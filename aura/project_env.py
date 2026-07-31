@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import ntpath
 import os
 import shlex
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -165,7 +165,7 @@ def resolve_workspace_cwd(workspace_root: Path, cwd: str | Path | None) -> Path:
 
     raw = str(cwd).strip().strip("'\"")
     candidate = Path(raw)
-    if candidate.is_absolute() or raw.startswith(("/", "\\")):
+    if candidate.is_absolute() or ntpath.isabs(raw) or raw.startswith(("/", "\\")):
         raise ValueError("cwd must be workspace-relative, not absolute")
 
     resolved = (root / candidate).resolve()
@@ -186,9 +186,12 @@ def missing_external_tool_for_command(command: str) -> str | None:
     executable = _first_executable(command)
     if not executable or _looks_like_path(executable):
         return None
-    if executable in _SHELL_BUILTINS:
+    executable_name = executable.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if executable_name.endswith(".exe"):
+        executable_name = executable_name[:-4]
+    if executable_name in _SHELL_BUILTINS:
         return None
-    return executable if _which(executable) is None else None
+    return executable_name if _which(executable_name) is None else None
 
 
 def _python_provider_applies(workspace_root: Path, command: str) -> bool:
@@ -204,10 +207,7 @@ def _first_executable(command: str) -> str | None:
         tokens = str(command or "").split()
     if not tokens:
         return None
-    executable = tokens[0].strip("'\"").replace("\\", "/").rsplit("/", 1)[-1].lower()
-    if executable.endswith(".exe"):
-        executable = executable[:-4]
-    return executable
+    return tokens[0].strip("'\"")
 
 
 def _looks_like_path(executable: str) -> bool:

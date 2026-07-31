@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -41,6 +43,9 @@ class SandboxResult:
     stdout: str
     stderr: str
     exit_code: int
+    failure_class: str | None = None
+    timed_out: bool = False
+    cancelled: bool = False
 
 
 @dataclass(frozen=True)
@@ -52,10 +57,66 @@ class WatchResult:
     error_detected: bool
     exit_code: int | None
     output: str
+    failure_class: str | None = None
+    cancelled: bool = False
 
 
 def _has_traceback(output: str) -> bool:
     return "Traceback (most recent call last):" in output
+
+
+def _resolve_windows_command_shell() -> str:
+    """Resolve the CMD executable Aura will use for host commands."""
+    candidates: list[str] = []
+    comspec = str(os.environ.get("COMSPEC") or "").strip().strip('"')
+    if comspec:
+        candidates.append(comspec)
+    system_root = str(os.environ.get("SystemRoot") or "").strip().strip('"')
+    if system_root:
+        candidates.append(str(Path(system_root) / "System32" / "cmd.exe"))
+    discovered = shutil.which("cmd.exe")
+    if discovered:
+        candidates.append(discovered)
+
+    for candidate in candidates:
+        path = Path(candidate)
+        if path.is_file():
+            return str(path.resolve())
+    raise FileNotFoundError("Unable to resolve COMSPEC/cmd.exe for host command execution")
+
+
+def _resolve_posix_command_shell() -> str:
+    """Resolve the supported POSIX shell used for host commands."""
+    for candidate in ("/bin/sh", shutil.which("sh")):
+        if candidate and Path(candidate).is_file():
+            return str(Path(candidate).resolve())
+    raise FileNotFoundError("Unable to resolve /bin/sh for host command execution")
+
+
+def _host_shell_invocation(command: str) -> tuple[str | list[str], str | None]:
+    """Build an explicit shell invocation while preserving *command* verbatim.
+
+    Windows needs CMD's native outer-quote convention.  Python's generic
+    list-to-command-line conversion backslash-escapes embedded quotes, but
+    CMD does not treat those backslashes as quote escapes.
+    """
+    if os.name == "nt":
+        shell = _resolve_windows_command_shell()
+        return f'"{shell}" /d /s /c "{command}"', shell
+    return [_resolve_posix_command_shell(), "-c", command], None
+
+
+def _is_missing_executable_output(output: str) -> bool:
+    lowered = str(output or "").lower()
+    return (
+        "is not recognized as an internal or external command" in lowered
+        or "command not found" in lowered
+        or re.search(
+            r"(?m)^(?:.*/)?[a-z]*sh:\s*(?:\d+:\s*)?.+:\s+not found\s*$",
+            lowered,
+        )
+        is not None
+    )
 
 
 def classify_watch_outcome(
@@ -65,6 +126,8 @@ def classify_watch_outcome(
     window_seconds: int,
     *,
     require_survive_window: bool = False,
+    failure_class: str | None = None,
+    cancelled: bool = False,
 ) -> WatchResult:
     error_detected = _has_traceback(output)
 
@@ -73,33 +136,39 @@ def classify_watch_outcome(
             return WatchResult(
                 ok=False, survived_window=True, exited_early=False,
                 error_detected=True, exit_code=None, output=output,
+                failure_class=failure_class, cancelled=cancelled,
             )
         return WatchResult(
             ok=True, survived_window=True, exited_early=False,
             error_detected=False, exit_code=None, output=output,
+            failure_class=failure_class, cancelled=cancelled,
         )
 
     if error_detected:
         return WatchResult(
             ok=False, survived_window=False, exited_early=True,
             error_detected=True, exit_code=exit_code, output=output,
+            failure_class=failure_class, cancelled=cancelled,
         )
 
     if require_survive_window:
         return WatchResult(
             ok=False, survived_window=False, exited_early=True,
             error_detected=False, exit_code=exit_code, output=output,
+            failure_class=failure_class, cancelled=cancelled,
         )
 
     if exit_code == 0:
         return WatchResult(
             ok=True, survived_window=False, exited_early=True,
             error_detected=False, exit_code=exit_code, output=output,
+            failure_class=failure_class, cancelled=cancelled,
         )
 
     return WatchResult(
         ok=False, survived_window=False, exited_early=True,
         error_detected=False, exit_code=exit_code, output=output,
+        failure_class=failure_class, cancelled=cancelled,
     )
 
 
@@ -234,24 +303,10 @@ class SandboxExecutor:
         survived_window=True. If it exits early, the result reports
         exited_early=True with the exit code.
         """
-        from aura.config import get_subprocess_kwargs
-
         cwd = self._resolve_working_directory(working_directory)
-        popen_kwargs: dict[str, Any] = {
-            "shell": True,
-            "cwd": str(cwd),
-            "stdin": None,
-            "stdout": subprocess.PIPE,
-            "stderr": subprocess.STDOUT,
-            "text": True,
-            "encoding": "utf-8",
-            "bufsize": 1,
-        }
-        extra = get_subprocess_kwargs()
-        popen_kwargs.update(extra)
 
         try:
-            proc = subprocess.Popen(command, **popen_kwargs)
+            proc = self._launch_host_command(command, cwd=cwd, stdin_enabled=False)
             # Close stdin immediately — safe no-op when stdin is None
             if proc.stdin:
                 proc.stdin.close()
@@ -263,6 +318,14 @@ class SandboxExecutor:
                 on_output=on_output,
                 timeout_is_success=True,
             )
+            if result.exit_code != 0 and _is_missing_executable_output(result.stdout):
+                result = SandboxResult(
+                    ok=False,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                    exit_code=result.exit_code,
+                    failure_class="execution_failed",
+                )
 
             if result.ok and result.exit_code == -1:
                 return classify_watch_outcome(
@@ -271,6 +334,8 @@ class SandboxExecutor:
                     output=result.stdout,
                     window_seconds=window_seconds,
                     require_survive_window=require_survive_window,
+                    failure_class=result.failure_class,
+                    cancelled=result.cancelled,
                 )
 
             return classify_watch_outcome(
@@ -279,6 +344,8 @@ class SandboxExecutor:
                 output=result.stdout,
                 window_seconds=window_seconds,
                 require_survive_window=require_survive_window,
+                failure_class=result.failure_class,
+                cancelled=result.cancelled,
             )
 
         except Exception as exc:
@@ -291,6 +358,7 @@ class SandboxExecutor:
                 output=output,
                 window_seconds=window_seconds,
                 require_survive_window=require_survive_window,
+                failure_class="execution_failed",
             )
 
     @staticmethod
@@ -317,7 +385,7 @@ class SandboxExecutor:
                 subprocess.Popen(
                     ["cmd.exe", "/c", "start", "", title, "cmd.exe", "/c", command],
                     cwd=str(workspace_root),
-                    shell=True,
+                    shell=False,
                 )
             elif sys.platform == "darwin":
                 # macOS: use 'open' with Terminal.app
@@ -404,26 +472,16 @@ class SandboxExecutor:
         input_data: str | None = None,
         working_directory: Path | None = None,
     ) -> SandboxResult:
-        """Direct Popen execution (current behavior, no sandbox)."""
-        from aura.config import get_subprocess_kwargs
-
+        """Execute a host command through Aura's explicit platform shell."""
         cwd = working_directory or self._workspace_root
-        popen_kwargs: dict[str, Any] = {
-            "shell": True,
-            "cwd": str(cwd),
-            "stdin": subprocess.PIPE if input_data else None,
-            "stdout": subprocess.PIPE,
-            "stderr": subprocess.STDOUT,
-            "text": True,
-            "encoding": "utf-8",
-            "bufsize": 1,
-        }
-        extra = get_subprocess_kwargs()
-        popen_kwargs.update(extra)
 
         try:
-            proc = subprocess.Popen(command, **popen_kwargs)
-            if input_data and proc.stdin:
+            proc = self._launch_host_command(
+                command,
+                cwd=cwd,
+                stdin_enabled=input_data is not None,
+            )
+            if input_data is not None and proc.stdin:
                 try:
                     proc.stdin.write(input_data)
                     proc.stdin.close()
@@ -434,12 +492,21 @@ class SandboxExecutor:
                     except Exception:
                         pass
 
-            return self._stream_subprocess_output(
+            result = self._stream_subprocess_output(
                 proc,
                 timeout=timeout,
                 cancel_event=cancel_event,
                 on_output=on_output,
             )
+            if result.exit_code != 0 and _is_missing_executable_output(result.stdout):
+                return SandboxResult(
+                    ok=False,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                    exit_code=result.exit_code,
+                    failure_class="execution_failed",
+                )
+            return result
         except Exception as exc:
             output = f"\n[ERROR: {type(exc).__name__}: {exc}]\n"
             if on_output is not None:
@@ -449,6 +516,7 @@ class SandboxExecutor:
                 stdout=output,
                 stderr="",
                 exit_code=-1,
+                failure_class="execution_failed",
             )
 
     # ---- Docker execution ---------------------------------------------------
@@ -642,13 +710,45 @@ class SandboxExecutor:
                 stdout=output,
                 stderr="",
                 exit_code=-1,
+                failure_class="execution_failed",
             )
 
+    def _launch_host_command(
+        self,
+        command: str,
+        *,
+        cwd: Path,
+        stdin_enabled: bool,
+    ) -> subprocess.Popen[str]:
+        """Launch a command with one explicit, platform-owned shell contract.
+
+        The original command is kept as one argument so quoting, built-ins,
+        chaining, pipes, and redirects are interpreted by the selected shell.
+        ``shell=False`` ensures Python never chooses or wraps that shell for us.
+        """
+        from aura.config import get_subprocess_kwargs
+
+        invocation, executable = _host_shell_invocation(command)
+        popen_kwargs: dict[str, Any] = {
+            "shell": False,
+            "cwd": str(cwd),
+            "stdin": subprocess.PIPE if stdin_enabled else None,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.STDOUT,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+            "bufsize": 1,
+        }
+        popen_kwargs.update(get_subprocess_kwargs())
+        return subprocess.Popen(invocation, executable=executable, **popen_kwargs)
+
     def _resolve_working_directory(self, working_directory: Path | str | None) -> Path:
-        if working_directory is None or str(working_directory).strip() == "":
-            return self._workspace_root
-        resolved = Path(working_directory).resolve()
         root = self._workspace_root.resolve()
+        if working_directory is None or str(working_directory).strip() == "":
+            return root
+        candidate = Path(working_directory)
+        resolved = candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
         if not safe_is_relative_to(resolved, root):
             raise ValueError("working_directory must stay inside workspace_root")
         return resolved
@@ -719,6 +819,8 @@ class SandboxExecutor:
                     stdout="".join(output_lines),
                     stderr="",
                     exit_code=-1,
+                    failure_class="cancelled",
+                    cancelled=True,
                 )
 
             now = time.monotonic()
@@ -741,6 +843,8 @@ class SandboxExecutor:
                     stdout="".join(output_lines),
                     stderr="",
                     exit_code=124,
+                    failure_class="timeout",
+                    timed_out=True,
                 )
 
             if (

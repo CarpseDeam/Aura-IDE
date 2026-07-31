@@ -6,6 +6,7 @@ from typing import Any
 
 from PySide6.QtCore import QObject, Signal
 
+from aura.bridge.event_relay_errors import _is_validation_terminal_record
 from aura.bridge.event_relay_execution_ledger import EventRelayExecutionLedger
 from aura.bridge.event_relay_terminal_tracking import EventRelayTerminalTracker
 from aura.client import (
@@ -24,6 +25,7 @@ from aura.client import (
     ToolResult,
     Usage,
 )
+from aura.conversation.validation_orchestrator import looks_like_validation_command
 from aura.events import (
     WORKER_COMMAND_STARTED,
     WORKER_FAILED,
@@ -97,6 +99,8 @@ class WorkerEventRelay(QObject):
         self.final_report_text: str = ""          # last assistant content after Done event
         self._active_tool_names: dict[str, str] = {}
         self._tool_arg_fragments: dict[str, str] = {}
+        self._terminal_lifecycle_started: set[str] = set()
+        self._validation_lifecycle_started: set[str] = set()
 
     def set_model(self, model: str) -> None:
         """Set the model id reported on usage events for the active run."""
@@ -199,23 +203,11 @@ class WorkerEventRelay(QObject):
             self.toolCallStart.emit(tool_call_id, ev.id, ev.name)
             if ev.name in _PASSIVE_DISPLAY_TOOLS:
                 return
-            # Emit tool_started for activity projectors.
-            # For terminal commands also emit command_started.
+            # The model-originated start is the single owner of tool_started.
             self._emit_bus_event(WORKER_TOOL_STARTED, {
                 "name": ev.name,
                 "tool_call_id": ev.id,
             })
-            if ev.name in ("run_terminal_command", "run_and_watch"):
-                self._emit_bus_event(WORKER_COMMAND_STARTED, {
-                    "name": ev.name,
-                    "command": "",
-                    "tool_call_id": ev.id,
-                })
-                self._emit_bus_event(WORKER_VALIDATION_STARTED, {
-                    "name": ev.name,
-                    "command": "",
-                    "tool_call_id": ev.id,
-                })
         elif isinstance(ev, ToolCallArgsDelta):
             wid = self.index_to_id.get(ev.index, "")
             if wid:
@@ -226,6 +218,31 @@ class WorkerEventRelay(QObject):
         elif isinstance(ev, ToolCallEnd):
             wid = self.index_to_id.get(ev.index, "")
             if wid:
+                tool_name = self._active_tool_names.get(wid, "")
+                if (
+                    tool_name in ("run_terminal_command", "run_and_watch")
+                    and wid not in self._terminal_lifecycle_started
+                ):
+                    command = ""
+                    try:
+                        args = json.loads(self._tool_arg_fragments.get(wid, "") or "{}")
+                    except (json.JSONDecodeError, TypeError):
+                        args = {}
+                    if isinstance(args, dict):
+                        command = str(args.get("command") or "")
+                    self._emit_bus_event(WORKER_COMMAND_STARTED, {
+                        "name": tool_name,
+                        "command": command,
+                        "tool_call_id": wid,
+                    })
+                    if tool_name == "run_and_watch" or looks_like_validation_command(command):
+                        self._emit_bus_event(WORKER_VALIDATION_STARTED, {
+                            "name": tool_name,
+                            "command": command,
+                            "tool_call_id": wid,
+                        })
+                        self._validation_lifecycle_started.add(wid)
+                    self._terminal_lifecycle_started.add(wid)
                 self.toolCallEnd.emit(tool_call_id, wid)
         elif isinstance(ev, Usage):
             self.usage.emit(
@@ -286,6 +303,18 @@ class WorkerEventRelay(QObject):
                 parsed = json.loads(ev.result)
             except (json.JSONDecodeError, TypeError):
                 parsed = {}
+            if (
+                ev.name in ("run_terminal_command", "run_and_watch")
+                and isinstance(parsed, dict)
+                and _is_validation_terminal_record(parsed)
+                and ev.tool_call_id not in self._validation_lifecycle_started
+            ):
+                self._emit_bus_event(WORKER_VALIDATION_STARTED, {
+                    "name": ev.name,
+                    "command": str(parsed.get("command") or ""),
+                    "tool_call_id": ev.tool_call_id,
+                })
+                self._validation_lifecycle_started.add(ev.tool_call_id)
             if ev.name == UPDATE_WORKER_TODO_TOOL and ev.ok:
                 snapshot, errors = parse_worker_todo_snapshot(parsed)
                 if snapshot is not None and not errors:
@@ -307,6 +336,7 @@ class WorkerEventRelay(QObject):
             )
             self._active_tool_names.pop(ev.tool_call_id, None)
             self._tool_arg_fragments.pop(ev.tool_call_id, None)
+            self._terminal_lifecycle_started.discard(ev.tool_call_id)
             if ev.name not in _PASSIVE_DISPLAY_TOOLS:
                 self._emit_bus_event(WORKER_TOOL_FINISHED, {
                     "name": ev.name,
@@ -323,6 +353,7 @@ class WorkerEventRelay(QObject):
 
             # Track terminal command results, then classify the subset that is meaningful validation.
             self._terminal_tracker.handle_tool_result(ev.name, parsed)
+            self._validation_lifecycle_started.discard(ev.tool_call_id)
         elif isinstance(ev, TerminalOutput):            self.terminalOutput.emit(tool_call_id, ev.tool_call_id, ev.text)
         elif isinstance(ev, AgentProcessStarted):
             self.agentProcessStarted.emit(
@@ -345,6 +376,8 @@ class WorkerEventRelay(QObject):
         self.final_report_text = ""
         self._active_tool_names.clear()
         self._tool_arg_fragments.clear()
+        self._terminal_lifecycle_started.clear()
+        self._validation_lifecycle_started.clear()
 
     def _tool_result_record(self, ev: ToolResult, parsed: Any) -> dict[str, Any]:
         record: dict[str, Any] = {

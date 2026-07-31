@@ -34,6 +34,7 @@ MISSING_DEPENDENCY = "missing_dependency"
 MISSING_EXECUTABLE = "missing_executable"
 POLICY_BLOCKED = "policy_blocked"
 TIMEOUT = "timeout"
+CANCELLED = "cancelled"
 ENVIRONMENT_ERROR = "environment_error"
 TRACEBACK_DETECTED = "traceback_detected"
 UNKNOWN_FAILURE = "unknown_failure"
@@ -191,16 +192,6 @@ def parse_validation_command(raw_text: str, *, source: str = "worker_command") -
     if cd_normalized is not None:
         command_cwd, command = cd_normalized
         reason = _append_reason(reason, "cd wrapper")
-        if not _looks_like_command(command):
-            return ValidationCommand(
-                raw_text=raw,
-                command="",
-                cwd=command_cwd,
-                expected_outcome=expected,
-                source=source,
-                normalized=True,
-                normalization_reason="cd wrapper did not contain a runnable command",
-            )
 
     package_cwd = _extract_package_manager_cwd(command)
     if package_cwd is not None:
@@ -277,7 +268,13 @@ def classify_validation_run(
             user_action=ACTION_FIX_VALIDATION_COMMAND,
         )
 
-    if exit_code == -1 or _contains_timeout(output_text):
+    if failure_class == CANCELLED:
+        return _result(validation_command, exit_code, output_text, CANCELLED, user_action=ACTION_RETRY)
+    if failure_class == "execution_failed":
+        if _is_missing_executable(output_text.lower()):
+            return _result(validation_command, exit_code, output_text, MISSING_EXECUTABLE, user_action=ACTION_INSTALL_DEPENDENCY)
+        return _result(validation_command, exit_code, output_text, ENVIRONMENT_ERROR, user_action=ACTION_RETRY)
+    if failure_class == TIMEOUT or _contains_timeout(output_text) or exit_code == 124:
         return _result(validation_command, exit_code, output_text, TIMEOUT, user_action=ACTION_RETRY)
 
     if ok and exit_code == 0:
@@ -308,6 +305,9 @@ def classify_validation_run(
         return _result(validation_command, exit_code, output_text, MISSING_EXECUTABLE, user_action=ACTION_INSTALL_DEPENDENCY)
     if _is_missing_dependency(lowered):
         return _result(validation_command, exit_code, output_text, MISSING_DEPENDENCY, user_action=ACTION_INSTALL_DEPENDENCY)
+
+    if exit_code is None or exit_code == -1:
+        return _result(validation_command, exit_code, output_text, ENVIRONMENT_ERROR, user_action=ACTION_RETRY)
 
     if _is_pytest_tokens(tokens):
         missing_path = _pytest_missing_path(output_text)
@@ -429,6 +429,8 @@ def classify_terminal_run(
     exit_code: int | None,
     output: str = "",
     was_timeout: bool = False,
+    execution_failed: bool = False,
+    cancelled: bool = False,
 ) -> TerminalRunClassification:
     role = (
         TERMINAL_ROLE_SEARCH
@@ -437,12 +439,26 @@ def classify_terminal_run(
     )
     has_tb = "Traceback (most recent call last):" in output
 
+    if cancelled:
+        return TerminalRunClassification(
+            role=role,
+            classification=CANCELLED,
+            command_success=False,
+        )
+
     if was_timeout or exit_code == 124:
         return TerminalRunClassification(
             role=role,
             classification=TIMEOUT,
             command_success=False,
             was_timeout=True,
+        )
+
+    if execution_failed:
+        return TerminalRunClassification(
+            role=role,
+            classification=TERMINAL_EXECUTION_FAILED,
+            command_success=False,
         )
 
     if exit_code == 0:
@@ -532,6 +548,8 @@ def classify_command_outcome(
     is_validation_command: bool = False,
     is_launch_watch: bool = False,
     was_timeout: bool = False,
+    execution_failed: bool = False,
+    cancelled: bool = False,
 ) -> CommandOutcome:
     """Classify a terminal command outcome with structured metadata.
 
@@ -556,12 +574,24 @@ def classify_command_outcome(
     has_tb = "Traceback (most recent call last):" in output
     is_search = _is_search_command(command)
 
+    if cancelled:
+        return CommandOutcome(
+            classification=CANCELLED,
+            command_success=False,
+        )
+
     # --- Timeout -----------------------------------------------------------
     if was_timeout or exit_code == 124:
         return CommandOutcome(
             classification=TIMEOUT,
             command_success=False,
             was_timeout=True,
+        )
+
+    if execution_failed:
+        return CommandOutcome(
+            classification=ENVIRONMENT_ERROR,
+            command_success=False,
         )
 
     # --- Exit code 0 (process-level success) --------------------------------
@@ -714,6 +744,7 @@ __all__ = [
     "ACTION_INSTALL_DEPENDENCY",
     "ACTION_NONE",
     "ACTION_RETRY",
+    "CANCELLED",
     "ENVIRONMENT_ERROR",
     "MALFORMED_VALIDATION_COMMAND",
     "MISSING_DEPENDENCY",

@@ -10,7 +10,6 @@ from typing import Any, Callable
 
 from aura.client import (
     TerminalOutput,
-    ToolCallStart,
     ToolResult,
     WorkerDispatchRequested,
 )
@@ -446,8 +445,6 @@ class ToolRunner:
             args.get("timeout"),
         )
 
-        on_event(ToolCallStart(index=0, id=tool_call_id, name="run_terminal_command"))
-
         settings = load_settings()
         sandbox = SandboxExecutor(
             mode=settings.sandbox_mode,  # type: ignore[arg-type]
@@ -470,7 +467,7 @@ class ToolRunner:
         )
 
         full_output = result.stdout
-        ok = result.exit_code != -1
+        ok = result.ok
         exit_code = result.exit_code
 
         if not ok and result.stderr and "Docker is not available" in result.stderr:
@@ -485,7 +482,11 @@ class ToolRunner:
             "original_command": original_command,
             "cwd": relative_cwd,
             "working_directory": relative_cwd,
+            "timed_out": result.timed_out,
+            "cancelled": result.cancelled,
         }
+        if result.failure_class:
+            payload_dict["failure_class"] = result.failure_class
         if normalized.normalization_reason:
             payload_dict.update(
                 {
@@ -498,6 +499,9 @@ class ToolRunner:
             str(command),
             exit_code=exit_code,
             output=full_output,
+            was_timeout=result.timed_out,
+            execution_failed=result.failure_class == "execution_failed",
+            cancelled=result.cancelled,
         )
         payload_dict.update(terminal_classification.metadata())
         if validation_command.normalized:
@@ -516,6 +520,7 @@ class ToolRunner:
                 exit_code=exit_code,
                 output=full_output,
                 ok=ok,
+                failure_class=result.failure_class or "",
             )
             payload_dict.update(run_result.metadata())
             # Compute contextual command outcome so that Workers see
@@ -527,6 +532,9 @@ class ToolRunner:
                 exit_code=exit_code,
                 output=full_output,
                 is_validation_command=True,
+                was_timeout=result.timed_out,
+                execution_failed=result.failure_class == "execution_failed",
+                cancelled=result.cancelled,
             )
             payload_dict.update(outcome.metadata())
             # Override the raw terminal fields with the contextual
@@ -564,7 +572,6 @@ class ToolRunner:
             }
             payload = json.dumps(payload_dict, ensure_ascii=False)
             self._history.append_tool_result(tool_call_id, payload)
-            on_event(ToolCallStart(index=0, id=tool_call_id, name="run_and_watch"))
             on_event(
                 ToolResult(
                     tool_call_id=tool_call_id,
@@ -582,8 +589,6 @@ class ToolRunner:
                 window_seconds = max(1, min(int(raw_window), 60))
             except (TypeError, ValueError):
                 pass
-
-        on_event(ToolCallStart(index=0, id=tool_call_id, name="run_and_watch"))
 
         # Normalize for consistent execution environment.
         normalized = normalize_command(declared_run_command, self._workspace_root)
@@ -631,7 +636,11 @@ class ToolRunner:
         full_output = result.output
         ok = result.ok and result.exited_early
         if not ok:
-            if result.survived_window and not result.error_detected:
+            if result.cancelled:
+                failure_class = "cancelled"
+            elif result.failure_class == "execution_failed":
+                failure_class = "launch_command_execution_failed"
+            elif result.survived_window and not result.error_detected:
                 failure_class = "launch_command_did_not_exit"
             elif result.error_detected:
                 failure_class = "launch_command_crashed"
@@ -651,6 +660,7 @@ class ToolRunner:
             "exit_code": result.exit_code,
             "output": full_output,
             "command": declared_run_command,
+            "cancelled": result.cancelled,
         }
         payload = json.dumps(payload_dict, ensure_ascii=False)
 

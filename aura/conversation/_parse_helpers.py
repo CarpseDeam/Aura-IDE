@@ -119,7 +119,7 @@ def _strip_trailing_outcome_token(command: str, tokens: list[str]) -> tuple[str,
 
 def _extract_cd_wrapper(command: str) -> tuple[str, str] | None:
     match = re.match(
-        r"^\s*(?:cd|chdir)\s+(?P<cwd>\"[^\"]+\"|'[^']+'|[^&;]+?)\s*(?:&&|;)\s*(?P<command>.+?)\s*$",
+        r"^\s*(?:cd|chdir)\s+(?:/d\s+)?(?P<cwd>\"[^\"]+\"|'[^']+'|[^&;]+?)\s*(?:&&|;)\s*(?P<command>.+?)\s*$",
         command,
         flags=re.IGNORECASE,
     )
