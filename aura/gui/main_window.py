@@ -88,6 +88,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         super().__init__()
         self._checkpoint_dialog: CheckpointDialog | None = None
         self._answer_only_ui_guard: SilentResearchUiGuard | None = None
+        # Final assistant message of the current turn, held until the turn is
+        # saved so a pending handoff can run against it afterwards.
+        self._final_stream_message: dict = {}
         self._use_native_chrome = os.environ.get("AURA_NATIVE_CHROME") == "1"
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(QIcon(str(icon_path())))
@@ -634,6 +637,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
 
     def _on_started(self) -> None:
+        self._final_stream_message = {}
         self._input.set_execution_active(True)
         # Switch from Drone Bay to workspace so the user sees the run —
         # but do NOT switch away from the Chain Editor (Workflow Studio).
@@ -646,16 +650,45 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._answer_only_ui_guard.stop()
             self._answer_only_ui_guard = None
         self._input.set_execution_active(False)
+        # Closes the assistant card and records its transcript. By this point
+        # ConversationManager has committed the final assistant message to
+        # History, so chat and model history agree.
         self._chat.assistant_done()
         self._chat.stop_current_aura()
         self._input.focus_editor()
-        # Drain one queued item (if any) after the current turn completes.
-        # Defer via singleShot(0) to avoid racing with the lifecycle's
-        # Qt presentation work.
+        # Settle the turn, then drain one queued item. Both are deferred so the
+        # run's own completion presentation (the receipt flush scheduled by the
+        # worker handler) lands first; the FIFO order guarantees the snapshot is
+        # taken after this turn is fully finalized and before the next queued
+        # turn touches the conversation.
         from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, self._settle_finished_turn)
         QTimer.singleShot(0, lambda: self._send_handler.process_message_queue(
             self.current_model(), self.current_thinking()
         ))
+
+    def _settle_finished_turn(self) -> None:
+        """Save the completed turn, then run any pending handoff."""
+        self._auto_save_conversation()
+        final_message = self._final_stream_message
+        self._final_stream_message = {}
+        if final_message:
+            # Handoff abandons the conversation for a fresh one, so it only
+            # runs once the finished turn is safely on disk.
+            self._handoff_controller.finalize_handoff(final_message)
+
+    def _auto_save_conversation(self) -> None:
+        """Persist the conversation as it currently stands."""
+        self._persistence.auto_save(
+            workspace_root=self._workspace_root,
+            model=self.current_model(),
+            thinking=self.current_thinking(),
+            worker_model=self.current_worker_model(),
+            worker_thinking=self.current_worker_thinking(),
+            provider=self._settings.provider,
+            planner_provider=self._settings.planner_provider,
+            worker_provider=self._settings.worker_provider,
+        )
 
     def _on_stream_done(self, finish_reason: str, full_message: dict) -> None:
         # If the model produced tool calls, it's not actually done — the bridge
@@ -677,21 +710,16 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         else:
             # No tool calls — this is the final turn.
             self._chat.assistant_done()
-        # Auto-save after each assistant turn — including partial tool-call rounds.
-        self._persistence.auto_save(
-            workspace_root=self._workspace_root,
-            model=self.current_model(),
-            thinking=self.current_thinking(),
-            worker_model=self.current_worker_model(),
-            worker_thinking=self.current_worker_thinking(),
-            provider=self._settings.provider,
-            planner_provider=self._settings.planner_provider,
-            worker_provider=self._settings.worker_provider,
-        )
+        # No auto-save here. A stream can end mid-turn (tool-call rounds), and
+        # ConversationManager only appends the assistant message to History
+        # *after* this event, so saving now would persist an incomplete turn.
+        # The turn is saved from _on_finished instead.
 
-        # Check for pending handoff after the response completes (no tool calls)
+        # A pending handoff starts a fresh conversation, so it must run after
+        # the completed one has been saved — remember the final message and
+        # finalize from _on_finished.
         if not tool_calls:
-            self._handoff_controller.finalize_handoff(full_message)
+            self._final_stream_message = dict(full_message)
 
     def _on_tool_result(self, tool_id: str, name: str, ok: bool, result: str, extras: dict) -> None:
         self._chat.set_tool_result(tool_id, ok, result)
@@ -728,16 +756,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # Terminal dispatches don't trigger _on_stream_done, so we must auto-save here
         # to ensure the worker's result is persisted before the app is closed.
         if name in ("dispatch_to_worker",):
-            self._persistence.auto_save(
-                workspace_root=self._workspace_root,
-                model=self.current_model(),
-                thinking=self.current_thinking(),
-                worker_model=self.current_worker_model(),
-                worker_thinking=self.current_worker_thinking(),
-                provider=self._settings.provider,
-                planner_provider=self._settings.planner_provider,
-                worker_provider=self._settings.worker_provider,
-            )
+            self._auto_save_conversation()
             self._drone_controller.refresh_drone_context()
 
     def _prepare_answer_only_research_ui(self) -> None:

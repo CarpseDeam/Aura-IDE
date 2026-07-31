@@ -6,6 +6,10 @@ activity, live TODO, tool cards, writes and diffs, terminal output, external
 process output, validation evidence, the completion receipt, cancellation, and
 the return to idle.
 
+It owns execution activity only.  The assistant's conversational prose belongs
+to the chat transcript and is routed there by ``ConversationBridge``; this
+session never re-emits it as Worker activity.
+
 It deliberately reuses the existing execution machinery rather than growing a
 second workflow engine:
 
@@ -93,12 +97,18 @@ class ProductionExecutionSession(QObject):
         self._todo_projector.set_on_change(self._on_todo_changed)
 
         # One authoritative execution ledger for the active production run.
+        #
+        # Assistant prose is deliberately NOT projected here: conversation
+        # content is chat-owned and reaches ChatView through the bridge's
+        # canonical ``contentDelta`` path.  Projecting it again would put the
+        # answer in the ephemeral Worker Log, where it is cleared on reload.
         self._relay = create_worker_relay(
             approval_proxy=approval_proxy,
             worker_model="",
             dispatch_proxy=self,
             event_bus=self._event_bus,
             suppress_workflow_state_updates=True,
+            suppress_content_projection=True,
         )
 
         self._run_id: str = ""

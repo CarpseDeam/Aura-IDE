@@ -11,6 +11,7 @@ from typing import Any
 USER = "user"
 PLANNER = "planner"
 WORKER_COMPLETE = "worker_complete"
+ERROR = "error"
 
 
 def user_item(text: str, image_b64s: list[str] | None = None) -> dict[str, Any]:
@@ -22,6 +23,20 @@ def user_item(text: str, image_b64s: list[str] | None = None) -> dict[str, Any]:
 
 def planner_item(text: str) -> dict[str, Any]:
     return {"kind": PLANNER, "text": str(text)}
+
+
+def error_item(title: str, message: str, show_retry: bool = False) -> dict[str, Any]:
+    """A failure the user saw in chat (API error, harness error, cancellation).
+
+    Errors are part of the durable conversation: what went wrong must still be
+    visible after a restart, not only in the ephemeral workspace.
+    """
+    return {
+        "kind": ERROR,
+        "title": str(title),
+        "message": str(message),
+        "show_retry": bool(show_retry),
+    }
 
 
 def worker_complete_item(
@@ -61,6 +76,12 @@ def normalize_chat_item(data: Any) -> dict[str, Any] | None:
         if not isinstance(text, str):
             return None
         return planner_item(text)
+    if kind == ERROR:
+        title = data.get("title", "")
+        message = data.get("message", "")
+        if not isinstance(title, str) or not isinstance(message, str):
+            return None
+        return error_item(title, message, bool(data.get("show_retry", False)))
     if kind == WORKER_COMPLETE:
         return worker_complete_item(
             tool_call_id=str(data.get("tool_call_id", "")),

@@ -23,6 +23,7 @@ from aura.conversation.persistence import (
     save_conversation,
 )
 from aura.conversation.chat_transcript import (
+    ERROR,
     PLANNER,
     USER,
     WORKER_COMPLETE,
@@ -95,9 +96,11 @@ class ConversationPersistence(QObject):
         self._conversation_generation: int = 0
 
         self.save_succeeded.connect(self._on_save_succeeded)
+        # A save failure is a notice about this session, not conversation
+        # content — never record it into the transcript we are trying to save.
         self.save_failed.connect(
             lambda msg: self._chat.add_error(
-                "Could not save conversation", msg
+                "Could not save conversation", msg, persist=False
             )
         )
 
@@ -487,6 +490,12 @@ class ConversationPersistence(QObject):
                 self._chat.begin_assistant()
                 self._chat.append_content(str(item.get("text", "")))
                 self._chat.assistant_done()
+            elif kind == ERROR:
+                self._chat.add_error(
+                    str(item.get("title", "")),
+                    str(item.get("message", "")),
+                    bool(item.get("show_retry", False)),
+                )
             elif kind == WORKER_COMPLETE:
                 # Worker completion records are durable diagnostics only.
                 # Replaying them must not recreate main-chat finish cards.

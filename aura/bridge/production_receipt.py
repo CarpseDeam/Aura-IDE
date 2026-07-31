@@ -8,6 +8,10 @@ exit status, cancellation, and the final model response.
 It never infers success from "the stream ended" and never treats a syntax
 probe as proof.  A validation command that failed and was then rerun
 successfully is reported as a repair, with both events represented.
+
+The receipt is an *execution* artifact.  The assistant's final answer belongs
+to the chat transcript, so the visible receipt never restates it; the text is
+retained under ``metadata["final_response"]`` only.
 """
 
 from __future__ import annotations
@@ -291,12 +295,11 @@ def build_production_receipt(
         lines.append("")
         lines.append(" Stopped by user before completion.")
 
+    # The final assistant answer is chat-owned and has already been streamed
+    # into the chat transcript.  The receipt reports execution facts only and
+    # deliberately does not restate the prose; it stays in metadata for
+    # diagnostics and downstream consumers.
     final_response = (evidence.final_response or "").strip()
-    if final_response:
-        lines.append("")
-        lines.append(" Model report:")
-        for line in final_response.splitlines():
-            lines.append(f" {line}")
 
     if status == STATUS_COMPLETED_UNVERIFIED:
         lines.append("")

@@ -23,6 +23,7 @@ def create_worker_relay(
     event_bus: EventBus,
     suppress_final_report_activity: bool = False,
     suppress_workflow_state_updates: bool = False,
+    suppress_content_projection: bool = False,
 ) -> WorkerEventRelay:
     """Construct a WorkerEventRelay and wire every signal to *dispatch_proxy*.
 
@@ -38,6 +39,11 @@ def create_worker_relay(
     suppress_workflow_state_updates: When True, Worker tool start/result
         events still flow to Worker UI and event-bus projectors, but are not
         projected into planner/spec-card WorkflowState.
+
+    suppress_content_projection: When True, assistant prose is not forwarded
+        into the workspace ``workerContentDelta`` stream.  Conversation prose
+        is chat-owned; a caller that already routes it to ChatView must not
+        also duplicate it into the ephemeral Worker Log.
     """
     relay = WorkerEventRelay(
         approval_proxy=approval_proxy,
@@ -47,7 +53,8 @@ def create_worker_relay(
     )
     # Stream events
     relay.reasoningDelta.connect(dispatch_proxy.workerReasoningDelta)
-    relay.contentDelta.connect(dispatch_proxy.workerContentDelta)
+    if not suppress_content_projection:
+        relay.contentDelta.connect(dispatch_proxy.workerContentDelta)
     # Tool-call lifecycle
     relay.toolCallStart.connect(dispatch_proxy.workerToolCallStart)
     relay.toolCallArgs.connect(dispatch_proxy.workerToolCallArgs)

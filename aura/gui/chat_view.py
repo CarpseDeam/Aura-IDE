@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 
 from aura.conversation.chat_transcript import (
     clone_chat_items,
+    error_item,
     planner_item,
     user_item,
     worker_complete_item,
@@ -808,11 +809,25 @@ class ChatView(QScrollArea):
         layout.addWidget(body)
         self._add_card(card)
 
-    def add_error(self, title: str, message: str, show_retry: bool = False) -> None:
+    def add_error(
+        self,
+        title: str,
+        message: str,
+        show_retry: bool = False,
+        persist: bool = True,
+    ) -> None:
+        """Show a failure card and, by default, record it in the transcript.
+
+        Errors are durable conversation state: an API failure the user saw must
+        still be there after a restart.  ``persist=False`` is for notices about
+        the session itself (a failed save), which must not be written back.
+        """
         card = ErrorCard(title, message, show_retry=show_retry, parent=self)
         if show_retry:
             card.retry_clicked.connect(self.retry_requested.emit)
         self._add_card(card)
+        if self._record_transcript and persist:
+            self._chat_items.append(error_item(title, message, show_retry))
 
     def stop_current_aura(self) -> None:
         if self._current_aura is not None:
@@ -853,12 +868,15 @@ class ChatView(QScrollArea):
     def finalize_markdown_only(self) -> None:
         """Finalize Markdown rendering without stopping the breathing aura.
 
-        Use this when the stream has ended but the planner is still busy
-        (e.g. waiting for dispatch resolution) so the aura should keep pulsing.
+        Use this when the stream has ended but the turn is still running (a
+        tool-call round, or waiting for dispatch resolution) so the aura should
+        keep pulsing.  The transcript is deliberately *not* recorded here: the
+        assistant turn is incomplete, and recording it now would both freeze a
+        partial answer and lock out the real one, which appends to this same
+        card in a later round.
         """
         ac = self._current_assistant
         if ac is not None:
-            self._record_current_assistant_transcript()
             ac.finalize_content()
             self._scroll_to_bottom()
 

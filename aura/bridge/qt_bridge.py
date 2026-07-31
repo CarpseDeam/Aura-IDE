@@ -174,17 +174,25 @@ class _Worker(QObject):
     def _on_event(self, ev: Event) -> None:
         session = self._production_session
         if session is not None:
-            # Production execution projects into the workspace, not the chat
-            # transcript. Only the facts the chat/persistence layer needs
-            # (stream completion, usage, fatal API errors) surface here.
+            # Production *execution* projects into the workspace; the
+            # assistant's conversation prose stays chat-owned and travels the
+            # canonical contentDelta path (see _emit_chat_facts).
             session.handle_event(ev)
             self._emit_chat_facts(ev)
             return
         self._emit_all(ev)
 
     def _emit_chat_facts(self, ev: Event) -> None:
-        """Emit the minimal event set the chat and persistence layers require."""
-        if isinstance(ev, Usage):
+        """Emit the event set the chat and persistence layers own.
+
+        Assistant prose is chat-owned and must reach ChatView through exactly
+        one signal path, so ``ContentDelta`` surfaces here and is *not* also
+        projected into the workspace Worker Log.  Reasoning, tool calls, and
+        every other execution fact stay workspace-owned.
+        """
+        if isinstance(ev, ContentDelta):
+            self.contentDelta.emit(ev.text)
+        elif isinstance(ev, Usage):
             self.usageEmitted.emit(
                 ev.prompt_tokens, ev.completion_tokens, ev.cache_hit_tokens, ev.cache_miss_tokens
             )

@@ -198,12 +198,19 @@ class TestExecutionLifecycle:
 
 
 class TestStreamProjection:
-    def test_reasoning_and_content_project(self, session, recorder) -> None:
+    def test_reasoning_projects_but_prose_stays_chat_owned(
+        self, session, recorder
+    ) -> None:
+        """Reasoning is execution activity; the answer belongs to the chat.
+
+        The session must not re-emit assistant prose as Worker activity — that
+        is what put answers in the ephemeral Worker Log instead of the chat.
+        """
         session.begin()
         session.handle_event(ReasoningDelta(text="weighing options"))
         session.handle_event(ContentDelta(text="here is the plan"))
         assert [r[1] for r in recorder.reasoning] == ["weighing options"]
-        assert [c[1] for c in recorder.content] == ["here is the plan"]
+        assert recorder.content == []
 
     def test_tool_calls_project_with_args_and_result(self, session, recorder) -> None:
         session.begin()
@@ -436,7 +443,9 @@ class TestReturnToIdle:
         assert ok is True
         assert status == STATUS_COMPLETED
         assert needs_followup is False
-        assert "no changes needed" in summary
+        # The receipt reports execution facts; the prose is chat-owned.
+        assert "no changes needed" not in summary
+        assert "Production Report" in summary
 
     def test_clear_resets_projected_state(self, session) -> None:
         session.begin()

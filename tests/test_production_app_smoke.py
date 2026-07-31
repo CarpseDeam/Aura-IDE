@@ -232,6 +232,10 @@ class ProductionAppHarness:
             lambda v: self.running_states.append(v)
         )
 
+    def worker_log_text(self) -> str:
+        """The workspace Worker Log's visible text."""
+        return self.playground._info_hub._log_view.toPlainText()
+
     def run_turn(self, user_text: str, timeout_ms: int = 120000) -> bool:
         """Send one production turn and pump the Qt loop until it completes."""
         self.bridge.history.set_system("You are Aura's production coding agent.")
@@ -471,22 +475,33 @@ class TestProductionAppSmoke:
             assert "calc.py" in summary
             assert "after repair" in summary
             assert "failed, repaired, passed on rerun" in summary
-            assert "reran pytest" in summary
+            # The receipt reports execution facts only. The final answer is
+            # chat-owned and must not be restated here.
+            assert "reran pytest" not in summary
 
             # --- receipt cites real run data -------------------------------
             metadata = harness.bridge.execution_result_metadata(run_id)
             assert metadata["modified_files"] == ["calc.py"]
             assert metadata["validation_repaired"] is True
             assert metadata["commands_run"].count(VALIDATION_COMMAND) >= 2
+            # The prose is still available as metadata for diagnostics.
+            assert "reran pytest" in metadata["final_response"]
 
             # --- workspace returned to idle --------------------------------
             assert harness.running_states[-1] is False
             assert harness.bridge.production_session.is_active() is False
             assert harness.bridge.is_running() is False
 
-            # --- transcript stayed in the workspace, not the chat ----------
-            assert harness.chat_content == [], (
-                "production transcript must not be duplicated into the main chat"
+            # --- the assistant's prose reached the chat, exactly once -------
+            # Chat owns conversation prose even on the production path.
+            assert "".join(harness.chat_content).count("reran pytest") == 1, (
+                f"assistant prose must reach chat exactly once, got "
+                f"{harness.chat_content!r}"
+            )
+            # ...and was not also duplicated into the ephemeral Worker Log.
+            worker_log = harness.worker_log_text()
+            assert "reran pytest" not in worker_log, (
+                "assistant prose must not be duplicated into the Worker Log"
             )
 
             # --- no SpecCard / dispatch during normal coding ---------------
@@ -547,8 +562,10 @@ class TestProductionAppSmoke:
             _run_id, ok, summary, _needs, status = harness.finished[0]
             assert ok is True
             assert status == "completed"
-            assert "aura/settings.py" in summary
             assert "Files changed   : 0" in summary
+            # The answer belongs to the chat, not to the execution receipt.
+            assert "aura/settings.py" not in summary
+            assert "".join(harness.chat_content).count("aura/settings.py") == 1
             assert harness.bridge.production_session.is_active() is False
         finally:
             harness.teardown()
