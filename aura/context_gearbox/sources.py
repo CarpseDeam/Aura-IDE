@@ -48,35 +48,32 @@ CODE_QUALITY_CONTRACT = """### code_quality_contract
 - Code must compile or parse when applicable.
 - Do not leave placeholders, stubs, incomplete implementations, or fake fallbacks.
 - Preserve public behavior unless the spec requires a change.
-- The current contents of your target files are provided in context. Read them before editing.
+- The current contents of your target files are already in context; do not re-read them without a named reason.
 - Use the real imports, types, and helpers that already exist. Never invent an API, re-declare a constant, or re-implement a helper the codebase already provides.
 - Do not imitate existing structure for its own sake. Do not extend god files, copy ceremony, or reproduce over-engineering. Put each change where responsibility belongs and leave the code better-shaped than you found it.
 - Prefer narrow edits over broad rewrites, but a narrow edit in the wrong place is not correct — split or relocate when the right home does not exist.
-- Do not swallow errors silently.
-- Keep validation focused on the changed surface."""
+- Do not swallow errors silently."""
 
 VALIDATION_SELECTION_CONTRACT = """### validation_selection_contract
 - Validate the changed surface when practical.
+- Use the check this repository actually runs; discover it rather than assuming pytest or py_compile.
 - Compile touched Python files when Python changed.
 - Run focused tests for touched behavior when available.
 - Use broader tests only for shared infrastructure, integration seams, or high-risk changes.
 - Prefer fast deterministic checks over slow unrelated suites.
-- Do not run irrelevant expensive tests as ritual validation.
-- State skipped validation honestly.
-- Never claim checks that were not run."""
+- Do not run irrelevant expensive tests as ritual validation."""
 
 RECEIPT_CONTRACT = """### receipt_contract
 - List changed files.
 - Summarize what changed.
 - List validation run and result.
-- State blockers or skipped validation honestly.
-- Do not claim checks that were not run."""
+- Separate verified results from assumptions: say "verified by <command>" or say "not verified".
+- State blockers or skipped validation honestly, and never claim checks that were not run."""
 
 GUI_RULES = """### gui_rules
 - Preserve existing signal wiring and data flow.
 - Use existing theme tokens, styles, and components before adding new UI paths.
-- Keep widget and layout edits narrow; avoid broad rewrites.
-- Validate UI-adjacent changes with focused tests or selfcheck when practical.
+- The focused check for UI-adjacent changes is a GUI test or selfcheck.
 - Do not invent parallel UI paths when an existing seam exists."""
 
 DRONE_RULES = """### drone_rules

@@ -25,7 +25,6 @@ _RESPONSE_DISCIPLINE = """Response discipline:
 - Default to concise, useful replies.
 - Avoid essays, tutorials, and multi-section breakdowns unless the user asks for depth.
 - Normal chat should usually be 1-4 short paragraphs or up to 5 bullets.
-- Coding/workflow replies should emphasize target, decision, next step, and validation.
 - Give full detail when the user asks or when missing detail would make the answer unsafe or unusable."""
 
 def _role_prompt_text(runtime_role: RuntimeRole) -> str:
