@@ -6,6 +6,7 @@ from typing import Any
 from aura.conversation.tools._types import ToolExecResult
 from aura.drones.store import DroneStore
 from aura.research.adapter import WEB_RESEARCH_DRONE_ID
+from aura.research.native import execute_native_web_search
 from aura.research.result import format_research_answer
 
 _log = logging.getLogger(__name__)
@@ -86,6 +87,37 @@ class PlannerHandlersMixin:
                 payload={"error": str(exc), "workspace_root": str(self._root)},
             )
 
+    def _handle_web_search(
+        self,
+        args: dict[str, Any],
+        approval_cb: Any,
+        reject_all: bool,
+    ) -> ToolExecResult:
+        """Run live web research through the active provider's native search.
+
+        The capability name is provider-neutral (``web_search``).  Provider
+        capability handling is explicit: only providers with a native
+        Responses API web-search built-in (DeepSeek) execute here; every
+        other provider gets a clear unsupported result.  The legacy
+        browser/Drone research path is never launched from this tool.
+        """
+        question = str(args.get("question") or "").strip()
+        context = str(args.get("context") or "").strip()
+        if not question:
+            return ToolExecResult(
+                ok=False,
+                payload={"ok": False, "error": "question is required"},
+            )
+
+        result = execute_native_web_search(
+            provider=self.provider,
+            question=question,
+            context=context or None,
+        )
+        payload = result.to_dict()
+        payload["answer_for_chat"] = format_research_answer(result)
+        return ToolExecResult(ok=True, payload=payload)
+
     def _handle_launch_read_only_drone(
         self,
         args: dict[str, Any],
@@ -106,6 +138,9 @@ class PlannerHandlersMixin:
                 ok=False,
                 payload={"ok": False, "error": "goal is required"},
             )
+
+        if drone_id == WEB_RESEARCH_DRONE_ID:
+            return _web_research_drone_retired_result()
 
         from aura.drones.store import DroneStore
 
@@ -134,26 +169,8 @@ class PlannerHandlersMixin:
 
         from aura.drones.background_runner import get_background_runner
 
-        # The Research Browser Controller owns all browser decisions.
-        # We just pass the goal/query — no UI contract, no headless/silent flags.
-        upstream: dict[str, Any] | None = None
-        if drone_id == WEB_RESEARCH_DRONE_ID:
-            upstream = {
-                "research_request": {
-                    "question": goal,
-                    "original_text": goal,
-                    "drone_id": WEB_RESEARCH_DRONE_ID,
-                }
-            }
-            folder = DroneStore.drone_folder(self._root, drone_id)
-            _log.info(
-                "answer_only_research_launch drone_id=%s folder=%s "
-                "browser_owned_by_controller=True",
-                drone_id,
-                folder,
-            )
         runner = get_background_runner(self._root)
-        job = runner.launch(drone, goal, upstream=upstream)
+        job = runner.launch(drone, goal, upstream=None)
 
         return ToolExecResult(
             ok=True,
@@ -187,17 +204,13 @@ class PlannerHandlersMixin:
                 payload={"ok": False, "error": "Missing required parameter: goal"},
             )
 
+        if drone_id == WEB_RESEARCH_DRONE_ID:
+            return _web_research_drone_retired_result()
+
         from aura.drones.store import DroneStore
 
         drone = DroneStore.load_drone(self._root, drone_id)
         if drone is None:
-            if drone_id == WEB_RESEARCH_DRONE_ID:
-                folder = DroneStore.drone_folder(self._root, drone_id)
-                _log.warning(
-                    "web_research_drone_unregistered drone_id=%s folder=%s",
-                    drone_id,
-                    folder,
-                )
             return ToolExecResult(
                 ok=False,
                 payload={"ok": False, "error": f"No drone found with id: {drone_id}"},
@@ -218,34 +231,13 @@ class PlannerHandlersMixin:
         from aura.drones.sync_runner import run_read_only_drone_sync
 
         try:
-            # The Research Browser Controller owns all browser decisions.
-            # We just pass the goal/query — no UI contract, no headless/silent flags.
-            upstream: dict[str, Any] | None = None
-            if drone_id == WEB_RESEARCH_DRONE_ID:
-                upstream = {
-                    "research_request": {
-                        "question": goal,
-                        "original_text": goal,
-                        "drone_id": WEB_RESEARCH_DRONE_ID,
-                    }
-                }
-                folder = DroneStore.drone_folder(self._root, drone_id)
-                _log.info(
-                    "answer_only_research_start drone_id=%s folder=%s "
-                    "browser_owned_by_controller=True",
-                    drone_id,
-                    folder,
-                )
             result = run_read_only_drone_sync(
                 drone_id=drone_id,
                 goal=goal,
                 workspace_root=self._root,
                 drone=drone,
-                upstream=upstream,
+                upstream=None,
             )
-            if drone_id == WEB_RESEARCH_DRONE_ID:
-                result = dict(result)
-                result["answer_for_chat"] = format_research_answer(result)
             return ToolExecResult(ok=True, payload=result)
         except Exception as exc:
             return ToolExecResult(
@@ -432,6 +424,26 @@ class PlannerHandlersMixin:
                 ok=False,
                 payload={"ok": False, "error": str(e)},
             )
+
+
+def _web_research_drone_retired_result() -> ToolExecResult:
+    """Explicit unsupported result for the retired web-research Drone id.
+
+    The bundled web-research Drone (Bing/browser research) was replaced by
+    the provider-native ``web_search`` tool.  Requesting it must return a
+    clear result instead of launching the old browser system.
+    """
+    return ToolExecResult(
+        ok=True,
+        payload={
+            "ok": False,
+            "status": "unsupported",
+            "error": (
+                "The 'web-research' Drone is retired. Use the web_search "
+                "tool for live web research."
+            ),
+        },
+    )
 
 
 def format_web_research_answer(result: dict[str, Any]) -> str:

@@ -33,6 +33,11 @@ from aura.client.events import (
     ToolCallStart,
     Usage,
 )
+from aura.client.responses_stream import (
+    ResponsesStreamParser,
+    build_native_web_search_request,
+    translate_to_responses_tools,
+)
 from aura.config import (
     ProviderId,
     ThinkingMode,
@@ -396,6 +401,114 @@ class DeepSeekClient:
                         pass
 
         yield Done(finish_reason=finish_reason, full_message=full_message)
+
+    def stream_responses_web_search(
+        self,
+        question: str,
+        context: str | None = None,
+        model: str | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> Iterator[Event]:
+        """Stream a native Responses API web search as normalized Aura events.
+
+        Builds the DeepSeek native request::
+
+            client.responses.create(
+                model=<provider default or model>,
+                input=[{"role": "user", "content": question + context}],
+                tools=[{"type": "web_search"}],
+                tool_choice="auto",
+                stream=True,
+            )
+
+        Yields ContentDelta/Usage events and a final ``Done`` whose
+        ``full_message`` is the neutral research payload (status, text,
+        sources, usage, error).  On API failures yields ``ApiError``.
+        Honors cancel_event and the same first-event timeout as ``stream``.
+        """
+        cfg = get_provider(self._provider)
+        request_kwargs = build_native_web_search_request(
+            question=question,
+            context=context,
+            model=model or cfg.default_model,
+        )
+
+        _log.info(
+            "responses_web_search_start provider=%s model=%s tools=%s",
+            self._provider,
+            request_kwargs["model"],
+            translate_to_responses_tools(request_kwargs.get("tools")),
+        )
+
+        try:
+            stream = self._client.responses.create(**request_kwargs)
+        except APIStatusError as exc:
+            yield ApiError(status_code=exc.status_code, message=str(exc))
+            return
+        except APIError as exc:
+            yield ApiError(status_code=None, message=str(exc))
+            return
+        except Exception as exc:  # network errors, ssl, etc.
+            yield ApiError(status_code=None, message=f"{type(exc).__name__}: {exc}")
+            return
+
+        # Queue+pump-daemon pattern guards against silent hangs when the
+        # provider never sends the first streaming chunk.
+        chunk_queue: queue.Queue = queue.Queue()
+
+        def _pump_stream() -> None:
+            try:
+                for chunk in stream:
+                    chunk_queue.put(("chunk", chunk))
+                chunk_queue.put(("sentinel", None))
+            except Exception as exc:  # noqa: BLE001
+                chunk_queue.put(("error", exc))
+
+        pump_thread = threading.Thread(target=_pump_stream, daemon=True)
+        pump_thread.start()
+
+        parser = ResponsesStreamParser()
+        _first_read = True
+
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                break
+            try:
+                if _first_read:
+                    kind, payload = chunk_queue.get(
+                        timeout=FIRST_STREAM_EVENT_TIMEOUT_SECONDS
+                    )
+                    _first_read = False
+                else:
+                    kind, payload = chunk_queue.get(timeout=30.0)
+            except queue.Empty:
+                break
+
+            if kind == "sentinel":
+                break
+            if kind == "error":
+                yield ApiError(
+                    status_code=None,
+                    message=f"{type(payload).__name__}: {payload}",
+                )
+                return
+
+            try:
+                events = parser.push(payload)
+            except Exception as exc:  # noqa: BLE001
+                yield ApiError(
+                    status_code=None,
+                    message=f"responses stream parse error: {type(exc).__name__}: {exc}",
+                )
+                return
+            for event in events:
+                yield event
+            if parser.terminal:
+                break
+
+        if cancel_event is not None and cancel_event.is_set():
+            parser.cancel()
+        yield Done(finish_reason=parser.finish_reason, full_message=parser.finish())
 
 
 # ---------------------------------------------------------------------------

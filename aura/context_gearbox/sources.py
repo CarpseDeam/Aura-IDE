@@ -28,7 +28,7 @@ PLANNER_DISPATCH_CONTRACT = """### planner_dispatch_contract
 - Fill structured contract fields when knowable: expected_public_symbols, expected_dataclass_fields, forbidden_calls, forbidden_public_methods, and non_goals."""
 
 WEB_RESEARCH_RULES = """### web_research_rules
-- Use run_read_only_drone with drone_id "web-research" for latest/current facts, external docs/API examples, pricing, versions/releases/changelogs, schedules, current people/roles, error lookup, URLs, and external references.
+- Use the web_search tool for latest/current facts, external docs/API examples, pricing, versions/releases/changelogs, schedules, current people/roles, error lookup, URLs, and external references.
 - Do not use web research for local repo, file, workspace, git, or ordinary coding tasks unless the user explicitly needs current external facts.
 - Pure research answers must use the sourced research result and must not dispatch Worker.
 - For hybrid research-plus-code, Planner should research first and dispatch Worker only after findings create a concrete code objective with target files and acceptance.

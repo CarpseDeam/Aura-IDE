@@ -36,11 +36,8 @@ LAUNCH_READ_ONLY_DRONE_TOOL_DEF: dict[str, Any] = {
                     "type": "string",
                     "enum": ["silent", "visible"],
                     "description": (
-                        "For drone_id='web-research' only. Use 'silent' for "
-                        "answer-only research so no browser, report, Workbay, "
-                        "Terminal, or other work surface is shown. Use "
-                        "'visible' only when the user explicitly asks for a "
-                        "visible browser, login, or research UI."
+                        "Optional UI preference for Drone runs. Only relevant "
+                        "for browse drones that surface a visible browser."
                     ),
                 },
             },
@@ -56,9 +53,8 @@ RUN_READ_ONLY_DRONE_TOOL_DEF: dict[str, Any] = {
         "name": "run_read_only_drone",
         "description": (
             "Run a saved read-only Drone directly in the background to handle a "
-            "focused sub-task. Returns results synchronously. For current-info "
-            "questions that need fresh web evidence, call this with "
-            "drone_id='web-research' and pass the user's question as goal text."
+            "focused sub-task. Returns results synchronously. For live web "
+            "research, use the web_search tool instead."
         ),
         "parameters": {
             "type": "object",
@@ -75,11 +71,8 @@ RUN_READ_ONLY_DRONE_TOOL_DEF: dict[str, Any] = {
                     "type": "string",
                     "enum": ["silent", "visible"],
                     "description": (
-                        "For drone_id='web-research' only. Use 'silent' for "
-                        "answer-only research so no browser, report, Workbay, "
-                        "Terminal, or other work surface is shown. Use "
-                        "'visible' only when the user explicitly asks for a "
-                        "visible browser or research UI."
+                        "Optional UI preference for Drone runs. Only relevant "
+                        "for browse drones that surface a visible browser."
                     ),
                 },
             },

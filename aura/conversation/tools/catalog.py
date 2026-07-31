@@ -20,6 +20,7 @@ from aura.conversation.tools._schemas import (
     RUN_AND_WATCH_TOOL_DEF,
     SUMMON_DRONE_TOOL_DEF,
     TERMINAL_TOOL_DEF,
+    WEB_SEARCH_TOOL_DEF,
     WORKER_TODO_TOOL_DEF,
     WORKSPACE_SNAPSHOT_TOOL_DEF,
     WRITE_TOOL_DEFS,
@@ -124,6 +125,7 @@ class ToolCatalog:
                 + [dict(DECLARE_UI_CONTRACT_TOOL_DEF)]
                 + [dict(DIAGNOSTIC_TOOL_DEF)]
                 + [dict(WORKSPACE_SNAPSHOT_TOOL_DEF)]
+                + [dict(WEB_SEARCH_TOOL_DEF)]
             )
         elif mode == "worker":
             worker_write_tools = [
@@ -154,6 +156,7 @@ class ToolCatalog:
                 + list(GIT_TOOL_DEFS)
                 + [dict(DIAGNOSTIC_TOOL_DEF)]
                 + [dict(WORKSPACE_SNAPSHOT_TOOL_DEF)]
+                + [dict(WEB_SEARCH_TOOL_DEF)]
                 + [dict(RUN_READ_ONLY_DRONE_TOOL_DEF)]
                 + [dict(REGISTER_DRONE_FOLDER_TOOL_DEF)]
             )

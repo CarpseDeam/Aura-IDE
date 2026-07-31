@@ -1,15 +1,20 @@
-"""Adapter from ResearchRequest to the existing web-research Drone seam."""
+"""Adapter from ResearchRequest to provider-native web search execution.
+
+The legacy browser/Drone web-research seam is retired.  Research requests
+resolve through the provider's native Responses API web search when the
+active provider supports it and return an explicit unsupported result for
+every other provider — the old browser system is never launched.
+"""
 
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
-from aura.drones.definition import DroneDefinition
-from aura.drones.store import DroneStore
-from aura.drones.sync_runner import run_read_only_drone_sync
+from aura.research.native import execute_native_web_search
 from aura.research.ui_contract import (
     RESEARCH_UI_MODE_SILENT,
     with_research_ui_contract,
@@ -17,9 +22,6 @@ from aura.research.ui_contract import (
 
 WEB_RESEARCH_DRONE_ID = "web-research"
 _log = logging.getLogger(__name__)
-
-Runner = Callable[..., dict[str, Any]]
-DroneLoader = Callable[[Path, str], DroneDefinition | None]
 
 
 @dataclass(frozen=True)
@@ -53,43 +55,31 @@ def execute_web_research_request(
     workspace_root: Path,
     request: Any,
     *,
-    runner: Runner = run_read_only_drone_sync,
-    drone_loader: DroneLoader = DroneStore.load_drone,
+    provider: str = "deepseek",
+    model: str | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
-    """Run the existing read-only web-research Drone for a request."""
-    call = build_adapter_call(request)
-    if not call.goal:
+    """Execute a research request through the provider's native web search.
+
+    The legacy browser/Drone web-research path is retired.  This seam
+    resolves through the native Responses API when the active provider
+    supports it (DeepSeek) and returns a clear unsupported result for
+    every other provider.
+    """
+    question = str(getattr(request, "question", "") or "").strip()
+    original = str(getattr(request, "original_text", "") or "").strip()
+    if not question:
         return {
             "ok": False,
-            "drone_id": call.drone_id,
+            "status": "invalid_request",
             "error": "research question is required",
         }
 
-    drone = drone_loader(Path(workspace_root), call.drone_id)
-    if drone is None:
-        folder = DroneStore.drone_folder(Path(workspace_root), call.drone_id)
-        _log.warning(
-            "answer_only_research_unregistered drone_id=%s folder=%s",
-            call.drone_id,
-            folder,
-        )
-        return {
-            "ok": False,
-            "drone_id": call.drone_id,
-            "drone_folder": str(folder),
-            "error": "web-research Drone is not registered",
-        }
-
-    folder = DroneStore.drone_folder(Path(workspace_root), call.drone_id)
-    _log.info(
-        "answer_only_research_start drone_id=%s folder=%s browser_owned_by_controller=True",
-        call.drone_id,
-        folder,
+    result = execute_native_web_search(
+        provider=provider,
+        question=question,
+        context=original or None,
+        model=model,
+        cancel_event=cancel_event,
     )
-    return runner(
-        workspace_root=Path(workspace_root),
-        drone_id=call.drone_id,
-        drone=drone,
-        goal=call.goal,
-        upstream=call.upstream,
-    )
+    return result.to_dict()

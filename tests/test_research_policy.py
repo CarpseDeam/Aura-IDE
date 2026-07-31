@@ -3,13 +3,11 @@ import threading
 
 from aura.conversation.history import History
 from aura.conversation.dispatch import WorkerDispatchResult
-from aura.conversation.loop_detection import LoopDetector
 from aura.conversation.manager_send_state import _SendState
 from aura.conversation.manager_tool_round import ToolRoundRunner
 from aura.conversation.planner_refresh import PlannerRefreshState
 from aura.conversation.tool_runner import ToolRunner
 from aura.conversation.tools.registry import ToolRegistry
-from aura.conversation.verification_progress import VerificationProgressTracker
 from aura.research.policy import (
     ANSWER_ONLY,
     RESEARCH_THEN_WORKER,
@@ -19,20 +17,13 @@ from aura.research.policy import (
 
 def _round_runner(tmp_path, history: History | None = None) -> tuple[ToolRoundRunner, History]:
     history = history or History()
-    loop_detector = LoopDetector()
     registry = ToolRegistry(tmp_path, mode="planner")
-    tool_runner = ToolRunner(
-        history,
-        tmp_path,
-        loop_detector,
-        VerificationProgressTracker(),
-    )
+    tool_runner = ToolRunner(history, tmp_path)
     return (
         ToolRoundRunner(
             history=history,
             tools=registry,
             tool_runner=tool_runner,
-            loop_detector=loop_detector,
             planner_refresh=PlannerRefreshState(),
         ),
         history,

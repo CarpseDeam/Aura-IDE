@@ -114,6 +114,7 @@ class HarnessLapBridge(QObject):
             workspace_root=workspace_root,
             mode="planner",
         )
+        self._registry.set_provider(self._provider)
         self._manager = ConversationManager(self._history, self._registry)
 
         self._planner_backend = APIAgentBackend(provider=planner_provider or provider)
@@ -134,11 +135,13 @@ class HarnessLapBridge(QObject):
         )
 
     def _make_worker_registry(self, mode: str) -> ToolRegistry:
-        return ToolRegistry(
+        worker_reg = ToolRegistry(
             workspace_root=self._registry.workspace_root,
             read_only=self._registry.read_only,
             mode="worker" if mode == "worker" else "single",
         )
+        worker_reg.set_provider(self._provider)
+        return worker_reg
 
     def run_one_lap(self, want: str) -> LapResult:
         """Execute one unattended planner -> worker lap.

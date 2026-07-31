@@ -356,67 +356,6 @@ class TestStartReceiptReadiness:
         assert receipt.phase_errors.get("detect") == "Chrome not found"
 
 
-class TestBrowserResearchSessionStart:
-    """BrowserResearchSession.start() should accept a ready-but-not-navigated receipt."""
-
-    def _import_session(self):
-        """Import BrowserResearchSession from the web-research bundle directory.
-
-        The web-research modules use bare imports (``from models import ...``)
-        that require the bundle directory on sys.path.
-        """
-        import importlib
-        bundle_dir = (
-            Path(__file__).resolve().parent.parent
-            / "aura" / "drones" / "bundled" / "web-research"
-        )
-        if str(bundle_dir) not in sys.path:
-            sys.path.insert(0, str(bundle_dir))
-        # Clear the bundle's own top-level modules so the path update takes
-        # effect.  Match exact top-level names only: a substring match on
-        # "models" also evicts packaged modules such as
-        # aura.context_gearbox.models, and re-importing those creates a second
-        # RuntimeRole enum class whose members no longer compare equal to the
-        # ones already bound elsewhere — which silently breaks role-capsule
-        # loading for the rest of the test session.
-        for name in ("browser_search", "models"):
-            sys.modules.pop(name, None)
-        mod = importlib.import_module("browser_search")
-        return mod.BrowserResearchSession
-
-    def test_start_accepts_ready_receipt(self):
-        """Session start succeeds when the controller returns browser_ready=True."""
-        BrowserResearchSession = self._import_session()
-
-        class FakePage:
-            pass
-
-        ready_receipt = BrowserReceipt(
-            browser_executable="/usr/bin/chrome",
-            browser_profile_dir="/tmp/profile",
-            cdp_url="ws://127.0.0.1:9222",
-            browser_ready=True,
-            navigation_status="not_started",
-        )
-
-        # The module is imported as bare "browser_search" (not under the aura
-        # package namespace) because the bundle directory is on sys.path.
-        with (
-            patch("browser_search.ResearchBrowserController") as MockCtrl,
-        ):
-            instance = MockCtrl.return_value
-            instance.start.return_value = ready_receipt
-            instance.page = FakePage()
-
-            session = BrowserResearchSession()
-            result = session.start()
-
-        assert result is True
-        assert session._started is True
-        assert session._page is not None
-        session.close()
-
-
 # ---------------------------------------------------------------------------
 # Controller launch command shape (mocked)
 # ---------------------------------------------------------------------------

@@ -324,6 +324,7 @@ class ConversationBridge(QObject):
 
         self._history = History()
         self._registry = ToolRegistry(workspace_root=_dummy_root(), mode="single")
+        self._registry.set_provider(provider)
         self._manager = ConversationManager(self._history, self._registry)
         self._parent_widget = parent_widget
         self._approval_proxy = _ApprovalProxy(parent_widget)
@@ -671,6 +672,7 @@ class ConversationBridge(QObject):
             read_only=self._registry.read_only,
             mode="worker" if mode == "worker" else "single",
         )
+        worker_reg.set_provider(self._provider)
         return worker_reg
 
     # ---- dispatch button-pressed handlers (GUI -> bridge) -----------------

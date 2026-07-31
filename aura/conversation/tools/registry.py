@@ -87,6 +87,7 @@ class ToolRegistry(
         self._mcp_tools = MCPToolRegistry()
         self._contract: ExplicitSpecContract | None = None
         self._task_shape: TaskShape | None = None
+        self._provider: str = "deepseek"
         self._executor = ToolExecutor(
             owner=self,
             dynamic_tools=self._dynamic_tools,
@@ -119,6 +120,15 @@ class ToolRegistry(
 
     def set_mode(self, mode: RegistryMode) -> None:
         self._mode = mode
+
+    @property
+    def provider(self) -> str:
+        """Active provider id for provider-gated capabilities (e.g. web_search)."""
+        return self._provider
+
+    def set_provider(self, provider: str | None) -> None:
+        if provider:
+            self._provider = provider
 
     def tool_defs(self) -> list[dict[str, Any]]:
         dynamic_schemas = self._dynamic_tools.schemas() if not self._read_only else []
@@ -221,6 +231,7 @@ TOOL_HANDLERS["save_to_project_memory"] = ToolRegistry._handle_save_to_project_m
 TOOL_HANDLERS["run_diagnostic_command"] = ToolRegistry._handle_run_diagnostic_command
 TOOL_HANDLERS["get_workspace_snapshot"] = ToolRegistry._handle_get_workspace_snapshot
 TOOL_HANDLERS["summon_drone"] = ToolRegistry._handle_summon_drone
+TOOL_HANDLERS["web_search"] = ToolRegistry._handle_web_search
 TOOL_HANDLERS["launch_read_only_drone"] = ToolRegistry._handle_launch_read_only_drone
 TOOL_HANDLERS["run_read_only_drone"] = ToolRegistry._handle_run_read_only_drone
 TOOL_HANDLERS["check_drone_run"] = ToolRegistry._handle_check_drone_run
