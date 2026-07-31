@@ -70,7 +70,6 @@ from aura.config import (
 from aura.context_gearbox.models import RuntimeRole
 from aura.context_gearbox.runtime import (
     SINGLE_SYSTEM_PROMPT,
-    build_context_text,
     compose_system_prompt,
     context_gearbox_metadata,
 )
@@ -362,6 +361,8 @@ class ConversationBridge(QObject):
         self._pre_worker_sha: str | None = None
         self._active_prompt_mode: str | None = None
         self._turn_task_kind: str | None = None
+        self._turn_content: str = ""
+        self._turn_target_files: tuple[str, ...] = ()
 
         # Re-emit dispatch proxy signals on the bridge so the GUI binds once.
         self._dispatch_proxy.showSpecCard.connect(self.workerDispatchRequested)
@@ -481,20 +482,6 @@ class ConversationBridge(QObject):
         composed = self._compose_prompt(role, prompt)
         self._history.set_system(composed.system_prompt)
 
-    def _compute_and_cache_tier1(self, force_repo_map: bool = False) -> None:
-        """Recompute runtime context from the current workspace root and cache it."""
-        context = build_context_text(
-            self._active_runtime_role(),
-            self._registry.workspace_root,
-            force=force_repo_map,
-            task_kind=self._turn_task_kind,
-        )
-        self._context_gearbox_metadata = context_gearbox_metadata(
-            context.ledger, workspace_root=self._registry.workspace_root,
-        )
-        self._tier1_context = context.context_text
-        self._dispatch_proxy.set_tier1_context(self._tier1_context)
-
     def refresh_tier1_context(self, force_repo_map: bool = False) -> None:
         """Refresh workspace context and reapply the active system prompt."""
         role = self._active_runtime_role()
@@ -522,11 +509,8 @@ class ConversationBridge(QObject):
                 "production single-agent mode is the normal product"
             )
         self._planner_worker_mode = False
-        self._compute_and_cache_tier1()
         mode_key = "single"
         self._registry.set_mode(mode_key)
-        if self._active_prompt_mode == mode_key:
-            return  # Already set, avoid churn
         role = self._active_runtime_role()
         composed = self._compose_prompt(role, self._custom_prompt_for_role(role))
         self._history.set_system(composed.system_prompt)
@@ -577,12 +561,16 @@ class ConversationBridge(QObject):
         *,
         force_repo_map: bool = False,
     ):
+        """The one place a production system prompt is built and cached."""
         composed = compose_system_prompt(
             role,
             custom_prompt,
             self._registry.workspace_root,
             force=force_repo_map,
+            model=self._active_model or None,
             task_kind=self._turn_task_kind,
+            target_files=self._turn_target_files,
+            content=self._turn_content or None,
         )
         self._context_gearbox_metadata = context_gearbox_metadata(
             composed.ledger, workspace_root=self._registry.workspace_root,
@@ -700,6 +688,9 @@ class ConversationBridge(QObject):
         """
         if self.is_running():
             return
+        # The active model is terrain for skill selection, so it must be known
+        # before the turn's system prompt is composed.
+        self._active_model = str(model)
         self._prepare_turn_context()
         # Capture pre-run snapshot for reliable /undo.
         if self._registry.workspace_root is not None:
@@ -710,7 +701,6 @@ class ConversationBridge(QObject):
         self._cancel = threading.Event()
         self._index_to_id.clear()
         self._index_to_name.clear()
-        self._active_model = str(model)
         self._dispatch_proxy.set_max_tool_rounds(max_tool_rounds)
         if self._registry.workspace_root is not None:
             base_prompt = (
@@ -722,6 +712,10 @@ class ConversationBridge(QObject):
                 base_prompt=base_prompt,
                 workspace_root=self._registry.workspace_root,
                 role=RuntimeRole.SINGLE,
+                model=self._active_model or None,
+                task_kind=self._turn_task_kind,
+                content=self._turn_content or None,
+                target_files=self._turn_target_files,
             )
 
         # One stable execution identity for this production turn.
@@ -855,15 +849,27 @@ class ConversationBridge(QObject):
         self.finished.emit()
 
     def _prepare_turn_context(self) -> None:
-        task_kind = _research_task_kind_for_text(_latest_user_text(self._history))
-        if task_kind == self._turn_task_kind:
-            return
-        self._turn_task_kind = task_kind
+        """Recompose the system prompt against this turn's live terrain.
+
+        Runs on every turn: skill selection uses the current user message,
+        task kind, active model, and any known target files, never a cached
+        workspace-startup composition.
+        """
+        self._turn_content = _latest_user_text(self._history)
+        self._turn_task_kind = _research_task_kind_for_text(self._turn_content)
         if self._registry.workspace_root is None:
             return
         role = self._active_runtime_role()
         composed = self._compose_prompt(role, self._custom_prompt_for_role(role))
         self._history.set_system(composed.system_prompt)
+        _log.info(
+            "context_gearbox_turn_summary %s",
+            self._context_gearbox_metadata.get("summary", {}).get("display", ""),
+        )
+
+    def set_turn_target_files(self, target_files: list[str] | tuple[str, ...]) -> None:
+        """Declare the files this turn is known to target (optional)."""
+        self._turn_target_files = tuple(str(path) for path in target_files if str(path).strip())
 
 
 def _dummy_root():

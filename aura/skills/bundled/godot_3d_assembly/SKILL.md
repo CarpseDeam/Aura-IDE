@@ -2,6 +2,7 @@
 task_kinds: ["3d", "level design", "godot_3d"]
 path_globs: ["**/*.tscn", "assets/**"]
 triggers: ["node3d", "transform3d", "packedscene", "modular", "assembly", "placement", "socket", "local transform", "global transform", "level"]
+workspace_markers: ["project.godot"]
 ---
 ### Godot 3D and Modular Assembly
 

@@ -2,6 +2,7 @@
 task_kinds: ["performance", "mmo"]
 path_globs: []
 triggers: ["mmo", "performance", "multimesh", "lod", "hlod", "occlusion", "streaming", "navigation", "multiplayer", "authority", "draw calls"]
+workspace_markers: ["project.godot"]
 ---
 ### Godot MMO and Large-World Judgment
 

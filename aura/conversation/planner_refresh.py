@@ -54,23 +54,44 @@ class PlannerRefreshState:
         self._base_system_prompt: str | None = None
         self._workspace_root: Path | None = None
         self._role: RuntimeRole = RuntimeRole.PLANNER
+        self._model: str | None = None
+        self._task_kind: str | None = None
+        self._content: str | None = None
+        self._target_files: tuple[str, ...] = ()
 
     def configure(
         self,
         base_prompt: str,
         workspace_root: Path,
         role: RuntimeRole | str = RuntimeRole.PLANNER,
+        *,
+        model: str | None = None,
+        task_kind: str | None = None,
+        content: str | None = None,
+        target_files: tuple[str, ...] = (),
     ) -> None:
-        """Store the base system prompt, workspace root, and role for mid-turn refresh."""
+        """Store the base prompt, root, role, and this turn's live terrain.
+
+        The terrain is kept so a mid-turn refresh reselects the same skills
+        the turn started with instead of silently dropping them.
+        """
         self._base_system_prompt = base_prompt
         self._workspace_root = workspace_root
         self._role = RuntimeRole.from_value(role)
+        self._model = model
+        self._task_kind = task_kind
+        self._content = content
+        self._target_files = tuple(target_files or ())
 
     @property
     def role(self) -> RuntimeRole:
         return self._role
 
-    def refresh_tier1_after_writes(self, history) -> None:
+    def refresh_tier1_after_writes(
+        self,
+        history,
+        target_files: tuple[str, ...] | list[str] = (),
+    ) -> None:
         """Rebuild Tier 1 context with force-refreshed repo map and update system prompt.
 
         Called after file writes land. Forces repo map regeneration so the next
@@ -80,12 +101,17 @@ class PlannerRefreshState:
         """
         if self._base_system_prompt is None or self._workspace_root is None:
             return
+        known_targets = tuple(dict.fromkeys((*self._target_files, *tuple(target_files or ()))))
         try:
             composed = compose_system_prompt(
                 self._role,
                 self._base_system_prompt,
                 self._workspace_root,
                 force=True,
+                model=self._model,
+                task_kind=self._task_kind,
+                target_files=known_targets,
+                content=self._content,
             )
             metadata = context_gearbox_metadata(
                 composed.ledger, workspace_root=self._workspace_root,
@@ -115,7 +141,8 @@ class PlannerRefreshState:
             return
 
         history.append_user_text(stale_read_notice(modified_files))
-        self.refresh_tier1_after_writes(history)
+        # Files the run just wrote are the target files we now know about.
+        self.refresh_tier1_after_writes(history, tuple(modified_files))
 
         if self._workspace_root is not None:
             from aura.dependency_context import build_dependent_planner_notice

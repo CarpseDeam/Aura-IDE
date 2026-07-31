@@ -20,60 +20,115 @@ except ImportError:
         return []
 
 
+def _bundled_skills_dir() -> Path | None:
+    """Resolve the packaged skill directory in dev and packaged builds."""
+    local_dir = Path(__file__).resolve().parent / "bundled"
+    if local_dir.is_dir():
+        return local_dir
+    try:
+        from aura.resources import get_resource_path
+
+        resource_dir = get_resource_path(Path("aura") / "skills" / "bundled")
+    except Exception:
+        logger.debug("Failed to resolve packaged skill directory", exc_info=True)
+        return None
+    return resource_dir if resource_dir.is_dir() else None
+
+
 def _read_bundled_skills() -> list[Skill]:
-    """Read bundled skill JSON files from the bundled package directory."""
+    """Read packaged skills from the bundled package directory.
+
+    Two on-disk forms are supported:
+    - ``bundled/<skill_id>/SKILL.md`` — markdown with optional front matter.
+    - ``bundled/<skill_id>.json`` — a single skill object.
+    """
     skills: list[Skill] = []
     try:
-        import importlib.resources as ilr
+        bundled_dir = _bundled_skills_dir()
+        if bundled_dir is None:
+            return []
 
-        try:
-            pkg_files = ilr.files("aura.skills.bundled")
-        except (ModuleNotFoundError, TypeError, Exception):
-            pkg_files = None
-
-        if pkg_files is not None and pkg_files.is_dir():
-            entries = list(pkg_files.iterdir())
-        else:
-            # Fallback: compute from __file__
-            bundled_dir = Path(__file__).resolve().parent / "bundled"
-            if bundled_dir.is_dir():
-                entries = list(bundled_dir.iterdir())
-            else:
-                entries = []
-
-        for entry in entries:
+        for entry in sorted(bundled_dir.iterdir(), key=lambda path: path.name):
+            if entry.is_dir():
+                skill = _read_markdown_skill_dir(entry, SkillProvenance.BUNDLED)
+                if skill is not None:
+                    skills.append(skill)
+                continue
             if entry.suffix != ".json":
                 continue
             try:
-                if isinstance(entry, Path):
-                    raw = entry.read_text(encoding="utf-8")
-                else:
-                    raw = entry.read_bytes()
-                data = json.loads(raw) if isinstance(raw, str) else json.loads(raw)
+                data = json.loads(entry.read_text(encoding="utf-8"))
             except Exception:
                 logger.debug("Failed to read bundled skill %s", entry, exc_info=True)
                 continue
             if not isinstance(data, dict):
                 continue
-            text = data.get("text", "")
+            text = str(data.get("text", "") or "").strip()
             if not text:
                 continue
-            task_kinds = tuple(data.get("task_kinds", []) or [])
-            path_globs = tuple(data.get("path_globs", []) or [])
-            model = data.get("model", None)
             skills.append(
                 Skill(
                     text=text,
-                    task_kinds=task_kinds,
-                    path_globs=path_globs,
-                    model=model,
+                    task_kinds=tuple(data.get("task_kinds", []) or []),
+                    path_globs=tuple(data.get("path_globs", []) or []),
+                    model=data.get("model", None),
                     provenance=SkillProvenance.BUNDLED,
-                    origin=(),
+                    origin=(("skill_id", entry.stem),),
+                    triggers=tuple(data.get("triggers", []) or []),
+                    workspace_markers=tuple(data.get("workspace_markers", []) or []),
                 )
             )
     except Exception:
         logger.debug("Failed to read bundled skills", exc_info=True)
     return skills
+
+
+def _read_markdown_skill_dir(
+    directory: Path,
+    provenance: SkillProvenance,
+) -> Skill | None:
+    """Read one ``<skill_id>/SKILL.md`` folder into a Skill, or None."""
+    skill_path = directory / "SKILL.md"
+    if not skill_path.is_file():
+        return None
+    try:
+        raw = skill_path.read_text(encoding="utf-8")
+        text, metadata = _parse_skill_markdown(raw, skill_path)
+    except Exception:
+        logger.debug("Failed to read markdown skill %s", skill_path, exc_info=True)
+        return None
+    if not text:
+        return None
+    return Skill(
+        text=text,
+        task_kinds=_metadata_list(metadata, "task_kinds"),
+        path_globs=_metadata_list(metadata, "path_globs"),
+        model=_metadata_model(metadata),
+        provenance=provenance,
+        origin=(("skill_id", directory.name),),
+        triggers=_metadata_list(metadata, "triggers"),
+        workspace_markers=_metadata_list(metadata, "workspace_markers"),
+    )
+
+
+def _workspace_marker_present(workspace_root: str | Path, marker: str) -> bool:
+    candidate = str(marker or "").strip()
+    if not candidate:
+        return False
+    try:
+        return (Path(workspace_root) / candidate).exists()
+    except OSError:
+        return False
+
+
+def _skill_applies_to_workspace(skill: Skill, workspace_root: str | Path) -> bool:
+    """Packaged skills declaring workspace markers only load where they apply."""
+    if not skill.workspace_markers:
+        return True
+    return any(
+        _workspace_marker_present(workspace_root, marker)
+        for marker in skill.workspace_markers
+    )
 
 
 
@@ -217,7 +272,13 @@ def _parse_skill_markdown(raw: str, skill_path: Path) -> tuple[str, dict[str, An
                 raise ValueError(f"metadata line missing ':' in {skill_path}")
             key, value = stripped.split(":", 1)
             key = key.strip()
-            if key not in {"task_kinds", "path_globs", "model", "triggers"}:
+            if key not in {
+                "task_kinds",
+                "path_globs",
+                "model",
+                "triggers",
+                "workspace_markers",
+            }:
                 continue
             metadata[key] = _parse_front_matter_value(value)
     except Exception:
@@ -242,28 +303,9 @@ def _read_user_authored_skills(workspace_root: str | Path) -> list[Skill]:
         skills: list[Skill] = []
         for entry in sorted(authored_dir.iterdir(), key=lambda path: path.name):
             if entry.is_dir():
-                skill_path = entry / "SKILL.md"
-                if not skill_path.is_file():
-                    continue
-                try:
-                    raw = skill_path.read_text(encoding="utf-8")
-                    text, metadata = _parse_skill_markdown(raw, skill_path)
-                except Exception:
-                    logger.debug("Failed to read user-authored skill %s", skill_path, exc_info=True)
-                    continue
-                if not text:
-                    continue
-                skills.append(
-                    Skill(
-                        text=text,
-                        task_kinds=_metadata_list(metadata, "task_kinds"),
-                        path_globs=_metadata_list(metadata, "path_globs"),
-                        model=_metadata_model(metadata),
-                        provenance=SkillProvenance.USER_AUTHORED,
-                        origin=(("skill_id", entry.name),),
-                        triggers=_metadata_list(metadata, "triggers"),
-                    )
-                )
+                skill = _read_markdown_skill_dir(entry, SkillProvenance.USER_AUTHORED)
+                if skill is not None:
+                    skills.append(skill)
                 continue
 
             if entry.suffix != ".json":
@@ -319,11 +361,20 @@ def read_skills(
 ) -> list[Skill]:
     """Read all skills: authored first, then bundled, graduated, and refined.
 
+    Read order is the scoping priority used to break selection ties:
+    workspace-authored, then packaged, then learned guards.  Packaged skills
+    that declare ``workspace_markers`` (for example ``project.godot``) are
+    dropped for workspaces that do not carry the marker.
+
     Returns empty list on any failure — never propagates exceptions.
     """
     try:
         authored = _read_user_authored_skills(workspace_root)
-        bundled = _read_bundled_skills()
+        bundled = [
+            skill
+            for skill in _read_bundled_skills()
+            if _skill_applies_to_workspace(skill, workspace_root)
+        ]
         graduated = _read_graduated_skills(workspace_root, window_days=window_days)
         refined = _read_refined_skills(workspace_root)
         return authored + bundled + graduated + refined

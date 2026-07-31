@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
+from aura.skills.models import SkillProvenance
 from aura.skills.reader import read_skills
 from aura.skills.selection import select_relevant_skills
 from aura.skills.text import build_skill_context
 
-SOURCE = Path("scripts/personal/godot_knowledge/skills")
+SOURCE = Path("aura/skills/bundled")
 SKILL_FILE = SOURCE / "godot_aura_workflow" / "SKILL.md"
 
 
@@ -16,11 +16,8 @@ def _skill_text() -> str:
 
 
 def _workspace_with_skills(tmp_path: Path) -> Path:
-    destination = tmp_path / ".aura/skills/authored"
-    destination.mkdir(parents=True)
-    for source in SOURCE.iterdir():
-        if source.is_dir():
-            shutil.copytree(source, destination / source.name)
+    """A Godot workspace: the packaged pack loads from the project marker."""
+    (tmp_path / "project.godot").write_text("[application]\n", encoding="utf-8")
     return tmp_path
 
 
@@ -28,19 +25,30 @@ def _ids(skills) -> list[str]:
     return [dict(skill.origin).get("skill_id", "") for skill in skills]
 
 
-def test_personal_godot_skills_are_read_as_project_authored(tmp_path: Path) -> None:
+def test_godot_skills_are_packaged_and_load_for_a_godot_workspace(tmp_path: Path) -> None:
     root = _workspace_with_skills(tmp_path)
     skills = read_skills(root)
-    authored = [skill for skill in skills if dict(skill.origin).get("skill_id", "").startswith("godot_")]
+    godot = [skill for skill in skills if dict(skill.origin).get("skill_id", "").startswith("godot_")]
 
-    assert len(authored) == 5
-    assert {dict(skill.origin)["skill_id"] for skill in authored} == {
+    assert len(godot) == 5
+    assert all(skill.provenance == SkillProvenance.BUNDLED for skill in godot)
+    assert {dict(skill.origin)["skill_id"] for skill in godot} == {
         "godot_3d_assembly",
         "godot_aura_workflow",
         "godot_gdscript",
         "godot_mmo_performance",
         "godot_scene_architecture",
     }
+
+
+def test_godot_pack_is_not_loaded_for_a_non_godot_workspace(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+    skills = read_skills(tmp_path)
+
+    assert not [
+        skill for skill in skills if dict(skill.origin).get("skill_id", "").startswith("godot_")
+    ]
 
 
 def test_personal_godot_skills_route_specialized_knowledge_first(tmp_path: Path) -> None:
@@ -71,12 +79,20 @@ def test_personal_godot_skills_route_specialized_knowledge_first(tmp_path: Path)
     assert _ids(assembly)[:2] == ["godot_3d_assembly", "godot_aura_workflow"]
 
 
-def test_personal_godot_knowledge_is_not_imported_by_packaged_aura() -> None:
-    assert SOURCE.parts[0] == "scripts"
+def test_godot_pack_ships_as_runtime_owned_skills_with_one_copy() -> None:
+    assert SOURCE.parts[:2] == ("aura", "skills")
+    assert not Path("scripts/personal/godot_knowledge/skills").exists()
+    # Selection stays generic: no Godot skill id is hardcoded in runtime code.
     assert not any(
-        "godot_knowledge" in path.read_text(encoding="utf-8", errors="ignore")
+        "godot_aura_workflow" in path.read_text(encoding="utf-8", errors="ignore")
         for path in Path("aura").rglob("*.py")
     )
+
+
+def test_godot_pack_declares_the_godot_workspace_marker() -> None:
+    for directory in sorted(SOURCE.glob("godot_*")):
+        text = (directory / "SKILL.md").read_text(encoding="utf-8")
+        assert 'workspace_markers: ["project.godot"]' in text
 
 
 def test_godot_workflow_skill_defines_planner_and_worker_roles() -> None:
@@ -164,12 +180,9 @@ def test_godot_workflow_exempts_purely_structural_tasks() -> None:
     assert "deterministic geometry checks" in text
 
 
-def test_godot_workflow_skill_remains_outside_packaged_aura() -> None:
-    assert SKILL_FILE.parts[0] == "scripts"
-    assert not any(
-        "godot_aura_workflow" in path.read_text(encoding="utf-8", errors="ignore")
-        for path in Path("aura").rglob("*.py")
-    )
+def test_godot_workflow_skill_is_packaged_markdown() -> None:
+    assert SKILL_FILE.parts[0] == "aura"
+    assert SKILL_FILE.is_file()
 
 
 def test_godot_visual_iteration_routes_to_workflow_skill(tmp_path: Path) -> None:

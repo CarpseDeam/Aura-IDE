@@ -127,14 +127,28 @@ class ConversationManager:
         base_prompt: str,
         workspace_root: Path,
         role: RuntimeRole | str = RuntimeRole.SINGLE,
+        *,
+        model: str | None = None,
+        task_kind: str | None = None,
+        content: str | None = None,
+        target_files: tuple[str, ...] = (),
     ) -> None:
-        """Role-neutral entry point: store the base prompt, root, and runtime role.
+        """Role-neutral entry point: store the base prompt, root, role, terrain.
 
         This is the canonical configuration call for the production
         single-agent path.  Mid-turn context refreshes recompose against
-        *role*, so nothing Planner-specific leaks into production execution.
+        *role* and this turn's terrain, so nothing Planner-specific leaks into
+        production execution and the turn's skills are not dropped mid-run.
         """
-        self._planner_refresh.configure(base_prompt, workspace_root, role)
+        self._planner_refresh.configure(
+            base_prompt,
+            workspace_root,
+            role,
+            model=model,
+            task_kind=task_kind,
+            content=content,
+            target_files=target_files,
+        )
 
     def configure_for_planner(self, base_prompt: str, workspace_root: Path) -> None:
         """Compatibility alias for the historical Planner path."""

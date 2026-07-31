@@ -2,6 +2,7 @@
 task_kinds: ["bugfix", "gdscript"]
 path_globs: ["**/*.gd"]
 triggers: ["gdscript", "godot api", "await", "signal", "typed", "export", "ready", "process", "physics process"]
+workspace_markers: ["project.godot"]
 ---
 ### Godot 4.6 GDScript Practice
 

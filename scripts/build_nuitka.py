@@ -40,6 +40,9 @@ BUILTIN_DRONES_DEST_REL = Path("aura") / "drones" / "bundled"
 ROLE_CAPSULES_SOURCE_REL = Path("aura") / "roles" / "bundled"
 ROLE_CAPSULES_DEST_REL = Path("aura") / "roles" / "bundled"
 
+BUNDLED_SKILLS_SOURCE_REL = Path("aura") / "skills" / "bundled"
+BUNDLED_SKILLS_DEST_REL = Path("aura") / "skills" / "bundled"
+
 REQUIRED_ROLE_CAPSULE_FILES = [
     "planner.md",
     "worker.md",
@@ -218,6 +221,9 @@ def validate_project_paths(root: Path) -> None:
         for filename in REQUIRED_ROLE_CAPSULE_FILES
         if not (capsule_dir / filename).is_file()
     )
+    skills_dir = root / BUNDLED_SKILLS_SOURCE_REL
+    if not skills_dir.is_dir():
+        missing.append(skills_dir)
     if missing:
         details = "\n".join(f"  - {path}" for path in missing)
         raise SystemExit(f"Missing required build files:\n{details}")
@@ -692,6 +698,7 @@ def create_nuitka_command(
         f"--windows-icon-from-ico={ICON_PATH}",
         f"--include-data-dir={MEDIA_DIR}={MEDIA_DIR}",
         f"--include-data-dir={ROLE_CAPSULES_SOURCE_REL}={ROLE_CAPSULES_DEST_REL}",
+        f"--include-data-dir={BUNDLED_SKILLS_SOURCE_REL}={BUNDLED_SKILLS_DEST_REL}",
         "--include-package=aura",
         "--include-package-data=aura",
         "--include-package=relay",

@@ -21,6 +21,19 @@ class Skill:
     provenance: SkillProvenance
     origin: tuple[tuple[str, str], ...]
     triggers: tuple[str, ...] = ()
+    workspace_markers: tuple[str, ...] = ()
+
+
+def skill_label(skill: Skill) -> str:
+    """Return a human-readable identifier for inspection surfaces.
+
+    Falls back to the stable hashed id when a skill has no authored folder
+    name (flat JSON skills, graduated hazards, refined guards).
+    """
+    for key, value in skill.origin:
+        if key == "skill_id" and str(value).strip():
+            return str(value).strip()
+    return compute_skill_id(skill)
 
 
 def compute_skill_id(

@@ -9,6 +9,8 @@ from aura.context_gearbox.models import (
 )
 from aura.context_gearbox.runtime import (
     CONTEXT_PLACEHOLDER,
+    CUSTOM_PROMPT_HEADER,
+    FULL_REPLACEMENT_MARKER,
     PLANNER_SYSTEM_PROMPT,
     SINGLE_SYSTEM_PROMPT,
     WORKER_SYSTEM_PROMPT,
@@ -23,6 +25,8 @@ from aura.context_gearbox.runtime import (
 
 __all__ = [
     "CONTEXT_PLACEHOLDER",
+    "CUSTOM_PROMPT_HEADER",
+    "FULL_REPLACEMENT_MARKER",
     "PLANNER_SYSTEM_PROMPT",
     "WORKER_SYSTEM_PROMPT",
     "SINGLE_SYSTEM_PROMPT",

@@ -13,6 +13,13 @@ from aura.roles import load_bundled_role_capsule
 
 CONTEXT_PLACEHOLDER = "{TIER1_CONTEXT}"
 
+# Documented opt-in for full replacement. A custom prompt containing this
+# marker owns the whole system prompt; every other custom prompt is an
+# additive extension of Aura's canonical context and role instructions.
+FULL_REPLACEMENT_MARKER = "{AURA_REPLACE_CANONICAL_PROMPT}"
+
+CUSTOM_PROMPT_HEADER = "### Custom Instructions"
+
 _RESPONSE_DISCIPLINE = """Response discipline:
 - Lead with the answer, decision, or next action.
 - Default to concise, useful replies.
@@ -239,7 +246,6 @@ def build_context_text(
     target_files: tuple[str, ...] | None = None,
     content: str | None = None,
 ) -> ComposedContext:
-    _ = model
     runtime_role = RuntimeRole.from_value(role)
     parts: list[str] = []
     ledger: list[ContextLedgerEntry] = []
@@ -250,6 +256,7 @@ def build_context_text(
             runtime_role,
             workspace_root,
             force=force,
+            model=model,
             task_kind=task_kind,
             target_files=normalized_target_files,
             content=content,
@@ -277,6 +284,14 @@ def compose_system_prompt(
     target_files: tuple[str, ...] | None = None,
     content: str | None = None,
 ) -> ComposedContext:
+    """Compose the one canonical system prompt for *role*.
+
+    Core context, response discipline, and the role capsule always survive.
+    A custom prompt is an additive extension appended under
+    ``### Custom Instructions``; text it repeats verbatim from the canonical
+    blocks is dropped so nothing is injected twice.  Full replacement is only
+    available by opting in with ``FULL_REPLACEMENT_MARKER``.
+    """
     runtime_role = RuntimeRole.from_value(role)
     context = build_context_text(
         runtime_role,
@@ -288,14 +303,57 @@ def compose_system_prompt(
         content=content,
     )
     custom = (custom_prompt or "").strip()
-    prompt_template = custom if custom else default_role_prompt(runtime_role)
-    if CONTEXT_PLACEHOLDER in prompt_template:
-        system_prompt = prompt_template.replace(CONTEXT_PLACEHOLDER, context.context_text, 1)
+    if custom and FULL_REPLACEMENT_MARKER in custom:
+        template = custom.replace(FULL_REPLACEMENT_MARKER, "").strip()
+        system_prompt = template.replace(
+            CONTEXT_PLACEHOLDER, context.context_text, 1
+        ).strip()
     else:
-        system_prompt = prompt_template
+        system_prompt = _compose_canonical_prompt(
+            runtime_role,
+            context.context_text,
+            custom,
+        )
     return ComposedContext(
         role=runtime_role,
         system_prompt=system_prompt,
         context_text=context.context_text,
         ledger=context.ledger,
     )
+
+
+def _compose_canonical_prompt(
+    runtime_role: RuntimeRole,
+    context_text: str,
+    custom: str,
+) -> str:
+    """Build canonical context + role prompt, then append custom extras."""
+    blocks = [context_text, _RESPONSE_DISCIPLINE, _role_prompt_text(runtime_role)]
+    parts = [block.strip() for block in blocks if block and block.strip()]
+    extension = _custom_prompt_extension(custom, blocks)
+    if extension:
+        parts.append(f"{CUSTOM_PROMPT_HEADER}\n{extension}")
+    return "\n\n".join(parts)
+
+
+def _custom_prompt_extension(custom: str, canonical_blocks: list[str]) -> str:
+    """Return only the part of *custom* that canonical composition lacks.
+
+    Custom prompts are usually an edited copy of the default role prompt, so
+    the placeholder and any verbatim canonical block are removed before the
+    remainder is appended.
+    """
+    if not custom:
+        return ""
+    text = custom.replace(CONTEXT_PLACEHOLDER, "")
+    for block in canonical_blocks:
+        stripped = block.strip()
+        if stripped:
+            text = text.replace(stripped, "")
+    lines = [line.rstrip() for line in text.splitlines()]
+    collapsed: list[str] = []
+    for line in lines:
+        if not line and (not collapsed or not collapsed[-1]):
+            continue
+        collapsed.append(line)
+    return "\n".join(collapsed).strip()

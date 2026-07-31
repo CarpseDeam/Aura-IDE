@@ -8,7 +8,7 @@ from typing import Any
 
 from aura.context_gearbox.models import ContextLedgerEntry, ContextSource, RuntimeRole
 from aura.repo_map import generate_repo_map
-from aura.skills.text import build_skill_context_with_ids
+from aura.skills.text import SkillPack, build_skill_pack
 
 CORE_KERNEL_TEXT = """Core kernel:
 - Work inside the selected workspace.
@@ -337,7 +337,7 @@ CONTEXT_SOURCES: tuple[ContextSource, ...] = (
     ContextSource(
         source_id="skill_pack",
         kind="skill_pack",
-        roles=(RuntimeRole.PLANNER, RuntimeRole.WORKER),
+        roles=(RuntimeRole.PLANNER, RuntimeRole.WORKER, RuntimeRole.SINGLE),
         reason="terrain-selected skills for this context",
     ),
 )
@@ -353,20 +353,22 @@ def collect_source_text(
     workspace_root: Path | None,
     *,
     force: bool = False,
+    model: str | None = None,
     task_kind: str | None = None,
     target_files: tuple[str, ...] | None = None,
     content: str | None = None,
 ) -> tuple[str, ContextLedgerEntry, list[ContextLedgerEntry]]:
     try:
-        skill_ids: list[str] = []
+        pack: SkillPack | None = None
         if _source_origin_matches_target_file(source, role, target_files, workspace_root):
             text, reason = "", "skipped because target file owns this context source"
         elif source.kind == "skill_pack":
             if role not in source.roles:
                 text, reason = "", f"not scoped to {role.value} role"
             else:
-                text, reason, skill_ids = _load_skill_pack(
+                text, reason, pack = _load_skill_pack(
                     workspace_root,
+                    model,
                     task_kind,
                     target_files,
                     content,
@@ -377,6 +379,7 @@ def collect_source_text(
                 workspace_root,
                 force=force,
                 role=role,
+                model=model,
                 task_kind=task_kind,
                 target_files=target_files,
                 content=content,
@@ -391,20 +394,33 @@ def collect_source_text(
             char_count=len(text),
         )
 
-        # For skill_pack, include per-skill ledger entries
+        # For skill_pack, include per-skill ledger entries so the Context
+        # Gearbox shows the actual skill IDs, why each was loaded or skipped,
+        # and how many characters it contributed.
         extra: list[ContextLedgerEntry] = []
-        if source.kind == "skill_pack" and workspace_root is not None:
-            extra = [
-                ContextLedgerEntry(
-                    source_id=sid,
-                    kind="individual_skill",
-                    role=role,
-                    reason="individual skill in terrain-selected pack",
-                    included=included,
-                    char_count=0,
+        if pack is not None:
+            for record in pack.selected:
+                extra.append(
+                    ContextLedgerEntry(
+                        source_id=record.skill_id,
+                        kind="individual_skill",
+                        role=role,
+                        reason=f"{record.label} [{record.provenance}] {record.reason}",
+                        included=True,
+                        char_count=record.char_count,
+                    )
                 )
-                for sid in skill_ids
-            ]
+            for record in pack.skipped:
+                extra.append(
+                    ContextLedgerEntry(
+                        source_id=record.skill_id,
+                        kind="individual_skill",
+                        role=role,
+                        reason=f"{record.label} [{record.provenance}] {record.reason}",
+                        included=False,
+                        char_count=0,
+                    )
+                )
 
         return text, entry, extra
     except Exception as exc:
@@ -425,6 +441,7 @@ def _load_source_text(
     *,
     force: bool,
     role: RuntimeRole,
+    model: str | None,
     task_kind: str | None,
     target_files: tuple[str, ...] | None,
     content: str | None,
@@ -444,8 +461,9 @@ def _load_source_text(
             target_files,
         )
     if source.kind == "skill_pack":
-        text, reason, _skill_ids = _load_skill_pack(
+        text, reason, _pack = _load_skill_pack(
             workspace_root,
+            model,
             task_kind,
             target_files,
             content,
@@ -674,21 +692,23 @@ def _load_scoped_coding_pack(
 
 def _load_skill_pack(
     workspace_root: Path | None,
+    model: str | None,
     task_kind: str | None,
     target_files: tuple[str, ...] | None,
     content: str | None,
-) -> tuple[str, str, list[str]]:
+) -> tuple[str, str, SkillPack | None]:
     if workspace_root is None:
-        return "", "no workspace root", []
-    text, skill_ids = build_skill_context_with_ids(
+        return "", "no workspace root", None
+    pack = build_skill_pack(
         workspace_root,
+        model=model,
         task_kind=task_kind,
         target_files=tuple(target_files or ()),
         content=content,
     )
-    if text:
-        return text, "terrain-selected skills for this context", skill_ids
-    return "", "no skills matched for this terrain", []
+    if pack.text:
+        return pack.text, "terrain-selected skills for this context", pack
+    return "", "no skills matched for this terrain", pack
 
 
 def _single_contract_applies(

@@ -2,6 +2,7 @@
 task_kinds: ["visual iteration", "godot_bridge", "godot_assembly", "godot_visual_iteration"]
 path_globs: ["addons/aura_bridge/**"]
 triggers: ["aura preview", "godot bridge", "inspect_godot_api", "inspect_godot_assets", "capture_godot", "visual iteration", "assemble", "edit_godot_asset_preview", "godot live", "live scene", "live composition"]
+workspace_markers: ["project.godot"]
 ---
 ### Godot Visual Iteration — Planner and Worker Role Split
 
