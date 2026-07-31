@@ -93,13 +93,13 @@ class PlannerHandlersMixin:
         approval_cb: Any,
         reject_all: bool,
     ) -> ToolExecResult:
-        """Run live web research through the active provider's native search.
+        """Run live web research through Aura's native search backend.
 
-        The capability name is provider-neutral (``web_search``).  Provider
-        capability handling is explicit: only providers with a native
-        Responses API web-search built-in (DeepSeek) execute here; every
-        other provider gets a clear unsupported result.  The legacy
-        browser/Drone research path is never launched from this tool.
+        Search runs against Aura's configured search provider (DeepSeek) using
+        that provider's own credential, whichever chat model provider is
+        currently selected.  The legacy browser/Drone research path is never
+        launched from this tool.  Cancellation uses the turn's cancel event
+        supplied by the tool round — this handler owns no cancel state.
         """
         question = str(args.get("question") or "").strip()
         context = str(args.get("context") or "").strip()
@@ -110,9 +110,9 @@ class PlannerHandlersMixin:
             )
 
         result = execute_native_web_search(
-            provider=self.provider,
             question=question,
             context=context or None,
+            cancel_event=self.active_cancel_event,
         )
         payload = result.to_dict()
         payload["answer_for_chat"] = format_research_answer(result)

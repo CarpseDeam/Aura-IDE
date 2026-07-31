@@ -1,9 +1,9 @@
-"""Adapter from ResearchRequest to provider-native web search execution.
+"""Adapter from ResearchRequest to native web search execution.
 
 The legacy browser/Drone web-research seam is retired.  Research requests
-resolve through the provider's native Responses API web search when the
-active provider supports it and return an explicit unsupported result for
-every other provider — the old browser system is never launched.
+resolve through Aura's own search backend (DeepSeek's native Responses API
+web search), independently of the selected chat model provider — the old
+browser system is never launched and there is no fallback.
 """
 
 from __future__ import annotations
@@ -55,16 +55,15 @@ def execute_web_research_request(
     workspace_root: Path,
     request: Any,
     *,
-    provider: str = "deepseek",
+    chat_provider: str | None = None,
     model: str | None = None,
     cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
-    """Execute a research request through the provider's native web search.
+    """Execute a research request through Aura's native web search backend.
 
-    The legacy browser/Drone web-research path is retired.  This seam
-    resolves through the native Responses API when the active provider
-    supports it (DeepSeek) and returns a clear unsupported result for
-    every other provider.
+    The legacy browser/Drone web-research path is retired.  Execution always
+    resolves through the search backend's own credential; ``chat_provider``
+    is recorded for tracing only and never gates the search.
     """
     question = str(getattr(request, "question", "") or "").strip()
     original = str(getattr(request, "original_text", "") or "").strip()
@@ -76,10 +75,10 @@ def execute_web_research_request(
         }
 
     result = execute_native_web_search(
-        provider=provider,
         question=question,
         context=original or None,
         model=model,
         cancel_event=cancel_event,
+        chat_provider=chat_provider,
     )
     return result.to_dict()

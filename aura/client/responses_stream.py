@@ -16,6 +16,7 @@ Rules:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from aura.client.events import (
@@ -30,10 +31,18 @@ from aura.client.events import (
 # Stable Responses API built-in web search tool.
 RESPONSES_WEB_SEARCH_TOOL: dict[str, Any] = {"type": "web_search"}
 
-# Response event types handled by ResponsesStreamParser.
+# Forces the model to run the built-in search instead of answering directly.
+RESPONSES_WEB_SEARCH_TOOL_CHOICE: dict[str, Any] = {"type": "web_search"}
+
+# Response statuses that end the server-side response.
 TERMINAL_RESPONSE_STATUSES: frozenset[str] = frozenset(
     {"completed", "incomplete", "failed"}
 )
+
+# Statuses that make a consumed stream terminal, including local cancellation.
+# ``in_progress`` is never one of these: a stream that stops without reaching a
+# terminal status is reported as ``failed``.
+TERMINAL_STREAM_STATUSES: frozenset[str] = TERMINAL_RESPONSE_STATUSES | {"cancelled"}
 
 
 def translate_to_responses_tools(
@@ -61,7 +70,9 @@ def translate_to_responses_tools(
                 flat["name"] = fn["name"]
             if fn.get("description"):
                 flat["description"] = fn["description"]
-            if fn.get("parameters"):
+            if fn.get("parameters") is not None:
+                # An explicit empty schema is meaningful for zero-argument
+                # tools; only a missing key is dropped.
                 flat["parameters"] = fn["parameters"]
             if "strict" in fn:
                 flat["strict"] = fn["strict"]
@@ -87,18 +98,27 @@ def build_native_web_search_request(
         "model": model,
         "input": [{"role": "user", "content": content}],
         "tools": [dict(RESPONSES_WEB_SEARCH_TOOL)],
-        "tool_choice": "auto",
+        "tool_choice": dict(RESPONSES_WEB_SEARCH_TOOL_CHOICE),
         "stream": True,
     }
 
 
 def _attr(obj: Any, name: str, default: Any = None) -> Any:
-    return getattr(obj, name, default)
+    """Read one field from either a mapping or an SDK model object.
 
-
-def _dict_attr(obj: Any, name: str) -> dict[str, Any]:
-    value = getattr(obj, name, None)
-    return value if isinstance(value, dict) else {}
+    Responses payloads reach us as parsed OpenAI SDK objects in production and
+    as plain dictionaries from raw SSE decoding, stubs, and providers that
+    return loosely-typed extras.  Every nested read (usage details, incomplete
+    details, error, citation annotations) goes through here so both shapes
+    parse identically.
+    """
+    if obj is None:
+        return default
+    if isinstance(obj, Mapping):
+        value = obj.get(name, default)
+        return default if value is None else value
+    value = getattr(obj, name, default)
+    return default if value is None else value
 
 
 def _usage_to_events(response_obj: Any) -> tuple[Usage | None, dict[str, Any] | None]:
@@ -109,7 +129,7 @@ def _usage_to_events(response_obj: Any) -> tuple[Usage | None, dict[str, Any] | 
     input_tokens = int(_attr(usage, "input_tokens", 0) or 0)
     output_tokens = int(_attr(usage, "output_tokens", 0) or 0)
     total_tokens = int(_attr(usage, "total_tokens", 0) or 0)
-    details = _dict_attr(usage, "input_tokens_details")
+    details = _attr(usage, "input_tokens_details")
     cached = int(_attr(details, "cached_tokens", 0) or 0)
     if not cached:
         cached = int(_attr(usage, "prompt_cache_hit_tokens", 0) or 0)
@@ -143,7 +163,7 @@ def _annotations_to_sources(item: Any) -> list[dict[str, Any]]:
         for annotation in annotations:
             if _attr(annotation, "type") != "url_citation":
                 continue
-            url = str(_attr(annotation, "url", "") or "").strip()
+            url = _clean_source_url(_attr(annotation, "url", ""))
             if not url:
                 continue
             sources.append(
@@ -153,6 +173,60 @@ def _annotations_to_sources(item: Any) -> list[dict[str, Any]]:
                 }
             )
     return sources
+
+
+def _clean_source_url(raw: Any) -> str:
+    """Normalize a source URL, dropping the provider's call-id fragment.
+
+    Search-call URLs come back as ``https://host/path/#ws_call_id=call_01_...``;
+    the fragment is bookkeeping, not part of the page the model read.
+    """
+    url = str(raw or "").strip()
+    if not url:
+        return ""
+    fragment = url.find("#ws_call_id=")
+    if fragment != -1:
+        url = url[:fragment]
+    return url.rstrip("#")
+
+
+def _search_call_action(item: Any) -> dict[str, Any]:
+    """Normalize the ``action`` of a web_search_call item.
+
+    DeepSeek reports what the search actually did here — ``search`` with the
+    issued queries, or ``open_page`` with the URL it read.  This is where the
+    real evidence lives: the provider emits no url_citation annotations.
+    """
+    action = _attr(item, "action")
+    if action is None:
+        return {}
+    queries = _attr(action, "queries", None)
+    normalized: dict[str, Any] = {
+        "action": str(_attr(action, "type", "") or "").strip(),
+        "url": _clean_source_url(_attr(action, "url", "")),
+        "queries": [
+            str(q).strip()
+            for q in queries
+            if str(q).strip() and not str(q).startswith("ws_call_id=")
+        ]
+        if isinstance(queries, list)
+        else [],
+    }
+    return normalized
+
+
+def _source_from_search_call(item: Any, status: str) -> dict[str, Any] | None:
+    """Return the page a completed search call read, as a source."""
+    if status != "completed":
+        return None
+    action = _search_call_action(item)
+    url = action.get("url") or ""
+    if not url:
+        return None
+    host = ""
+    if "://" in url:
+        host = url.split("://", 1)[1].split("/", 1)[0]
+    return {"title": host or url, "url": url}
 
 
 class ResponsesStreamParser:
@@ -187,11 +261,28 @@ class ResponsesStreamParser:
 
     @property
     def terminal(self) -> bool:
+        """True once the server reported a terminal response status."""
         return self.status in TERMINAL_RESPONSE_STATUSES
+
+    @property
+    def settled(self) -> bool:
+        """True once this stream has an honest terminal status of any kind."""
+        return self.status in TERMINAL_STREAM_STATUSES
 
     def cancel(self) -> None:
         """Mark the stream cancelled (caller observed cancel_event)."""
         self.status = "cancelled"
+
+    def fail(self, message: str, code: str | None = None) -> None:
+        """Mark the stream failed, keeping any partial text and sources.
+
+        Used when the stream stops without a terminal response event (first-
+        event timeout, inter-event timeout, or an early close).  A consumed
+        stream must never be reported as still ``in_progress``.
+        """
+        self.status = "failed"
+        self.error = self.error or message
+        self.error_code = self.error_code or code
 
     def push(self, event: Any) -> list[Event]:
         """Consume one Responses stream event; return Aura events."""
@@ -241,9 +332,11 @@ class ResponsesStreamParser:
             response_obj = _attr(event, "response")
             if response_obj is not None:
                 self.status = "incomplete"
-                details = _dict_attr(response_obj, "incomplete_details")
+                details = _attr(response_obj, "incomplete_details")
                 self.incomplete_reason = str(
-                    details.get("reason") or _attr(response_obj, "reason", "") or ""
+                    _attr(details, "reason", "")
+                    or _attr(response_obj, "reason", "")
+                    or ""
                 ) or None
                 usage_event, usage_dict = _usage_to_events(response_obj)
                 if usage_event is not None:
@@ -255,10 +348,10 @@ class ResponsesStreamParser:
             response_obj = _attr(event, "response")
             if response_obj is not None:
                 self.status = "failed"
-                error = _dict_attr(response_obj, "error")
-                self.error_code = str(error.get("code") or "") or None
+                error = _attr(response_obj, "error")
+                self.error_code = str(_attr(error, "code", "") or "") or None
                 self.error = str(
-                    error.get("message")
+                    _attr(error, "message", "")
                     or _attr(response_obj, "message", "")
                     or "Responses API request failed"
                 )
@@ -277,17 +370,7 @@ class ResponsesStreamParser:
             for source in _annotations_to_sources(item):
                 self._add_source(source)
         elif item_type == "web_search_call":
-            item_id = str(_attr(item, "id", "") or "")
-            status = str(_attr(item, "status", "") or "in_progress")
-            if item_id and item_id not in self._seen_search_calls:
-                self._seen_search_calls.add(item_id)
-                self.web_search_calls.append(
-                    {
-                        "item_id": item_id,
-                        "status": status,
-                        "search_recipient": str(_attr(item, "search_recipient", "") or ""),
-                    }
-                )
+            self._record_search_call_item(item)
         elif item_type == "function_call":
             call_id = str(_attr(item, "id", "") or "")
             name = str(_attr(item, "name", "") or "")
@@ -320,6 +403,30 @@ class ResponsesStreamParser:
                     return
         self.web_search_calls.append(entry)
 
+    def _record_search_call_item(self, item: Any) -> None:
+        """Record one web_search_call output item and any page it read."""
+        item_id = str(_attr(item, "id", "") or "")
+        status = str(_attr(item, "status", "") or "in_progress")
+        entry = {
+            "item_id": item_id,
+            "status": status,
+            "search_recipient": str(_attr(item, "search_recipient", "") or ""),
+            **_search_call_action(item),
+        }
+        if item_id and item_id in self._seen_search_calls:
+            for existing in self.web_search_calls:
+                if existing.get("item_id") == item_id:
+                    existing.update(entry)
+                    break
+        else:
+            if item_id:
+                self._seen_search_calls.add(item_id)
+            self.web_search_calls.append(entry)
+
+        source = _source_from_search_call(item, status)
+        if source is not None:
+            self._add_source(source)
+
     def _add_source(self, source: dict[str, Any]) -> None:
         url = source.get("url")
         if not url or url in self._seen_urls:
@@ -337,18 +444,32 @@ class ResponsesStreamParser:
                 for source in _annotations_to_sources(item):
                     self._add_source(source)
             elif item_type == "web_search_call":
-                item_id = str(_attr(item, "id", "") or "")
-                if item_id and item_id not in self._seen_search_calls:
-                    self._seen_search_calls.add(item_id)
-                    self.web_search_calls.append(
-                        {
-                            "item_id": item_id,
-                            "status": str(_attr(item, "status", "") or "in_progress"),
-                            "search_recipient": str(
-                                _attr(item, "search_recipient", "") or ""
-                            ),
-                        }
-                    )
+                self._record_search_call_item(item)
+
+    def _final_message_text(self, response_obj: Any) -> str:
+        """Text of the last assistant message in the completed output.
+
+        The provider emits interim ``commentary`` messages before the final
+        answer, so the last non-empty message wins.
+        """
+        output = _attr(response_obj, "output", None)
+        if not isinstance(output, list):
+            return ""
+        final = ""
+        for item in output:
+            if _attr(item, "type") != "message":
+                continue
+            content = _attr(item, "content", None)
+            if not isinstance(content, list):
+                continue
+            text = "".join(
+                str(_attr(part, "text", "") or "")
+                for part in content
+                if _attr(part, "type", "output_text") == "output_text"
+            ).strip()
+            if text:
+                final = text
+        return final
 
     def _finalize_response(self, response_obj: Any, events: list[Event]) -> None:
         self.status = "completed"
@@ -356,6 +477,11 @@ class ResponsesStreamParser:
         if usage_event is not None:
             self.usage = usage_dict
             events.append(usage_event)
+        # Prefer the completed response's own final message over whatever the
+        # deltas happened to leave behind.
+        final_text = self._final_message_text(response_obj)
+        if final_text:
+            self.text = final_text
         self._collect_output_sources(response_obj)
         self.response_id = str(_attr(response_obj, "id", "") or "")
         self.finish_reason = str(_attr(response_obj, "status", "completed") or "completed")

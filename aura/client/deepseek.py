@@ -47,6 +47,15 @@ from aura.config import (
 
 FIRST_STREAM_EVENT_TIMEOUT_SECONDS = 60.0
 
+# Maximum gap between two Responses stream events before the search is
+# declared dead. Exceeding it produces a terminal failed result, never a
+# silent "still in progress" one.
+RESPONSES_INTER_EVENT_TIMEOUT_SECONDS = 30.0
+
+# Cancellation poll interval while waiting on the Responses stream queue.
+# Short enough that a cancel during an active search is observed promptly.
+_RESPONSES_POLL_SECONDS = 0.1
+
 
 class DeepSeekClient:
     """Wraps an OpenAI-compatible endpoint as an event stream.
@@ -417,14 +426,19 @@ class DeepSeekClient:
                 model=<provider default or model>,
                 input=[{"role": "user", "content": question + context}],
                 tools=[{"type": "web_search"}],
-                tool_choice="auto",
+                tool_choice={"type": "web_search"},
                 stream=True,
             )
 
+        ``tool_choice`` names the built-in explicitly so an Aura ``web_search``
+        call always searches instead of being answered from model memory.
+
         Yields ContentDelta/Usage events and a final ``Done`` whose
         ``full_message`` is the neutral research payload (status, text,
-        sources, usage, error).  On API failures yields ``ApiError``.
-        Honors cancel_event and the same first-event timeout as ``stream``.
+        sources, usage, error).  On API failures yields ``ApiError``.  The
+        ``Done`` status is always terminal — ``completed``, ``incomplete``,
+        ``failed``, or ``cancelled``.  ``cancel_event`` is the caller's turn
+        cancel event; this method never creates one of its own.
         """
         cfg = get_provider(self._provider)
         request_kwargs = build_native_web_search_request(
@@ -469,20 +483,38 @@ class DeepSeekClient:
 
         parser = ResponsesStreamParser()
         _first_read = True
+        _wait_started = time.time()
 
         while True:
             if cancel_event is not None and cancel_event.is_set():
+                parser.cancel()
                 break
+
+            budget = (
+                FIRST_STREAM_EVENT_TIMEOUT_SECONDS
+                if _first_read
+                else RESPONSES_INTER_EVENT_TIMEOUT_SECONDS
+            )
             try:
-                if _first_read:
-                    kind, payload = chunk_queue.get(
-                        timeout=FIRST_STREAM_EVENT_TIMEOUT_SECONDS
-                    )
-                    _first_read = False
-                else:
-                    kind, payload = chunk_queue.get(timeout=30.0)
+                kind, payload = chunk_queue.get(timeout=_RESPONSES_POLL_SECONDS)
             except queue.Empty:
+                elapsed = time.time() - _wait_started
+                if elapsed <= budget:
+                    continue
+                stage = "first" if _first_read else "next"
+                _log.info(
+                    "responses_web_search_timeout provider=%s stage=%s elapsed_ms=%d",
+                    self._provider, stage, int(elapsed * 1000),
+                )
+                parser.fail(
+                    f"web search stream stalled: no {stage} response event within "
+                    f"{int(budget)} seconds",
+                    code="stream_timeout",
+                )
                 break
+
+            _first_read = False
+            _wait_started = time.time()
 
             if kind == "sentinel":
                 break
@@ -506,8 +538,16 @@ class DeepSeekClient:
             if parser.terminal:
                 break
 
+        # Cancellation wins over anything the stream said on its way out, and a
+        # stream that stopped without a terminal status is a failure — never a
+        # Done that still claims "in_progress".
         if cancel_event is not None and cancel_event.is_set():
             parser.cancel()
+        elif not parser.settled:
+            parser.fail(
+                "web search stream ended without a terminal response",
+                code="incomplete_stream",
+            )
         yield Done(finish_reason=parser.finish_reason, full_message=parser.finish())
 
 

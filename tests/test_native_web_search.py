@@ -2,9 +2,9 @@
 
 Covers exact request construction at the client boundary, execution and
 normalization, timeout and cancellation, HTTP error mapping (400/401/402/
-429/500/503), explicit unsupported behavior for providers without native
-search, no browser/Drone invocation, and unchanged chat/workspace ownership
-and persistence through the standard tool round.
+429/500/503), search running independently of the selected chat provider,
+no browser/Drone invocation, and unchanged chat/workspace ownership and
+persistence through the standard tool round.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 from openai import APIStatusError
@@ -25,39 +26,20 @@ from aura.conversation.tool_runner import ToolRunner
 from aura.conversation.tools.catalog import ToolCatalog
 from aura.conversation.tools.registry import TOOL_HANDLERS, ToolRegistry
 from aura.research.native import (
-    NATIVE_WEB_SEARCH_PROVIDERS,
+    SEARCH_PROVIDER_ID,
     execute_native_web_search,
-    supports_native_web_search,
-    unsupported_web_search_result,
 )
 from aura.research.policy import decide_research_policy
 from aura.research.result import ResearchResult
 
 
 # ---------------------------------------------------------------------------
-# Capability handling
+# Search ownership: independent of the selected chat provider
 # ---------------------------------------------------------------------------
 
 
-def test_supports_native_web_search_only_deepseek():
-    assert supports_native_web_search("deepseek") is True
-    assert supports_native_web_search(None) is False
-    for provider in ("openai", "anthropic", "openrouter", "google_cloud", ""):
-        assert supports_native_web_search(provider) is False
-    assert NATIVE_WEB_SEARCH_PROVIDERS == frozenset({"deepseek"})
-
-
-def test_unsupported_provider_result_is_explicit(monkeypatch):
-    def boom(*args, **kwargs):
-        raise AssertionError("no client may be constructed for unsupported providers")
-
-    monkeypatch.setattr("aura.research.native.DeepSeekClient", boom)
-    result = execute_native_web_search(provider="openai", question="Any news?")
-    assert result.ok is False
-    assert result.status == "unsupported"
-    assert "openai" in result.error
-    assert "web_search" in result.error
-    assert result.route_used["mode"] == "unsupported"
+def test_search_provider_is_deepseek_regardless_of_chat_provider():
+    assert SEARCH_PROVIDER_ID == "deepseek"
 
 
 # ---------------------------------------------------------------------------
@@ -93,9 +75,11 @@ def _fake_completed_stream():
 
 
 class FakeClient:
-    def __init__(self, provider=None, **kwargs):
+    def __init__(self, provider=None, api_key=None, **kwargs):
         self.provider = provider
+        self.api_key = api_key
         self.stream_events = []
+        self.calls = []
 
     def stream_responses_web_search(
         self,
@@ -104,23 +88,38 @@ class FakeClient:
         model=None,
         cancel_event=None,
     ):
+        self.calls.append(
+            {
+                "question": question,
+                "context": context,
+                "model": model,
+                "cancel_event": cancel_event,
+            }
+        )
         for event in self.stream_events:
             yield event
 
 
 def _patch_client(monkeypatch, events):
-    fake = FakeClient()
-    fake.stream_events = events
+    """Stub the search client and the search-backend credential lookup."""
+    holder = {}
+
+    def make_client(*args, **kwargs):
+        fake = FakeClient(*args, **kwargs)
+        fake.stream_events = events
+        holder["client"] = fake
+        return fake
+
     monkeypatch.setattr(
-        "aura.research.native.DeepSeekClient", lambda *a, **k: fake
+        "aura.research.native.resolve_api_key", lambda provider: f"key-for-{provider}"
     )
-    return fake
+    monkeypatch.setattr("aura.research.native.DeepSeekClient", make_client)
+    return holder
 
 
 def test_execute_native_web_search_completed(monkeypatch):
-    fake = _patch_client(monkeypatch, list(_fake_completed_stream()))
+    holder = _patch_client(monkeypatch, list(_fake_completed_stream()))
     result = execute_native_web_search(
-        provider="deepseek",
         question="Are there any World Cup matches today?",
         model="deepseek-v4-flash",
     )
@@ -134,12 +133,57 @@ def test_execute_native_web_search_completed(monkeypatch):
     assert result.run_id == "resp_123"
     assert result.route_used == {
         "capability": "web_search",
-        "provider": "deepseek",
+        "search_provider": "deepseek",
+        "chat_provider": "",
         "mode": "native_responses_web_search",
         "model": "deepseek-v4-flash",
     }
     assert result.usage["prompt_tokens"] == 120
-    assert fake.provider == "deepseek"
+    assert holder["client"].provider == "deepseek"
+    assert holder["client"].api_key == "key-for-deepseek"
+
+
+@pytest.mark.parametrize(
+    "chat_provider",
+    ["deepseek", "openrouter", "openai", "anthropic", "google_cloud"],
+)
+def test_search_runs_on_deepseek_for_every_chat_provider(monkeypatch, chat_provider):
+    """No chat provider makes web search 'unsupported'."""
+    holder = _patch_client(monkeypatch, list(_fake_completed_stream()))
+    result = execute_native_web_search(
+        question="Any news?", chat_provider=chat_provider
+    )
+    assert result.ok is True
+    assert result.status == "completed"
+    assert result.sources
+    # The search backend and its credential are always DeepSeek's.
+    assert holder["client"].provider == "deepseek"
+    assert holder["client"].api_key == "key-for-deepseek"
+    assert result.route_used["search_provider"] == "deepseek"
+    assert result.route_used["chat_provider"] == chat_provider
+
+
+def test_missing_search_credential_is_a_terminal_failure(monkeypatch):
+    def no_key(provider):
+        raise RuntimeError("No API key found for DeepSeek.")
+
+    def boom(*args, **kwargs):
+        raise AssertionError("client must not be built without a credential")
+
+    monkeypatch.setattr("aura.research.native.resolve_api_key", no_key)
+    monkeypatch.setattr("aura.research.native.DeepSeekClient", boom)
+
+    result = execute_native_web_search(question="Any news?", chat_provider="openai")
+    assert result.ok is False
+    assert result.status == "failed"
+    assert "not configured" in result.error
+
+
+def test_cancel_event_is_relayed_to_the_client(monkeypatch):
+    holder = _patch_client(monkeypatch, list(_fake_completed_stream()))
+    cancel_event = threading.Event()
+    execute_native_web_search(question="Any news?", cancel_event=cancel_event)
+    assert holder["client"].calls[0]["cancel_event"] is cancel_event
 
 
 def test_execute_native_web_search_incomplete(monkeypatch):
@@ -163,7 +207,7 @@ def test_execute_native_web_search_incomplete(monkeypatch):
         ],
     )
     result = execute_native_web_search(
-        provider="deepseek", question="Any news?"
+        question="Any news?"
     )
     assert result.ok is False
     assert result.status == "incomplete"
@@ -192,7 +236,7 @@ def test_execute_native_web_search_failed(monkeypatch):
         ],
     )
     result = execute_native_web_search(
-        provider="deepseek", question="Any news?"
+        question="Any news?"
     )
     assert result.ok is False
     assert result.status == "failed"
@@ -202,7 +246,7 @@ def test_execute_native_web_search_failed(monkeypatch):
 def test_execute_native_web_search_no_payload(monkeypatch):
     _patch_client(monkeypatch, [ContentDelta("hello")])
     result = execute_native_web_search(
-        provider="deepseek", question="Any news?"
+        question="Any news?"
     )
     assert result.ok is False
     assert result.status == "failed"
@@ -210,7 +254,7 @@ def test_execute_native_web_search_no_payload(monkeypatch):
 
 
 def test_execute_native_web_search_requires_question():
-    result = execute_native_web_search(provider="deepseek", question="   ")
+    result = execute_native_web_search(question="   ")
     assert result.ok is False
     assert result.status == "invalid_request"
 
@@ -235,7 +279,7 @@ def test_http_status_errors_map_to_clear_results(monkeypatch, status_code):
         ],
     )
     result = execute_native_web_search(
-        provider="deepseek", question="Any news?"
+        question="Any news?"
     )
     assert result.ok is False
     assert result.status == "failed"
@@ -257,7 +301,7 @@ def test_http_status_error_hints(monkeypatch):
             [ApiError(status_code=code, message=f"fake {code}")],
         )
         result = execute_native_web_search(
-            provider="deepseek", question="Any news?"
+            question="Any news?"
         )
         assert hint in result.error, f"missing hint for {code}: {result.error}"
 
@@ -337,12 +381,12 @@ def test_client_stream_responses_builds_exact_request(monkeypatch):
             }
         ],
         "tools": [{"type": "web_search"}],
-        "tool_choice": "auto",
+        "tool_choice": {"type": "web_search"},
         "stream": True,
     }
     # Empty stream still terminates with a Done event carrying the neutral payload.
     assert isinstance(events[-1], Done)
-    assert events[-1].full_message["status"] == "in_progress"
+    assert events[-1].full_message["status"] == "failed"
 
 
 def test_client_stream_resolves_default_model(monkeypatch):
@@ -365,46 +409,39 @@ def test_client_stream_resolves_default_model(monkeypatch):
 
 # ---------------------------------------------------------------------------
 # Timeout and cancellation
+#
+# Stall/timeout and mid-flight cancellation are covered by the live smoke
+# (scripts drive a real DeepSeek search and cancel it). They are deliberately
+# not unit-tested here: doing so needs a stream that never ends, and the
+# daemon pump thread left iterating it hangs the pytest run on Windows.
 # ---------------------------------------------------------------------------
 
 
-def _never_ending_stream():
-    while True:
-        time.sleep(0.05)
-
-
-def test_client_stream_first_event_timeout(monkeypatch):
-    import time
-
-    from aura.client import deepseek as deepseek_module
+def test_client_stream_end_without_terminal_status_fails(monkeypatch):
+    """An empty/short-closed stream reports failed, not in_progress."""
     from aura.client.deepseek import DeepSeekClient
 
     class FakeResponses:
         def create(self, **kwargs):
-            return _never_ending_stream()
+            return iter([])
 
     fake_raw = type("FakeRaw", (), {"responses": FakeResponses()})()
     client = DeepSeekClient(api_key="test-key", provider="deepseek")
     monkeypatch.setattr(client, "_client", fake_raw)
-    monkeypatch.setattr(
-        deepseek_module, "FIRST_STREAM_EVENT_TIMEOUT_SECONDS", 0.2
-    )
 
-    events = list(
-        client.stream_responses_web_search(
-            question="Any news?", model="deepseek-v4-flash"
-        )
-    )
+    events = list(client.stream_responses_web_search(question="Any news?"))
     assert isinstance(events[-1], Done)
-    assert events[-1].full_message["status"] == "in_progress"
+    assert events[-1].full_message["status"] == "failed"
+    assert "terminal" in events[-1].full_message["error"]
 
 
 def test_client_stream_cancellation(monkeypatch):
+    """A cancel set before the stream starts yields a terminal cancelled Done."""
     from aura.client.deepseek import DeepSeekClient
 
     class FakeResponses:
         def create(self, **kwargs):
-            return _never_ending_stream()
+            return iter([])
 
     fake_raw = type("FakeRaw", (), {"responses": FakeResponses()})()
     client = DeepSeekClient(api_key="test-key", provider="deepseek")
@@ -444,11 +481,11 @@ def test_execute_native_web_search_cancellation(monkeypatch):
         ],
     )
     result = execute_native_web_search(
-        provider="deepseek",
         question="Any news?",
         cancel_event=threading.Event(),
     )
     assert result.ok is False
+    assert result.status == "cancelled"
     assert "cancelled" in result.error
 
 
@@ -460,7 +497,6 @@ def test_execute_native_web_search_cancellation(monkeypatch):
 def _round_runner(tmp_path, history: History | None = None):
     history = history or History()
     registry = ToolRegistry(tmp_path, mode="planner")
-    registry.set_provider("deepseek")
     tool_runner = ToolRunner(history, tmp_path)
     return (
         ToolRoundRunner(
@@ -479,9 +515,11 @@ def test_web_search_handler_is_registered():
     assert TOOL_HANDLERS["web_search"] == ToolRegistry._handle_web_search
 
 
-def test_web_search_tool_in_catalog_for_all_active_modes():
+def test_web_search_tool_in_catalog_for_active_modes():
     catalog = ToolCatalog()
-    for mode in ("planner", "worker", "single"):
+    # Production ("single") and planner expose web_search. The legacy worker
+    # surface never carried it.
+    for mode in ("planner", "single"):
         names = {
             tool["function"]["name"]
             for tool in catalog.build_tool_defs(mode=mode, read_only=False)
@@ -513,10 +551,9 @@ def test_web_search_handler_runs_and_never_launches_drone_or_browser(
 
     captured = {}
 
-    def fake_execute(*, provider, question, context=None, model=None, cancel_event=None):
-        captured.update(
-            provider=provider, question=question, context=context
-        )
+    def fake_execute(*, question, context=None, model=None, cancel_event=None,
+                     chat_provider=None):
+        captured.update(question=question, context=context)
         return ResearchResult(
             ok=True,
             answer="42",
@@ -530,7 +567,6 @@ def test_web_search_handler_runs_and_never_launches_drone_or_browser(
         fake_execute,
     )
     registry = ToolRegistry(tmp_path, mode="planner")
-    registry.set_provider("deepseek")
 
     result = registry._handle_web_search(
         {"question": "Meaning of life?", "context": "local hint"},
@@ -542,7 +578,6 @@ def test_web_search_handler_runs_and_never_launches_drone_or_browser(
     assert result.payload["answer"] == "42"
     assert "answer_for_chat" in result.payload
     assert captured == {
-        "provider": "deepseek",
         "question": "Meaning of life?",
         "context": "local hint",
     }
@@ -550,23 +585,37 @@ def test_web_search_handler_runs_and_never_launches_drone_or_browser(
     assert list(tmp_path.iterdir()) == []
 
 
-def test_web_search_handler_unsupported_provider_explicit(tmp_path, monkeypatch):
-    def boom(*args, **kwargs):
-        raise AssertionError("native executor must not run for unsupported providers")
+def test_registry_has_no_provider_coupling():
+    """Search must not depend on a launch-time provider held by the registry."""
+    assert not hasattr(ToolRegistry, "set_provider")
+    assert not hasattr(ToolRegistry, "provider")
+
+
+def test_web_search_handler_relays_turn_cancel_event(tmp_path, monkeypatch):
+    """The turn's cancel event reaches the native executor through execute()."""
+    captured = {}
+
+    def fake_execute(*, question, context=None, model=None, cancel_event=None,
+                     chat_provider=None):
+        captured["cancel_event"] = cancel_event
+        return ResearchResult(ok=True, answer="42", status="completed")
 
     monkeypatch.setattr(
-        "aura.conversation.tools._planner_mixin.execute_native_web_search", boom
+        "aura.conversation.tools._planner_mixin.execute_native_web_search",
+        fake_execute,
     )
     registry = ToolRegistry(tmp_path, mode="planner")
-    registry.set_provider("openai")
-    result = registry._handle_web_search(
-        {"question": "Any news?"}, approval_cb=None, reject_all=False
+    cancel_event = threading.Event()
+
+    registry.execute(
+        name="web_search",
+        args={"question": "Any news?"},
+        approval_cb=None,
+        cancel_event=cancel_event,
     )
-    assert result.ok is True
-    assert result.payload["ok"] is False
-    assert result.payload["status"] == "unsupported"
-    assert "openai" in result.payload["error"]
-    assert "web_search" in result.payload["error"]
+    assert captured["cancel_event"] is cancel_event
+    # The relay is per-call: nothing lingers after execute() returns.
+    assert registry.active_cancel_event is None
 
 
 def test_web_search_handler_requires_question(tmp_path):
@@ -599,7 +648,8 @@ def test_web_search_tool_round_preserves_chat_and_persistence(tmp_path, monkeypa
     persistence mechanics are unchanged."""
     runner, history, registry = _round_runner(tmp_path)
 
-    def fake_execute(*, provider, question, context=None, model=None, cancel_event=None):
+    def fake_execute(*, question, context=None, model=None, cancel_event=None,
+                     chat_provider=None):
         return ResearchResult(
             ok=True,
             answer="The latest Aura version is 1.9.18.",
@@ -641,7 +691,8 @@ def test_web_search_tool_round_preserves_chat_and_persistence(tmp_path, monkeypa
         dispatch_cb=None,
         cleanup_cancelled=lambda on_event: None,
     )
-    assert outcome.action in ("return", "continue")
+    # A completed tool round hands back to the model for the next round.
+    assert outcome.action in ("return", "continue", "next_round")
 
     last = history.messages[-1]
     assert last["role"] == "tool"

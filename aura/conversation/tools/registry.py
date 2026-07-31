@@ -1,6 +1,7 @@
 """Tool registry facade for Aura conversation tools."""
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -87,7 +88,9 @@ class ToolRegistry(
         self._mcp_tools = MCPToolRegistry()
         self._contract: ExplicitSpecContract | None = None
         self._task_shape: TaskShape | None = None
-        self._provider: str = "deepseek"
+        # The turn's cancel event, supplied per execute() call by the tool
+        # round. The registry never creates one — it only relays the caller's.
+        self._cancel_event: threading.Event | None = None
         self._executor = ToolExecutor(
             owner=self,
             dynamic_tools=self._dynamic_tools,
@@ -122,13 +125,14 @@ class ToolRegistry(
         self._mode = mode
 
     @property
-    def provider(self) -> str:
-        """Active provider id for provider-gated capabilities (e.g. web_search)."""
-        return self._provider
+    def active_cancel_event(self) -> threading.Event | None:
+        """The cancel event of the tool call currently executing, if any.
 
-    def set_provider(self, provider: str | None) -> None:
-        if provider:
-            self._provider = provider
+        Handlers that run long external work (web search) read this so they
+        stop with the rest of the turn. It is the caller's event, relayed —
+        not a second cancellation authority.
+        """
+        return self._cancel_event
 
     def tool_defs(self) -> list[dict[str, Any]]:
         dynamic_schemas = self._dynamic_tools.schemas() if not self._read_only else []
@@ -190,8 +194,13 @@ class ToolRegistry(
         args: dict[str, Any],
         approval_cb: ApprovalCallback,
         reject_all: bool = False,
+        cancel_event: threading.Event | None = None,
     ) -> ToolExecResult:
-        return self._executor.execute(name, args, approval_cb, reject_all)
+        self._cancel_event = cancel_event
+        try:
+            return self._executor.execute(name, args, approval_cb, reject_all)
+        finally:
+            self._cancel_event = None
 
 
 TOOL_HANDLERS["read_file"] = ToolRegistry._handle_read_file

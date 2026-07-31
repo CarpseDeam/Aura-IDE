@@ -116,7 +116,7 @@ def test_build_native_web_search_request_exact_shape():
             }
         ],
         "tools": [{"type": "web_search"}],
-        "tool_choice": "auto",
+        "tool_choice": {"type": "web_search"},
         "stream": True,
     }
 
@@ -127,7 +127,8 @@ def test_build_native_web_search_request_without_context():
         {"role": "user", "content": "What is the latest Aura version?"}
     ]
     assert request["tools"] == [{"type": "web_search"}]
-    assert request["tool_choice"] == "auto"
+    # The built-in is named explicitly so the model cannot skip searching.
+    assert request["tool_choice"] == {"type": "web_search"}
     assert request["stream"] is True
 
 
@@ -205,7 +206,8 @@ def test_output_text_delta_and_done():
 
 def test_function_call_arguments_delta_done():
     parser = ResponsesStreamParser()
-    parser.push(
+    # ToolCallStart is emitted by the item.added push, so collect from there.
+    events = parser.push(
         SimpleNamespace(
             type="response.output_item.added",
             output_index=0,
@@ -218,7 +220,7 @@ def test_function_call_arguments_delta_done():
             ),
         )
     )
-    events = parser.push(
+    events += parser.push(
         SimpleNamespace(
             type="response.function_call_arguments.delta",
             delta='{"path":',

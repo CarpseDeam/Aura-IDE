@@ -415,6 +415,7 @@ class ToolRoundRunner:
             args=args,
             approval_cb=approval_cb,
             reject_all=False,
+            cancel_event=cancel_event,
         )
 
         if exec_result.extras.get("approval") == "reject_all":

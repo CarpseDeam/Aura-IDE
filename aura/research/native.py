@@ -1,14 +1,18 @@
-"""Native web search through the active provider's Responses API.
+"""Native web search through Aura's configured search backend.
 
-Aura exposes a provider-neutral capability named ``web_search``.  When the
-active provider supports a native Responses API web-search tool — currently
-only DeepSeek — execution translates that capability to the built-in
-``{"type": "web_search"}`` tool and streams a Responses request through the
-existing OpenAI-compatible client.
+Aura exposes a provider-neutral capability named ``web_search``.  Search is
+owned by its own backend and is deliberately independent of whichever chat
+model provider the user has selected:
 
-Provider capability handling is explicit: providers without a native
-compatible web-search tool get a clear unsupported result.  The legacy
-browser/Drone research path is never launched from here.
+- **Search provider** — always :data:`SEARCH_PROVIDER_ID` (DeepSeek).  Its
+  credential and base URL are resolved explicitly here, so a chat model served
+  by OpenRouter, OpenAI, Anthropic, Google, or DeepSeek all reach the same
+  DeepSeek Responses API search path.
+- **Chat provider** — carried through only as metadata for tracing.  It never
+  decides whether search runs, and it never selects the search credential.
+
+The legacy browser/Drone research path is retired and is never launched from
+here; there is no fallback.
 """
 
 from __future__ import annotations
@@ -18,14 +22,13 @@ from typing import Any
 
 from aura.client.deepseek import DeepSeekClient
 from aura.client.events import ApiError, ContentDelta, Done, Usage
-from aura.client.responses_stream import build_native_web_search_request
-from aura.config import ProviderId
+from aura.config import ProviderId, resolve_api_key
 from aura.research.result import ResearchResult
 
 WEB_SEARCH_CAPABILITY = "web_search"
 
-# Providers that expose a native Responses API web-search built-in.
-NATIVE_WEB_SEARCH_PROVIDERS: frozenset[str] = frozenset({"deepseek"})
+# Aura's configured web-search backend. This is NOT the chat model provider.
+SEARCH_PROVIDER_ID: ProviderId = "deepseek"
 
 # User-facing messages for common Responses API HTTP failures.
 _HTTP_STATUS_MESSAGES: dict[int, str] = {
@@ -40,47 +43,29 @@ _HTTP_STATUS_MESSAGES: dict[int, str] = {
 _NATIVE_ROUTE = "native_responses_web_search"
 
 
-def supports_native_web_search(provider: str | None) -> bool:
-    """Explicit capability check for the native web-search tool."""
-    return bool(provider) and provider in NATIVE_WEB_SEARCH_PROVIDERS
+def resolve_search_credential() -> str:
+    """Return the API key for the search backend, independent of chat.
 
-
-def unsupported_web_search_result(provider: str | None) -> ResearchResult:
-    """Clear unsupported result for providers without native web search."""
-    provider_name = provider or "unknown"
-    return ResearchResult(
-        ok=False,
-        answer="",
-        confidence="none",
-        route_used={
-            "capability": WEB_SEARCH_CAPABILITY,
-            "provider": provider_name,
-            "mode": "unsupported",
-        },
-        status="unsupported",
-        error=(
-            f"web_search is not supported by provider '{provider_name}': "
-            f"no native web search tool is configured. "
-            f"Native web search requires a provider with a Responses API "
-            f"web-search built-in (currently: {', '.join(sorted(NATIVE_WEB_SEARCH_PROVIDERS))})."
-        ),
-    )
+    Raises ``RuntimeError`` with the standard provider-configuration message
+    when the DeepSeek key is missing.
+    """
+    return resolve_api_key(SEARCH_PROVIDER_ID)
 
 
 def execute_native_web_search(
     *,
-    provider: ProviderId = "deepseek",
     question: str = "",
     context: str | None = None,
     model: str | None = None,
     cancel_event: threading.Event | None = None,
+    chat_provider: str | None = None,
 ) -> ResearchResult:
     """Run one native Responses API web search and normalize the result.
 
-    Uses the existing OpenAI-compatible client configuration (api_key from
-    the provider key store, base_url from the provider catalog).  The raw
-    Responses stream is consumed here; DeepSeek-specific response events
-    never leave the client layer.
+    Always executes against :data:`SEARCH_PROVIDER_ID` using that provider's
+    own credential.  ``chat_provider`` is the user's selected chat model
+    provider and is recorded for tracing only — it never gates execution.
+    ``cancel_event`` must be the caller's existing turn cancel event.
     """
     question = str(question or "").strip()
     if not question:
@@ -90,10 +75,20 @@ def execute_native_web_search(
             error="web search question is required",
         )
 
-    if not supports_native_web_search(provider):
-        return unsupported_web_search_result(provider)
+    try:
+        api_key = resolve_search_credential()
+    except RuntimeError as exc:
+        error = f"web search backend is not configured: {exc}"
+        return ResearchResult(
+            ok=False,
+            status="failed",
+            error=error,
+            route_used=_route_used(model, chat_provider),
+            summary="Native web search failed",
+            gaps=[error],
+        )
 
-    client = DeepSeekClient(provider=provider)
+    client = DeepSeekClient(api_key=api_key, provider=SEARCH_PROVIDER_ID)
     text_parts: list[str] = []
     usage: dict[str, Any] | None = None
     payload: dict[str, Any] | None = None
@@ -119,21 +114,28 @@ def execute_native_web_search(
         elif isinstance(event, ApiError):
             api_error = event
 
+    partial_text = "".join(text_parts).strip()
+
     if api_error is not None:
-        return _api_error_result(provider, api_error, question, usage)
+        return _api_error_result(api_error, usage, partial_text, model, chat_provider)
 
     if payload is None:
         return ResearchResult(
             ok=False,
-            answer="\n".join(text_parts).strip(),
+            answer=partial_text,
             usage=usage,
             status="failed",
             error="web search stream ended without a response",
-            route_used=_route_used(provider, model),
+            route_used=_route_used(model, chat_provider),
         )
 
-    status = str(payload.get("status") or "in_progress")
-    text = str(payload.get("text") or "").strip() or "\n".join(text_parts).strip()
+    # The stream normally emits a Usage event; fall back to the usage the
+    # final payload carries so token accounting is never silently lost.
+    if usage is None and isinstance(payload.get("usage"), dict):
+        usage = dict(payload["usage"])
+
+    status = str(payload.get("status") or "").strip() or "failed"
+    text = str(payload.get("text") or "").strip() or partial_text
     sources = payload.get("sources") or []
     if not isinstance(sources, list):
         sources = []
@@ -174,7 +176,7 @@ def execute_native_web_search(
                 "response_id": str(payload.get("response_id") or ""),
             }
         ],
-        route_used=_route_used(provider, model),
+        route_used=_route_used(model, chat_provider),
         summary=(
             f"Native web search returned {len(sources)} source(s)"
             if ok
@@ -183,23 +185,26 @@ def execute_native_web_search(
         error=error,
         run_id=str(payload.get("response_id") or ""),
         status=status,
+        usage=usage,
     )
 
 
-def _route_used(provider: str, model: str | None) -> dict[str, Any]:
+def _route_used(model: str | None, chat_provider: str | None) -> dict[str, Any]:
     return {
         "capability": WEB_SEARCH_CAPABILITY,
-        "provider": provider,
+        "search_provider": SEARCH_PROVIDER_ID,
+        "chat_provider": str(chat_provider or ""),
         "mode": _NATIVE_ROUTE,
         "model": model or "",
     }
 
 
 def _api_error_result(
-    provider: str,
     api_error: ApiError,
-    question: str,
     usage: dict[str, Any] | None,
+    partial_text: str,
+    model: str | None,
+    chat_provider: str | None,
 ) -> ResearchResult:
     code = api_error.status_code
     hint = _HTTP_STATUS_MESSAGES.get(code) if code is not None else ""
@@ -212,11 +217,11 @@ def _api_error_result(
     )
     return ResearchResult(
         ok=False,
-        answer="",
+        answer=partial_text,
         usage=usage,
         status="failed",
         error=error,
-        route_used=_route_used(provider, None),
+        route_used=_route_used(model, chat_provider),
         summary="Native web search failed",
         gaps=[error],
     )
