@@ -127,8 +127,11 @@ _CODING_TASK_KINDS = {
     "refactor",
 }
 
-_TARGET_FILE_CHAR_CAP = 24_000
-_TARGET_FILES_TOTAL_CAP = 64_000
+# Sized for the current DeepSeek V4 models (1M-token context), not for the
+# old cramped defaults. A single file may take up to half the turn budget so
+# one large file still loads whole, while a wide multi-file turn stays bounded.
+_TARGET_FILE_CHAR_CAP = 128_000
+_TARGET_FILES_TOTAL_CAP = 256_000
 _TARGET_FILE_TRUNCATION_MARKER = "[truncated — read the rest with tools if needed]"
 _TARGET_FILES_TOTAL_CAP_MARKER = "[target file contents total cap reached; omitted files: {files}]"
 
