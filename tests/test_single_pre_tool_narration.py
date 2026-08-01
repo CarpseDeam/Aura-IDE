@@ -12,9 +12,9 @@ Two contracts are under test:
    nor persisted; its ``tool_calls`` survive intact and execute.  A no-tool
    round streams and persists normally.
 2. **Pre-edit loop guard.**  Exact repeated reads before the first applied
-   write are rejected, excessive read-only rounds earn one steering message,
-   and rereads justified by a failure, a stale-file notice, or pending
-   edit-recovery state stay allowed.
+   write are rejected, consecutive rounds that produce no new evidence earn
+   one steering message, and rereads justified by a failure, a stale-file
+   notice, or pending edit-recovery state stay allowed.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ from aura.conversation.history import History
 from aura.conversation.manager import ConversationManager
 from aura.conversation.pre_edit_loop_guard import (
     DUPLICATE_READ_REASON,
-    MAX_READ_ONLY_ROUNDS_BEFORE_STEER,
+    MAX_STAGNANT_ROUNDS_BEFORE_STEER,
     PreEditLoopGuard,
 )
 from aura.conversation.tools._types import ApprovalDecision
@@ -573,23 +573,43 @@ class TestLegitimateRereadsSurvive:
         assert guard.check("read_file", {"path": "notes.md"}) is not None
 
 
-class TestReadOnlyStallSteering:
-    def test_excessive_read_only_rounds_inject_one_steering_message(
+class TestStagnantRoundsSteering:
+    def test_four_unique_reads_do_not_trigger_steering(
         self, workspace, isolated_streams
     ) -> None:
-        reads = [
-            ("notes.md", "read_file"),
-            ("other.md", "read_file"),
-            (".", "list_directory"),
+        """Genuinely new evidence, however much is gathered, is not a stall."""
+        for name in ("alpha.py", "beta.py", "gamma.py", "delta.py"):
+            (workspace / name).write_text(
+                f"# {name}\n\ncontent unique to {name}\n", encoding="utf-8"
+            )
+        rounds: list[list[Event]] = [
+            tool_round([(f"r{i}", "read_file", {"path": target})])
+            for i, target in enumerate(
+                ("notes.md", "other.md", "alpha.py", "beta.py", "gamma.py")
+            )
         ]
-        rounds: list[list[Event]] = []
-        for index in range(MAX_READ_ONLY_ROUNDS_BEFORE_STEER + 1):
-            target, tool = reads[index % len(reads)]
-            key = "path" if tool == "read_file" else "path"
-            rounds.append(tool_round([
-                (f"t{index}", tool, {key: target, "_n": index}),
-            ]))
-        rounds.append(final_round("Done circling."))
+        rounds.append(final_round("Enough evidence; implementing."))
+        backend = ScriptedBackend(rounds)
+        isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
+        manager = build_manager(workspace, "Update notes.md.")
+
+        run(manager, Recorder())
+
+        assert not [
+            m for m in manager.history.messages
+            if "Loop guard:" in str(m.get("content"))
+        ], "five unique reads are discovery, not a stall"
+
+    def test_two_equivalent_evidence_rounds_inject_one_steering_message(
+        self, workspace, isolated_streams
+    ) -> None:
+        """Re-reading the same bytes under a new argument is not new evidence."""
+        rounds: list[list[Event]] = [
+            tool_round([("r0", "read_file", {"path": "notes.md"})]),
+            tool_round([("r1", "read_file", {"path": "notes.md", "_n": 1})]),
+            tool_round([("r2", "read_file", {"path": "notes.md", "_n": 2})]),
+            final_round("Using the evidence already gathered."),
+        ]
         backend = ScriptedBackend(rounds)
         isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
         manager = build_manager(workspace, "Update notes.md.")
@@ -604,6 +624,123 @@ class TestReadOnlyStallSteering:
         text = steering[0]["content"]
         assert "make the change" in text
         assert "write_file" in text
+
+    def test_truncated_reads_allow_focused_continuation(
+        self, workspace, isolated_streams
+    ) -> None:
+        """A truncated read plus range continuations is discovery, not a stall."""
+        from aura.config import MAX_READ_BYTES
+
+        lines = [
+            f"line {i:05d} " + ("x" * 120)
+            for i in range((MAX_READ_BYTES // 100) + 200)
+        ]
+        (workspace / "big.md").write_text("\n".join(lines), encoding="utf-8")
+        rounds: list[list[Event]] = [
+            tool_round([("t0", "read_file", {"path": "big.md"})]),
+            tool_round([("t1", "read_file_range", {
+                "path": "big.md", "start_line": 2100, "end_line": 2200,
+            })]),
+            tool_round([("t2", "read_file_range", {
+                "path": "big.md", "start_line": 2201, "end_line": 2250,
+            })]),
+            final_round("Continuing from the truncated read."),
+        ]
+        backend = ScriptedBackend(rounds)
+        isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
+        manager = build_manager(workspace, "Update big.md.")
+
+        run(manager, Recorder())
+
+        assert not [
+            m for m in manager.history.messages
+            if "Loop guard:" in str(m.get("content"))
+        ], "truncated reads and their continuations are new evidence"
+
+    def test_changed_arguments_with_identical_results_do_not_reset_the_counter(
+        self,
+    ) -> None:
+        """Cosmetic argument changes cannot launder the same evidence as new."""
+        guard = PreEditLoopGuard()
+        payload = {
+            "ok": True,
+            "path": "notes.md",
+            "content": "# Notes\n\nold body\n",
+            "truncated": False,
+            "content_hash": "a" * 64,
+            "file_size": 18,
+        }
+        for index in range(MAX_STAGNANT_ROUNDS_BEFORE_STEER + 1):
+            guard.begin_round()
+            guard.record("read_file", {"path": "notes.md", "_n": index})
+            guard.observe_result("read_file", True, payload)
+            guard.end_round()
+        assert guard.take_steering_message() != ""
+
+    def test_a_new_search_result_resets_the_stall_counter(self) -> None:
+        """A genuinely new search result is evidence, not a stall."""
+        guard = PreEditLoopGuard()
+        for pattern in ("loop", "guard", "steering"):
+            guard.begin_round()
+            guard.record("grep_search", {"pattern": pattern})
+            guard.observe_result("grep_search", True, {
+                "ok": True,
+                "matches": [{
+                    "path": f"src/{pattern}.py",
+                    "line_number": 1,
+                    "content": f"def {pattern}():",
+                }],
+                "engine": "ripgrep",
+                "searched_files": 3,
+                "skipped_files": 0,
+                "summary": f"found {pattern}",
+            })
+            guard.end_round()
+        assert guard.take_steering_message() == ""
+
+    def test_equivalent_search_results_do_not_count_as_progress(self) -> None:
+        """The same matches under a different pattern are the same evidence."""
+        guard = PreEditLoopGuard()
+        matches = [
+            {"path": "src/a.py", "line_number": 3, "content": "x = 1"},
+        ]
+        for index in range(MAX_STAGNANT_ROUNDS_BEFORE_STEER + 1):
+            guard.begin_round()
+            guard.record("grep_search", {"pattern": "x" if index == 0 else "X"})
+            guard.observe_result("grep_search", True, {
+                "ok": True,
+                "matches": matches,
+                "engine": "ripgrep",
+                "searched_files": 7,
+                "skipped_files": 0,
+                "summary": "same matches again",
+            })
+            guard.end_round()
+        assert guard.take_steering_message() != ""
+
+    def test_a_truncated_read_counts_as_new_evidence(self) -> None:
+        """A truncated payload is new evidence; only its repetition stalls."""
+        guard = PreEditLoopGuard()
+        payload = {
+            "ok": True,
+            "path": "big.md",
+            "content": "first 200KB of the file...",
+            "truncated": True,
+            "content_hash": "b" * 64,
+            "file_size": 300000,
+        }
+        # The first truncated read is new evidence and resets the counter.
+        guard.begin_round()
+        guard.record("read_file", {"path": "big.md"})
+        guard.observe_result("read_file", True, payload)
+        guard.end_round()
+        # Two identical repeats (only the argument changed) are a stall.
+        for index in range(MAX_STAGNANT_ROUNDS_BEFORE_STEER):
+            guard.begin_round()
+            guard.record("read_file", {"path": "big.md", "_n": index + 1})
+            guard.observe_result("read_file", True, payload)
+            guard.end_round()
+        assert guard.take_steering_message() != ""
 
     def test_no_steering_when_the_turn_makes_progress(
         self, workspace, isolated_streams
@@ -631,28 +768,46 @@ class TestReadOnlyStallSteering:
 
     def test_terminal_commands_count_as_progress(self) -> None:
         guard = PreEditLoopGuard()
-        for _ in range(MAX_READ_ONLY_ROUNDS_BEFORE_STEER + 2):
+        for _ in range(MAX_STAGNANT_ROUNDS_BEFORE_STEER + 2):
             guard.begin_round()
             guard.record("read_file", {"path": "a"})
             guard.record("run_terminal_command", {"command": "pytest -q"})
             guard.end_round()
         assert guard.take_steering_message() == ""
 
-    def test_the_todo_tool_does_not_launder_a_read_only_round(self) -> None:
-        """Bookkeeping is not progress — it must not reset the counter."""
+    def test_the_todo_tool_does_not_launder_a_stagnant_round(self) -> None:
+        """Bookkeeping is not evidence — it must not reset the counter."""
         guard = PreEditLoopGuard()
-        for index in range(MAX_READ_ONLY_ROUNDS_BEFORE_STEER):
+        payload = {
+            "ok": True,
+            "path": "notes.md",
+            "content": "# Notes\n\nold body\n",
+            "truncated": False,
+            "content_hash": "a" * 64,
+            "file_size": 18,
+        }
+        for index in range(MAX_STAGNANT_ROUNDS_BEFORE_STEER + 1):
             guard.begin_round()
             guard.record("update_worker_todo", {"items": []})
-            guard.record("read_file", {"path": f"file{index}.py"})
+            guard.record("read_file", {"path": "notes.md", "_n": index})
+            guard.observe_result("read_file", True, payload)
             guard.end_round()
         assert guard.take_steering_message() != ""
 
     def test_steering_fires_at_most_once_per_turn(self) -> None:
         guard = PreEditLoopGuard()
-        for index in range(MAX_READ_ONLY_ROUNDS_BEFORE_STEER + 4):
+        payload = {
+            "ok": True,
+            "path": "notes.md",
+            "content": "# Notes\n\nold body\n",
+            "truncated": False,
+            "content_hash": "a" * 64,
+            "file_size": 18,
+        }
+        for index in range(MAX_STAGNANT_ROUNDS_BEFORE_STEER + 2):
             guard.begin_round()
-            guard.record("read_file", {"path": f"file{index}.py"})
+            guard.record("read_file", {"path": "notes.md", "_n": index})
+            guard.observe_result("read_file", True, payload)
             guard.end_round()
         assert guard.take_steering_message() != ""
         assert guard.take_steering_message() == ""

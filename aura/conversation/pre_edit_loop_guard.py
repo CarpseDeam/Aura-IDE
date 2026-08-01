@@ -6,11 +6,21 @@ Two mechanical signals, both derived from state the send loop already keeps:
    read-only tool call with the same arguments is rejected the second time it
    is issued.  The result is already in the conversation above; repeating it
    only feeds the model its own transcript again.
-2. **Consecutive read-only rounds.** After
-   :data:`MAX_READ_ONLY_ROUNDS_BEFORE_STEER` rounds that ran tools but produced
-   no write and no terminal command, one concise internal steering message is
-   injected — once per turn — telling the agent to use the evidence it has and
-   implement.
+2. **Stagnant discovery rounds.** After
+   :data:`MAX_STAGNANT_ROUNDS_BEFORE_STEER` consecutive rounds that produced
+   *no new evidence* — no new file, range, search result, or result payload,
+   no applied write, and no terminal command — one concise internal steering
+   message is injected, once per turn, telling the agent to use the evidence
+   it has and implement.
+
+Evidence is judged by the *result*, never by the call arguments.  Each
+successful read-only result is folded into a normalized fingerprint: a
+genuinely new file, line range, search match, or result payload resets the
+stall counter, while a result that is effectively identical to one already
+seen — cosmetic argument changes included — does not.  Truncated reads return
+genuinely new content, so a focused continuation after a truncation is normal
+discovery and is never steered.  TODO updates and other bookkeeping are not
+evidence.
 
 A reread is legitimate, and is allowed, when the previous round had a tool
 failure, when a stale-file notice invalidated that path, or while edit-recovery
@@ -46,14 +56,32 @@ READ_ONLY_TOOLS: frozenset[str] = frozenset({
     "code_intel_dependents",
 })
 
-#: Tools that count as forward progress and reset the read-only round counter.
+#: Tools that count as forward progress and reset the stall counter.
 PROGRESS_TOOLS: frozenset[str] = frozenset(WRITE_TOOLS | TERMINAL_TOOLS)
 
-#: Rounds of tools-without-progress tolerated before one steering message.
-MAX_READ_ONLY_ROUNDS_BEFORE_STEER: int = 4
+#: Rounds of tools-without-new-evidence tolerated before one steering message.
+MAX_STAGNANT_ROUNDS_BEFORE_STEER: int = 2
+
+#: Result-payload keys that describe call mechanics, not evidence content.
+#: Stripped from evidence fingerprints so that two calls returning effectively
+#: identical results (differing only in engine, search stats, echoed args, or
+#: derived summaries) are recognised as the same evidence.
+_NON_EVIDENCE_KEYS: frozenset[str] = frozenset({
+    "ok",
+    "error",
+    "engine",
+    "searched_files",
+    "skipped_files",
+    "skipped_details",
+    "summary",
+    "regex_mode",
+    "auto_regex_retry",
+    "include_pattern",
+    "regex_hint",
+    "pattern",
+})
 
 DUPLICATE_READ_REASON = "duplicate_read_before_first_edit"
-READ_ONLY_STALL_REASON = "read_only_rounds_before_first_edit"
 
 _DUPLICATE_READ_MESSAGE = (
     "You already ran this exact call earlier in this turn and its result is "
@@ -64,11 +92,11 @@ _DUPLICATE_READ_MESSAGE = (
 )
 
 _STEERING_MESSAGE = (
-    "Loop guard: {rounds} consecutive rounds ran read-only tools with no edit "
-    "applied and no command run. You have the evidence you need. Do not "
-    "re-read, restate the plan, or re-derive the decision — make the change "
-    "now with write_file or patch_file, then validate it. If something "
-    "genuinely blocks the edit, name that blocker in one sentence and stop."
+    "Loop guard: {rounds} consecutive rounds produced no new evidence and no "
+    "edit applied. You have the evidence you need. Do not re-read, restate "
+    "the plan, or re-derive the decision — make the change now with "
+    "write_file or patch_file, then validate it. If something genuinely "
+    "blocks the edit, name that blocker in one sentence and stop."
 )
 
 
@@ -81,12 +109,47 @@ def read_fingerprint(name: str, args: Any) -> str:
     return f"{name}:{rendered}"
 
 
+def evidence_fingerprint(name: str, payload: Any) -> str | None:
+    """Return a normalized identity for the evidence a successful result carries.
+
+    The fingerprint is derived from the *result payload*, never from the call
+    arguments, so re-issuing a read with cosmetic argument changes cannot
+    launder the same evidence as new.  Bookkeeping keys (search stats, engine
+    names, echoed arguments, derived summaries) are stripped; the content —
+    file bytes, selected ranges, match lists, directory listings — is the
+    fingerprint.  ``None`` is returned when there is no payload to count.
+    """
+    if payload is None or payload == "":
+        return None
+    data: Any = payload
+    if isinstance(payload, str):
+        try:
+            data = json.loads(payload)
+        except (TypeError, ValueError):
+            data = None
+    if isinstance(data, dict):
+        normalized = {
+            key: value
+            for key, value in data.items()
+            if key not in _NON_EVIDENCE_KEYS
+        }
+        rendered = json.dumps(
+            normalized, sort_keys=True, ensure_ascii=False, default=str
+        )
+    elif data is None:
+        rendered = str(payload)
+    else:
+        rendered = json.dumps(data, sort_keys=True, ensure_ascii=False, default=str)
+    return f"{name}:{rendered}"
+
+
 @dataclass
 class PreEditLoopGuard:
-    """Track read repetition and read-only rounds before the first write."""
+    """Track read repetition and stagnant discovery before the first write."""
 
     seen_reads: dict[str, int] = field(default_factory=dict)
-    consecutive_read_only_rounds: int = 0
+    seen_evidence: set[str] = field(default_factory=set)
+    stagnant_rounds: int = 0
     write_applied: bool = False
     steered: bool = False
     blocked_calls: int = 0
@@ -95,20 +158,22 @@ class PreEditLoopGuard:
     _grace_rounds: int = 0
     _round_had_tools: bool = False
     _round_made_progress: bool = False
+    _round_new_evidence: bool = False
 
     # ---- round lifecycle -------------------------------------------------
 
     def begin_round(self) -> None:
         self._round_had_tools = False
         self._round_made_progress = False
+        self._round_new_evidence = False
 
     def end_round(self) -> None:
         if self._grace_rounds > 0:
             self._grace_rounds -= 1
-        if self._round_made_progress:
-            self.consecutive_read_only_rounds = 0
+        if self._round_made_progress or self._round_new_evidence:
+            self.stagnant_rounds = 0
         elif self._round_had_tools:
-            self.consecutive_read_only_rounds += 1
+            self.stagnant_rounds += 1
 
     # ---- pre-execution gate ----------------------------------------------
 
@@ -152,7 +217,7 @@ class PreEditLoopGuard:
         if name in PROGRESS_TOOLS:
             self._round_made_progress = True
 
-    # ---- evidence that justifies a reread --------------------------------
+    # ---- evidence that justifies continued discovery ---------------------
 
     def observe_result(self, name: str, ok: bool, payload: Any = None) -> None:
         """Fold one tool result into the guard's state."""
@@ -161,7 +226,17 @@ class PreEditLoopGuard:
             return
         if name in WRITE_TOOLS and _payload_applied(payload):
             self.write_applied = True
-            self.consecutive_read_only_rounds = 0
+            self.stagnant_rounds = 0
+            self._round_made_progress = True
+            return
+        if name in TERMINAL_TOOLS:
+            self._round_made_progress = True
+            return
+        if name in READ_ONLY_TOOLS:
+            fingerprint = evidence_fingerprint(name, payload)
+            if fingerprint is not None and fingerprint not in self.seen_evidence:
+                self.seen_evidence.add(fingerprint)
+                self._round_new_evidence = True
 
     def note_failure(self) -> None:
         """A tool failed: the next round may reread whatever it needs."""
@@ -184,13 +259,13 @@ class PreEditLoopGuard:
     # ---- steering --------------------------------------------------------
 
     def take_steering_message(self) -> str:
-        """Return the one steering message when it is due, else ``""``."""
+        """Return the one steering message when it is due, else ``\"\"``."""
         if self.write_applied or self.steered:
             return ""
-        if self.consecutive_read_only_rounds < MAX_READ_ONLY_ROUNDS_BEFORE_STEER:
+        if self.stagnant_rounds < MAX_STAGNANT_ROUNDS_BEFORE_STEER:
             return ""
         self.steered = True
-        return _STEERING_MESSAGE.format(rounds=self.consecutive_read_only_rounds)
+        return _STEERING_MESSAGE.format(rounds=self.stagnant_rounds)
 
 
 def _payload_applied(payload: Any) -> bool:
@@ -210,10 +285,10 @@ def _payload_applied(payload: Any) -> bool:
 
 __all__ = [
     "DUPLICATE_READ_REASON",
-    "MAX_READ_ONLY_ROUNDS_BEFORE_STEER",
+    "MAX_STAGNANT_ROUNDS_BEFORE_STEER",
     "PROGRESS_TOOLS",
     "PreEditLoopGuard",
-    "READ_ONLY_STALL_REASON",
     "READ_ONLY_TOOLS",
+    "evidence_fingerprint",
     "read_fingerprint",
 ]

@@ -53,7 +53,7 @@ class _SendState:
     """Holds each round's ContentDelta until ``Done`` says who owns it."""
 
     pre_edit_guard: PreEditLoopGuard | None = field(init=False)
-    """Deterministic repeat-read / read-only-round guard before the first write."""
+    """Deterministic repeat-read / stagnant-discovery guard before the first write."""
 
     # --- worker recovery state ---
     worker_flow_last_steering: str = ""
