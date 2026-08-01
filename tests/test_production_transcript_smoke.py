@@ -1,18 +1,28 @@
 """Smoke: one production turn runs straight through without circling.
 
 The consolidated production contract (``aura/roles/bundled/single.md``) asks for
-one pass — orientation, focused reads, one decision, edit, validation, receipt —
-and forbids reopening a settled decision or restating the implementation before
-editing.  This smoke drives a disciplined transcript through the real production
-execution machinery and asserts that shape, then proves the circularity detector
-actually bites by running the pre-fix behaviour through it.
+one pass — orientation, focused reads, one decision, edit, validation, receipt.
+Two different things are checked here, and only together are they evidence:
+
+* **Projection** (``ProductionExecutionSession``): a disciplined transcript
+  lands in the workspace in the right order with one receipt.  This is a
+  projection test and nothing more — feeding it an ideal transcript proves
+  nothing about whether the agent circles.
+* **Control** (``ConversationManager``): the circular transcript is streamed
+  through the *real* send loop, and the loop is what stops it — the pre-tool
+  essay never reaches chat or history, and the second identical read is
+  rejected.  The manager owns real streamed rounds; the projection layer never
+  sees the prose at all.
+
+Deeper coverage of the buffering contract and the loop guard lives in
+``tests/test_single_pre_tool_narration.py``.
 """
 
 from __future__ import annotations
 
-import difflib
 import json
-import re
+import threading
+from pathlib import Path
 
 import pytest
 
@@ -21,10 +31,19 @@ from aura.bridge.production_receipt import STATUS_COMPLETED
 from aura.client import (
     ContentDelta,
     Done,
+    Event,
     ReasoningDelta,
+    ToolCallArgsDelta,
+    ToolCallEnd,
     ToolCallStart,
     ToolResult,
 )
+from aura.conversation.history import History
+from aura.conversation.manager import ConversationManager
+from aura.conversation.pre_edit_loop_guard import DUPLICATE_READ_REASON
+from aura.conversation.tools._types import ApprovalDecision
+from aura.conversation.tools.registry import ToolRegistry
+from aura.model_streams import PRODUCTION_STREAM_HOOK, ModelStreamRegistry
 from aura.worker_todo import UPDATE_WORKER_TODO_TOOL
 
 pytest.importorskip("PySide6.QtWidgets")
@@ -203,46 +222,115 @@ def _run_disciplined_turn(session, approval_proxy) -> None:
     ))
 
 
-# ── circularity detector ────────────────────────────────────────────────────
-
-_DELIBERATION = re.compile(
-    r"\b(option [abc]\b|let me think|reconsider|to summari[sz]e|"
-    r"acceptance criteria|double-check the decision)",
-    re.IGNORECASE,
-)
-_CODE_FENCE = re.compile(r"```")
+# ── the real send loop, driven with the circular transcript ─────────────────
 
 
-def circularity_report(prose: list[str], first_edit_index: int) -> dict[str, list[str]]:
-    """Return the circling a transcript exhibits, as {finding: evidence}.
+def _scripted_tool_round(
+    prose: str, calls: list[tuple[str, str, dict]]
+) -> list[Event]:
+    """One streamed round: prose, then tool calls, then Done."""
+    events: list[Event] = [ContentDelta(text=prose)]
+    tool_calls = []
+    for index, (call_id, name, args) in enumerate(calls):
+        arguments = json.dumps(args)
+        events.append(ToolCallStart(index=index, id=call_id, name=name))
+        events.append(ToolCallArgsDelta(index=index, args_chunk=arguments))
+        events.append(ToolCallEnd(index=index))
+        tool_calls.append({
+            "id": call_id,
+            "type": "function",
+            "function": {"name": name, "arguments": arguments},
+        })
+    events.append(Done(
+        finish_reason="tool_calls",
+        full_message={
+            "role": "assistant", "content": prose, "tool_calls": tool_calls,
+        },
+    ))
+    return events
 
-    An empty report means the turn moved forward: no restated decision, no
-    proposed patch before the first edit, no deliberation narration.
-    """
-    findings: dict[str, list[str]] = {}
 
-    restated = [
-        f"{a[:48]}... ~ {b[:48]}..."
-        for i, a in enumerate(prose)
-        for b in prose[i + 1:]
-        if difflib.SequenceMatcher(None, a, b).ratio() > 0.55
+def _scripted_final_round(prose: str) -> list[Event]:
+    return [
+        ContentDelta(text=prose),
+        Done(
+            finish_reason="stop",
+            full_message={"role": "assistant", "content": prose},
+        ),
     ]
-    if restated:
-        findings["restated_decision"] = restated
 
-    narrated = [line[:64] for line in prose if _DELIBERATION.search(line)]
-    if narrated:
-        findings["narrated_deliberation"] = narrated
 
-    patch_first = [
-        line[:64]
-        for line in prose[:first_edit_index]
-        if _CODE_FENCE.search(line)
-    ]
-    if patch_first:
-        findings["patch_before_edit"] = patch_first
+class _ScriptedProductionBackend:
+    def __init__(self, rounds: list[list[Event]]) -> None:
+        self._rounds = rounds
+        self.calls: list[dict] = []
 
-    return findings
+    def stream(self, **kwargs):
+        index = len(self.calls)
+        self.calls.append(kwargs)
+        if index < len(self._rounds):
+            return iter(self._rounds[index])
+        return iter(_scripted_final_round("(script exhausted)"))
+
+
+@pytest.fixture
+def isolated_streams(monkeypatch) -> ModelStreamRegistry:
+    registry = ModelStreamRegistry()
+    import aura.conversation.manager as manager_module
+
+    monkeypatch.setattr(manager_module, "model_streams", registry)
+    return registry
+
+
+@pytest.fixture
+def repo(tmp_path: Path) -> Path:
+    root = tmp_path / "repo"
+    (root / "aura" / "work_artifact").mkdir(parents=True)
+    (root / "aura" / "work_artifact" / "runner.py").write_text(
+        "CAP = 10\n\n\ndef _run_item(job):\n    return job\n", encoding="utf-8"
+    )
+    return root
+
+
+def _run_circular_transcript(repo: Path, isolated_streams):
+    """Stream the pre-fix circular transcript through the real send loop."""
+    runner = "aura/work_artifact/runner.py"
+    backend = _ScriptedProductionBackend([
+        _scripted_tool_round(
+            CIRCULAR_PROSE[0], [("g1", "grep_search", {"pattern": "CAP"})]
+        ),
+        _scripted_tool_round(
+            CIRCULAR_PROSE[1], [("r1", "read_file", {"path": runner})]
+        ),
+        _scripted_tool_round(
+            f"{CIRCULAR_PROSE[2]}\n{CIRCULAR_PROSE[3]}\n{CIRCULAR_PROSE[4]}",
+            [("r2", "read_file", {"path": runner})],
+        ),
+        _scripted_tool_round(
+            f"{CIRCULAR_PROSE[5]}\n{CIRCULAR_PROSE[6]}\n{CIRCULAR_PROSE[7]}",
+            [("r3", "read_file", {"path": runner})],
+        ),
+        _scripted_final_round("Stopped."),
+    ])
+    isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
+
+    history = History()
+    history.set_system("You are Aura's production coding agent.")
+    history.append_user_text("Make the retry cap pause the job.")
+    manager = ConversationManager(
+        history, ToolRegistry(workspace_root=repo, mode="single")
+    )
+    events: list[Event] = []
+    manager.send(
+        on_event=events.append,
+        approval_cb=lambda _r: ApprovalDecision(action="approve"),
+        cancel_event=threading.Event(),
+        model="scripted-production-model",
+        thinking="off",
+        hook_name=PRODUCTION_STREAM_HOOK,
+        max_tool_rounds=12,
+    )
+    return manager, events, backend
 
 
 # ── the smoke ───────────────────────────────────────────────────────────────
@@ -288,18 +376,71 @@ def test_disciplined_turn_reads_before_it_edits_and_validates_after(
     assert order.count("write_file") == 1
 
 
-def test_disciplined_transcript_shows_no_circling() -> None:
-    first_edit = DISCIPLINED_PROSE.index("Editing `aura/work_artifact/runner.py`.")
-    assert circularity_report(DISCIPLINED_PROSE, first_edit) == {}
+# ── the manager, not the projection layer, is what stops the circling ───────
 
 
-def test_detector_catches_the_pre_fix_circular_transcript() -> None:
-    """The detector is not vacuous: the old behaviour trips every finding."""
-    first_edit = CIRCULAR_PROSE.index("Editing `aura/work_artifact/runner.py`.")
-    report = circularity_report(CIRCULAR_PROSE, first_edit)
+class TestManagerControlsRealStreamedRounds:
+    """The circular transcript is streamed at the manager; it never gets out."""
 
-    assert set(report) == {
-        "restated_decision",
-        "narrated_deliberation",
-        "patch_before_edit",
-    }
+    def test_the_circling_prose_never_reaches_chat(
+        self, repo, isolated_streams
+    ) -> None:
+        _manager, events, _backend = _run_circular_transcript(repo, isolated_streams)
+
+        chat = "".join(
+            e.text for e in events if isinstance(e, ContentDelta)
+        )
+        for line in CIRCULAR_PROSE[:8]:
+            assert line not in chat, f"pre-tool prose leaked into chat: {line!r}"
+        assert chat == "Stopped.", (
+            "only the final no-tool answer is chat-owned prose"
+        )
+
+    def test_the_circling_prose_is_never_stored_in_history(
+        self, repo, isolated_streams
+    ) -> None:
+        manager, _events, _backend = _run_circular_transcript(repo, isolated_streams)
+
+        stored = json.dumps(manager.history.messages)
+        assert "Option A" not in stored
+        assert "Acceptance criteria" not in stored
+        assert "Reconsidering" not in stored
+        assert "To summarize the plan again" not in stored
+        assert "return _paused(job)" not in stored, (
+            "the narrated patch must not be replayed back to the model"
+        )
+
+    def test_the_prompt_replayed_to_the_provider_stays_clean(
+        self, repo, isolated_streams
+    ) -> None:
+        """The loop closes through the next round's prompt — prove it is open."""
+        _manager, _events, backend = _run_circular_transcript(repo, isolated_streams)
+
+        assert len(backend.calls) >= 3
+        for call in backend.calls[1:]:
+            replayed = json.dumps(call["messages"])
+            assert "Option A" not in replayed
+            assert "Acceptance criteria" not in replayed
+
+    def test_the_repeated_read_is_rejected_before_the_first_edit(
+        self, repo, isolated_streams
+    ) -> None:
+        _manager, events, _backend = _run_circular_transcript(repo, isolated_streams)
+
+        results = {
+            e.tool_call_id: e for e in events if isinstance(e, ToolResult)
+        }
+        assert results["r1"].ok is True, "the first read is real work"
+        assert results["r2"].ok is False, "the identical reread adds nothing"
+        assert json.loads(results["r2"].result)["reason"] == DUPLICATE_READ_REASON
+        assert results["r3"].ok is False
+
+    def test_tool_calls_still_execute_and_project(
+        self, repo, isolated_streams
+    ) -> None:
+        """Suppressing prose must not disturb tool execution or projection."""
+        _manager, events, _backend = _run_circular_transcript(repo, isolated_streams)
+
+        started = [e.name for e in events if isinstance(e, ToolCallStart)]
+        assert started == ["grep_search", "read_file", "read_file", "read_file"]
+        assert len([e for e in events if isinstance(e, ToolResult)]) == 4

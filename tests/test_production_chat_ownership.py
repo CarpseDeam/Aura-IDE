@@ -418,7 +418,12 @@ class TestImplementationTurn:
     def test_tool_rounds_do_not_duplicate_prose_or_record_early(
         self, harness
     ) -> None:
-        """Proof 6: a tool-call round must not freeze a partial transcript."""
+        """Proof 6: a tool-call round must not freeze a partial transcript.
+
+        The round's pre-tool narration is suppressed outright (see
+        ``tests/test_single_pre_tool_narration.py``), so the one recorded
+        assistant turn is the final summary and nothing else.
+        """
         backend = ScriptedBackend(self._script())
         install_production_backend(backend.stream)
 
@@ -427,14 +432,31 @@ class TestImplementationTurn:
         assistant = harness.assistant_texts()
         assert len(assistant) == 1, f"expected one assistant turn, got {assistant}"
         recorded = assistant[0]
-        # The pre-tool sentence and the final summary belong to the same turn,
-        # each appearing once.
-        assert recorded.count("Writing the notes file now.") == 1
+        assert "Writing the notes file now." not in recorded, (
+            "pre-tool narration must never reach the chat transcript"
+        )
         assert recorded.count(IMPL_SUMMARY) == 1
         # The completed turn survives the round trip.
         loaded = harness.reload()
         assert [i["kind"] for i in loaded.chat_items] == [USER, PLANNER]
         assert loaded.chat_items[1]["text"] == recorded
+
+    def test_pre_tool_narration_is_not_persisted_in_history(self, harness) -> None:
+        """It must also be absent from the messages replayed to the provider."""
+        backend = ScriptedBackend(self._script())
+        install_production_backend(backend.stream)
+
+        assert harness.run_turn("Add a notes.md describing the project.")
+
+        stored = json.dumps(harness.bridge.history.messages)
+        assert "Writing the notes file now." not in stored
+        tool_call_messages = [
+            m for m in harness.bridge.history.messages
+            if m.get("role") == "assistant" and m.get("tool_calls")
+        ]
+        assert tool_call_messages, "the write round must still be in history"
+        assert tool_call_messages[0]["content"] == ""
+        assert tool_call_messages[0]["tool_calls"][0]["id"] == "w1"
 
     def test_no_worker_summary_card_stands_in_for_the_answer(self, harness) -> None:
         backend = ScriptedBackend(self._script())
@@ -492,7 +514,9 @@ class TestQueuedFollowUp:
 
         assert finished_turns["count"] == 2, "the queued turn never ran"
         assert harness.user_texts() == ["Create a.md.", "And what do you think of it?"]
-        assert harness.assistant_texts() == [f"Working. {first}", second]
+        # "Working. " was the write round's pre-tool narration and is suppressed;
+        # each turn's chat-owned prose is its final answer.
+        assert harness.assistant_texts() == [first, second]
 
         loaded = harness.reload()
         assert [i["kind"] for i in loaded.chat_items] == [

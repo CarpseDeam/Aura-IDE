@@ -11,6 +11,7 @@ from aura.client import (
     Event,
 )
 from aura.conversation.planner_stream_hygiene import PlannerStreamHygiene
+from aura.conversation.single_content_gate import SingleContentGate
 from aura.conversation.worker_stream_buffer import WorkerStreamBuffer
 
 
@@ -32,11 +33,13 @@ class StreamEventRouter:
         on_event: Callable[[Event], None],
         mode: str = "single",
         stream_buffer: WorkerStreamBuffer | None = None,
+        content_gate: SingleContentGate | None = None,
     ) -> None:
         self._planner_hygiene = planner_hygiene
         self._on_event = on_event
         self._mode = mode
         self._stream_buffer = stream_buffer
+        self._content_gate = content_gate
 
     def process(self, ev: Event) -> StreamEventResult:
         # 1. Planner ContentDelta filter
@@ -56,21 +59,37 @@ class StreamEventRouter:
                 if isinstance(content, str):
                     ev.full_message["content"] = self._planner_hygiene.sanitize_message_text(content)
 
-        # 3. Worker stream_buffer routing / normal forwarding
+        # 3. SINGLE production pre-tool content gate.
+        #
+        # Prose is held for the whole round.  A round that ends in tool calls
+        # never projects or stores its pre-tool essay; any other round replays
+        # the buffer verbatim so the final answer stays chat-owned.  A round
+        # that dies on ApiError flushes what it generated — the user should
+        # still see it, and that path stores no assistant message anyway.
+        if self._content_gate is not None:
+            if isinstance(ev, ContentDelta):
+                self._content_gate.capture(ev)
+                return StreamEventResult()
+            if isinstance(ev, Done):
+                ev = self._content_gate.resolve_done(ev, self._on_event)
+            elif isinstance(ev, ApiError):
+                self._content_gate.flush(self._on_event)
+
+        # 4. Worker stream_buffer routing / normal forwarding
         if self._mode == "worker" and self._stream_buffer is not None:
             self._stream_buffer.capture_or_forward(ev, self._on_event)
         else:
             self._on_event(ev)
 
-        # 4. Done full_message capture
+        # 5. Done full_message capture
         if isinstance(ev, Done):
             return StreamEventResult(full_message=ev.full_message)
 
-        # 5. ApiError detection
+        # 6. ApiError detection
         if isinstance(ev, ApiError):
             return StreamEventResult(api_error=ev.message)
 
-        # 6. Default
+        # 7. Default
         return StreamEventResult()
 
 

@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from aura.conversation.edit_orchestrator import EditRetryLedger
+from aura.conversation.pre_edit_loop_guard import PreEditLoopGuard
+from aura.conversation.single_content_gate import SingleContentGate
 from aura.conversation.tool_limits import ToolLimitState
 from aura.conversation.validation_ledger import WorkerValidationLedger
 from aura.conversation.worker_flow import WorkerFlowHarness
@@ -45,6 +47,13 @@ class _SendState:
     limits: ToolLimitState = field(init=False)
     stream_buffer: WorkerStreamBuffer | None = field(init=False)
     worker_flow: WorkerFlowHarness | None = field(init=False)
+
+    # --- single-mode production objects (initialised in __post_init__) ---
+    content_gate: SingleContentGate | None = field(init=False)
+    """Holds each round's ContentDelta until ``Done`` says who owns it."""
+
+    pre_edit_guard: PreEditLoopGuard | None = field(init=False)
+    """Deterministic repeat-read / read-only-round guard before the first write."""
 
     # --- worker recovery state ---
     worker_flow_last_steering: str = ""
@@ -86,9 +95,14 @@ class _SendState:
         self.limits = ToolLimitState(mode=self.mode)
         self.stream_buffer = None
         self.worker_flow = None
+        self.content_gate = None
+        self.pre_edit_guard = None
         if self.mode == "worker":
             self.stream_buffer = WorkerStreamBuffer()
             self.worker_flow = WorkerFlowHarness()
+        elif self.mode == "single":
+            self.content_gate = SingleContentGate()
+            self.pre_edit_guard = PreEditLoopGuard()
 
     # ── Write-count helpers (honest signals from WorkerFlowHarness) ──
 

@@ -222,6 +222,8 @@ class ConversationManager:
             tool_defs = self._tools.tool_defs()
             if state.stream_buffer is not None:
                 state.stream_buffer.begin_round()
+            if state.content_gate is not None:
+                state.content_gate.begin_round()
 
             label = _stream_log_label(hook_name)
             _log.info(
@@ -240,6 +242,7 @@ class ConversationManager:
                 on_event=on_event,
                 mode=state.mode,
                 stream_buffer=state.stream_buffer,
+                content_gate=state.content_gate,
             )
 
             for ev in model_streams.trigger(
@@ -264,6 +267,13 @@ class ConversationManager:
                     return
 
             _log.info("%s_done model=%s", label, model)
+
+            # A stream that ended without a Done (cancel, truncated provider
+            # response) still owes the user whatever prose it produced.  Rounds
+            # that reached Done already resolved their buffer, so this is a
+            # no-op for them.
+            if state.content_gate is not None:
+                state.content_gate.flush(on_event)
 
             if cancel_event.is_set():
                 # If we have some content but no tool calls, we can keep it.
@@ -354,6 +364,10 @@ class ConversationManager:
                 explicit_validation_commands=explicit_validation_commands,
                 declared_run_command=declared_run_command,
             )
+            if state.pre_edit_guard is not None:
+                steering = state.pre_edit_guard.take_steering_message()
+                if steering:
+                    self._history.append_internal_user_text(steering)
             if tool_round.action == "return":
                 return
             if tool_round.action == "continue":

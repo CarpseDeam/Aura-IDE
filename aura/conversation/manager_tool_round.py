@@ -61,6 +61,22 @@ _READ_ONLY_TOOLS = {
 }
 
 
+def _edit_recovery_pending(state: _SendState) -> bool:
+    """Return whether existing edit-recovery state requires a fresh reread.
+
+    Reads the send state the loop already keeps — no new bookkeeping.  While
+    any of these are outstanding the model has been *told* to re-read a file,
+    so the pre-edit loop guard must not block it for doing so.
+    """
+    return bool(
+        state.line_range_reread_required
+        or state.edit_fallback_required
+        or state.syntax_repair_required
+        or state.syntax_validation_required
+        or state.patch_invalid_syntax_required
+    )
+
+
 @dataclass(frozen=True)
 class ToolRoundOutcome:
     action: str
@@ -105,6 +121,11 @@ class ToolRoundRunner:
         worker_phase_boundary_info: dict[str, Any] | None = None
         enter_silent_preflight = False
 
+        guard = state.pre_edit_guard
+        if guard is not None:
+            guard.begin_round()
+        recovery_pending = _edit_recovery_pending(state)
+
         tasks: list[dict[str, Any]] = []
         for tc in tool_calls:
             fn = tc["function"]
@@ -139,7 +160,24 @@ class ToolRoundRunner:
                 if is_recoverable_phase_boundary(limit_info):
                     worker_phase_boundary_info = limit_info
                 continue
+
+            if guard is not None:
+                repeat_info = guard.check(
+                    name, args, recovery_pending=recovery_pending
+                )
+                if repeat_info is not None:
+                    append_limit_tool_result(
+                        context=ToolRoundEventsContext(history=self._history),
+                        tool_call_id=tool_call_id,
+                        name=name,
+                        info=repeat_info,
+                        on_event=on_event,
+                    )
+                    continue
+
             state.limits.record(name)
+            if guard is not None:
+                guard.record(name, args)
             if state.worker_flow is not None:
                 state.worker_flow.observe_tool_call(name, args)
             tasks.append({"id": tool_call_id, "name": name, "args": args})
@@ -229,13 +267,27 @@ class ToolRoundRunner:
                 completed_tool_result_for_final = True
             if res.get("enter_silent_preflight"):
                 enter_silent_preflight = True
-            if state.worker_flow is not None and res.get("flow_result"):
+            if res.get("flow_result"):
                 flow_result = res["flow_result"]
-                state.worker_flow.observe_tool_result(
-                    flow_result.get("name", task["name"]),
-                    flow_result.get("args", task["args"]),
-                    flow_result.get("ok"),
-                    flow_result.get("result_payload"),
+                if state.worker_flow is not None:
+                    state.worker_flow.observe_tool_result(
+                        flow_result.get("name", task["name"]),
+                        flow_result.get("args", task["args"]),
+                        flow_result.get("ok"),
+                        flow_result.get("result_payload"),
+                    )
+                if guard is not None:
+                    guard.observe_result(
+                        str(flow_result.get("name", task["name"])),
+                        bool(flow_result.get("ok")),
+                        flow_result.get("result_payload"),
+                    )
+            elif guard is not None and "result_payload" in res:
+                event = res.get("event")
+                guard.observe_result(
+                    task["name"],
+                    bool(getattr(event, "ok", True)),
+                    res.get("result_payload"),
                 )
             planner_constraint = str(res.get("planner_internal_constraint", "") or "")
             attempt_brief = res.get("attempt_brief")
@@ -255,6 +307,11 @@ class ToolRoundRunner:
         self._planner_refresh.handle_post_write_notices(
             self._history, planner_stale_read_files
         )
+
+        if guard is not None:
+            # A stale-file notice makes the named paths worth reading again.
+            guard.note_stale_paths(planner_stale_read_files)
+            guard.end_round()
 
         if worker_phase_boundary_info is not None:
             if worker_phase_boundary_info.get("message"):
