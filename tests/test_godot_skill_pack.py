@@ -8,11 +8,8 @@ from aura.skills.selection import select_relevant_skills
 from aura.skills.text import build_skill_context
 
 SOURCE = Path("aura/skills/bundled")
-SKILL_FILE = SOURCE / "godot_aura_workflow" / "SKILL.md"
-
-
-def _skill_text() -> str:
-    return SKILL_FILE.read_text(encoding="utf-8")
+WORKFLOW_FILE = SOURCE / "godot_aura_workflow" / "SKILL.md"
+VALIDATION_FILE = SOURCE / "godot_validation" / "SKILL.md"
 
 
 def _workspace_with_skills(tmp_path: Path) -> Path:
@@ -25,12 +22,15 @@ def _ids(skills) -> list[str]:
     return [dict(skill.origin).get("skill_id", "") for skill in skills]
 
 
-def test_godot_skills_are_packaged_and_load_for_a_godot_workspace(tmp_path: Path) -> None:
-    root = _workspace_with_skills(tmp_path)
-    skills = read_skills(root)
+def _normalized(text: str) -> str:
+    return " ".join(text.split())
+
+
+def test_six_godot_skills_are_packaged_for_a_godot_workspace(tmp_path: Path) -> None:
+    skills = read_skills(_workspace_with_skills(tmp_path))
     godot = [skill for skill in skills if dict(skill.origin).get("skill_id", "").startswith("godot_")]
 
-    assert len(godot) == 5
+    assert len(godot) == 6
     assert all(skill.provenance == SkillProvenance.BUNDLED for skill in godot)
     assert {dict(skill.origin)["skill_id"] for skill in godot} == {
         "godot_3d_assembly",
@@ -38,22 +38,25 @@ def test_godot_skills_are_packaged_and_load_for_a_godot_workspace(tmp_path: Path
         "godot_gdscript",
         "godot_mmo_performance",
         "godot_scene_architecture",
+        "godot_validation",
     }
 
 
-def test_godot_pack_is_not_loaded_for_a_non_godot_workspace(tmp_path: Path) -> None:
+def test_godot_pack_is_gated_by_the_project_marker(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
-
-    skills = read_skills(tmp_path)
-
     assert not [
-        skill for skill in skills if dict(skill.origin).get("skill_id", "").startswith("godot_")
+        skill
+        for skill in read_skills(tmp_path)
+        if dict(skill.origin).get("skill_id", "").startswith("godot_")
     ]
 
+    for directory in sorted(SOURCE.glob("godot_*")):
+        text = (directory / "SKILL.md").read_text(encoding="utf-8")
+        assert 'workspace_markers: ["project.godot"]' in text
 
-def test_personal_godot_skills_route_specialized_knowledge_first(tmp_path: Path) -> None:
-    root = _workspace_with_skills(tmp_path)
-    skills = read_skills(root)
+
+def test_relevant_godot_skills_are_ordered_by_specialty(tmp_path: Path) -> None:
+    skills = read_skills(_workspace_with_skills(tmp_path))
 
     mmo = select_relevant_skills(
         skills,
@@ -63,7 +66,7 @@ def test_personal_godot_skills_route_specialized_knowledge_first(tmp_path: Path)
     )
     gdscript = select_relevant_skills(
         skills,
-        task_kind="coding",
+        task_kind="bugfix",
         target_files=("scripts/player.gd",),
         content="fix this GDScript signal and physics process bug",
     )
@@ -79,139 +82,98 @@ def test_personal_godot_skills_route_specialized_knowledge_first(tmp_path: Path)
     assert _ids(assembly)[:2] == ["godot_3d_assembly", "godot_aura_workflow"]
 
 
+def test_validation_skill_routes_first_for_godot_validation(tmp_path: Path) -> None:
+    skills = read_skills(_workspace_with_skills(tmp_path))
+    selected = select_relevant_skills(
+        skills,
+        task_kind="godot_validation",
+        target_files=("tests/test_player.gd",),
+        content="run a headless Godot import before script tests and check class_name registration",
+    )
+
+    assert _ids(selected)[0] == "godot_validation"
+    assert "godot_gdscript" in _ids(selected)
+
+
 def test_godot_pack_ships_as_runtime_owned_skills_with_one_copy() -> None:
     assert SOURCE.parts[:2] == ("aura", "skills")
     assert not Path("scripts/personal/godot_knowledge/skills").exists()
-    # Selection stays generic: no Godot skill id is hardcoded in runtime code.
     assert not any(
         "godot_aura_workflow" in path.read_text(encoding="utf-8", errors="ignore")
         for path in Path("aura").rglob("*.py")
     )
 
 
-def test_godot_pack_declares_the_godot_workspace_marker() -> None:
-    for directory in sorted(SOURCE.glob("godot_*")):
-        text = (directory / "SKILL.md").read_text(encoding="utf-8")
-        assert 'workspace_markers: ["project.godot"]' in text
+def test_gdscript_guidance_targets_current_godot_classdb() -> None:
+    text = (SOURCE / "godot_gdscript" / "SKILL.md").read_text(encoding="utf-8")
+    assert "### Godot 4.x GDScript Practice" in text
+    assert "ClassDB is exact for the running editor version" in text
+    assert "Godot 4.6 GDScript Practice" not in text
 
 
-def test_godot_workflow_skill_defines_planner_and_worker_roles() -> None:
-    text = _skill_text()
-    assert "#### Planner (read-only)" in text
-    assert "#### Worker (owns every mutation" in text
-
-
-def test_godot_workflow_skill_forbids_planner_mutations() -> None:
-    text = _skill_text()
+def test_workflow_is_a_concise_single_agent_contract() -> None:
+    text = WORKFLOW_FILE.read_text(encoding="utf-8")
     lower = text.lower()
-    assert "not attempt mutations" in lower
-    assert "not write helper scripts" in lower
-    assert "not read bridge credentials" in lower
+
+    assert "production agent owns inspection, mutation, evidence, and revision" in lower
+    assert "planner" not in lower
+    assert "worker" not in lower
+    assert len(text) < 2_300
 
 
-def test_godot_workflow_skill_forbids_raw_tcp_and_arbitrary_paths() -> None:
-    text = _skill_text()
+def test_workflow_preserves_live_composition_contract() -> None:
+    text = WORKFLOW_FILE.read_text(encoding="utf-8")
     lower = text.lower()
-    assert "no raw tcp" in lower
-    assert "not prescribe raw resource paths" in lower
+    normalized = _normalized(lower)
+
+    assert "catalog asset id" in lower
+    assert "genuine `aurapreview` root" in lower
+    assert "never save the scene unless" in lower
+    assert "visible layers" in lower
+    assert "inspect exact scene facts" in lower
+    assert "capture_godot_asset_preview" in text
+    assert "critique_godot_preview_local" in text
+    assert "structural facts alone do not prove visual coherence" in normalized
+    assert "evidence stops changing" in lower
+    assert "tool failure prevents further work" in lower
 
 
-def test_godot_workflow_skill_lists_live_tool_names() -> None:
-    text = _skill_text()
-    for tool in [
-        "inspect_godot_assets",
-        "inspect_godot_editor",
-        "inspect_godot_asset_preview",
-        "edit_godot_asset_preview",
-        "capture_godot_asset_preview",
-        "critique_godot_preview_local",
-    ]:
-        assert tool in text
+def test_validation_skill_defines_import_and_completion_checks() -> None:
+    text = VALIDATION_FILE.read_text(encoding="utf-8")
+    normalized = _normalized(text)
+
+    assert "real configured or discovered Godot executable" in normalized
+    assert "confirm its version" in normalized
+    assert "headless editor import first" in normalized
+    assert "`.uid` files before tests" in normalized
+    assert "`SCRIPT ERROR` and `ERROR:` even when Godot exits with code 0" in normalized
+    assert "missing test summary" in normalized
+    assert "completion signal or result count" in normalized
 
 
-def test_godot_workflow_skill_has_no_fixed_pass_limit() -> None:
-    text = _skill_text()
-    assert "no fixed revision-pass limit" in text
-
-
-def test_godot_workflow_skill_allows_supervised_iteration() -> None:
-    text = _skill_text()
-    assert "actively supervising" in text
-    assert "meaningful progress" in text
-
-
-def test_godot_workflow_requires_semantic_evidence_for_visual_composition() -> None:
-    text = _skill_text()
-    lower = text.lower()
-    assert "critique (optional" not in lower
-    assert "semantic critique is required" in lower
-    assert "installed and callable" in lower
-    assert "not proof that a rendered composition is visually coherent" in lower
-    assert "do not claim that the composition is visually successful or coherent" in lower
-    assert "original creative brief" in lower
-
-
-def test_godot_workflow_preserves_planner_worker_boundary_and_refinement() -> None:
-    text = _skill_text()
-    lower = text.lower()
-    assert "planner names the tool" in lower
-    assert "does not execute semantic critique" in lower
-    assert "worker alone owns" in lower
-    assert "reinspect exact facts, recapture, critique again" in lower
-    assert "no fixed revision-pass limit" in lower
-
-
-def test_godot_workflow_uses_verdicts_without_weakening_boundaries() -> None:
-    text = _skill_text().lower()
-    assert "`needs_revision` requires another focused composition pass" in text
-    assert "`cannot_judge` requires a more useful capture" in text
-    assert "latest useful critique returns `coherent`" in text
-    assert "exact structural facts do not contradict it" in text
-    assert "worst reported coherence failure first" in text
-    assert "preserves the reported strongest feature" in text
-    assert "planner names the tool" in text
-    assert "worker alone owns" in text
-
-
-def test_godot_workflow_exempts_purely_structural_tasks() -> None:
-    text = _skill_text().lower()
-    assert "semantic critique is unnecessary for purely structural work" in text
-    assert "bridge validation" in text
-    assert "deterministic geometry checks" in text
-
-
-def test_godot_workflow_skill_is_packaged_markdown() -> None:
-    assert SKILL_FILE.parts[0] == "aura"
-    assert SKILL_FILE.is_file()
-
-
-def test_godot_visual_iteration_routes_to_workflow_skill(tmp_path: Path) -> None:
-    root = _workspace_with_skills(tmp_path)
-    skills = read_skills(root)
+def test_visual_iteration_routes_to_workflow_first(tmp_path: Path) -> None:
+    skills = read_skills(_workspace_with_skills(tmp_path))
     result = select_relevant_skills(
         skills,
         task_kind="visual iteration",
         target_files=("addons/aura_bridge/transport/bridge_server.gd",),
-        content="build a ruined checkpoint with approach and landmark using catalog assets beneath AuraPreview",
-    )
-    ids = _ids(result)
-    assert ids[0] == "godot_aura_workflow"
-
-
-def test_live_composition_build_skill_context_selects_workflow(tmp_path: Path) -> None:
-    root = _workspace_with_skills(tmp_path)
-    brief = (
-        "Design The Broken Gate with one clear gate opening, two unequal tower masses, "
-        "connected defensive walls, one alternate breach, a readable court, deliberate "
-        "negative space, and rubble from understandable structural collapse beneath AuraPreview."
+        content="build a ruined checkpoint with catalog assets beneath AuraPreview",
     )
 
+    assert _ids(result)[0] == "godot_aura_workflow"
+
+
+def test_live_composition_context_uses_single_agent_workflow(tmp_path: Path) -> None:
     context = build_skill_context(
-        root,
+        _workspace_with_skills(tmp_path),
         task_kind="visual iteration",
         target_files=("addons/aura_bridge/transport/bridge_server.gd",),
-        content=brief,
+        content=(
+            "Design a broken gate with unequal towers, connected walls, a readable court, "
+            "deliberate negative space, and structural rubble beneath AuraPreview."
+        ),
     )
 
-    assert "Godot Visual Iteration — Planner and Worker Role Split" in context
+    assert "### Godot Visual Iteration" in context
     assert "critique_godot_preview_local" in context
+    assert "Planner and Worker" not in context

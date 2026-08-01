@@ -4,7 +4,7 @@ path_globs: ["**/*.gd"]
 triggers: ["gdscript", "godot api", "await", "signal", "typed", "export", "ready", "process", "physics process"]
 workspace_markers: ["project.godot"]
 ---
-### Godot 4.6 GDScript Practice
+### Godot 4.x GDScript Practice
 
 - Use Godot 4 syntax and typed declarations where they clarify contracts. Treat warnings-as-errors as
   real validation: explicitly type values returned as `Variant` instead of relying on `:=` inference.
@@ -21,5 +21,3 @@ workspace_markers: ["project.godot"]
   referenced nodes may have left the tree; revalidate when necessary.
 - Keep data in typed Resources when it must be shared, authored, duplicated, or serialized separately
   from behavior.
-- Validate with Godot itself and inspect output for `SCRIPT ERROR`/`ERROR:` because some headless
-  checks can still return exit code 0 after a parse failure.

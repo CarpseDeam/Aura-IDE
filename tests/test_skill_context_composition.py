@@ -130,7 +130,7 @@ def test_edited_default_prompt_is_not_injected_twice(tmp_path: Path) -> None:
 
     assert composed.system_prompt.count("Core kernel:") == 1
     assert composed.system_prompt.count("Response discipline:") == 1
-    assert composed.system_prompt.count("### Godot 4.6 GDScript Practice") == 1
+    assert composed.system_prompt.count("### Godot 4.x GDScript Practice") == 1
     assert "never use emoji" in composed.system_prompt
     assert CONTEXT_PLACEHOLDER not in composed.system_prompt
 
