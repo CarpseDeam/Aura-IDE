@@ -141,6 +141,8 @@ class _Worker(QObject):
         self._production_session = production_session
         self._hook_name = hook_name
         self._task_route = task_route
+        self._blocked_reason: str = ""
+        self._provider_contract_failure: bool = False
 
     @Slot()
     def run(self) -> None:
@@ -167,6 +169,10 @@ class _Worker(QObject):
                 hook_name=self._hook_name,
                 max_tool_rounds=self._max_tool_rounds,
                 task_route=self._task_route,
+            )
+            self._blocked_reason = self._manager.last_turn_blocked_reason
+            self._provider_contract_failure = (
+                self._manager.last_turn_provider_contract_failure
             )
         except Exception as exc:
             from aura.config import redact_secrets
@@ -865,9 +871,20 @@ class ConversationBridge(QObject):
         self._worker = None
 
         # Exactly one completion receipt per production turn, built from the
-        # run's structured execution evidence, then back to idle.
+        # run's structured execution evidence, then back to idle. A focused
+        # action that ended in a successful ``report_blocker`` names the reason
+        # so the receipt reports the turn as blocked, never as completed; a
+        # focused provider-contract failure is reported as its own terminal
+        # status rather than as a completed turn.
+        blocked_reason = worker._blocked_reason if worker is not None else ""
+        provider_contract_failure = (
+            worker._provider_contract_failure if worker is not None else False
+        )
         try:
-            self._production_session.finish()
+            self._production_session.finish(
+                blocked_reason=blocked_reason,
+                provider_contract_failure=provider_contract_failure,
+            )
         except Exception:
             _log.exception("Failed to build production completion receipt")
 

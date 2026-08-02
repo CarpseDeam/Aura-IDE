@@ -17,9 +17,11 @@ from aura.bridge.production_execution import (
     new_production_run_id,
 )
 from aura.bridge.production_receipt import (
+    STATUS_BLOCKED,
     STATUS_CANCELLED,
     STATUS_COMPLETED,
     STATUS_COMPLETED_UNVERIFIED,
+    STATUS_PROVIDER_CONTRACT_FAILURE,
     STATUS_VALIDATION_FAILED,
     ProductionRunEvidence,
     build_production_receipt,
@@ -530,7 +532,35 @@ class TestReceiptTruthfulness:
             run_id="prod-x", blocked_reason="pytest is not installed",
         ))
         assert receipt.ok is False
+        assert receipt.status == STATUS_BLOCKED
+        assert receipt.needs_followup is True
         assert "pytest is not installed" in receipt.text
+        assert receipt.metadata["blocked_reason"] == "pytest is not installed"
+
+    def test_provider_contract_failure_is_its_own_terminal_status(self) -> None:
+        """A focused request the provider answered without the required tool
+        call is a provider-contract failure, never a completed turn."""
+        receipt = build_production_receipt(ProductionRunEvidence(
+            run_id="prod-x", provider_contract_failure=True,
+        ))
+        assert receipt.ok is False
+        assert receipt.status == STATUS_PROVIDER_CONTRACT_FAILURE
+        assert receipt.needs_followup is True
+        assert "Provider Contract Failure" in receipt.text
+        assert "exactly one tool call" in receipt.text
+        assert receipt.metadata["provider_contract_failure"] is True
+
+    def test_a_contract_failure_never_reports_completed(self) -> None:
+        """Even alongside writes/validation, the failure is the truth."""
+        receipt = build_production_receipt(ProductionRunEvidence(
+            run_id="prod-x",
+            provider_contract_failure=True,
+            write_results=[{"path": "a.py", "applied": True}],
+            validation_results=[{
+                "command": "python -m pytest", "exit_code": 0, "validation_ok": True,
+            }],
+        ))
+        assert receipt.status == STATUS_PROVIDER_CONTRACT_FAILURE
 
     def test_rejected_writes_are_reported(self) -> None:
         receipt = build_production_receipt(ProductionRunEvidence(

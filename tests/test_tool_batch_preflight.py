@@ -8,9 +8,12 @@ prefix runs, and every rejected tool call receives exactly one paired tool
 result — the invalid call gets its own rejection payload, every valid sibling
 gets a batch-rejection payload explaining that nothing ran.
 
+The loop guard's only structured rejection is the exact-repeat read before the
+first applied write; there is no discovery spend budget any more.
+
 What is asserted here:
 
-* a batch with one guard-blocked call is rejected as a whole;
+* a batch with one guard-blocked read is rejected as a whole;
 * an accepted prefix (a mutation) never executes when a sibling vetoes the batch;
 * every rejected call — invalid and valid sibling alike — receives exactly one
   paired tool result, in call order, through both history and events;
@@ -34,18 +37,13 @@ from aura.conversation.manager_send_state import _SendState
 from aura.conversation.manager_tool_round import ToolRoundOutcome, ToolRoundRunner
 from aura.conversation.planner_refresh import PlannerRefreshState
 from aura.conversation.pre_edit_loop_guard import (
-    DISCOVERY_EXHAUSTED_REASON,
-    MAX_DISCOVERY_CALLS_AFTER_FOCUS,
-    MAX_DISCOVERY_CALLS_BEFORE_FOCUS,
+    DUPLICATE_READ_REASON,
     PreEditLoopGuard,
     is_narrow_read,
 )
 from aura.conversation.tool_limits import MAX_TOOL_CALLS_BY_MODE
 from aura.conversation.tool_runner import ToolRunner
 from aura.conversation.tools.registry import TOOL_HANDLERS, ToolRegistry
-
-BEFORE = MAX_DISCOVERY_CALLS_BEFORE_FOCUS
-AFTER = MAX_DISCOVERY_CALLS_AFTER_FOCUS
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
@@ -112,14 +110,9 @@ def runner(tmp_path):
     )
 
 
-def exhaust(state: _SendState) -> None:
-    guard = state.pre_edit_guard
-    for i in range(BEFORE):
-        guard.record("read_file", {"path": f"seen_{i}.py"})
-    guard.take_internal_messages()
-    for i in range(AFTER):
-        guard.record("read_file", {"path": f"late_{i}.py"})
-    assert guard.discovery_exhausted
+def guard_blocked_read(state: _SendState) -> None:
+    """Record one read so the identical read is the guard-blocked call."""
+    state.pre_edit_guard.record("read_file", {"path": "alpha.py"})
 
 
 def run_round(runner_bundle, state, calls):
@@ -149,22 +142,22 @@ class TestWholeBatchRejection:
     def test_a_guard_blocked_batch_is_rejected_as_a_whole(self, runner) -> None:
         _, history, workspace = runner
         state = _SendState(mode="single", research_policy=None)
-        exhaust(state)
+        guard_blocked_read(state)
 
         # A write that would otherwise be accepted sits first in the batch;
-        # the guard-blocked discovery call after it must veto the whole batch.
+        # the guard-blocked repeat read after it must veto the whole batch.
         calls = [
             tool_call("call-write", "write_file", {
                 "path": "new.py", "content": "x = 1\n",
             }),
-            tool_call("call-glob", "glob", {"pattern": "**/*.py"}),
+            tool_call("call-read", "read_file", {"path": "alpha.py"}),
         ]
         history.append_assistant({"role": "assistant", "content": "", "tool_calls": calls})
         run_round(runner, state, calls)
 
         assert_tool_pairing_valid(history.messages)
         results = tool_results(history.messages)
-        assert [r["tool_call_id"] for r in results] == ["call-write", "call-glob"]
+        assert [r["tool_call_id"] for r in results] == ["call-write", "call-read"]
         assert not (workspace / "new.py").exists(), (
             "the accepted-prefix write executed despite the batch being rejected"
         )
@@ -174,7 +167,7 @@ class TestWholeBatchRejection:
     ) -> None:
         _, history, workspace = runner
         state = _SendState(mode="single", research_policy=None)
-        exhaust(state)
+        guard_blocked_read(state)
 
         # Mutations are the valid siblings here: they pass the guard gate (only
         # observation calls are gated), so they must be answered as batch
@@ -183,7 +176,7 @@ class TestWholeBatchRejection:
             tool_call("call-w1", "write_file", {
                 "path": "new.py", "content": "x = 1\n",
             }),
-            tool_call("call-glob", "glob", {"pattern": "**/*.py"}),
+            tool_call("call-read", "read_file", {"path": "alpha.py"}),
             tool_call("call-w2", "write_file", {
                 "path": "other.py", "content": "y = 2\n",
             }),
@@ -193,10 +186,10 @@ class TestWholeBatchRejection:
 
         assert_tool_pairing_valid(history.messages)
         assert [r["tool_call_id"] for r in tool_results(history.messages)] == [
-            "call-w1", "call-glob", "call-w2",
+            "call-w1", "call-read", "call-w2",
         ]
         emitted = [e for e in events if type(e).__name__ == "ToolResult"]
-        assert [e.tool_call_id for e in emitted] == ["call-w1", "call-glob", "call-w2"]
+        assert [e.tool_call_id for e in emitted] == ["call-w1", "call-read", "call-w2"]
         assert not (workspace / "new.py").exists()
         assert not (workspace / "other.py").exists()
 
@@ -205,13 +198,13 @@ class TestWholeBatchRejection:
     ) -> None:
         _, history, _ = runner
         state = _SendState(mode="single", research_policy=None)
-        exhaust(state)
+        guard_blocked_read(state)
 
         calls = [
             tool_call("call-write", "write_file", {
                 "path": "new.py", "content": "x = 1\n",
             }),
-            tool_call("call-glob", "glob", {"pattern": "**/*.py"}),
+            tool_call("call-read", "read_file", {"path": "alpha.py"}),
         ]
         history.append_assistant({"role": "assistant", "content": "", "tool_calls": calls})
         run_round(runner, state, calls)
@@ -221,21 +214,21 @@ class TestWholeBatchRejection:
         assert sibling["recoverable"] is True
         assert sibling["batch_rejected"] is True
         assert sibling["reason"] == "tool_batch_rejected_before_execution"
-        assert sibling["rejected_sibling_call_id"] == "call-glob"
-        assert sibling["rejected_sibling_tool"] == "glob"
+        assert sibling["rejected_sibling_call_id"] == "call-read"
+        assert sibling["rejected_sibling_tool"] == "read_file"
         assert "No call in this batch executed" in sibling["message"]
 
     def test_the_invalid_call_keeps_its_own_rejection_reason(self, runner) -> None:
         _, history, _ = runner
         state = _SendState(mode="single", research_policy=None)
-        exhaust(state)
+        guard_blocked_read(state)
 
-        calls = [tool_call("call-1", "glob", {"pattern": "**/*.py"})]
+        calls = [tool_call("call-1", "read_file", {"path": "alpha.py"})]
         history.append_assistant({"role": "assistant", "content": "", "tool_calls": calls})
         run_round(runner, state, calls)
 
         payload = json.loads(tool_results(history.messages)[0]["content"])
-        assert payload["reason"] == DISCOVERY_EXHAUSTED_REASON
+        assert payload["reason"] == DUPLICATE_READ_REASON
         assert payload["recoverable"] is True
 
     def test_a_parse_error_batch_is_rejected_coherently(self, runner) -> None:
@@ -381,12 +374,12 @@ class _FakeMCPClient:
 
 class TestGuardEffectClassification:
 
-    def test_observation_tools_from_every_channel_affect_guard_evidence(
+    def test_observation_tools_from_every_channel_produce_evidence(
         self, tmp_path,
     ) -> None:
         """Git, Godot, web, workspace, drone, dynamic, and MCP observation
-        calls are all counted and produce evidence — the guard never falls back
-        to a built-in name set."""
+        calls are all counted as evidence — the guard never falls back to a
+        built-in name set."""
         (tmp_path / "alpha.py").write_text("alpha = 1\n", encoding="utf-8")
         registry = ToolRegistry(workspace_root=tmp_path, mode="single")
         # Registering an MCP tool also touches the module-global TOOL_HANDLERS
@@ -421,18 +414,18 @@ class TestGuardEffectClassification:
         guard.begin_round()
         for i, name in enumerate(observation_names):
             guard.record(name, {"path": f"m{i}.py"})
-        assert guard.discovery_calls == len(observation_names), (
-            "observation calls outside the built-in name set escaped the budget"
-        )
-
         for i, name in enumerate(observation_names):
             guard.observe_result(
                 name, True, json.dumps({"path": f"m{i}.py", "content": f"b{i}"})
             )
         guard.end_round()
-        assert guard.stagnant_rounds == 0, (
-            "successful observation results through non-built-in channels were "
-            "not treated as evidence"
+
+        assert len(guard.seen_evidence) == len(observation_names), (
+            "observation results through non-built-in channels were not "
+            "treated as evidence"
+        )
+        assert guard.focused is False, (
+            "a round full of new evidence through every channel must not stall"
         )
 
     def test_mutation_and_command_classifications_are_not_observation(
@@ -448,7 +441,7 @@ class TestGuardEffectClassification:
         assert not guard._is_observation("run_terminal_command")
         assert guard._is_observation("read_file")
 
-    def test_a_wired_guard_does_not_count_mutations_as_discovery(
+    def test_a_wired_guard_does_not_track_mutations_as_reads(
         self, tmp_path,
     ) -> None:
         (tmp_path / "alpha.py").write_text("alpha = 1\n", encoding="utf-8")
@@ -462,4 +455,11 @@ class TestGuardEffectClassification:
 
         guard.record("write_file", {"path": "alpha.py", "content": "x"})
         guard.record("read_file", {"path": "alpha.py"})
-        assert guard.discovery_calls == 1
+
+        # Only the observation left a read fingerprint; the mutation is not
+        # part of duplicate-read tracking or the stall reckoning.
+        assert len(guard.seen_reads) == 1
+        assert guard.check("read_file", {"path": "alpha.py"})["reason"] == (
+            DUPLICATE_READ_REASON
+        )
+        assert guard.check("write_file", {"path": "alpha.py"}) is None

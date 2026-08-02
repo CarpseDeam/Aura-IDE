@@ -302,10 +302,19 @@ def is_real_user_message(msg: dict[str, Any]) -> bool:
     current request's own fresh evidence look like an old turn and hands it to
     old-turn compaction and block dropping.
 
+    The transient completed-step boundary is emitted without its ``aura_internal``
+    marker (``_render`` strips internal flags before the provider sees them), so it
+    is identified here by content as well — a fake user request that must never
+    count as a turn start.
+
     This is the single definition of "the real user turn" — turn-boundary
     detection here, and rewind/retry in ``History``, share it.
     """
-    return msg.get("role") == "user" and not msg.get("aura_internal")
+    return (
+        msg.get("role") == "user"
+        and not msg.get("aura_internal")
+        and not is_step_boundary_message(msg)
+    )
 
 
 def user_message_text(msg: dict[str, Any]) -> str:

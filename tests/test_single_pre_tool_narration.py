@@ -12,8 +12,12 @@ Two contracts are under test:
    nor persisted; its ``tool_calls`` survive intact and execute.  A no-tool
    round streams and persists normally.
 2. **Pre-edit loop guard.**  Exact repeated reads before the first applied
-   write are rejected, consecutive rounds that produce no new evidence earn
-   one steering message, and rereads justified by a failure, a stale-file
+   write are rejected, and the first round that produces no new evidence and
+   no progress is the focused action transition — the send loop answers the
+   next request with the one-required-tool-call action request instead of
+   another reasoning stream.  Unique evidence never stalls, truncated reads
+   and their continuations count as evidence, successful commands are progress
+   (failed ones are not), and rereads justified by a failure, a stale-file
    notice, or pending edit-recovery state stay allowed.
 """
 
@@ -40,12 +44,21 @@ from aura.conversation.history import History
 from aura.conversation.manager import ConversationManager
 from aura.conversation.pre_edit_loop_guard import (
     DUPLICATE_READ_REASON,
-    MAX_STAGNANT_ROUNDS_BEFORE_STEER,
     PreEditLoopGuard,
 )
+from aura.conversation.task_router import TaskLane, TaskRoute
 from aura.conversation.tools._types import ApprovalDecision
 from aura.conversation.tools.registry import ToolRegistry
 from aura.model_streams import PRODUCTION_STREAM_HOOK, ModelStreamRegistry
+
+#: These are implementation turns, so a stalled discovery round hands the send
+#: loop the focused action request rather than another reasoning stream.
+IMPLEMENTATION_ROUTE = TaskRoute(
+    lane=TaskLane.implementation,
+    action="implementation",
+    confidence=0.85,
+    reason="scripted implementation turn",
+)
 
 # The verbose pre-tool essay the production model streams before every tool
 # call — the text that used to be replayed into the next round's prompt.
@@ -210,6 +223,7 @@ def run(
         thinking="off",
         hook_name=PRODUCTION_STREAM_HOOK,
         max_tool_rounds=max_tool_rounds,
+        task_route=IMPLEMENTATION_ROUTE,
     )
 
 
@@ -573,8 +587,12 @@ class TestLegitimateRereadsSurvive:
         assert guard.check("read_file", {"path": "notes.md"}) is not None
 
 
-class TestStagnantRoundsSteering:
-    def test_four_unique_reads_do_not_trigger_steering(
+class TestStalledDiscoveryFiresTheFocusedRequest:
+    """The first round with no new evidence and no progress is the protocol
+    transition: the send loop answers the next request with the focused action
+    request instead of another reasoning stream."""
+
+    def test_unique_reads_never_fire_the_focused_request(
         self, workspace, isolated_streams
     ) -> None:
         """Genuinely new evidence, however much is gathered, is not a stall."""
@@ -596,19 +614,22 @@ class TestStagnantRoundsSteering:
         run(manager, Recorder())
 
         assert not [
-            m for m in manager.history.messages
-            if "Loop guard:" in str(m.get("content"))
-        ], "five unique reads are discovery, not a stall"
+            c.get("require_tool_call") for c in backend.calls
+            if c.get("require_tool_call")
+        ], "five unique reads are discovery, never a focused action request"
 
-    def test_two_equivalent_evidence_rounds_inject_one_steering_message(
+    def test_equivalent_evidence_rounds_fire_the_focused_action_request(
         self, workspace, isolated_streams
     ) -> None:
-        """Re-reading the same bytes under a new argument is not new evidence."""
+        """Re-reading the same bytes under a new argument is not new evidence,
+        so the round after the stall is the action-serialization request."""
         rounds: list[list[Event]] = [
             tool_round([("r0", "read_file", {"path": "notes.md"})]),
             tool_round([("r1", "read_file", {"path": "notes.md", "_n": 1})]),
-            tool_round([("r2", "read_file", {"path": "notes.md", "_n": 2})]),
-            final_round("Using the evidence already gathered."),
+            tool_round([("w1", "write_file", {
+                "path": "notes.md", "content": "# Notes\n\nnew\n",
+            })]),
+            final_round("Applied the change."),
         ]
         backend = ScriptedBackend(rounds)
         isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
@@ -616,14 +637,20 @@ class TestStagnantRoundsSteering:
 
         run(manager, Recorder())
 
-        steering = [
-            m for m in manager.history.messages
-            if m.get("aura_internal") and "Loop guard:" in str(m.get("content"))
-        ]
-        assert len(steering) == 1, f"expected exactly one nudge, got {steering}"
-        text = steering[0]["content"]
-        assert "make the change" in text
-        assert "write_file" in text
+        focused = backend.calls[2]
+        assert focused.get("require_tool_call") is True, (
+            "the request after the stalled round must require exactly one tool call"
+        )
+        exposed = {
+            str(t.get("function", {}).get("name", "")) for t in focused.get("tools") or []
+        }
+        assert "write_file" in exposed
+        assert "report_blocker" in exposed
+        assert "read_file" not in exposed
+        # The one authorized act really landed.
+        assert (workspace / "notes.md").read_text(encoding="utf-8") == (
+            "# Notes\n\nnew\n"
+        )
 
     def test_truncated_reads_allow_focused_continuation(
         self, workspace, isolated_streams
@@ -653,13 +680,11 @@ class TestStagnantRoundsSteering:
         run(manager, Recorder())
 
         assert not [
-            m for m in manager.history.messages
-            if "Loop guard:" in str(m.get("content"))
+            c.get("require_tool_call") for c in backend.calls
+            if c.get("require_tool_call")
         ], "truncated reads and their continuations are new evidence"
 
-    def test_changed_arguments_with_identical_results_do_not_reset_the_counter(
-        self,
-    ) -> None:
+    def test_identical_results_under_changed_arguments_stall(self) -> None:
         """Cosmetic argument changes cannot launder the same evidence as new."""
         guard = PreEditLoopGuard()
         payload = {
@@ -670,14 +695,14 @@ class TestStagnantRoundsSteering:
             "content_hash": "a" * 64,
             "file_size": 18,
         }
-        for index in range(MAX_STAGNANT_ROUNDS_BEFORE_STEER + 1):
+        for index in range(2):
             guard.begin_round()
             guard.record("read_file", {"path": "notes.md", "_n": index})
             guard.observe_result("read_file", True, payload)
             guard.end_round()
-        assert guard.take_steering_message() != ""
+        assert guard.focused is True
 
-    def test_a_new_search_result_resets_the_stall_counter(self) -> None:
+    def test_new_search_results_never_stall(self) -> None:
         """A genuinely new search result is evidence, not a stall."""
         guard = PreEditLoopGuard()
         for pattern in ("loop", "guard", "steering"):
@@ -696,15 +721,15 @@ class TestStagnantRoundsSteering:
                 "summary": f"found {pattern}",
             })
             guard.end_round()
-        assert guard.take_steering_message() == ""
+        assert guard.focused is False
 
-    def test_equivalent_search_results_do_not_count_as_progress(self) -> None:
+    def test_equivalent_search_results_stall(self) -> None:
         """The same matches under a different pattern are the same evidence."""
         guard = PreEditLoopGuard()
         matches = [
             {"path": "src/a.py", "line_number": 3, "content": "x = 1"},
         ]
-        for index in range(MAX_STAGNANT_ROUNDS_BEFORE_STEER + 1):
+        for index in range(2):
             guard.begin_round()
             guard.record("grep_search", {"pattern": "x" if index == 0 else "X"})
             guard.observe_result("grep_search", True, {
@@ -716,9 +741,9 @@ class TestStagnantRoundsSteering:
                 "summary": "same matches again",
             })
             guard.end_round()
-        assert guard.take_steering_message() != ""
+        assert guard.focused is True
 
-    def test_a_truncated_read_counts_as_new_evidence(self) -> None:
+    def test_a_truncated_read_counts_as_new_evidence_then_repeats_stall(self) -> None:
         """A truncated payload is new evidence; only its repetition stalls."""
         guard = PreEditLoopGuard()
         payload = {
@@ -729,22 +754,23 @@ class TestStagnantRoundsSteering:
             "content_hash": "b" * 64,
             "file_size": 300000,
         }
-        # The first truncated read is new evidence and resets the counter.
         guard.begin_round()
         guard.record("read_file", {"path": "big.md"})
         guard.observe_result("read_file", True, payload)
         guard.end_round()
-        # Two identical repeats (only the argument changed) are a stall.
-        for index in range(MAX_STAGNANT_ROUNDS_BEFORE_STEER):
-            guard.begin_round()
-            guard.record("read_file", {"path": "big.md", "_n": index + 1})
-            guard.observe_result("read_file", True, payload)
-            guard.end_round()
-        assert guard.take_steering_message() != ""
+        assert guard.focused is False, "the truncated read is new evidence"
 
-    def test_no_steering_when_the_turn_makes_progress(
+        guard.begin_round()
+        guard.record("read_file", {"path": "big.md", "_n": 1})
+        guard.observe_result("read_file", True, payload)
+        guard.end_round()
+        assert guard.focused is True, "an identical repeat of it is a stall"
+
+    def test_no_focused_request_when_the_turn_makes_progress(
         self, workspace, isolated_streams
     ) -> None:
+        """A turn that applied a write never opens a focused request, and the
+        guard stays dormant for reads after the write."""
         rounds: list[list[Event]] = [
             tool_round([("r0", "read_file", {"path": "notes.md"})]),
             tool_round([("w0", "write_file", {
@@ -762,14 +788,14 @@ class TestStagnantRoundsSteering:
         run(manager, Recorder())
 
         assert not [
-            m for m in manager.history.messages
-            if "Loop guard:" in str(m.get("content"))
-        ], "a turn that edited must never be nudged"
+            c.get("require_tool_call") for c in backend.calls
+            if c.get("require_tool_call")
+        ], "a turn that edited must never open a focused request"
 
     def test_successful_terminal_commands_count_as_progress(self) -> None:
         """Progress is the command's *result*, not the decision to run one."""
         guard = PreEditLoopGuard()
-        for _ in range(MAX_STAGNANT_ROUNDS_BEFORE_STEER + 2):
+        for _ in range(2):
             guard.begin_round()
             guard.record("read_file", {"path": "a"})
             guard.record("run_terminal_command", {"command": "pytest -q"})
@@ -777,12 +803,12 @@ class TestStagnantRoundsSteering:
                 "run_terminal_command", True, json.dumps({"exit_code": 0})
             )
             guard.end_round()
-        assert guard.take_steering_message() == ""
+        assert guard.focused is False
 
-    def test_failing_terminal_commands_do_not_count_as_progress(self) -> None:
+    def test_failing_terminal_commands_open_recovery_not_focus(self) -> None:
         """The bug: intent was recorded as progress before the command ran."""
         guard = PreEditLoopGuard()
-        for _ in range(MAX_STAGNANT_ROUNDS_BEFORE_STEER + 2):
+        for _ in range(2):
             guard.begin_round()
             guard.record("read_file", {"path": "a"})
             guard.record("run_terminal_command", {"command": "pytest -q"})
@@ -792,10 +818,11 @@ class TestStagnantRoundsSteering:
                 json.dumps({"exit_code": 1, "command": "pytest -q"}),
             )
             guard.end_round()
-        assert guard.take_steering_message() != ""
+        assert guard.focused is False
+        assert guard._failure_active is True
 
-    def test_the_todo_tool_does_not_launder_a_stagnant_round(self) -> None:
-        """Bookkeeping is not evidence — it must not reset the counter."""
+    def test_the_todo_tool_does_not_launder_a_stalled_round(self) -> None:
+        """Bookkeeping is not evidence — it must not reset the stall."""
         guard = PreEditLoopGuard()
         payload = {
             "ok": True,
@@ -805,31 +832,13 @@ class TestStagnantRoundsSteering:
             "content_hash": "a" * 64,
             "file_size": 18,
         }
-        for index in range(MAX_STAGNANT_ROUNDS_BEFORE_STEER + 1):
+        for index in range(2):
             guard.begin_round()
             guard.record("update_worker_todo", {"items": []})
             guard.record("read_file", {"path": "notes.md", "_n": index})
             guard.observe_result("read_file", True, payload)
             guard.end_round()
-        assert guard.take_steering_message() != ""
-
-    def test_steering_fires_at_most_once_per_turn(self) -> None:
-        guard = PreEditLoopGuard()
-        payload = {
-            "ok": True,
-            "path": "notes.md",
-            "content": "# Notes\n\nold body\n",
-            "truncated": False,
-            "content_hash": "a" * 64,
-            "file_size": 18,
-        }
-        for index in range(MAX_STAGNANT_ROUNDS_BEFORE_STEER + 2):
-            guard.begin_round()
-            guard.record("read_file", {"path": "notes.md", "_n": index})
-            guard.observe_result("read_file", True, payload)
-            guard.end_round()
-        assert guard.take_steering_message() != ""
-        assert guard.take_steering_message() == ""
+        assert guard.focused is True
 
 
 class TestEmergencyBrakeIsStillTheBackstop:

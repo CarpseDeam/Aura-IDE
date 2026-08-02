@@ -1,17 +1,21 @@
-"""The discovery boundary must not damage anything the send loop already does.
+"""The loop guard's rejection must not damage anything the send loop does.
 
-A new rejection path and a new internal message are exactly the kind of change
-that quietly breaks tool pairing (an assistant tool_call with no matching
-result), turns internal steering into a fake user turn, or drops reasoning on
-replay. These tests drive the real ``ToolRoundRunner`` and the real API view.
+The discovery-budget counter is gone; the only structured guard rejection left
+is the exact-repeat read. A new rejection path and the aura_internal boundary
+are exactly the kind of change that quietly breaks tool pairing (an assistant
+tool_call with no matching result) or drops reasoning on replay. These tests
+drive the real ``ToolRoundRunner`` and the real API view.
 
 What is asserted here:
 
-* a rejected discovery call still produces a paired tool result;
+* a guard-blocked read still produces a paired tool result;
 * the rejection reaches the model as a recoverable payload and a ToolResult
   event, so activity rendering has something to show;
-* internal steering stays inside the real user turn;
-* reasoning is still replayed and history is never mutated by the view;
+* a mixed round with one guard-blocked call pairs every call, executes nothing,
+  and answers the valid sibling with a coherent batch rejection;
+* a fresh read is never refused by any count;
+* the API view remains non-destructive and keeps tool pairing under a brutal
+  budget, with completed-step reasoning shed instead of replayed;
 * content gating for the single-agent path is unaffected.
 """
 
@@ -28,16 +32,9 @@ from aura.conversation.history import History
 from aura.conversation.manager_send_state import _SendState
 from aura.conversation.manager_tool_round import ToolRoundRunner
 from aura.conversation.planner_refresh import PlannerRefreshState
-from aura.conversation.pre_edit_loop_guard import (
-    DISCOVERY_EXHAUSTED_REASON,
-    MAX_DISCOVERY_CALLS_AFTER_FOCUS,
-    MAX_DISCOVERY_CALLS_BEFORE_FOCUS,
-)
+from aura.conversation.pre_edit_loop_guard import DUPLICATE_READ_REASON
 from aura.conversation.tool_runner import ToolRunner
 from aura.conversation.tools.registry import ToolRegistry
-
-BEFORE = MAX_DISCOVERY_CALLS_BEFORE_FOCUS
-AFTER = MAX_DISCOVERY_CALLS_AFTER_FOCUS
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
@@ -95,14 +92,9 @@ def runner(tmp_path):
     )
 
 
-def exhaust(state: _SendState) -> None:
-    guard = state.pre_edit_guard
-    for i in range(BEFORE):
-        guard.record("read_file", {"path": f"seen_{i}.py"})
-    guard.take_internal_messages()
-    for i in range(AFTER):
-        guard.record("read_file", {"path": f"late_{i}.py"})
-    assert guard.discovery_exhausted
+def guard_blocked_read(state: _SendState) -> None:
+    """Record one read so the identical read is the guard-blocked call."""
+    state.pre_edit_guard.record("read_file", {"path": "alpha.py"})
 
 
 def run_round(runner_bundle, state, calls):
@@ -120,91 +112,100 @@ def run_round(runner_bundle, state, calls):
     return events
 
 
-# ── the rejection travels correctly ─────────────────────────────────────────
+def tool_results(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [m for m in messages if m.get("role") == "tool"]
 
 
-class TestRejectedDiscoveryStaysWellFormed:
+# ── the duplicate-read rejection travels correctly ──────────────────────────
+
+
+class TestDuplicateReadRejectionTravels:
 
     def test_a_rejected_call_still_gets_a_paired_tool_result(self, runner) -> None:
         _, history, _ = runner
         state = _SendState(mode="single", research_policy=None)
-        exhaust(state)
+        guard_blocked_read(state)
 
-        calls = [tool_call("call-1", "glob", {"pattern": "**/*.py"})]
+        calls = [tool_call("call-1", "read_file", {"path": "alpha.py"})]
         history.append_assistant({"role": "assistant", "content": "", "tool_calls": calls})
         run_round(runner, state, calls)
 
         assert_tool_pairing_valid(history.messages)
-        results = [m for m in history.messages if m.get("role") == "tool"]
+        results = tool_results(history.messages)
         assert len(results) == 1
         assert results[0]["tool_call_id"] == "call-1"
 
     def test_the_result_payload_is_the_recoverable_rejection(self, runner) -> None:
         _, history, _ = runner
         state = _SendState(mode="single", research_policy=None)
-        exhaust(state)
+        guard_blocked_read(state)
 
-        calls = [tool_call("call-1", "search_codebase", {"query": "retry"})]
+        calls = [tool_call("call-1", "read_file", {"path": "alpha.py"})]
         history.append_assistant({"role": "assistant", "content": "", "tool_calls": calls})
         run_round(runner, state, calls)
 
-        payload = json.loads(
-            [m for m in history.messages if m.get("role") == "tool"][0]["content"]
-        )
-        assert payload["reason"] == DISCOVERY_EXHAUSTED_REASON
+        payload = json.loads(tool_results(history.messages)[0]["content"])
+        assert payload["reason"] == DUPLICATE_READ_REASON
         assert payload["recoverable"] is True
         assert payload["ok"] is False
 
     def test_a_tool_result_event_is_emitted_for_activity_rendering(
-        self, runner
+        self, runner,
     ) -> None:
-        _, history, _ = runner
         state = _SendState(mode="single", research_policy=None)
-        exhaust(state)
+        guard_blocked_read(state)
 
-        calls = [tool_call("call-1", "glob", {"pattern": "**/*.py"})]
-        history.append_assistant({"role": "assistant", "content": "", "tool_calls": calls})
+        calls = [tool_call("call-1", "read_file", {"path": "alpha.py"})]
         events = run_round(runner, state, calls)
 
-        tool_results = [e for e in events if type(e).__name__ == "ToolResult"]
-        assert len(tool_results) == 1
-        assert tool_results[0].name == "glob"
-        assert tool_results[0].ok is False
-        assert tool_results[0].extras["reason"] == DISCOVERY_EXHAUSTED_REASON
-        assert tool_results[0].extras["recoverable"] is True
+        tool_results_events = [e for e in events if type(e).__name__ == "ToolResult"]
+        assert len(tool_results_events) == 1
+        assert tool_results_events[0].name == "read_file"
+        assert tool_results_events[0].ok is False
+        assert tool_results_events[0].extras["reason"] == DUPLICATE_READ_REASON
+        assert tool_results_events[0].extras["recoverable"] is True
 
-    def test_a_mixed_round_pairs_every_call(self, runner) -> None:
-        """One refused, one allowed — both must be answered, in order."""
+    def test_a_mixed_round_pairs_every_call_and_executes_nothing(
+        self, runner,
+    ) -> None:
+        """One guard-blocked read vetoes the whole batch: the accepted-prefix
+        write must not run, and every call still gets exactly one paired result."""
         _, history, workspace = runner
         state = _SendState(mode="single", research_policy=None)
-        exhaust(state)
+        guard_blocked_read(state)
 
         calls = [
-            tool_call("call-1", "glob", {"pattern": "**/*.py"}),
-            tool_call("call-2", "read_file_outline", {"path": "alpha.py"}),
+            tool_call("call-1", "read_file", {"path": "alpha.py"}),
+            tool_call("call-write", "write_file", {
+                "path": "new.py", "content": "x = 1\n",
+            }),
         ]
         history.append_assistant({"role": "assistant", "content": "", "tool_calls": calls})
         run_round(runner, state, calls)
 
         assert_tool_pairing_valid(history.messages)
-        results = [m for m in history.messages if m.get("role") == "tool"]
-        assert [r["tool_call_id"] for r in results] == ["call-1", "call-2"]
+        results = tool_results(history.messages)
+        assert [r["tool_call_id"] for r in results] == ["call-1", "call-write"]
+        assert not (workspace / "new.py").exists(), (
+            "the accepted-prefix write executed despite the batch being rejected"
+        )
+        sibling = json.loads(results[1]["content"])
+        assert sibling["batch_rejected"] is True
+        assert sibling["rejected_sibling_call_id"] == "call-1"
 
-    def test_narrow_reads_still_execute_after_exhaustion(self, runner) -> None:
+    def test_a_fresh_narrow_read_executes_normally(self, runner) -> None:
         _, history, _ = runner
         state = _SendState(mode="single", research_policy=None)
-        exhaust(state)
 
         calls = [tool_call("call-1", "read_file_outline", {"path": "alpha.py"})]
         history.append_assistant({"role": "assistant", "content": "", "tool_calls": calls})
         run_round(runner, state, calls)
 
-        payload = json.loads(
-            [m for m in history.messages if m.get("role") == "tool"][0]["content"]
-        )
-        assert payload.get("reason") != DISCOVERY_EXHAUSTED_REASON
+        payload = json.loads(tool_results(history.messages)[0]["content"])
+        assert payload.get("reason") != DUPLICATE_READ_REASON
+        assert payload.get("ok") is not False
 
-    def test_an_unexhausted_turn_executes_discovery_normally(self, runner) -> None:
+    def test_a_fresh_read_is_never_refused_by_a_count(self, runner) -> None:
         _, history, _ = runner
         state = _SendState(mode="single", research_policy=None)
 
@@ -212,78 +213,11 @@ class TestRejectedDiscoveryStaysWellFormed:
         history.append_assistant({"role": "assistant", "content": "", "tool_calls": calls})
         run_round(runner, state, calls)
 
-        payload = json.loads(
-            [m for m in history.messages if m.get("role") == "tool"][0]["content"]
-        )
-        assert payload.get("reason") != DISCOVERY_EXHAUSTED_REASON
-        assert state.pre_edit_guard.discovery_calls == 1
-
-
-# ── internal steering stays internal ────────────────────────────────────────
-
-
-class TestInternalSteeringStaysInsideTheUserTurn:
-
-    def _history_with_focus(self) -> History:
-        history = History()
-        history.set_system("system")
-        history.append_user_text("Fix the retry cap so the job pauses.")
-
-        state = _SendState(mode="single", research_policy=None)
-        guard = state.pre_edit_guard
-        for i in range(BEFORE):
-            calls = [tool_call(f"c{i}", "read_file", {"path": f"m{i}.py"})]
-            history.append_assistant({
-                "role": "assistant",
-                "content": "",
-                "reasoning_content": f"considering m{i}\n",
-                "tool_calls": calls,
-            })
-            history.append_tool_result(
-                f"c{i}", json.dumps({"ok": True, "path": f"m{i}.py", "content": f"b{i}"})
-            )
-            guard.record("read_file", {"path": f"m{i}.py"})
-
-        for message in guard.take_internal_messages():
-            history.append_internal_user_text(message)
-        return history
-
-    def test_the_focus_message_is_marked_internal(self) -> None:
-        history = self._history_with_focus()
-        internal = [m for m in history.messages if m.get("aura_internal")]
-
-        assert len(internal) == 1
-        assert internal[0]["role"] == "user"
-        assert "discovery calls" in internal[0]["content"]
-
-    def test_the_focus_message_does_not_start_a_new_turn(self) -> None:
-        history = self._history_with_focus()
-        view = build_api_view("system", history.messages, budget_tokens=200_000)
-
-        starts = _turn_starts(history.messages)
-        assert len(starts) == 1, (
-            "internal steering created a second, fake user turn"
-        )
-        assert len(_turn_starts(view.messages)) <= 1
-
-    def test_the_focus_message_still_reaches_the_model_without_the_marker(
-        self,
-    ) -> None:
-        history = self._history_with_focus()
-        view = build_api_view("system", history.messages, budget_tokens=200_000)
-
-        delivered = [
-            m for m in view.messages
-            if m.get("role") == "user" and "discovery calls" in str(m.get("content"))
-        ]
-        assert delivered, "the focus instruction never reached the model"
-        assert all("aura_internal" not in m for m in view.messages)
-
-    def test_a_genuine_user_message_still_starts_a_turn(self) -> None:
-        history = self._history_with_focus()
-        history.append_user_text("actually, do this instead")
-
-        assert len(_turn_starts(history.messages)) == 2
+        payload = json.loads(tool_results(history.messages)[0]["content"])
+        assert payload.get("reason") != DUPLICATE_READ_REASON
+        # The accepted call was recorded: its exact repeat is now guarded.
+        fingerprints = state.pre_edit_guard.seen_reads
+        assert any("alpha.py" in fp for fp in fingerprints)
 
 
 # ── the view remains non-destructive and complete ───────────────────────────
@@ -303,7 +237,7 @@ class TestViewRemainsIntact:
             "tool_calls": calls,
         })
         history.append_tool_result("c1", json.dumps({"ok": True, "content": "x" * 200}))
-        history.append_internal_user_text("Loop guard: 12 discovery calls have run.")
+        history.append_internal_user_text("completed-step boundary")
         return history
 
     def test_building_the_view_does_not_mutate_history(self) -> None:
@@ -316,9 +250,9 @@ class TestViewRemainsIntact:
         assert json.dumps(history.messages, sort_keys=True) == before
 
     def test_reasoning_before_the_last_user_message_is_shed(self) -> None:
-        """The provider-visible boundary is the last user message — here the
-        internal steering message — so the reasoning that preceded it is dead
-        weight and the stats say exactly what was removed."""
+        """The provider-visible boundary is the last user message, so the
+        reasoning that preceded it is dead weight and the stats say exactly
+        what was removed."""
         history = self._history()
         view = build_api_view("system", history.messages, budget_tokens=200_000)
 
@@ -337,6 +271,12 @@ class TestViewRemainsIntact:
         view = build_api_view("system", history.messages, budget_tokens=200)
 
         assert_tool_pairing_valid([m for m in view.messages if m.get("role") != "system"])
+
+    def test_a_genuine_user_message_still_starts_a_turn(self) -> None:
+        history = self._history()
+        history.append_user_text("actually, do this instead")
+
+        assert len(_turn_starts(history.messages)) == 2
 
     def test_completed_step_reasoning_does_not_grow_round_after_round(self) -> None:
         """The production regression: one real request drives a multi-round

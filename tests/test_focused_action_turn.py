@@ -1,21 +1,28 @@
 """The focused action turn: one request that serializes a decision into one act.
 
-Once ``PreEditLoopGuard`` has issued its focus instruction on a production
-``implementation`` turn and nothing has been written, the send loop stops
-opening ordinary reasoning streams and issues exactly one action-serialization
-request: thinking off, mutation tools plus ``report_blocker``, and a
-provider-neutral requirement that the answer be a tool call.
+Once ``PreEditLoopGuard`` has concluded that a production ``implementation``
+turn has stopped producing new evidence and nothing has been written, the send
+loop stops opening ordinary reasoning streams and issues exactly one
+action-serialization request: thinking off, mutation tools plus
+``report_blocker``, and a provider-neutral requirement that the answer be a
+tool call.
 
 These tests drive the real ``ConversationManager``, the real ``ToolRegistry``,
-and the real ``PreEditLoopGuard`` — the focus flag is reached by actually
-spending the discovery budget, not by poking state. What is asserted:
+and the real ``PreEditLoopGuard`` — the focused flag is reached by actually
+stalling the loop, not by poking state. What is asserted:
 
 * which request is focused, and that there is exactly one of them;
 * the thinking mode on every request, before, during, and after;
 * the exact tool surface the focused request exposes;
 * each provider's own required-tool mapping;
 * that a write, a rejected write, a blocker, and a contract-violating provider
-  each leave focused action by their own path, with no retry and no cap.
+  each leave focused action by their own path, with no retry and no cap;
+* that zero, multiple, unknown, and mixed tool-call responses execute nothing
+  and end in exactly one terminal failure response, with the violating prose and
+  reasoning discarded rather than preserved;
+* that a read-only registry never enters focused mutation mode;
+* that a successful blocker finalizes against a request with no tool catalog;
+* that the blocked reason reaches the completion-receipt path.
 """
 
 from __future__ import annotations
@@ -36,10 +43,7 @@ from aura.conversation.focused_action import (
 )
 from aura.conversation.history import History
 from aura.conversation.manager import ConversationManager
-from aura.conversation.pre_edit_loop_guard import (
-    MAX_DISCOVERY_CALLS_BEFORE_FOCUS,
-    PreEditLoopGuard,
-)
+from aura.conversation.pre_edit_loop_guard import PreEditLoopGuard
 from aura.conversation.task_router import TaskLane, TaskRoute
 from aura.conversation.tools._types import ApprovalDecision
 from aura.conversation.tools.catalog import MUTATION_TOOL_NAMES
@@ -118,21 +122,26 @@ def tool_call(call_id: str, name: str, args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def assistant(*calls: dict[str, Any], content: str = "") -> dict[str, Any]:
+def assistant(*calls: dict[str, Any], content: str = "", reasoning: str = "") -> dict[str, Any]:
     message: dict[str, Any] = {"role": "assistant", "content": content}
+    if reasoning:
+        message["reasoning_content"] = reasoning
     if calls:
         message["tool_calls"] = list(calls)
     return message
 
 
-def discovery_round() -> dict[str, Any]:
-    """One assistant message that spends the whole pre-focus discovery budget."""
-    return assistant(
-        *[
-            tool_call(f"d{i}", "glob", {"pattern": f"**/probe_{i}_*.py"})
-            for i in range(MAX_DISCOVERY_CALLS_BEFORE_FOCUS)
-        ]
-    )
+def discovery_round() -> list[dict[str, Any]]:
+    """Two rounds that hand the send loop the focused action protocol.
+
+    The first glob surfaces the harness workspace's only file as new evidence;
+    the second glob returns the same file list, so the round produced no new
+    evidence and the guard concludes discovery is over.
+    """
+    return [
+        assistant(tool_call("d0", "glob", {"pattern": "**/alpha*.py"})),
+        assistant(tool_call("d1", "glob", {"pattern": "**/*.py"})),
+    ]
 
 
 @dataclass
@@ -164,13 +173,13 @@ class Harness:
         return ApprovalDecision(action="reject")
 
 
-def make_harness(tmp_path: Path, rounds: list[dict[str, Any]]) -> Harness:
+def make_harness(tmp_path: Path, rounds: list[dict[str, Any]], *, read_only: bool = False) -> Harness:
     history = History()
     history.set_system("You are Aura's production coding agent.")
     history.append_user_text("Fix the loader in alpha.py")
     (tmp_path / "alpha.py").write_text("alpha = 1\n", encoding="utf-8")
 
-    tools = ToolRegistry(workspace_root=tmp_path, mode="single")
+    tools = ToolRegistry(workspace_root=tmp_path, mode="single", read_only=read_only)
     manager = ConversationManager(history, tools)
     stream = ScriptedStream(rounds=rounds)
     model_streams.unregister(HOOK)
@@ -202,7 +211,7 @@ FINAL_ROUND = assistant(content="Changed alpha.py: alpha is now 2.")
 @pytest.fixture
 def focused_write(tmp_path):
     harness = make_harness(
-        tmp_path, [discovery_round(), WRITE_ROUND, FINAL_ROUND]
+        tmp_path, [*discovery_round(), WRITE_ROUND, FINAL_ROUND]
     )
     harness.run()
     return harness
@@ -210,7 +219,7 @@ def focused_write(tmp_path):
 
 def test_focused_implementation_enters_exactly_one_action_request(focused_write):
     required = [r.require_tool_call for r in focused_write.stream.requests]
-    assert required == [False, True, False]
+    assert required == [False, False, True, False]
 
 
 def test_discovery_uses_the_user_selected_thinking_mode(focused_write):
@@ -218,15 +227,15 @@ def test_discovery_uses_the_user_selected_thinking_mode(focused_write):
 
 
 def test_focused_action_request_uses_thinking_off(focused_write):
-    assert focused_write.stream.requests[1].thinking == "off"
+    assert focused_write.stream.requests[2].thinking == "off"
 
 
 def test_selected_thinking_mode_is_restored_after_the_action(focused_write):
-    assert focused_write.stream.requests[2].thinking == "high"
+    assert focused_write.stream.requests[3].thinking == "high"
 
 
 def test_only_mutation_tools_and_report_blocker_are_exposed(focused_write):
-    exposed = set(focused_write.stream.requests[1].tool_names)
+    exposed = set(focused_write.stream.requests[2].tool_names)
     assert exposed == set(MUTATION_TOOL_NAMES) | {"report_blocker"}
     forbidden = {
         "read_file",
@@ -251,7 +260,7 @@ def test_only_mutation_tools_and_report_blocker_are_exposed(focused_write):
 
 
 def test_report_blocker_is_not_exposed_on_ordinary_requests(focused_write):
-    for index in (0, 2):
+    for index in (0, 1, 3):
         assert "report_blocker" not in focused_write.stream.requests[index].tool_names
 
 
@@ -264,7 +273,7 @@ def test_a_successful_write_exits_focused_action_state(focused_write, tmp_path):
     assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 2\n"
     # Only one focused request, and the round after it is an ordinary one.
     assert sum(r.require_tool_call for r in focused_write.stream.requests) == 1
-    assert focused_write.stream.requests[2].require_tool_call is False
+    assert focused_write.stream.requests[3].require_tool_call is False
 
 
 # ── 10: no local cap on action arguments ────────────────────────────────────
@@ -276,7 +285,7 @@ def test_large_write_arguments_are_not_truncated(tmp_path):
     harness = make_harness(
         tmp_path,
         [
-            discovery_round(),
+            *discovery_round(),
             assistant(
                 tool_call("w1", "write_file", {"path": "big.py", "content": body})
             ),
@@ -293,7 +302,7 @@ def test_large_write_arguments_are_not_truncated(tmp_path):
 def test_rejected_write_uses_existing_recovery_and_does_not_re_enter(tmp_path):
     harness = make_harness(
         tmp_path,
-        [discovery_round(), WRITE_ROUND, assistant(content="Blocked by rejection.")],
+        [*discovery_round(), WRITE_ROUND, assistant(content="Blocked by rejection.")],
     )
     harness.manager.send(
         on_event=harness.events.append,
@@ -310,10 +319,11 @@ def test_rejected_write_uses_existing_recovery_and_does_not_re_enter(tmp_path):
     assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 1\n"
     assert [r.require_tool_call for r in harness.stream.requests] == [
         False,
+        False,
         True,
         False,
     ]
-    assert harness.stream.requests[2].thinking == "high"
+    assert harness.stream.requests[3].thinking == "high"
     assert harness.approvals == ["alpha.py"]
     last_tool_result = json.loads(
         [m for m in harness.manager.history.messages if m.get("role") == "tool"][-1][
@@ -331,7 +341,7 @@ def test_report_blocker_performs_no_mutation_and_ends_with_one_final(tmp_path):
     harness = make_harness(
         tmp_path,
         [
-            discovery_round(),
+            *discovery_round(),
             assistant(
                 tool_call(
                     "b1",
@@ -352,8 +362,8 @@ def test_report_blocker_performs_no_mutation_and_ends_with_one_final(tmp_path):
     assert sorted(p.name for p in tmp_path.iterdir()) == before
     assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 1\n"
     assert harness.approvals == []
-    # Exactly three requests: discovery, the action, and one factual final.
-    assert len(harness.stream.requests) == 3
+    # Exactly four requests: evidence, stall, the action, and one factual final.
+    assert len(harness.stream.requests) == 4
     blocker_results = [
         json.loads(m["content"])
         for m in harness.manager.history.messages
@@ -372,34 +382,164 @@ def test_report_blocker_performs_no_mutation_and_ends_with_one_final(tmp_path):
     assert finals and "generated" in finals[0]["content"]
 
 
-# ── 14: a provider that ignores the contract ends honestly, with no retry ───
-
-
-def test_prose_without_a_required_tool_call_ends_as_provider_contract_failure(tmp_path):
+def test_blocker_final_uses_no_tool_catalog(tmp_path):
+    """A successful blocker ends the attempt; the factual final is produced by
+    a request that exposes no tool catalog, so it cannot mutate or re-open
+    planning."""
     harness = make_harness(
         tmp_path,
         [
-            discovery_round(),
-            assistant(content="Here is what I would do: first I would open..."),
+            *discovery_round(),
+            assistant(
+                tool_call("b1", "report_blocker", {"blocker": "generated at build time"})
+            ),
+            assistant(content="I could not edit alpha.py: it is generated."),
         ],
     )
     harness.run()
 
-    # No retry: the script would have raised on a third request.
-    assert len(harness.stream.requests) == 2
-    contents = [e.text for e in harness.events if isinstance(e, ContentDelta)]
-    assert PROVIDER_CONTRACT_FAILURE_MESSAGE in contents
-    dones = [e for e in harness.events if isinstance(e, Done)]
-    assert dones[-1].full_message["content"] == PROVIDER_CONTRACT_FAILURE_MESSAGE
-    assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 1\n"
-    # The model's own prose is preserved above the honest ending.
-    assistants = [
-        m["content"]
-        for m in harness.manager.history.messages
-        if m.get("role") == "assistant"
+    assert harness.stream.requests[-1].tool_names == ()
+    assert [r.require_tool_call for r in harness.stream.requests] == [
+        False,
+        False,
+        True,
+        False,
     ]
-    assert "Here is what I would do" in assistants[-2]
-    assert assistants[-1] == PROVIDER_CONTRACT_FAILURE_MESSAGE
+
+
+def test_blocked_reason_reaches_the_completion_receipt_path(tmp_path):
+    harness = make_harness(
+        tmp_path,
+        [
+            *discovery_round(),
+            assistant(
+                tool_call("b1", "report_blocker", {"blocker": "generated at build time"})
+            ),
+            assistant(content="I could not edit alpha.py: it is generated."),
+        ],
+    )
+    harness.run()
+
+    assert harness.manager.last_turn_blocked_reason == "generated at build time"
+    assert harness.manager.last_turn_provider_contract_failure is False
+
+
+# ── 14: the focused provider contract — exactly one exposed action call ─────
+
+
+class TestFocusedProviderContract:
+    """Zero, multiple, unknown, and mixed responses execute nothing and end in
+    exactly one terminal failure, with the violating prose and reasoning
+    discarded."""
+
+    def _run(self, tmp_path: Path, round_: dict[str, Any]) -> Harness:
+        harness = make_harness(tmp_path, [*discovery_round(), round_])
+        harness.run()
+        return harness
+
+    def _assert_nothing_executed(self, harness: Harness) -> None:
+        assert (harness.root / "alpha.py").read_text(encoding="utf-8") == "alpha = 1\n"
+        assert harness.approvals == []
+        # Exactly one request for each round: evidence, stall, focused. No retry.
+        assert len(harness.stream.requests) == 3
+        contents = [e.text for e in harness.events if isinstance(e, ContentDelta)]
+        assert PROVIDER_CONTRACT_FAILURE_MESSAGE in contents
+        dones = [e for e in harness.events if isinstance(e, Done)]
+        failure_dones = [
+            e for e in dones
+            if e.full_message.get("content") == PROVIDER_CONTRACT_FAILURE_MESSAGE
+        ]
+        assert len(failure_dones) == 1, (
+            "the failure ends in exactly one terminal Done, not a retry"
+        )
+        assert dones[-1].full_message["content"] == PROVIDER_CONTRACT_FAILURE_MESSAGE
+        # The violating response never reached history — not its prose, not its
+        # reasoning, not its tool calls. The only stored tool-call messages are
+        # the two discovery rounds that led the guard into the focused request.
+        assistants = [
+            m for m in harness.manager.history.messages if m.get("role") == "assistant"
+        ]
+        stored_tool_call_ids = {
+            call["id"]
+            for m in assistants
+            for call in (m.get("tool_calls") or [])
+        }
+        assert stored_tool_call_ids == {"d0", "d1"}, (
+            "the violating round's tool calls were stored"
+        )
+        assert not any("Here is what I would do" in m.get("content", "") for m in assistants), (
+            "violating prose was preserved"
+        )
+        assert not any(m.get("reasoning_content") for m in assistants), (
+            "violating reasoning was preserved"
+        )
+        # The failure propagates truthfully to the completion-receipt path.
+        assert harness.manager.last_turn_provider_contract_failure is True
+        assert harness.manager.last_turn_blocked_reason == ""
+
+    def test_prose_without_a_required_tool_call_discards_the_violating_prose(
+        self, tmp_path,
+    ) -> None:
+        harness = self._run(
+            tmp_path,
+            assistant(
+                content="Here is what I would do: first I would open...",
+                reasoning="weighing the options\n",
+            ),
+        )
+        self._assert_nothing_executed(harness)
+
+    def test_multiple_tool_calls_execute_nothing(self, tmp_path) -> None:
+        harness = self._run(
+            tmp_path,
+            assistant(
+                tool_call("x1", "write_file", {"path": "alpha.py", "content": "a = 2\n"}),
+                tool_call("x2", "write_file", {"path": "alpha.py", "content": "a = 3\n"}),
+            ),
+        )
+        self._assert_nothing_executed(harness)
+
+    def test_an_unknown_tool_call_executes_nothing(self, tmp_path) -> None:
+        harness = self._run(
+            tmp_path,
+            assistant(tool_call("x1", "mystery_tool", {"path": "alpha.py"})),
+        )
+        self._assert_nothing_executed(harness)
+
+    def test_a_mixed_batch_of_valid_and_unknown_calls_executes_nothing(
+        self, tmp_path,
+    ) -> None:
+        """One valid mutation alongside one unknown call is still not exactly
+        one exposed action — nothing in the batch may execute."""
+        harness = self._run(
+            tmp_path,
+            assistant(
+                tool_call("x1", "write_file", {"path": "alpha.py", "content": "a = 2\n"}),
+                tool_call("x2", "mystery_tool", {"path": "alpha.py"}),
+            ),
+        )
+        self._assert_nothing_executed(harness)
+
+
+# ── read-only mode exposes no focused mutation request ──────────────────────
+
+
+def test_read_only_mode_exposes_no_focused_mutation_request(tmp_path):
+    harness = make_harness(
+        tmp_path,
+        [*discovery_round(), FINAL_ROUND],
+        read_only=True,
+    )
+    harness.run()
+
+    # No request required a tool call: the focused mutation surface was never
+    # entered under a read-only registry.
+    assert [r.require_tool_call for r in harness.stream.requests] == [
+        False,
+        False,
+        False,
+    ]
+    assert {r.thinking for r in harness.stream.requests} == {"high"}
 
 
 # ── 15: every other kind of turn is untouched ───────────────────────────────
@@ -418,16 +558,17 @@ def test_prose_without_a_required_tool_call_ends_as_provider_contract_failure(tm
 def test_non_implementation_turns_never_enter_focused_action(tmp_path, route):
     harness = make_harness(
         tmp_path,
-        [discovery_round(), WRITE_ROUND, FINAL_ROUND],
+        [*discovery_round(), WRITE_ROUND, FINAL_ROUND],
     )
     harness.run(route=route)
     assert [r.require_tool_call for r in harness.stream.requests] == [
         False,
         False,
         False,
+        False,
     ]
     assert {r.thinking for r in harness.stream.requests} == {"high"}
-    assert "report_blocker" not in harness.stream.requests[1].tool_names
+    assert "report_blocker" not in harness.stream.requests[2].tool_names
 
 
 def test_implementation_turn_without_a_spent_budget_is_untouched(tmp_path):
@@ -452,8 +593,8 @@ def test_implementation_turn_without_a_spent_budget_is_untouched(tmp_path):
 
 
 def test_user_cancellation_during_the_focused_request_is_unchanged(tmp_path):
-    harness = make_harness(tmp_path, [discovery_round(), WRITE_ROUND])
-    harness.stream.cancel_on_request = 1
+    harness = make_harness(tmp_path, [*discovery_round(), WRITE_ROUND])
+    harness.stream.cancel_on_request = 2
     harness.run()
 
     errors = [e for e in harness.events if isinstance(e, ApiError)]
@@ -461,7 +602,7 @@ def test_user_cancellation_during_the_focused_request_is_unchanged(tmp_path):
     assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 1\n"
     # No further request was made and the cancel event was never set by Aura's
     # own machinery — the test set it, standing in for the user.
-    assert len(harness.stream.requests) == 2
+    assert len(harness.stream.requests) == 3
 
 
 # ── the activation predicate itself ─────────────────────────────────────────
@@ -511,13 +652,13 @@ def test_activation_predicate(kwargs, expected):
 )
 def test_history_tool_pairing_is_preserved(tmp_path, script_name):
     scripts = {
-        "write": [discovery_round(), WRITE_ROUND, FINAL_ROUND],
+        "write": [*discovery_round(), WRITE_ROUND, FINAL_ROUND],
         "blocker": [
-            discovery_round(),
+            *discovery_round(),
             assistant(tool_call("b1", "report_blocker", {"blocker": "generated"})),
             assistant(content="Blocked."),
         ],
-        "contract_failure": [discovery_round(), assistant(content="prose only")],
+        "contract_failure": [*discovery_round(), assistant(content="prose only")],
     }
     harness = make_harness(tmp_path, scripts[script_name])
     harness.run()

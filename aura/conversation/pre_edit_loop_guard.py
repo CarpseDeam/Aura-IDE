@@ -1,39 +1,29 @@
 """Deterministic pre-edit loop guard for the SINGLE production runtime.
 
-Three mechanical signals, all derived from state the send loop already keeps:
+Two mechanical signals, both derived from state the send loop already keeps:
 
 1. **Exact read fingerprints.** Before the first applied write, the same
    read-only tool call with the same arguments is rejected the second time it
    is issued.  The result is already in the conversation above; repeating it
    only feeds the model its own transcript again.
-2. **Stagnant discovery rounds.** After
-   :data:`MAX_STAGNANT_ROUNDS_BEFORE_STEER` consecutive rounds that produced
-   *no new evidence* — no new file, range, search result, or result payload,
-   no applied write, and no terminal command — one concise internal steering
-   message is injected, once per turn, telling the agent to use the evidence
-   it has and implement.
-3. **Cumulative discovery budget.** Signal 2 only fires when discovery *stops*
-   producing evidence.  A turn can also burn an entire context window while
-   every single call returns something genuinely new — a wide codebase always
-   has one more file to open.  So the accepted discovery calls made before the
-   first applied write are simply counted.  Past
-   :data:`MAX_DISCOVERY_CALLS_BEFORE_FOCUS` one focus instruction is injected;
-   past a further :data:`MAX_DISCOVERY_CALLS_AFTER_FOCUS` targeted calls,
-   continued *broad* discovery is rejected with a structured recoverable
-   payload.
 
-   These two numbers are mechanical safety budgets on spend, not a judgement
-   about the task.  Nothing here classifies task complexity, scores difficulty,
-   or decides that a task "should" need fewer files — it only says that a turn
-   which has opened this much and still written nothing must now narrow down.
-   Narrow reads (ranges and outlines) of files already discovered stay
-   available afterwards, so narrowing down is always possible.
+2. **Stalled discovery → the focused action protocol.** A round that ran tools,
+   observed their results, and produced *no new evidence* and *no progress* has
+   stopped moving the turn forward.  That single stalled round is the protocol
+   transition: :attr:`focused` becomes true, and the send loop answers the next
+   model request with the action-serialization request — thinking off, mutation
+   tools plus ``report_blocker``, exactly one tool call — instead of another
+   ordinary reasoning stream.  There is deliberately no counter of discovery
+   calls and no "how many files should this task need" budget: discovery is
+   never refused by a count.  A turn may survey as long as every call returns
+   genuinely new evidence; the first round that does not is where the focused
+   action protocol takes over.
 
 Evidence is judged by the *result*, never by the call arguments.  Each
 successful read-only result is folded into a normalized fingerprint: a
 genuinely new file, line range, search match, or result payload resets the
-stall counter, while a result that is effectively identical to one already
-seen — cosmetic argument changes included — does not.  Truncated reads return
+stall, while a result that is effectively identical to one already seen —
+cosmetic argument changes included — does not.  Truncated reads return
 genuinely new content, so a focused continuation after a truncation is normal
 discovery and is never steered.  TODO updates and other bookkeeping are not
 evidence.
@@ -45,13 +35,15 @@ name.
 
 **Progress is owned by results, never by intent.**  Issuing a terminal or
 diagnostic call proves nothing — the command may not even start.  Only an
-*applied* write and a *successful* command count as forward progress and reset
-the stall counter.  A failed command leaves the round stagnant, so steering
-still fires on a turn that is only failing.  One *distinct* failure shape buys
-one recovery round of reread grace; re-running the same command into the same
-failure buys nothing further, and is not new evidence.  A corrected command is
-never blocked by this guard — commands are outside its gate entirely — and when
-the correction succeeds, stagnation resets like any other progress.
+*applied* write and a *successful* command count as forward progress and clear
+the failure state.  A failed command leaves the round stalled, but a distinct
+failure opens recovery: rereads are allowed while it is open, and the focused
+transition waits so the agent can fix the command and recover.  Re-running the
+same command into the same failure is not a new distinct failure and renews
+nothing; once the recovery round closes without progress or new evidence, the
+reread grace is spent.  A corrected command is never blocked by this guard —
+commands are outside its gate entirely — and when the correction succeeds,
+recovery closes like any other progress.
 
 There is deliberately no semantic classification of model output, no
 planner/worker workflow, and no phase state machine here.  The 300-call
@@ -140,17 +132,6 @@ def _default_effect_lookup(name: str) -> ToolEffect:
     """
     return BUILTIN_TOOL_EFFECTS.get(name, ToolEffect.OBSERVATION)
 
-#: Rounds of tools-without-new-evidence tolerated before one steering message.
-MAX_STAGNANT_ROUNDS_BEFORE_STEER: int = 2
-
-#: Accepted discovery calls tolerated before the first applied write, after
-#: which one focus instruction is injected.  A mechanical spend budget — not a
-#: statement about how many files the task "should" need.
-MAX_DISCOVERY_CALLS_BEFORE_FOCUS: int = 12
-
-#: Further discovery calls allowed after the focus instruction, so the agent
-#: can confirm the one or two files it named before committing to an edit.
-MAX_DISCOVERY_CALLS_AFTER_FOCUS: int = 4
 
 #: Argument and result keys that name a file.  Used only to remember which
 #: files are already known candidates, so narrow reads of them stay allowed.
@@ -187,11 +168,6 @@ _NON_EVIDENCE_KEYS: frozenset[str] = frozenset({
     "pattern",
 })
 
-#: Rounds of reread grace bought by one distinct failure.  Spent by the round
-#: that observed the failure and the one after it, so exactly one round may
-#: reread while recovering.
-FAILURE_GRACE_ROUNDS: int = 2
-
 #: Payload keys that identify *which* failure this is.  A failure is "the same
 #: shape" when the tool, the command, the failure class, the exit code and the
 #: first line of the error match — so a retry of the identical broken command
@@ -206,16 +182,6 @@ _FAILURE_IDENTITY_KEYS: tuple[str, ...] = (
 )
 
 DUPLICATE_READ_REASON = "duplicate_read_before_first_edit"
-DISCOVERY_EXHAUSTED_REASON = "discovery_budget_exhausted_before_first_edit"
-
-#: Named in the rejection payload so the recovery path is explicit rather than
-#: something the model has to guess at.  ``read_file`` stays available only as
-#: a bounded offset/limit window of a file the turn already knows.
-_STILL_AVAILABLE_TOOLS: tuple[str, ...] = (
-    "read_file",
-    "write_file",
-    "patch_file",
-)
 
 _DUPLICATE_READ_MESSAGE = (
     "You already ran this exact call earlier in this turn and its result is "
@@ -223,36 +189,6 @@ _DUPLICATE_READ_MESSAGE = (
     "and adds no evidence. Use what you already have and make the edit. "
     "Rereads after a failed tool call, a stale-file notice, or a pending "
     "edit-recovery step are allowed and are not blocked by this guard."
-)
-
-_STEERING_MESSAGE = (
-    "Loop guard: {rounds} consecutive rounds produced no new evidence and no "
-    "edit applied. You have the evidence you need. Do not re-read, restate "
-    "the plan, or re-derive the decision — make the change now with "
-    "write_file or patch_file, then validate it. If something genuinely "
-    "blocks the edit, name that blocker in one sentence and stop."
-)
-
-_FOCUS_MESSAGE = (
-    "Loop guard: {calls} discovery calls have run in this turn and nothing has "
-    "been written yet. Stop surveying and commit to a target. Name the "
-    "specific file(s) you are about to change, then confirm only what you "
-    "still need with a bounded read_file (offset and limit) on those files and "
-    "make the edit. You have about {remaining} more broad discovery calls "
-    "before they are refused; narrow reads of files you have already found "
-    "stay available either way. If you genuinely cannot identify a target, say "
-    "so in one sentence and stop."
-)
-
-_DISCOVERY_EXHAUSTED_MESSAGE = (
-    "This turn has spent its broad-discovery budget ({calls} discovery calls) "
-    "without applying a single edit, so further exploration is refused. This "
-    "is not a failure of the tool and not a reason to try a different search: "
-    "read_file with a bounded offset/limit window on the files you have "
-    "already found still works, and so do write_file and patch_file. Narrow to "
-    "a target file, confirm the lines you need, and make the change. Once any "
-    "edit applies, this limit is lifted for the rest of the turn. If you truly "
-    "cannot proceed, name the blocker in one sentence and stop."
 )
 
 
@@ -331,7 +267,16 @@ def _condense(text: str) -> str:
 
 @dataclass
 class PreEditLoopGuard:
-    """Track read repetition, stagnant rounds, and discovery spend pre-write."""
+    """Track read repetition, stalled discovery, and failure recovery pre-write.
+
+    Protocol state, not a scoring engine: ``focused`` becomes true the first
+    time a round runs tools, sees their results, and neither advanced the turn
+    (an applied write or a successful command) nor gathered new evidence.  That
+    one transition hands the send loop the action-serialization request.  A
+    distinct failure opens recovery instead: rereads stay allowed while it is
+    open and the focused transition waits, so the agent can correct the failing
+    step rather than being pushed into a mutation the failure explains.
+    """
 
     #: Authoritative effect classifier — the live registry's ``tool_effect``
     #: when one is wired in, else the built-in table plus the observation
@@ -342,18 +287,15 @@ class PreEditLoopGuard:
 
     seen_reads: dict[str, int] = field(default_factory=dict)
     seen_evidence: set[str] = field(default_factory=set)
-    stagnant_rounds: int = 0
     write_applied: bool = False
-    steered: bool = False
     blocked_calls: int = 0
 
-    #: Accepted discovery calls made before the first applied write.
-    discovery_calls: int = 0
-    #: Whether the one focus instruction has been handed to the send loop.
+    #: Whether the loop has concluded that discovery is over and the next
+    #: request must be the focused action request.  Set once, by the first
+    #: stalled round; never reset by later evidence.
     focused: bool = False
     #: Files already surfaced by this turn's discovery, from call arguments and
-    #: from result payloads. Narrow reads of these stay allowed after the
-    #: budget is spent.
+    #: from result payloads. Narrow reads of these stay allowed.
     candidate_files: set[str] = field(default_factory=set)
     #: Failure shapes already seen this turn. A repeat buys no further grace.
     seen_failures: set[str] = field(default_factory=set)
@@ -361,46 +303,21 @@ class PreEditLoopGuard:
     #: that the agent is retrying the same broken command.
     repeated_failures: int = 0
 
-    # Grace budget in rounds; >0 means a reread is currently justified.
-    _grace_rounds: int = 0
+    #: Whether an unresolved distinct failure blocks the focused transition.
+    #: Set by a distinct failure, cleared only by recovery (new evidence or
+    #: forward progress).  While true, a stalled round is a recovery round, not
+    #: a signal to force a mutation.
+    _failure_active: bool = False
+    #: Whether a reread is currently justified because the previous round
+    #: opened a failure recovery.  Bounded: it is spent when the round after a
+    #: distinct failure closes without a new distinct failure.
+    _failure_pending: bool = False
+
     _round_had_tools: bool = False
     _round_made_progress: bool = False
     _round_new_evidence: bool = False
-
-    # ---- discovery budget ------------------------------------------------
-
-    @property
-    def discovery_limit(self) -> int:
-        """Total discovery calls allowed right now, focus allowance included."""
-        limit = MAX_DISCOVERY_CALLS_BEFORE_FOCUS
-        if self.focused:
-            limit += MAX_DISCOVERY_CALLS_AFTER_FOCUS
-        return limit
-
-    @property
-    def discovery_exhausted(self) -> bool:
-        """Whether broad discovery is spent (focus issued and allowance used)."""
-        return self.focused and self.discovery_calls >= self.discovery_limit
-
-    def is_known_candidate(self, path: Any) -> bool:
-        """Return whether *path* names a file this turn has already surfaced."""
-        normalized = _normalize_path(path)
-        if not normalized:
-            return False
-        if normalized in self.candidate_files:
-            return True
-        # Accept an unambiguous suffix match so "aura/x.py" matches a candidate
-        # recorded as "C:/repo/aura/x.py" and vice versa.
-        return any(
-            known.endswith("/" + normalized) or normalized.endswith("/" + known)
-            for known in self.candidate_files
-        )
-
-    def _note_candidates(self, values: Any) -> None:
-        for path in _iter_paths(values):
-            if len(self.candidate_files) >= _MAX_CANDIDATE_FILES:
-                return
-            self.candidate_files.add(path)
+    _round_observed: bool = False
+    _round_fresh_failure: bool = False
 
     # ---- effect classification -------------------------------------------
 
@@ -430,14 +347,36 @@ class PreEditLoopGuard:
         self._round_had_tools = False
         self._round_made_progress = False
         self._round_new_evidence = False
+        self._round_observed = False
+        self._round_fresh_failure = False
 
     def end_round(self) -> None:
-        if self._grace_rounds > 0:
-            self._grace_rounds -= 1
-        if self._round_made_progress or self._round_new_evidence:
-            self.stagnant_rounds = 0
-        elif self._round_had_tools:
-            self.stagnant_rounds += 1
+        recovered = self._round_made_progress or self._round_new_evidence
+        if recovered:
+            # The failure is resolved: rereads no longer need grace and the
+            # focused transition is unblocked.
+            self._failure_active = False
+            self._failure_pending = False
+        elif self._round_fresh_failure:
+            # A new distinct failure opens a recovery round for the one after
+            # it, and keeps the focused transition waiting.
+            self._failure_pending = True
+        else:
+            # One recovery round is spent: whatever reread grace a failure
+            # bought is used up.  Recovery may still be open (no new evidence
+            # yet), which is why ``_failure_active`` is separate.
+            self._failure_pending = False
+
+        if recovered or self._round_fresh_failure:
+            return
+        if not self._round_had_tools or not self._round_observed:
+            return
+        if self._failure_active:
+            return
+        # A round that ran tools, saw their results, and neither advanced the
+        # turn nor gathered evidence has stopped moving: hand the send loop the
+        # focused action protocol.
+        self.focused = True
 
     # ---- pre-execution gate ----------------------------------------------
 
@@ -450,18 +389,21 @@ class PreEditLoopGuard:
     ) -> dict[str, Any] | None:
         """Return a rejection payload for a call this turn should not make.
 
-        ``None`` means the call may run.  Two rejections are possible, both
-        recoverable and both dormant once any write has applied — rereading to
-        verify your own edit is normal work:
+        ``None`` means the call may run.  One rejection is possible, recoverable
+        and dormant once any write has applied — rereading to verify your own
+        edit is normal work:
 
-        * an unjustified exact repeat read, and
-        * broad discovery after the cumulative budget is spent.
+        * an unjustified exact repeat read.
+
+        Broad discovery is never refused by a count; a turn that keeps returning
+        genuinely new evidence is allowed to keep surveying, and the stalled
+        round protocol plus the 300-call brake bound the rest.
         """
         if self.write_applied or not self._is_observation(name):
             return None
-        if self._grace_rounds > 0 or recovery_pending:
-            # A failure, a stale-file notice, or a pending edit-recovery step
-            # already told the model to read again. Neither boundary applies.
+        if self._failure_pending or recovery_pending:
+            # A distinct failure, a stale-file notice, or a pending edit-recovery
+            # step already told the model to read again. Neither boundary applies.
             return None
 
         fingerprint = read_fingerprint(name, args)
@@ -476,28 +418,6 @@ class PreEditLoopGuard:
                 "tool": name,
                 "previous_calls": previous,
                 "message": _DUPLICATE_READ_MESSAGE,
-            }
-
-        # Narrow reads — a bounded read_file window, plus the historical range
-        # and outline tools kept for replay — stay available past this point,
-        # so the turn can always narrow down to an edit. They remain subject
-        # to the duplicate check above, since an exact repeat still returns the
-        # same bytes.
-        if self._is_discovery(name, args) and self.discovery_exhausted:
-            self.blocked_calls += 1
-            return {
-                "ok": False,
-                "loop_guard": True,
-                "recoverable": True,
-                "reason": DISCOVERY_EXHAUSTED_REASON,
-                "tool": name,
-                "discovery_calls": self.discovery_calls,
-                "discovery_limit": self.discovery_limit,
-                "still_available": _STILL_AVAILABLE_TOOLS,
-                "known_candidate_files": sorted(self.candidate_files)[:20],
-                "message": _DISCOVERY_EXHAUSTED_MESSAGE.format(
-                    calls=self.discovery_calls
-                ),
             }
         return None
 
@@ -514,10 +434,6 @@ class PreEditLoopGuard:
             fingerprint = read_fingerprint(name, args)
             self.seen_reads[fingerprint] = self.seen_reads.get(fingerprint, 0) + 1
             self._note_candidates(args)
-        if self._is_discovery(name, args) and not self.write_applied:
-            # Counted per accepted call, regardless of whether the result was
-            # new: a turn can survey forever while every call returns something.
-            self.discovery_calls += 1
 
     # ---- evidence that justifies continued discovery ---------------------
 
@@ -525,15 +441,15 @@ class PreEditLoopGuard:
         """Fold one tool result into the guard's state.
 
         This is the only place progress is granted.  A failure — of any tool,
-        including a command — is never progress, so the round stays stagnant
-        and the ordinary steering still fires on a turn that is only failing.
+        including a command — is never progress, so the round stays stalled and
+        opens recovery instead.
         """
+        self._round_observed = True
         if not ok:
             self.note_failure(name, payload)
             return
         if self._is_mutation(name) and _payload_applied(payload):
             self.write_applied = True
-            self.stagnant_rounds = 0
             self._round_made_progress = True
             return
         if self._is_command(name):
@@ -549,19 +465,22 @@ class PreEditLoopGuard:
                 self._round_new_evidence = True
 
     def note_failure(self, name: str = "", payload: Any = None) -> None:
-        """A tool failed: one *distinct* failure buys one round of reread grace.
+        """A tool failed: a *distinct* failure opens recovery.
 
-        Repeating a command into the failure it already produced is not new
-        information, so it renews nothing: the grace already granted runs out
-        on schedule and the round still counts as stagnant.  That is what stops
-        a broken command from reopening pre-edit planning indefinitely.
+        Recovery opens reread grace for the round that follows and blocks the
+        focused transition, so the agent can correct the failing step rather
+        than being pushed into a mutation the failure explains.  Repeating a
+        command into the failure it already produced is not new information, so
+        it renews nothing: the grace already granted runs out on schedule.
         """
         fingerprint = failure_fingerprint(name, payload)
         if fingerprint in self.seen_failures:
             self.repeated_failures += 1
             return
         self.seen_failures.add(fingerprint)
-        self._grace_rounds = FAILURE_GRACE_ROUNDS
+        self._failure_active = True
+        self._failure_pending = True
+        self._round_fresh_failure = True
 
     def note_stale_paths(self, paths: list[str] | tuple[str, ...]) -> None:
         """A stale-file notice landed: forget the reads that touched *paths*."""
@@ -577,42 +496,27 @@ class PreEditLoopGuard:
             if any(path and path in probe for path in normalized):
                 del self.seen_reads[fingerprint]
 
-    # ---- steering --------------------------------------------------------
+    # ---- candidate tracking ----------------------------------------------
 
-    def take_steering_message(self) -> str:
-        """Return the one steering message when it is due, else ``\"\"``."""
-        if self.write_applied or self.steered:
-            return ""
-        if self.stagnant_rounds < MAX_STAGNANT_ROUNDS_BEFORE_STEER:
-            return ""
-        self.steered = True
-        return _STEERING_MESSAGE.format(rounds=self.stagnant_rounds)
-
-    def take_focus_message(self) -> str:
-        """Return the one discovery-focus instruction when due, else ``\"\"``.
-
-        Fires at most once per turn, and never after a write has applied.
-        Issuing it opens the small post-focus allowance.
-        """
-        if self.write_applied or self.focused:
-            return ""
-        if self.discovery_calls < MAX_DISCOVERY_CALLS_BEFORE_FOCUS:
-            return ""
-        self.focused = True
-        return _FOCUS_MESSAGE.format(
-            calls=self.discovery_calls,
-            remaining=MAX_DISCOVERY_CALLS_AFTER_FOCUS,
+    def is_known_candidate(self, path: Any) -> bool:
+        """Return whether *path* names a file this turn has already surfaced."""
+        normalized = _normalize_path(path)
+        if not normalized:
+            return False
+        if normalized in self.candidate_files:
+            return True
+        # Accept an unambiguous suffix match so "aura/x.py" matches a candidate
+        # recorded as "C:/repo/aura/x.py" and vice versa.
+        return any(
+            known.endswith("/" + normalized) or normalized.endswith("/" + known)
+            for known in self.candidate_files
         )
 
-    def take_internal_messages(self) -> list[str]:
-        """Return every internal instruction due after this round, in order.
-
-        The send loop appends these as ``aura_internal`` user messages. They
-        are Aura's own steering, not the user's turn, and must never be treated
-        as a new user turn boundary.
-        """
-        messages = [self.take_focus_message(), self.take_steering_message()]
-        return [message for message in messages if message]
+    def _note_candidates(self, values: Any) -> None:
+        for path in _iter_paths(values):
+            if len(self.candidate_files) >= _MAX_CANDIDATE_FILES:
+                return
+            self.candidate_files.add(path)
 
 
 def _normalize_path(value: Any) -> str:
@@ -679,18 +583,14 @@ def _payload_applied(payload: Any) -> bool:
 __all__ = [
     "COMMAND_TOOLS",
     "DIAGNOSTIC_TOOLS",
-    "DISCOVERY_EXHAUSTED_REASON",
     "DISCOVERY_TOOLS",
     "DUPLICATE_READ_REASON",
-    "FAILURE_GRACE_ROUNDS",
-    "failure_fingerprint",
-    "MAX_DISCOVERY_CALLS_AFTER_FOCUS",
-    "MAX_DISCOVERY_CALLS_BEFORE_FOCUS",
-    "MAX_STAGNANT_ROUNDS_BEFORE_STEER",
     "NARROW_READ_TOOLS",
     "PROGRESS_TOOLS",
     "PreEditLoopGuard",
     "READ_ONLY_TOOLS",
     "evidence_fingerprint",
+    "failure_fingerprint",
+    "is_narrow_read",
     "read_fingerprint",
 ]

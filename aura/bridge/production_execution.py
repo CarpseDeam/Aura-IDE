@@ -176,7 +176,11 @@ class ProductionExecutionSession(QObject):
         _log.info("production_run_cancelled run_id=%s", self._run_id)
         self.workerCancelled.emit(self._run_id)
 
-    def finish(self, blocked_reason: str = "") -> ProductionReceipt | None:
+    def finish(
+        self,
+        blocked_reason: str = "",
+        provider_contract_failure: bool = False,
+    ) -> ProductionReceipt | None:
         """Build exactly one completion receipt and emit the finish lifecycle."""
         if not self._run_id or self._finished:
             return None
@@ -186,7 +190,12 @@ class ProductionExecutionSession(QObject):
             self.workerCancelled.emit(self._run_id)
             return None
 
-        receipt = build_production_receipt(self.evidence(blocked_reason=blocked_reason))
+        receipt = build_production_receipt(
+            self.evidence(
+                blocked_reason=blocked_reason,
+                provider_contract_failure=provider_contract_failure,
+            )
+        )
         self._result_metadata[self._run_id] = dict(receipt.metadata)
         _log.info(
             "production_run_finished run_id=%s ok=%s status=%s",
@@ -203,7 +212,11 @@ class ProductionExecutionSession(QObject):
 
     # ---- evidence --------------------------------------------------------
 
-    def evidence(self, blocked_reason: str = "") -> ProductionRunEvidence:
+    def evidence(
+        self,
+        blocked_reason: str = "",
+        provider_contract_failure: bool = False,
+    ) -> ProductionRunEvidence:
         """Return the structured execution evidence for the active run."""
         relay = self._relay
         return ProductionRunEvidence(
@@ -219,6 +232,7 @@ class ProductionExecutionSession(QObject):
             final_response=relay.final_report_text,
             cancelled=self._cancelled,
             blocked_reason=blocked_reason,
+            provider_contract_failure=provider_contract_failure,
         )
 
     def result_metadata(self, run_id: str) -> dict[str, Any]:

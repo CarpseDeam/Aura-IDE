@@ -99,6 +99,29 @@ def _stream_log_label(hook_name: str) -> str:
     return "production_stream"
 
 
+def _blocker_reason_from_call(full_message: dict[str, Any]) -> str:
+    """Return the blocker text named by this turn's ``report_blocker`` call.
+
+    The focused action request serializes exactly one tool call; when it is
+    ``report_blocker`` its ``blocker`` argument is the reason the implementation
+    attempt ended. Carried to the completion receipt so a blocked turn reports
+    as blocked, never as completed.
+    """
+    for call in full_message.get("tool_calls") or []:
+        if not isinstance(call, dict):
+            continue
+        function = call.get("function")
+        if not isinstance(function, dict) or function.get("name") != REPORT_BLOCKER:
+            continue
+        try:
+            args = json.loads(function.get("arguments") or "{}")
+        except (TypeError, ValueError):
+            return ""
+        reason = args.get("blocker")
+        return str(reason).strip() if isinstance(reason, str) else ""
+    return ""
+
+
 def _log_context_round(budget, stats, tool_defs: list[dict[str, Any]] | None) -> None:
     """One line per model round describing where the context budget went.
 
@@ -182,9 +205,28 @@ class ConversationManager:
             lifecycle=self._lifecycle,
             event_bus=self._event_bus,
         )
+        #: Terminal blocker reason from the most recent focused action turn
+        #: that ended in a successful ``report_blocker``, for completion
+        #: receipts. Reset at the start of every send.
+        self._last_turn_blocked_reason: str = ""
+        #: Whether the most recent turn ended in a focused provider-contract
+        #: failure (the required-tool call was not honoured). Completion
+        #: receipts report it as its own terminal status. Reset per send.
+        self._last_turn_provider_contract_failure: bool = False
+
     @property
     def history(self) -> History:
         return self._history
+
+    @property
+    def last_turn_blocked_reason(self) -> str:
+        """Blocker text from the last turn's successful ``report_blocker``."""
+        return self._last_turn_blocked_reason
+
+    @property
+    def last_turn_provider_contract_failure(self) -> bool:
+        """Whether the last turn ended in a focused provider-contract failure."""
+        return self._last_turn_provider_contract_failure
 
     @property
     def tools(self) -> ToolRegistry:
@@ -273,6 +315,8 @@ class ConversationManager:
             tool_effect=self._tools.tool_effect,
         )
         state.focused_action.selected_thinking = str(thinking)
+        self._last_turn_blocked_reason = ""
+        self._last_turn_provider_contract_failure = False
         if state.mode == "worker":
             state.loaded_target_files = list(loaded_target_files or [])
             if worker_dispatch_request is not None:
@@ -335,6 +379,13 @@ class ConversationManager:
                     FOCUSED_ACTION_THINKING,
                     ",".join(focused.exposed_tools),
                 )
+            elif focused.blocked:
+                # A successful blocker has already ended the implementation
+                # attempt: the turn owes exactly one factual final response and
+                # nothing else, so the request that produces it exposes no tool
+                # catalog. The final cannot mutate, search, or re-open planning.
+                tool_defs = []
+                round_thinking = thinking
             else:
                 tool_defs = self._tools.tool_defs()
                 round_thinking = thinking
@@ -362,6 +413,10 @@ class ConversationManager:
                 mode=state.mode,
                 stream_buffer=state.stream_buffer,
                 content_gate=state.content_gate,
+                # A focused action request must answer with exactly one tool
+                # call. Prose is a provider-contract violation: hold it so it is
+                # discarded, never streamed to chat.
+                discard_prose_final=focused.active,
             )
 
             # The outbound view is compacted against *this* model's budget;
@@ -457,6 +512,7 @@ class ConversationManager:
                 if not contract_ok:
                     focused.contract_violated = True
                     focused.outcome = OUTCOME_PROVIDER_CONTRACT_FAILURE
+                    self._last_turn_provider_contract_failure = True
                     _log.info(
                         "focused_action_outcome outcome=%s selected_action=%s "
                         "selected_thinking=%s focused_action_thinking=%s",
@@ -561,9 +617,13 @@ class ConversationManager:
                     if tool_round.blocker_succeeded:
                         # No mutation happened and none will: the attempt ends
                         # here and the turn owes exactly one factual final
-                        # response, which the existing completion path produces.
+                        # response, which the existing completion path produces
+                        # against a request that exposes no tool catalog.
                         focused.blocked = True
                         state.task_completion_context = True
+                        self._last_turn_blocked_reason = _blocker_reason_from_call(
+                            full_message
+                        )
                 _log.info(
                     "focused_action_outcome outcome=%s selected_action=%s "
                     "write_applied=%s selected_thinking=%s "
@@ -574,16 +634,6 @@ class ConversationManager:
                     focused.selected_thinking,
                     FOCUSED_ACTION_THINKING,
                 )
-            if state.pre_edit_guard is not None and not focused.blocked:
-                # A reported blocker has already ended the implementation
-                # attempt, so the guard's "make the change now" steering would
-                # contradict the turn's own conclusion. Everything else is
-                # unchanged.
-                #
-                # Internal steering only — appended as aura_internal so it never
-                # redefines the real user-turn boundary.
-                for steering in state.pre_edit_guard.take_internal_messages():
-                    self._history.append_internal_user_text(steering)
             if tool_round.action == "return":
                 return
             if tool_round.action == "continue":

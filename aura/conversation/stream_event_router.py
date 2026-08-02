@@ -34,12 +34,14 @@ class StreamEventRouter:
         mode: str = "single",
         stream_buffer: WorkerStreamBuffer | None = None,
         content_gate: SingleContentGate | None = None,
+        discard_prose_final: bool = False,
     ) -> None:
         self._planner_hygiene = planner_hygiene
         self._on_event = on_event
         self._mode = mode
         self._stream_buffer = stream_buffer
         self._content_gate = content_gate
+        self._discard_prose_final = discard_prose_final
 
     def process(self, ev: Event) -> StreamEventResult:
         # 1. Planner ContentDelta filter
@@ -71,7 +73,9 @@ class StreamEventRouter:
                 self._content_gate.capture(ev)
                 return StreamEventResult()
             if isinstance(ev, Done):
-                ev = self._content_gate.resolve_done(ev, self._on_event)
+                ev = self._content_gate.resolve_done(
+                    ev, self._on_event, discard_prose_final=self._discard_prose_final
+                )
             elif isinstance(ev, ApiError):
                 self._content_gate.flush(self._on_event)
 

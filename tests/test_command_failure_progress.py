@@ -5,17 +5,20 @@ every terminal call as forward progress *before the command ran*, and
 ``observe_result()`` then handed the failure a round of reread grace without
 undoing that progress. A command that failed therefore reset the stall counter
 and unlocked rereads at the same time, so a turn could fail the same validation
-over and over while the guard reported movement and never steered.
+over and over while the guard reported movement and never reached a decision.
 
 The contract asserted here:
 
 * tool intent proves nothing — only results do;
 * an applied write is progress;
 * a **successful** terminal or diagnostic result is progress;
-* a **failed** command is not, so the round stays stagnant and steering fires;
-* one distinct failure buys one recovery round; repeating the same command into
-  the same failure renews nothing and is not new evidence;
-* a corrected command is never blocked, and when it succeeds stagnation resets;
+* a **failed** command is not, so the round stays stalled and failure recovery
+  opens instead of a push into mutation;
+* one distinct failure opens recovery; repeating the same command into the
+  same failure renews nothing and is not new evidence;
+* a corrected command is never blocked, and when it succeeds recovery closes;
+* while any distinct failure is unresolved the focused action request never
+  fires — the agent fixes the failing step rather than being forced to mutate;
 * driven through the real manager loop, a turn that starts with a failing
   validation still reaches an edit — or a clear stop — in a bounded number of
   rounds, with its tool output and structured failures intact.
@@ -34,7 +37,6 @@ from aura.conversation import pre_edit_loop_guard as guard_module
 from aura.conversation.pre_edit_loop_guard import (
     COMMAND_TOOLS,
     DIAGNOSTIC_TOOLS,
-    MAX_STAGNANT_ROUNDS_BEFORE_STEER,
     PreEditLoopGuard,
     failure_fingerprint,
 )
@@ -49,8 +51,6 @@ from tests.test_single_pre_tool_narration import (
     run,
     tool_round,
 )
-
-STEER = MAX_STAGNANT_ROUNDS_BEFORE_STEER
 
 FAILED_COMMAND = {
     "ok": False,
@@ -76,6 +76,18 @@ def succeeding_round(guard: PreEditLoopGuard, tool: str, payload: dict) -> None:
     guard.end_round()
 
 
+def burn_discovery(guard: PreEditLoopGuard, count: int) -> None:
+    """Rounds of genuinely new evidence, so the guard is not stalled."""
+    for i in range(count):
+        guard.begin_round()
+        args = {"path": f"src/m{i}.py"}
+        guard.record("read_file", args)
+        guard.observe_result(
+            "read_file", True, json.dumps({"path": args["path"], "body": i})
+        )
+        guard.end_round()
+
+
 # ── intent is not progress ──────────────────────────────────────────────────
 
 
@@ -88,9 +100,11 @@ class TestIntentIsNotProgress:
         guard.record(tool, {"command": "pytest"})
         guard.end_round()
 
-        assert guard.stagnant_rounds == 1, (
+        assert guard._round_made_progress is False, (
             "asking for a command is not evidence that anything moved"
         )
+        # No result was observed, so the round cannot be a stalled transition.
+        assert guard.focused is False
 
     def test_record_never_sets_the_round_progress_flag(self) -> None:
         guard = PreEditLoopGuard()
@@ -112,44 +126,49 @@ class TestIntentIsNotProgress:
 class TestResultsDecideProgress:
 
     @pytest.mark.parametrize("tool", sorted(COMMAND_TOOLS))
-    def test_a_failed_command_does_not_reset_stagnation(self, tool: str) -> None:
+    def test_a_failed_command_opens_recovery_not_mutation(self, tool: str) -> None:
         guard = PreEditLoopGuard()
-        guard.stagnant_rounds = 3
 
         failing_round(guard, tool, FAILED_COMMAND)
 
-        assert guard.stagnant_rounds == 4, "a failure moves the turn backwards, not forwards"
+        assert guard.focused is False, "a failure must not push a mutation"
+        assert guard._failure_active is True
+        assert guard._failure_pending is True
 
     @pytest.mark.parametrize("tool", sorted(COMMAND_TOOLS))
-    def test_a_successful_command_resets_stagnation(self, tool: str) -> None:
+    def test_a_successful_command_closes_recovery(self, tool: str) -> None:
         guard = PreEditLoopGuard()
-        guard.stagnant_rounds = 3
 
+        failing_round(guard, tool, FAILED_COMMAND)
         succeeding_round(guard, tool, OK_COMMAND)
 
-        assert guard.stagnant_rounds == 0
+        assert guard._failure_active is False
+        assert guard.focused is False
 
     def test_an_applied_write_is_progress(self) -> None:
         guard = PreEditLoopGuard()
-        guard.stagnant_rounds = 3
+        failing_round(guard, "run_diagnostic_command", FAILED_COMMAND)
+
         guard.begin_round()
         guard.record("write_file", {"path": "notes.md"})
         guard.observe_result("write_file", True, json.dumps({"applied": True}))
         guard.end_round()
 
         assert guard.write_applied is True
-        assert guard.stagnant_rounds == 0
+        assert guard._failure_active is False
+        assert guard.focused is False
 
     def test_a_write_that_did_not_apply_is_not_progress(self) -> None:
         guard = PreEditLoopGuard()
-        guard.stagnant_rounds = 3
+        failing_round(guard, "run_diagnostic_command", FAILED_COMMAND)
+
         guard.begin_round()
         guard.record("write_file", {"path": "notes.md"})
         guard.observe_result("write_file", True, json.dumps({"applied": False}))
         guard.end_round()
 
         assert guard.write_applied is False
-        assert guard.stagnant_rounds == 4
+        assert guard.focused is False, "still inside failure recovery"
 
 
 # ── failure grace is spent once per distinct failure ────────────────────────
@@ -217,8 +236,8 @@ class TestFailureGrace:
         for _ in range(5):
             failing_round(guard, "run_terminal_command", FAILED_COMMAND)
 
-        assert guard.stagnant_rounds == 5
         assert guard.seen_evidence == set()
+        assert guard.focused is False
 
     def test_the_same_failure_has_one_fingerprint(self) -> None:
         first = failure_fingerprint("run_diagnostic_command", json.dumps(FAILED_COMMAND))
@@ -232,31 +251,36 @@ class TestFailureGrace:
         assert first != other
 
 
-# ── steering still fires, corrections still work ────────────────────────────
+# ── failures hold focus off; corrections still work ─────────────────────────
 
 
-class TestSteeringSurvivesFailures:
+class TestFailuresHoldFocusOff:
 
-    def test_repeated_command_failures_still_earn_the_steering_message(self) -> None:
+    def test_repeated_command_failures_never_push_into_focused_mutation(self) -> None:
         guard = PreEditLoopGuard()
-        for _ in range(STEER):
+        for _ in range(8):
             failing_round(guard, "run_diagnostic_command", FAILED_COMMAND)
 
-        message = guard.take_steering_message()
-        assert "no new evidence" in message
-        assert "write_file" in message
+        assert guard.focused is False, (
+            "an unresolved distinct failure must keep the mutation request off"
+        )
+        assert guard._failure_active is True
 
-    def test_the_focus_budget_is_not_reopened_by_failures(self) -> None:
+    def test_a_distinct_failure_holds_a_stalled_round_off_focus(self) -> None:
+        """Discovery evidence, then a failure, then a stall: the stall after
+        the failure is a recovery round, not a transition to mutation."""
         guard = PreEditLoopGuard()
-        for index in range(guard_module.MAX_DISCOVERY_CALLS_BEFORE_FOCUS):
-            guard.begin_round()
-            args = {"path": f"src/m{index}.py"}
-            guard.record("read_file", args)
-            guard.observe_result("read_file", True, json.dumps({"path": args["path"], "body": index}))
-            guard.end_round()
+        burn_discovery(guard, 4)
         failing_round(guard, "run_terminal_command", FAILED_COMMAND)
 
-        assert guard.take_focus_message() != ""
+        guard.begin_round()
+        guard.record("read_file", {"path": "src/m0.py"})
+        guard.observe_result(
+            "read_file", True, json.dumps({"path": "src/m0.py", "body": 0})
+        )
+        guard.end_round()
+
+        assert guard.focused is False
 
     def test_a_corrected_command_is_never_blocked(self) -> None:
         guard = PreEditLoopGuard()
@@ -266,15 +290,16 @@ class TestSteeringSurvivesFailures:
         for tool in sorted(COMMAND_TOOLS):
             assert guard.check(tool, {"command": "python -m pytest -q"}) is None
 
-    def test_a_successful_correction_resets_stagnation_normally(self) -> None:
+    def test_a_successful_correction_closes_recovery_without_focus(self) -> None:
         guard = PreEditLoopGuard()
         for _ in range(4):
             failing_round(guard, "run_diagnostic_command", FAILED_COMMAND)
-        assert guard.stagnant_rounds == 4
+        assert guard._failure_active is True
 
         succeeding_round(guard, "run_diagnostic_command", OK_COMMAND)
 
-        assert guard.stagnant_rounds == 0
+        assert guard._failure_active is False
+        assert guard.focused is False
 
 
 # ── the real manager loop ───────────────────────────────────────────────────
@@ -295,12 +320,9 @@ BAD_COMMAND = "npm install left-pad"
 GOOD_COMMAND = 'python -c "print(2+2)"'
 
 
-def steering_messages(manager) -> list[str]:
-    return [
-        str(m.get("content"))
-        for m in manager.history.messages
-        if m.get("aura_internal") and "Loop guard:" in str(m.get("content"))
-    ]
+def no_focused_request_fired(backend: ScriptedBackend) -> bool:
+    """The focused action request never fired: no call required a tool call."""
+    return not any(c.get("require_tool_call") for c in backend.calls)
 
 
 class TestBoundedProgressionThroughTheRealLoop:
@@ -337,10 +359,11 @@ class TestBoundedProgressionThroughTheRealLoop:
         assert (project / "notes.md").read_text(encoding="utf-8") == (
             "# Notes\n\nfixed body\n"
         )
-        # The two failures did not launder themselves as progress: steering
-        # fired, which the old code suppressed entirely.
-        assert len(steering_messages(manager)) == 1
-        assert "make the change now" in steering_messages(manager)[0]
+        # The two failures never pushed the turn into a focused mutation
+        # request: the distinct failure opened recovery, the corrected command
+        # closed it, and the write went through the ordinary path. The old code
+        # laundered the failures as progress and hid the decision entirely.
+        assert no_focused_request_fired(backend)
 
     def test_the_failures_stay_visible_and_structured(
         self, project, isolated_streams  # noqa: F811
@@ -378,12 +401,12 @@ class TestBoundedProgressionThroughTheRealLoop:
         run(manager, Recorder())
 
         assert len(backend.calls) == 4
-        assert len(steering_messages(manager)) == 1, (
-            "one nudge, not one per failure"
-        )
+        # The unresolved distinct failure kept the focused mutation request off
+        # the whole turn; nothing was written and nothing pretended otherwise.
+        assert no_focused_request_fired(backend)
         assert (project / "notes.md").read_text(encoding="utf-8") == (
             "# Notes\n\nold body\n"
-        ), "nothing was written, and nothing pretended otherwise"
+        )
 
 
 def test_no_new_owner_was_introduced() -> None:

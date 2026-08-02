@@ -1,23 +1,25 @@
-"""Bounded pre-edit discovery.
+"""Pre-edit loop guard protocol: no discovery budgets, a stall is the transition.
 
-The stagnation guard only fires when discovery stops producing evidence. But a
-turn can burn a whole context window while *every* call returns something
-genuinely new — a wide repository always has one more file to open. So accepted
-discovery calls made before the first applied write are counted, and the count
-alone drives the boundary.
+The old guard refused discovery by a call count: a cumulative spend of
+``MAX_DISCOVERY_CALLS_BEFORE_FOCUS`` calls ended broad discovery with an
+exhaustion rejection, and a small allowance remained after focus. Those
+counters are gone.  Discovery is never refused by a count — a turn may survey
+as long as every call returns genuinely new evidence — and the focused action
+protocol is entered on the first round that stops producing evidence.
 
 What is asserted here:
 
-* cumulative unique discovery triggers the focus instruction even though every
-  single call returned new evidence;
-* the focus instruction is internal steering, emitted exactly once;
-* a small targeted allowance remains after focus;
-* continued broad discovery is then rejected structurally and recoverably;
-* narrow reads, ranges, and outlines of known candidates remain available;
-* failure grace, stale-file rereads, and edit-recovery rereads remain available;
-* the first applied write makes the whole boundary dormant;
-* ``read_task_context`` is inside the budget;
-* the boundary is a mechanical spend budget, not a task-complexity classifier.
+* broad discovery is never refused, however many unique calls a turn makes;
+* a stalled round (tools ran, results were seen, no new evidence, no progress)
+  is the single protocol transition into the focused action request;
+* a stalled round that followed a distinct failure is a recovery round, not a
+  push into mutation;
+* the exact-repeat read rejection is the only structured rejection, and it
+  stays recoverable and dormant once any write has applied;
+* rereads justified by a failure, a stale-file notice, or pending edit-recovery
+  state stay allowed;
+* candidate tracking and the no-prose-inspection contract survive;
+* no internal steering messages exist any more.
 """
 
 from __future__ import annotations
@@ -29,17 +31,10 @@ import pytest
 
 from aura.conversation import pre_edit_loop_guard as guard_module
 from aura.conversation.pre_edit_loop_guard import (
-    DISCOVERY_EXHAUSTED_REASON,
-    DISCOVERY_TOOLS,
     DUPLICATE_READ_REASON,
-    MAX_DISCOVERY_CALLS_AFTER_FOCUS,
-    MAX_DISCOVERY_CALLS_BEFORE_FOCUS,
     NARROW_READ_TOOLS,
     PreEditLoopGuard,
 )
-
-BEFORE = MAX_DISCOVERY_CALLS_BEFORE_FOCUS
-AFTER = MAX_DISCOVERY_CALLS_AFTER_FOCUS
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
@@ -57,192 +52,216 @@ def unique_read(guard: PreEditLoopGuard, index: int, *, tool: str = "read_file")
 
 
 def burn_discovery(guard: PreEditLoopGuard, count: int, *, start: int = 0) -> None:
-    """Spend *count* discovery calls, each in its own round, each productive."""
+    """Spend *count* discovery rounds, each productive and unique."""
     for i in range(start, start + count):
         guard.begin_round()
         unique_read(guard, i)
         guard.end_round()
 
 
+def stall_round(guard: PreEditLoopGuard, *, which: int = 0) -> None:
+    """One round that repeats already-seen evidence: the stalled transition."""
+    guard.begin_round()
+    guard.record("read_file", {"path": f"src/module_{which}.py"})
+    guard.observe_result(
+        "read_file",
+        True,
+        json.dumps({"path": f"src/module_{which}.py", "content": f"unique body {which}"}),
+    )
+    guard.end_round()
+
+
+def focused_guard(evidence: int = 5) -> PreEditLoopGuard:
+    """A guard that has concluded discovery is over: evidence, then a stall."""
+    guard = PreEditLoopGuard()
+    burn_discovery(guard, evidence)
+    stall_round(guard, which=0)
+    assert guard.focused is True
+    return guard
+
+
 def applied_write(guard: PreEditLoopGuard) -> None:
     guard.observe_result("write_file", True, json.dumps({"applied": True}))
 
 
-# ── cumulative discovery, despite continually new evidence ──────────────────
+# ── discovery is unbounded ──────────────────────────────────────────────────
 
 
-class TestCumulativeDiscoveryTriggersFocus:
+class TestDiscoveryIsUnbounded:
 
-    def test_normal_early_discovery_is_allowed(self) -> None:
+    def test_every_unique_call_is_allowed(self) -> None:
         guard = PreEditLoopGuard()
-        burn_discovery(guard, BEFORE - 1)
+        # Far past any old budget, every call still runs and none is refused.
+        burn_discovery(guard, 40)
 
-        assert guard.take_internal_messages() == []
-        assert guard.focused is False
+        assert guard.focused is False, "unique evidence never stalls"
         assert guard.check("glob", {"pattern": "**/*.py"}) is None
+        assert guard.check("search_codebase", {"query": "anything"}) is None
 
-    def test_focus_fires_even_though_every_call_produced_new_evidence(self) -> None:
+    def test_new_evidence_prevents_the_stalled_round_transition(self) -> None:
         guard = PreEditLoopGuard()
-        burn_discovery(guard, BEFORE)
+        burn_discovery(guard, 40)
 
-        # Precisely the case the stagnation guard cannot see.
-        assert guard.stagnant_rounds == 0, "no round was stagnant"
-        assert len(guard.seen_evidence) == BEFORE, "every call returned new evidence"
+        assert guard.focused is False
+        assert guard.blocked_calls == 0
 
-        messages = guard.take_internal_messages()
-        assert len(messages) == 1
-        assert "discovery calls" in messages[0]
-        assert guard.focused is True
-
-    def test_the_focus_instruction_is_emitted_exactly_once(self) -> None:
+    def test_read_task_context_is_unbounded_observation(self) -> None:
         guard = PreEditLoopGuard()
-        burn_discovery(guard, BEFORE)
-
-        assert guard.take_internal_messages() != []
-        for _ in range(5):
-            assert guard.take_focus_message() == ""
-
-    def test_focus_names_the_way_forward(self) -> None:
-        guard = PreEditLoopGuard()
-        burn_discovery(guard, BEFORE)
-        message = guard.take_focus_message()
-
-        assert "bounded read_file" in message
-        assert "offset and limit" in message
-
-    def test_read_task_context_counts_toward_the_budget(self) -> None:
-        assert "read_task_context" in DISCOVERY_TOOLS
-
-        guard = PreEditLoopGuard()
-        for i in range(BEFORE):
+        for i in range(40):
             guard.begin_round()
             args = {"query": f"question {i}"}
             assert guard.check("read_task_context", args) is None
             guard.record("read_task_context", args)
+            guard.observe_result(
+                "read_task_context", True, json.dumps({"answer": i, "query": args["query"]})
+            )
             guard.end_round()
 
-        assert guard.discovery_calls == BEFORE
-        assert guard.take_focus_message() != ""
+        assert guard.focused is False
+        assert guard.check("read_task_context", {"query": "one more"}) is None
 
-    @pytest.mark.parametrize(
-        "tool",
-        ["read_file", "read_files", "glob", "grep_search", "search_codebase",
-         "list_directory", "find_usages", "read_task_context"],
-    )
-    def test_the_obvious_source_discovery_tools_are_all_counted(self, tool: str) -> None:
+
+# ── the stalled round is the transition ─────────────────────────────────────
+
+
+class TestStalledRoundIsTheTransition:
+
+    def test_one_stalled_round_sets_focused(self) -> None:
         guard = PreEditLoopGuard()
-        guard.record(tool, {"path": "a.py", "pattern": "x", "query": "q"})
+        guard.begin_round()
+        unique_read(guard, 0)
+        guard.end_round()
+        assert guard.focused is False
 
-        assert guard.discovery_calls == 1, f"{tool} escaped the budget"
+        stall_round(guard, which=0)
+        assert guard.focused is True
 
-    @pytest.mark.parametrize("tool", sorted(NARROW_READ_TOOLS))
-    def test_narrow_reads_are_not_counted(self, tool: str) -> None:
+    def test_a_round_that_saw_no_results_does_not_fire(self) -> None:
+        """Recording intent is not a stalled round: nobody has seen a result."""
         guard = PreEditLoopGuard()
-        guard.record(tool, {"path": "a.py"})
+        guard.begin_round()
+        guard.record("read_file", {"path": "a.py"})
+        guard.end_round()
 
-        assert guard.discovery_calls == 0, f"{tool} should not spend the budget"
+        assert guard.focused is False
 
-
-# ── the targeted allowance after focus ──────────────────────────────────────
-
-
-class TestPostFocusAllowance:
-
-    def test_a_small_broad_allowance_remains_after_focus(self) -> None:
+    def test_a_round_with_no_tools_does_not_fire(self) -> None:
         guard = PreEditLoopGuard()
-        burn_discovery(guard, BEFORE)
-        guard.take_internal_messages()
+        guard.begin_round()
+        guard.end_round()
 
-        assert guard.discovery_limit == BEFORE + AFTER
-        for i in range(AFTER):
-            guard.begin_round()
-            unique_read(guard, BEFORE + i)
-            guard.end_round()
+        assert guard.focused is False
 
-        assert guard.discovery_calls == BEFORE + AFTER
-
-    def test_targeted_reads_of_known_files_remain_usable_after_focus(self) -> None:
+    def test_focused_is_set_once_and_never_reset(self) -> None:
         guard = PreEditLoopGuard()
-        burn_discovery(guard, BEFORE)
-        guard.take_internal_messages()
+        burn_discovery(guard, 1)
+        stall_round(guard, which=0)
+        assert guard.focused is True
 
+        # Later genuinely new evidence does not reopen ordinary discovery.
+        guard.begin_round()
+        unique_read(guard, 9)
+        guard.end_round()
+        assert guard.focused is True
+
+    def test_identical_evidence_under_changed_arguments_still_stalls(self) -> None:
+        """Cosmetic argument changes cannot launder the same evidence as new."""
+        guard = PreEditLoopGuard()
+        guard.begin_round()
+        guard.record("read_file", {"path": "src/module_0.py"})
+        guard.observe_result(
+            "read_file", True, json.dumps({"path": "src/module_0.py", "content": "b"})
+        )
+        guard.end_round()
+
+        guard.begin_round()
+        guard.record("read_file", {"path": "src/module_0.py", "_n": 1})
+        guard.observe_result(
+            "read_file", True, json.dumps({"path": "src/module_0.py", "content": "b"})
+        )
+        guard.end_round()
+
+        assert guard.focused is True
+
+
+# ── after focus: narrow reads, writes, commands ─────────────────────────────
+
+
+class TestAfterFocus:
+
+    def test_narrow_reads_of_known_files_remain_usable(self) -> None:
+        guard = focused_guard()
         assert guard.is_known_candidate("src/module_3.py")
+
         assert guard.check(
             "read_file_range", {"path": "src/module_3.py", "start": 10, "end": 60}
         ) is None
         assert guard.check("read_file_outline", {"path": "src/module_3.py"}) is None
+        # A fresh broad read of a file the turn has not opened is not a repeat
+        # and is not gated by any count.
+        assert guard.check("read_file", {"path": "src/unopened.py"}) is None
 
-    def test_targeted_reads_remain_usable_after_the_allowance_is_spent(self) -> None:
-        guard = _exhausted_guard()
-
-        assert guard.discovery_exhausted is True
-        assert guard.check(
-            "read_file_range", {"path": "src/module_1.py", "start": 1, "end": 40}
-        ) is None
-        assert guard.check("read_file_outline", {"path": "src/module_1.py"}) is None
-
-    def test_writes_are_never_gated_by_this_boundary(self) -> None:
-        guard = _exhausted_guard()
+    def test_writes_are_never_gated_by_the_guard(self) -> None:
+        guard = focused_guard()
 
         assert guard.check("write_file", {"path": "src/module_1.py"}) is None
         assert guard.check("patch_file", {"path": "src/module_1.py"}) is None
 
+    def test_commands_are_never_gated_by_the_guard(self) -> None:
+        guard = focused_guard()
 
-# ── the structured rejection ────────────────────────────────────────────────
-
-
-def _exhausted_guard() -> PreEditLoopGuard:
-    guard = PreEditLoopGuard()
-    burn_discovery(guard, BEFORE)
-    guard.take_internal_messages()
-    burn_discovery(guard, AFTER, start=BEFORE)
-    return guard
+        assert guard.check("run_terminal_command", {"command": "pytest -q"}) is None
+        assert guard.check("run_diagnostic_command", {"command": "git status"}) is None
 
 
-class TestContinuedBroadDiscoveryIsRejected:
+# ── the exact-repeat read rejection ─────────────────────────────────────────
 
-    def test_broad_discovery_is_rejected_once_the_budget_is_spent(self) -> None:
-        guard = _exhausted_guard()
-        rejection = guard.check("glob", {"pattern": "**/*.py"})
+
+class TestDuplicateReadRejection:
+
+    def _guard_with_one_read(self) -> PreEditLoopGuard:
+        guard = PreEditLoopGuard()
+        guard.begin_round()
+        unique_read(guard, 0)
+        guard.end_round()
+        return guard
+
+    def test_an_exact_repeat_read_is_rejected(self) -> None:
+        guard = self._guard_with_one_read()
+        rejection = guard.check("read_file", {"path": "src/module_0.py"})
 
         assert rejection is not None
-        assert rejection["reason"] == DISCOVERY_EXHAUSTED_REASON
+        assert rejection["reason"] == DUPLICATE_READ_REASON
 
     def test_the_rejection_is_structured_and_recoverable(self) -> None:
-        guard = _exhausted_guard()
-        rejection = guard.check("search_codebase", {"query": "retry cap"})
+        guard = self._guard_with_one_read()
+        rejection = guard.check("read_file", {"path": "src/module_0.py"})
 
         assert rejection["ok"] is False
         assert rejection["recoverable"] is True, "this must never end the turn"
         assert rejection["loop_guard"] is True
-        assert rejection["tool"] == "search_codebase"
-        assert rejection["discovery_calls"] == BEFORE + AFTER
-        assert rejection["discovery_limit"] == BEFORE + AFTER
-
-    def test_the_rejection_names_what_is_still_available(self) -> None:
-        guard = _exhausted_guard()
-        rejection = guard.check("glob", {"pattern": "**/*.py"})
-
-        assert set(rejection["still_available"]) == {
-            "read_file", "write_file", "patch_file",
-        }
-        assert "src/module_1.py" in rejection["known_candidate_files"]
-        assert "bounded offset/limit window" in rejection["message"]
+        assert rejection["tool"] == "read_file"
+        assert rejection["previous_calls"] == 1
 
     def test_the_rejection_payload_serializes(self) -> None:
         """It travels to the model as a tool result, so it must be JSON."""
-        guard = _exhausted_guard()
-        rejection = guard.check("glob", {"pattern": "**/*.py"})
+        guard = self._guard_with_one_read()
+        rejection = guard.check("read_file", {"path": "src/module_0.py"})
 
-        assert json.loads(json.dumps(rejection))["reason"] == DISCOVERY_EXHAUSTED_REASON
+        assert json.loads(json.dumps(rejection))["reason"] == DUPLICATE_READ_REASON
 
-    @pytest.mark.parametrize("tool", sorted(DISCOVERY_TOOLS))
-    def test_every_discovery_tool_is_refused_once_exhausted(self, tool: str) -> None:
-        guard = _exhausted_guard()
-        rejection = guard.check(tool, {"path": "brand/new.py", "query": "q", "pattern": "p"})
+    def test_a_first_sight_of_the_same_file_is_not_rejected(self) -> None:
+        guard = self._guard_with_one_read()
+        assert guard.check("read_file", {"path": "src/module_1.py"}) is None
 
-        assert rejection is not None
-        assert rejection["reason"] == DISCOVERY_EXHAUSTED_REASON
+    @pytest.mark.parametrize("tool", sorted(NARROW_READ_TOOLS))
+    def test_narrow_repeats_are_still_guarded(self, tool: str) -> None:
+        """An exact repeat returns the same bytes whatever the tool."""
+        guard = PreEditLoopGuard()
+        args = {"path": "a.py"}
+        guard.record(tool, args)
+
+        assert guard.check(tool, args)["reason"] == DUPLICATE_READ_REASON
 
 
 # ── recovery paths stay open ────────────────────────────────────────────────
@@ -251,37 +270,35 @@ class TestContinuedBroadDiscoveryIsRejected:
 class TestRecoveryPathsStayOpen:
 
     def test_a_tool_failure_buys_grace_for_a_reread(self) -> None:
-        guard = _exhausted_guard()
-        guard.note_failure()
+        guard = PreEditLoopGuard()
+        guard.begin_round()
+        guard.record("read_file", {"path": "notes.md"})
+        guard.observe_result("patch_file", False, json.dumps({"error": "no match"}))
+        guard.end_round()
 
-        assert guard.check("glob", {"pattern": "**/*.py"}) is None
+        assert guard.check("read_file", {"path": "notes.md"}) is None
 
     def test_pending_edit_recovery_allows_a_reread(self) -> None:
-        guard = _exhausted_guard()
-
-        assert guard.check(
-            "read_file", {"path": "src/module_1.py"}, recovery_pending=True
-        ) is None
-
-    def test_a_stale_file_notice_clears_that_path(self) -> None:
         guard = PreEditLoopGuard()
         guard.begin_round()
         unique_read(guard, 0)
         guard.end_round()
 
-        repeat = guard.check("read_file", {"path": "src/module_0.py"})
-        assert repeat["reason"] == DUPLICATE_READ_REASON
+        assert guard.check("read_file", {"path": "src/module_0.py"}) is not None
+        assert guard.check(
+            "read_file", {"path": "src/module_0.py"}, recovery_pending=True
+        ) is None
+
+    def test_a_stale_file_notice_clears_only_the_named_paths(self) -> None:
+        guard = PreEditLoopGuard()
+        guard.begin_round()
+        guard.record("read_file", {"path": "src/module_0.py"})
+        guard.record("read_file", {"path": "src/module_1.py"})
+        guard.end_round()
 
         guard.note_stale_paths(["src/module_0.py"])
         assert guard.check("read_file", {"path": "src/module_0.py"}) is None
-
-    def test_duplicate_detection_still_applies_to_narrow_reads(self) -> None:
-        """An exact repeat returns the same bytes whatever the tool."""
-        guard = PreEditLoopGuard()
-        args = {"path": "src/module_1.py", "start": 1, "end": 40}
-        guard.record("read_file_range", args)
-
-        assert guard.check("read_file_range", args)["reason"] == DUPLICATE_READ_REASON
+        assert guard.check("read_file", {"path": "src/module_1.py"}) is not None
 
 
 # ── the first applied write ends the boundary ───────────────────────────────
@@ -289,70 +306,39 @@ class TestRecoveryPathsStayOpen:
 
 class TestAppliedWriteDisablesTheBoundary:
 
-    def test_an_applied_write_reopens_broad_discovery(self) -> None:
-        guard = _exhausted_guard()
-        assert guard.check("glob", {"pattern": "**/*.py"}) is not None
+    def test_an_applied_write_reopens_repeat_reads(self) -> None:
+        guard = focused_guard()
+        assert guard.check("read_file", {"path": "src/module_0.py"}) is not None
 
         applied_write(guard)
 
         assert guard.write_applied is True
+        assert guard.check("read_file", {"path": "src/module_0.py"}) is None
         assert guard.check("glob", {"pattern": "**/*.py"}) is None
-        assert guard.check("search_codebase", {"query": "anything"}) is None
-
-    def test_an_applied_write_stops_the_focus_instruction(self) -> None:
-        guard = PreEditLoopGuard()
-        burn_discovery(guard, BEFORE)
-        applied_write(guard)
-
-        assert guard.take_internal_messages() == []
 
     def test_a_write_that_did_not_apply_does_not_disable_the_boundary(self) -> None:
-        guard = _exhausted_guard()
+        guard = focused_guard()
         guard.observe_result(
             "write_file", True, json.dumps({"applied": False, "error": "rejected"})
         )
 
         assert guard.write_applied is False
-        assert guard.check("glob", {"pattern": "**/*.py"}) is not None
+        assert guard.check("read_file", {"path": "src/module_0.py"}) is not None
 
-    def test_discovery_after_a_write_is_no_longer_counted(self) -> None:
+    def test_discovery_after_a_write_is_untracked(self) -> None:
         guard = PreEditLoopGuard()
         applied_write(guard)
-        for i in range(BEFORE * 3):
+        for i in range(30):
             guard.record("read_file", {"path": f"after_{i}.py"})
 
-        assert guard.discovery_calls == 0
-        assert guard.discovery_exhausted is False
+        assert guard.focused is False
+        assert guard.blocked_calls == 0
 
 
-# ── this is a spend budget, not a task classifier ───────────────────────────
+# ── mechanical, not semantic ────────────────────────────────────────────────
 
 
-class TestBudgetIsMechanicalNotSemantic:
-
-    def test_the_limits_are_named_configurable_constants(self) -> None:
-        assert isinstance(MAX_DISCOVERY_CALLS_BEFORE_FOCUS, int)
-        assert isinstance(MAX_DISCOVERY_CALLS_AFTER_FOCUS, int)
-        assert MAX_DISCOVERY_CALLS_BEFORE_FOCUS > 0
-        assert MAX_DISCOVERY_CALLS_AFTER_FOCUS > 0
-
-    def test_the_boundary_depends_only_on_call_count_not_content(self) -> None:
-        """Two turns with wildly different subject matter behave identically."""
-        trivial = PreEditLoopGuard()
-        for i in range(BEFORE):
-            trivial.record("read_file", {"path": f"typo_fix_{i}.txt"})
-
-        sprawling = PreEditLoopGuard()
-        for i in range(BEFORE):
-            sprawling.record(
-                "read_file",
-                {"path": f"distributed_consensus_rewrite_{i}.py"},
-            )
-
-        assert trivial.discovery_calls == sprawling.discovery_calls
-        assert bool(trivial.take_focus_message()) == bool(
-            sprawling.take_focus_message()
-        )
+class TestMechanicalNotSemantic:
 
     def test_the_guard_never_inspects_model_prose(self) -> None:
         """check/record/observe_result take tool names, args, and payloads only."""
@@ -422,50 +408,81 @@ class TestCandidateTracking:
         assert len(guard.candidate_files) <= guard_module._MAX_CANDIDATE_FILES
 
 
-# ── the stagnation guard is untouched ───────────────────────────────────────
+# ── failure recovery blocks the focused transition ──────────────────────────
 
 
-class TestStagnationGuardStillWorks:
+class TestFailureRecoveryBlocksFocus:
 
-    def test_stagnant_rounds_still_steer(self) -> None:
+    def test_a_stalled_round_after_a_distinct_failure_is_not_a_transition(
+        self,
+    ) -> None:
+        """A failure explains the stall; the next round is for fixing it, not
+        for forcing a mutation."""
         guard = PreEditLoopGuard()
-        # The first round's payload is new evidence; only the rounds after it
-        # are stagnant, so one extra round is needed to reach the threshold.
-        for _ in range(guard_module.MAX_STAGNANT_ROUNDS_BEFORE_STEER + 1):
-            guard.begin_round()
-            args = {"path": "same.py"}
-            guard.record("read_file", args)
-            guard.observe_result("read_file", True, json.dumps({"same": "payload"}))
-            guard.end_round()
+        burn_discovery(guard, 1)
+        # A failing command opens recovery.
+        guard.begin_round()
+        guard.record("run_diagnostic_command", {"command": "pytest -q"})
+        guard.observe_result(
+            "run_diagnostic_command",
+            False,
+            json.dumps({"requested_command": "pytest -q", "failure_class": "boom"}),
+        )
+        guard.end_round()
+        # The recovery round itself repeats the same bytes: no progress, no new
+        # evidence — but failure recovery holds the transition off.
+        stall_round(guard, which=0)
 
-        assert guard.stagnant_rounds >= guard_module.MAX_STAGNANT_ROUNDS_BEFORE_STEER
-        messages = guard.take_internal_messages()
-        assert any("no new evidence" in m for m in messages)
+        assert guard.focused is False
 
-    def test_both_instructions_can_arrive_together_in_order(self) -> None:
+    def test_recovery_clears_the_block_and_new_evidence_never_fires_focus(
+        self,
+    ) -> None:
         guard = PreEditLoopGuard()
-        burn_discovery(guard, BEFORE)
-        # Now stall as well.
-        for _ in range(guard_module.MAX_STAGNANT_ROUNDS_BEFORE_STEER):
-            guard.begin_round()
-            guard.record("read_file", {"path": "src/module_0.py"})
-            guard.end_round()
+        burn_discovery(guard, 1)
+        guard.begin_round()
+        guard.record("run_diagnostic_command", {"command": "pytest -q"})
+        guard.observe_result(
+            "run_diagnostic_command",
+            False,
+            json.dumps({"requested_command": "pytest -q", "failure_class": "boom"}),
+        )
+        guard.end_round()
+        stall_round(guard, which=0)
+        assert guard.focused is False
 
-        messages = guard.take_internal_messages()
-        assert len(messages) == 2
-        assert "discovery calls" in messages[0]
-        assert "no new evidence" in messages[1]
+        # The corrected command succeeds: recovery closes and the turn is
+        # moving again, so focus never fires from that round either.
+        guard.begin_round()
+        guard.record("run_diagnostic_command", {"command": "pytest -q"})
+        guard.observe_result(
+            "run_diagnostic_command",
+            True,
+            json.dumps({"exit_code": 0, "command": "pytest -q"}),
+        )
+        guard.end_round()
+
+        assert guard._failure_active is False
+        assert guard.focused is False
+
+
+# ── guard state and ownership ───────────────────────────────────────────────
 
 
 def test_guard_state_is_plain_data() -> None:
     """The guard stays inspectable: no hidden services, just fields."""
     guard = PreEditLoopGuard()
     for field_name in (
-        "discovery_calls", "focused", "candidate_files", "write_applied",
-        "stagnant_rounds", "seen_reads", "seen_evidence", "blocked_calls",
+        "focused",
+        "candidate_files",
+        "write_applied",
+        "seen_reads",
+        "seen_evidence",
+        "blocked_calls",
+        "seen_failures",
+        "repeated_failures",
     ):
         assert hasattr(guard, field_name), field_name
-    assert isinstance(guard.discovery_calls, int)
     assert isinstance(guard.candidate_files, set)
 
 
@@ -480,34 +497,18 @@ def test_no_second_guard_owns_this_behaviour() -> None:
     assert worker.pre_edit_guard is None
 
 
-def test_send_loop_appends_guard_messages_as_internal_only() -> None:
-    """Steering must never look like a real user turn."""
-    from aura.conversation.manager import ConversationManager
-
-    source = inspect.getsource(ConversationManager.send)
-    assert "take_internal_messages()" in source
-    assert "append_internal_user_text(steering)" in source
-    assert "append_user_text(steering)" not in source
-
-
-def test_guard_messages_are_marked_aura_internal() -> None:
-    from aura.conversation.history import History
-
-    guard = PreEditLoopGuard()
-    burn_discovery(guard, BEFORE)
-
-    history = History()
-    history.set_system("s")
-    history.append_user_text("real user turn")
-    for message in guard.take_internal_messages():
-        history.append_internal_user_text(message)
-
-    internal = [m for m in history.messages if m.get("aura_internal")]
-    assert internal, "the focus instruction was not injected"
-    assert all(m["role"] == "user" for m in internal)
-
-    real_user_turns = [
-        m for m in history.messages
-        if m.get("role") == "user" and not m.get("aura_internal")
-    ]
-    assert len(real_user_turns) == 1, "internal steering redefined the user turn"
+def test_the_counter_api_is_gone() -> None:
+    """The removed budget, steering, and message plumbing must not exist."""
+    source = inspect.getsource(guard_module)
+    for banned in (
+        "MAX_DISCOVERY_CALLS",
+        "MAX_STAGNANT_ROUNDS",
+        "FAILURE_GRACE",
+        "DISCOVERY_EXHAUSTED",
+        "take_internal_messages",
+        "take_focus_message",
+        "take_steering_message",
+        "stagnant_rounds",
+        "discovery_calls",
+    ):
+        assert banned not in source, f"{banned} must not exist in the guard"
