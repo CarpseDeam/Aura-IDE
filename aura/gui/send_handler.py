@@ -19,7 +19,7 @@ _log = logging.getLogger(__name__)
 from dataclasses import dataclass
 
 from aura.config import PROVIDERS, AppSettings, ModelInfo, ThinkingMode, has_usable_provider_configuration
-from aura.conversation.task_router import TaskLane, classify_user_request
+from aura.conversation.task_router import TaskLane, TaskRoute, classify_user_request
 from aura.gui.input_panel import Attachment
 from aura.git_ops import (
     recent_commit_log,
@@ -42,12 +42,15 @@ class QueuedItem:
     """A captured send request waiting for the current production run to finish.
 
     Each item preserves its own submission-time state so that changing controls
-    after queueing does not alter an already queued request.
+    after queueing does not alter an already queued request. The deterministic
+    ``TaskRoute`` computed at submit time travels with the item so a queued
+    message never loses or reuses another message's route.
     """
     text: str
     attachments: list[Attachment]
     model: str
     thinking: ThinkingMode
+    route: TaskRoute
 
 
 class SendHandler(QObject):
@@ -86,9 +89,14 @@ class SendHandler(QObject):
         # Queued messages sent while the bridge is running.
         self._message_queue: list[QueuedItem] = []
 
-        # Pending model/thinking stored while vision thread is running.
+        # Pending model/thinking/route stored while vision thread is running.
         self._pending_model: str = ""
         self._pending_thinking: ThinkingMode = "off"
+        self._pending_route: TaskRoute | None = None
+
+        # Route of the most recently sent production message, so a retry of the
+        # retained user turn keeps the same deterministic classification.
+        self._last_sent_route: TaskRoute | None = None
 
         # Wire our own signal so _on_vision_done runs on the GUI thread.
         self.vision_done.connect(self._on_vision_done)
@@ -113,8 +121,22 @@ class SendHandler(QObject):
 
     # ---- public API --------------------------------------------------------
 
-    def handle_send(self, payload: SendPayload, model: str, thinking: ThinkingMode) -> None:
-        """Process a send payload: route built-ins, queue if busy, or send."""
+    def handle_send(
+        self,
+        payload: SendPayload,
+        model: str,
+        thinking: ThinkingMode,
+        route: TaskRoute | None = None,
+    ) -> None:
+        """Process a send payload: route built-ins, queue if busy, or send.
+
+        ``route`` is the deterministic ``TaskRoute`` already selected for this
+        payload (for example by a dequeued ``QueuedItem`` or the vision path).
+        When omitted it is computed here with ``classify_user_request`` — the
+        normal GUI path always supplies one.
+        """
+        if route is None:
+            route = classify_user_request(payload.text)
         # Guard: no workspace selected
         if self._workspace_root is None:
             self._chat.add_error(
@@ -135,7 +157,6 @@ class SendHandler(QObject):
 
         # Drone mode checks removed — drone lifecycle removed.
 
-        route = classify_user_request(payload.text)
         if route.lane == TaskLane.built_in_action:
             self._chat.add_user(payload.text)
             self._handle_built_in_action(route.action, payload.text)
@@ -147,6 +168,7 @@ class SendHandler(QObject):
                 attachments=list(payload.attachments),
                 model=model,
                 thinking=thinking,
+                route=route,
             )
             self._message_queue.append(item)
             self._input.set_queued_messages(len(self._message_queue))
@@ -179,6 +201,7 @@ class SendHandler(QObject):
 
             self._pending_model = model
             self._pending_thinking = thinking
+            self._pending_route = route
 
             def _run_vision():
                 nonlocal vision_error
@@ -200,7 +223,9 @@ class SendHandler(QObject):
             return  # Wait for _on_vision_done
 
         # Either no images or native vision supported
-        self._finalize_send(payload, model, thinking, vision_descriptions, vision_error)
+        self._finalize_send(
+            payload, model, thinking, vision_descriptions, vision_error, route=route
+        )
 
     def handle_stop(self) -> None:
         """Cancel the current bridge response, clear the message queue, but
@@ -234,6 +259,7 @@ class SendHandler(QObject):
             model=model,
             thinking=thinking,
             max_tool_rounds=self._settings.max_tool_rounds,
+            route=self._last_sent_route,
         )
         return True
 
@@ -398,6 +424,7 @@ class SendHandler(QObject):
             self._pending_thinking,
             descriptions,
             error,
+            route=self._pending_route,
         )
 
     # ---- finalise send -----------------------------------------------------
@@ -409,8 +436,15 @@ class SendHandler(QObject):
         thinking: ThinkingMode,
         vision_descriptions: list[str],
         vision_error: str | None,
+        route: TaskRoute | None = None,
     ) -> None:
-        """Build the message parts, append to history, and send via the bridge."""
+        """Build the message parts, append to history, and send via the bridge.
+
+        The deterministic route selected at send time travels with the message
+        into ``ConversationBridge.send`` so production context composition
+        treats this turn's classification as authoritative.
+        """
+        self._last_sent_route = route
         image_atts = [a for a in payload.attachments if a.kind == "image" and a.b64]
         text = payload.text
         text_refs = [a.text_ref for a in payload.attachments if a.text_ref]
@@ -477,6 +511,7 @@ class SendHandler(QObject):
             model=model,
             thinking=thinking,
             max_tool_rounds=self._settings.max_tool_rounds,
+            route=route,
         )
 
     # ---- model info lookup -------------------------------------------------
@@ -501,4 +536,4 @@ class SendHandler(QObject):
         # Reconstruct a SendPayload from the queued item, which captured its
         # own model and thinking at queue time.
         payload = SendPayload(text=item.text, attachments=list(item.attachments))
-        self.handle_send(payload, item.model, item.thinking)
+        self.handle_send(payload, item.model, item.thinking, route=item.route)

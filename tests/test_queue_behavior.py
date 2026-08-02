@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 from PySide6.QtCore import QCoreApplication
 
+from aura.conversation.task_router import TaskLane, TaskRoute
 from aura.gui.input_panel import Attachment, SendPayload
 from aura.gui.send_handler import QueuedItem, SendHandler
 
@@ -347,7 +348,13 @@ class TestQueuedItem:
     """QueuedItem dataclass properties."""
 
     def test_queued_item_holds_values(self):
-        item = QueuedItem(text="hi", attachments=[], model="m", thinking="high")
+        item = QueuedItem(
+            text="hi",
+            attachments=[],
+            model="m",
+            thinking="high",
+            route=TaskRoute(TaskLane.chat, "chat", 0.6, "test"),
+        )
         assert item.text == "hi"
         assert item.model == "m"
         assert item.thinking == "high"
@@ -355,7 +362,13 @@ class TestQueuedItem:
     def test_queued_item_from_list_copy(self):
         """Simulate the list() copy that handle_send does when creating a QueuedItem."""
         att = [Attachment(kind="image", name="x.png", b64="data", text_ref=None)]
-        item = QueuedItem(text="test", attachments=list(att), model="m", thinking="off")
+        item = QueuedItem(
+            text="test",
+            attachments=list(att),
+            model="m",
+            thinking="off",
+            route=TaskRoute(TaskLane.chat, "chat", 0.6, "test"),
+        )
         att.clear()
         assert len(item.attachments) == 1
         assert item.attachments[0].name == "x.png"
@@ -369,8 +382,31 @@ class TestQueuedItem:
             attachments=list(payload.attachments),
             model="deepseek-v4-flash",
             thinking="high",
+            route=TaskRoute(TaskLane.chat, "chat", 0.6, "test"),
         )
         assert item.text == "hello"
         assert len(item.attachments) == 1
         assert item.model == "deepseek-v4-flash"
         assert item.thinking == "high"
+
+    def test_queued_items_drain_with_their_own_route(self, _handler):
+        """Each queued message keeps the route captured at submit time; draining
+        must not lose it or reuse another message's route."""
+        bridge = _handler._bridge
+        impl = TaskRoute(TaskLane.implementation, "implementation", 0.85, "test")
+        chat = TaskRoute(TaskLane.chat, "chat", 0.6, "test")
+        bridge.set_running(True)
+        _handler.handle_send(
+            SendPayload(text="fix the bug", attachments=[]), "m", "off", route=impl
+        )
+        _handler.handle_send(
+            SendPayload(text="hello", attachments=[]), "m", "off", route=chat
+        )
+        assert _handler._message_queue[0].route is impl
+        assert _handler._message_queue[1].route is chat
+
+        bridge.set_running(False)
+        _handler._process_message_queue("m", "off")
+        _handler._process_message_queue("m", "off")
+
+        assert [call.get("route") for call in bridge.send_calls] == [impl, chat]

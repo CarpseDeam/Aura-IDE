@@ -77,6 +77,7 @@ from aura.conversation import (
     ConversationManager,
     History,
 )
+from aura.conversation.task_router import TaskLane, TaskRoute
 from aura.conversation.tools import (
     ToolRegistry,
 )
@@ -360,6 +361,7 @@ class ConversationBridge(QObject):
         self._auto_dispatch: bool = False
         self._pre_worker_sha: str | None = None
         self._active_prompt_mode: str | None = None
+        self._turn_task_route: TaskRoute | None = None
         self._turn_task_kind: str | None = None
         self._turn_content: str = ""
         self._turn_target_files: tuple[str, ...] = ()
@@ -679,8 +681,20 @@ class ConversationBridge(QObject):
 
     # ---- send / cancel ----------------------------------------------------
 
-    def send(self, model: ModelId, thinking: ThinkingMode, max_tool_rounds: int | None = None) -> None:
+    def send(
+        self,
+        model: ModelId,
+        thinking: ThinkingMode,
+        max_tool_rounds: int | None = None,
+        *,
+        route: TaskRoute | None = None,
+    ) -> None:
         """Run one production turn over the existing conversation.
+
+        ``route`` is the deterministic ``TaskRoute`` selected at send time and
+        is the authority for this turn's task kind. Callers that genuinely do
+        not provide one fall back to the previous research-only recomputation
+        inside ``_prepare_turn_context``.
 
         The manager already owns the persisted ``History``, so the model
         receives the actual conversation and the user's latest original
@@ -691,6 +705,7 @@ class ConversationBridge(QObject):
         # The active model is terrain for skill selection, so it must be known
         # before the turn's system prompt is composed.
         self._active_model = str(model)
+        self._turn_task_route = route
         self._prepare_turn_context()
         # Capture pre-run snapshot for reliable /undo.
         if self._registry.workspace_root is not None:
@@ -856,7 +871,14 @@ class ConversationBridge(QObject):
         workspace-startup composition.
         """
         self._turn_content = _latest_user_text(self._history)
-        self._turn_task_kind = _research_task_kind_for_text(self._turn_content)
+        route = self._turn_task_route
+        if route is not None:
+            # The route selected at send time is the authority for this turn.
+            self._turn_task_kind = _task_kind_from_route(route)
+        else:
+            # Fallback for callers that genuinely do not supply a route:
+            # keep the research-only recomputation from before.
+            self._turn_task_kind = _research_task_kind_for_text(self._turn_content)
         if self._registry.workspace_root is None:
             return
         role = self._active_runtime_role()
@@ -874,6 +896,22 @@ class ConversationBridge(QObject):
 
 def _dummy_root():
     return Path.home()
+
+
+def _task_kind_from_route(route: TaskRoute) -> str | None:
+    """Project a deterministic ``TaskRoute`` onto the turn's task kind.
+
+    The lane is a lossless, first-class value from the existing router — no
+    second classifier. Research keeps the router's action (``web_research`` /
+    ``research_then_worker``, both research-shaped for the context system);
+    implementation and validation surface their lane names; chat and built-in
+    actions have no production task kind and yield ``None``.
+    """
+    if route.lane == TaskLane.research:
+        return route.action
+    if route.lane in (TaskLane.implementation, TaskLane.validation):
+        return route.lane.value
+    return None
 
 
 def _research_task_kind_for_text(text: str) -> str | None:
