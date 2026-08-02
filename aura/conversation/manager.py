@@ -492,19 +492,14 @@ class ConversationManager:
 
 
 def _latest_user_text(history: History) -> str:
-    for message in reversed(history.messages):
-        if message.get("role") != "user":
-            continue
-        content = message.get("content")
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            parts: list[str] = []
-            for item in content:
-                if isinstance(item, dict) and item.get("type") == "text":
-                    parts.append(str(item.get("text") or ""))
-            return "\n".join(part for part in parts if part)
-    return ""
+    """The real user request driving this send.
+
+    Aura's own steering messages are ``role="user"`` but carry
+    ``aura_internal``; letting one stand in here would decide research policy
+    and the planner dispatch gate from Aura's words rather than the user's.
+    ``History`` owns that distinction.
+    """
+    return history.latest_real_user_text() or ""
 
 
 __all__ = [

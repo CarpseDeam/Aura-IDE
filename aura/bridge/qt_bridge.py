@@ -879,6 +879,16 @@ class ConversationBridge(QObject):
             # Fallback for callers that genuinely do not supply a route:
             # keep the research-only recomputation from before.
             self._turn_task_kind = _research_task_kind_for_text(self._turn_content)
+        # Declare the turn's scope to the tool layer so the production catalog
+        # exposes the capabilities this turn calls for rather than all of them.
+        self._registry.begin_turn(
+            task_kind=self._turn_task_kind,
+            target_files=self._turn_target_files,
+            request_text=self._turn_content,
+        )
+        capabilities = self._registry.active_capabilities()
+        if capabilities is not None:
+            _log.info("turn_capabilities %s", ", ".join(sorted(capabilities)))
         if self._registry.workspace_root is None:
             return
         role = self._active_runtime_role()

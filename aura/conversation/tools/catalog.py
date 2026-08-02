@@ -99,8 +99,16 @@ class ToolCatalog:
         read_only: bool,
         dynamic_schemas: list[dict[str, Any]] | None = None,
         mcp_schemas: list[dict[str, Any]] | None = None,
+        allowed_tool_names: frozenset[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Build tool definitions for the given mode and state."""
+        """Build tool definitions for the given mode and state.
+
+        ``allowed_tool_names`` narrows the production single-agent catalog to
+        the capabilities the current turn actually calls for.  It applies only
+        to ``single`` mode and only to the built-in catalog: Planner/Worker
+        keep their fixed sets, and dynamic/MCP schemas are appended afterwards
+        with their own gating.  ``None`` means no narrowing.
+        """
         if read_only:
             tools: list[dict[str, Any]] = list(READ_TOOL_DEFS) + list(GIT_TOOL_DEFS)
         elif mode == "planner":
@@ -160,6 +168,11 @@ class ToolCatalog:
                 + [dict(RUN_READ_ONLY_DRONE_TOOL_DEF)]
                 + [dict(REGISTER_DRONE_FOLDER_TOOL_DEF)]
             )
+            if allowed_tool_names is not None:
+                tools = [
+                    tool for tool in tools
+                    if _tool_name(tool) in allowed_tool_names
+                ]
 
         if not read_only and mode != "planner" and dynamic_schemas:
             tools.extend(dynamic_schemas)
