@@ -16,12 +16,6 @@ from typing import Any
 
 from aura.conversation.tools._types import ApprovalCallback, ToolExecResult
 
-#: Bound on how many target files a blocker report may name.  Bookkeeping, not
-#: a budget on the model: the field is advisory and a runaway list carries no
-#: extra information.
-_MAX_TARGET_FILES: int = 50
-
-
 class BlockerHandlersMixin:
     """Provides ``report_blocker``, the focused action turn's clean exit."""
 
@@ -50,8 +44,6 @@ class BlockerHandlersMixin:
                 text = str(entry).strip()
                 if text:
                     target_files.append(text)
-                if len(target_files) >= _MAX_TARGET_FILES:
-                    break
 
         payload: dict[str, Any] = {
             "ok": True,

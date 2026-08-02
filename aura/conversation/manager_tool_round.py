@@ -81,6 +81,7 @@ def _edit_recovery_pending(state: _SendState) -> bool:
 class ToolRoundOutcome:
     action: str
     enter_silent_preflight: bool = False
+    blocker_succeeded: bool = False
 
 
 class ToolRoundRunner:
@@ -230,6 +231,27 @@ class ToolRoundRunner:
 
         results_by_id = {r.get("id"): r for r in results_to_append if r is not None}
 
+        # Whether a ``report_blocker`` call in this round actually succeeded
+        # with the structured blocker payload. The manager's blocker
+        # finalization must be terminal only on this fact, never on the tool
+        # name alone.
+        blocker_succeeded = False
+        for task in tasks:
+            if task["name"] != "report_blocker":
+                continue
+            res = results_by_id.get(task["id"])
+            if not res:
+                continue
+            payload = parse_tool_payload(str(res.get("result_payload", "")))
+            if (
+                bool(payload.get("ok"))
+                and bool(payload.get("blocker_reported"))
+                and payload.get("mutation") is False
+                and payload.get("applied") is False
+            ):
+                blocker_succeeded = True
+            break
+
         completed_dispatch_for_final = False
         completed_tool_result_for_final = False
         planner_stale_read_files: list[str] = []
@@ -332,6 +354,7 @@ class ToolRoundRunner:
         return ToolRoundOutcome(
             action="next_round",
             enter_silent_preflight=enter_silent_preflight,
+            blocker_succeeded=blocker_succeeded,
         )
 
 

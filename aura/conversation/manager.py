@@ -311,6 +311,11 @@ class ConversationManager:
                 task_completion_context=state.task_completion_context,
                 state=focused,
             )
+            if focused.active and self._tools.read_only:
+                # A read-only registry exposes no mutation tools, so there is
+                # nothing for a focused action request to act on. Do not enter
+                # focused mutation mode under a read-only registry.
+                focused.active = False
             if focused.active:
                 tool_defs = self._tools.focused_action_tool_defs()
                 round_thinking: ThinkingMode = FOCUSED_ACTION_THINKING
@@ -436,18 +441,33 @@ class ConversationManager:
                 focused.spent = True
                 selected = tool_call_names(full_message)
                 focused.selected_action = selected[0] if selected else ""
-                if not tool_calls:
+
+                # The focused provider contract: exactly one tool call whose
+                # name is non-empty and in this round's exposed action set.
+                # Zero calls, multiple calls, or an unknown/unexposed name are
+                # all contract failures — none of them execute anything.
+                contract_ok = (
+                    len(selected) == 1
+                    and bool(selected[0])
+                    and selected[0] in focused.exposed_tools
+                )
+                if not contract_ok:
                     focused.contract_violated = True
                     focused.outcome = OUTCOME_PROVIDER_CONTRACT_FAILURE
                     _log.info(
                         "focused_action_outcome outcome=%s selected_action=%s "
                         "selected_thinking=%s focused_action_thinking=%s",
                         focused.outcome,
-                        "<none>",
+                        focused.selected_action or "<none>",
                         focused.selected_thinking,
                         FOCUSED_ACTION_THINKING,
                     )
-                    self._history.append_assistant(full_message)
+                    # Discard the provider's prose buffer and its reasoning;
+                    # do not store the violating assistant message. The turn
+                    # owes exactly one factual failure response and nothing
+                    # else, and it is never retried.
+                    if state.content_gate is not None:
+                        state.content_gate.discard_buffer()
                     content, failure_message = provider_contract_failure_message()
                     self._history.append_assistant(failure_message)
                     on_event(ContentDelta(text=content))
@@ -530,11 +550,17 @@ class ConversationManager:
                     and state.pre_edit_guard.write_applied
                 )
                 if focused.outcome == OUTCOME_BLOCKER:
-                    # No mutation happened and none will: the attempt ends
-                    # here and the turn owes exactly one factual final
-                    # response, which the existing completion path produces.
-                    focused.blocked = True
-                    state.task_completion_context = True
+                    # Blocked completion is terminal only when the matching
+                    # tool result actually succeeded and its structured payload
+                    # says the blocker was reported. An invalid blocker call is
+                    # an ordinary failed tool result and must not end the
+                    # attempt as blocked.
+                    if tool_round.blocker_succeeded:
+                        # No mutation happened and none will: the attempt ends
+                        # here and the turn owes exactly one factual final
+                        # response, which the existing completion path produces.
+                        focused.blocked = True
+                        state.task_completion_context = True
                 _log.info(
                     "focused_action_outcome outcome=%s selected_action=%s "
                     "write_applied=%s selected_thinking=%s "

@@ -99,6 +99,15 @@ class SingleContentGate:
         for delta in buffered:
             on_event(delta)
 
+    def discard_buffer(self) -> None:
+        """Drop whatever is still held without emitting it.
+
+        Used when a focused action round ends in a provider-contract failure:
+        the violating pre-tool prose must never reach chat or history, so the
+        buffered deltas are thrown away rather than flushed.
+        """
+        self._buffered.clear()
+
     # ---- introspection ---------------------------------------------------
 
     @property

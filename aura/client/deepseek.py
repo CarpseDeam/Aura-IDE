@@ -168,8 +168,16 @@ class DeepSeekClient:
             # serializes exactly one action.
             kwargs["tools"] = tools
             if require_tool_call:
+                # ``required`` is the OpenAI-compatible spelling of "answer
+                # with a tool call, not prose", and ``parallel_tool_calls`` is
+                # switched off so the response serializes exactly one action.
                 kwargs["tool_choice"] = "required"
-                kwargs["parallel_tool_calls"] = False
+                # DeepSeek's non-thinking focused request must not send
+                # ``parallel_tool_calls`` unless a live test proves support;
+                # OpenAI/OpenRouter accept it.  Either way the manager-side
+                # exact-one validation stays authoritative.
+                if self._provider in ("openai", "openrouter"):
+                    kwargs["parallel_tool_calls"] = False
             else:
                 kwargs["tool_choice"] = "auto"
 
