@@ -188,6 +188,15 @@ class TestProjectVenvInterpreter:
         assert argv[1:3] == ["-m", "pytest"]
         assert argv[3] == "tests/test_demo.py"
 
+    @pytest.mark.parametrize("name", ["python", "python3", "py", "pytest", "ruff", "mypy"])
+    def test_a_bare_tool_name_still_routes_through_the_project_venv(
+        self, workspace, name: str
+    ) -> None:
+        """Bare names carry no choice of interpreter, so the venv supplies one."""
+        argv = argv_for(workspace, f"{name} --version")
+
+        assert Path(argv[0]) == workspace.joinpath(".venv", *VENV_PARTS)
+
     def test_python_dash_m_pytest_routes_through_the_project_venv(self, workspace) -> None:
         argv = argv_for(workspace, "python -m pytest tests/test_demo.py")
 
@@ -238,14 +247,30 @@ class TestProjectVenvInterpreter:
 
         assert rejection.failure_class == "diagnostic_command_interpreter_not_project_venv"
 
-    def test_a_foreign_interpreter_is_normalized_to_the_project_venv(
+    def test_a_foreign_interpreter_survives_the_rewrite_and_is_refused(
         self, workspace, tmp_path
     ) -> None:
-        """The rewrite is the first line of defence; the validator is the second."""
-        outsider = make_venv(tmp_path / "other checkout")
-        argv = argv_for(workspace, f'"{outsider}" -m pytest')
+        """An explicit path is never silently swapped for the venv interpreter.
 
-        assert Path(argv[0]) == workspace.joinpath(".venv", *VENV_PARTS)
+        Replacing it would run a different executable than the one asked for and
+        report success; the caller must instead be told which interpreter this
+        workspace accepts.
+        """
+        outsider = make_venv(tmp_path / "other checkout")
+        rejection = reject(workspace, f'"{outsider}" -m pytest')
+
+        assert rejection.failure_class == "diagnostic_command_interpreter_not_project_venv"
+        assert rejection.offending_token == str(outsider)
+
+    def test_the_rewrite_leaves_an_explicit_interpreter_path_alone(
+        self, workspace, tmp_path
+    ) -> None:
+        from aura.project_env import build_project_command
+
+        outsider = make_venv(tmp_path / "other checkout")
+        command = f'"{outsider}" -m pytest'
+
+        assert build_project_command(workspace, command, explicit=True).command == command
 
     def test_a_venv_path_that_does_not_exist_is_refused(self, tmp_path) -> None:
         root = tmp_path / "empty"
@@ -346,6 +371,38 @@ class TestUnsafeCommandsAreRefused:
     def test_a_quoted_pipe_is_data_not_an_operator(self, workspace) -> None:
         assert find_unquoted_shell_operator('rg "alpha|beta" .') is None
         assert "alpha|beta" in argv_for(workspace, 'rg "alpha|beta" .')
+
+    def test_an_escaped_quote_does_not_end_the_quoted_argument(self) -> None:
+        """The operator scan must see the same quotes the argv parser sees."""
+        command = r'python -c "print(\"a|b\")"'
+
+        assert find_unquoted_shell_operator(command) is None
+        assert split_command_line(command)[-1] == r'print("a|b")'
+
+    @pytest.mark.parametrize("operator", [">", "&", ";", "<", "|"])
+    def test_an_operator_inside_escaped_quotes_is_argument_data(
+        self, operator: str
+    ) -> None:
+        command = rf'rg "a\"x{operator}y\"b" .'
+
+        assert find_unquoted_shell_operator(command) is None
+        assert split_command_line(command)[1] == f'a"x{operator}y"b'
+
+    @pytest.mark.parametrize(
+        "command, expected",
+        [
+            (r'rg "a\"b\"" | wc -l', "|"),
+            (r'rg "a\"b\"" > out.txt', ">"),
+            (r'rg "a\"b\"" && git status', "&"),
+            (r'rg "a\"b\"" ; git status', ";"),
+            (r'rg "a\"b\"" $(whoami)', "$("),
+            (r'rg "a\"b\"" `whoami`', "`"),
+        ],
+    )
+    def test_a_real_operator_after_escaped_quotes_is_still_found(
+        self, command: str, expected: str
+    ) -> None:
+        assert find_unquoted_shell_operator(command) == expected
 
     @pytest.mark.parametrize(
         "command",
@@ -489,6 +546,39 @@ class TestRegisteredDiagnosticExecution:
         assert "test_red" in combined, combined[:2000]
         assert "is not recognized" not in combined
         assert "No such file" not in combined
+
+    def test_a_foreign_interpreter_is_refused_by_the_registered_tool(
+        self, workspace, tmp_path
+    ) -> None:
+        """End to end: no silent substitution, a structured refusal instead."""
+        outsider = make_venv(tmp_path / "other checkout")
+
+        result = self._registry(workspace)._handle_run_diagnostic_command(
+            {"command": f'"{outsider}" -c "print(1)"'}, None, False
+        )
+
+        assert result.ok is False
+        assert result.payload["failure_class"] == (
+            "diagnostic_command_interpreter_not_project_venv"
+        )
+        assert result.payload["offending_token"] == str(outsider)
+        assert result.payload["stdout"] == ""
+        assert str(workspace.joinpath(".venv", *VENV_PARTS)) in (
+            result.payload["project_venv_interpreters"]
+        )
+
+    def test_the_registered_tool_runs_an_escaped_quote_script(self, tmp_path) -> None:
+        root = tmp_path / "escaped project"
+        (root / "tests").mkdir(parents=True)
+        (root / "pyproject.toml").write_text("[project]\nname='d'\n", encoding="utf-8")
+        make_venv(root, real=True)
+
+        result = self._registry(root)._handle_run_diagnostic_command(
+            {"command": r'python -c "print(\"a|b\")"'}, None, False
+        )
+
+        assert result.ok is True, result.payload
+        assert result.payload["stdout"].strip() == "a|b"
 
     def test_a_registered_refusal_comes_back_structured(self, workspace) -> None:
         result = self._registry(workspace)._handle_run_diagnostic_command(

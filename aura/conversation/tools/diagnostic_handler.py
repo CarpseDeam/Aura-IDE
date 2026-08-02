@@ -250,21 +250,30 @@ def _split_windows_command_line(command: str) -> list[str]:
 
 
 def find_unquoted_shell_operator(command: str) -> str | None:
-    """Return the first shell operator appearing outside quotes, if any."""
+    """Return the first shell operator appearing outside quotes, if any.
+
+    This must agree with :func:`split_command_line` about where the quotes are,
+    or the two disagree about the same string: on Windows a backslash run before
+    a quote can escape it, so ``python -c "print(\\"a|b\\")"`` never leaves the
+    quoted argument and its ``|`` is data, not a pipe.
+    """
+    if os.name != "nt":
+        return _find_posix_unquoted_shell_operator(command)
+    return _find_windows_unquoted_shell_operator(command)
+
+
+def _find_posix_unquoted_shell_operator(command: str) -> str | None:
     in_single = False
     in_double = False
     index = 0
     length = len(command)
-    posix_quotes = os.name != "nt"
 
     while index < length:
         char = command[index]
-        if char == "\\" and posix_quotes and not in_single:
-            # POSIX backslash escaping. On Windows a backslash is a path
-            # separator and escapes nothing outside the quote-run rules.
+        if char == "\\" and not in_single:
             index += 2
             continue
-        if char == "'" and posix_quotes and not in_double:
+        if char == "'" and not in_double:
             in_single = not in_single
             index += 1
             continue
@@ -273,11 +282,56 @@ def find_unquoted_shell_operator(command: str) -> str | None:
             index += 1
             continue
         if not in_single and not in_double:
-            if char == "$" and index + 1 < length and command[index + 1] == "(":
-                return "$("
-            if char in SHELL_OPERATORS:
-                return char
+            operator = _operator_at(command, index)
+            if operator is not None:
+                return operator
         index += 1
+    return None
+
+
+def _find_windows_unquoted_shell_operator(command: str) -> str | None:
+    """Scan with ``CommandLineToArgvW`` quoting rules, the ones argv is built on."""
+    in_quotes = False
+    index = 0
+    length = len(command)
+
+    while index < length:
+        char = command[index]
+
+        if char == "\\":
+            run_end = index
+            while run_end < length and command[run_end] == "\\":
+                run_end += 1
+            if run_end < length and command[run_end] == '"' and (run_end - index) % 2:
+                # An odd backslash run escapes the quote: it is a literal quote
+                # character and the quoting state does not change.
+                index = run_end + 1
+            else:
+                index = run_end
+            continue
+
+        if char == '"':
+            if in_quotes and index + 1 < length and command[index + 1] == '"':
+                index += 2
+                continue
+            in_quotes = not in_quotes
+            index += 1
+            continue
+
+        if not in_quotes:
+            operator = _operator_at(command, index)
+            if operator is not None:
+                return operator
+        index += 1
+    return None
+
+
+def _operator_at(command: str, index: int) -> str | None:
+    char = command[index]
+    if char == "$" and index + 1 < len(command) and command[index + 1] == "(":
+        return "$("
+    if char in SHELL_OPERATORS:
+        return char
     return None
 
 

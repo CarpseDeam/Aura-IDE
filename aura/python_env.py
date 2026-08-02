@@ -245,6 +245,16 @@ def _split_shell_segments(command: str) -> list[_ShellSegment]:
     return segments
 
 
+def _is_explicit_executable_path(executable: str) -> bool:
+    """True when *executable* was spelled as a path, not as a bare program name.
+
+    ``python`` / ``pytest`` are names to be resolved in the project environment;
+    ``.venv\\Scripts\\python.exe`` and ``C:\\Python313\\python.exe`` are paths the
+    caller chose, relative or absolute alike.
+    """
+    return "/" in executable or "\\" in executable
+
+
 def _rewrite_python_segment(segment: str, python: Path) -> str:
     try:
         tokens = shlex.split(segment, posix=False)
@@ -254,6 +264,14 @@ def _rewrite_python_segment(segment: str, python: Path) -> str:
         return segment
 
     first = tokens[0].strip("'\"")
+    if _is_explicit_executable_path(first):
+        # The caller named an executable by path rather than by bare name. That
+        # is a deliberate choice, so it survives untouched: the diagnostic
+        # validator can then accept it when it really is this project's venv
+        # interpreter and refuse it with a structured reason when it is not,
+        # instead of a foreign interpreter being silently swapped for the venv.
+        return segment
+
     first_name = first.replace("\\", "/").rsplit("/", 1)[-1].lower()
     if first_name.endswith(".exe"):
         first_name = first_name[:-4]
