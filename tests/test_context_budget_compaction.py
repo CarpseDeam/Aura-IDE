@@ -128,7 +128,14 @@ def big_read_files_result(paths: list[str], chars_each: int) -> str:
 
 
 class TestReasoningReplay:
-    """THE TRAP: reasoning_content must come back on every assistant that has it."""
+    """THE BOUNDARY: reasoning must survive on the active tool-call chain.
+
+    DeepSeek's thinking-mode replay rule binds the assistant messages *after*
+    the last user message — the chain the provider is about to continue. Before
+    that boundary reasoning is dead weight and may be dropped; the strip runs
+    before compaction so the space it frees comes out of reasoning, not out of
+    tool results.
+    """
 
     def _history(self) -> History:
         h = History()
@@ -149,29 +156,54 @@ class TestReasoningReplay:
             })
         return h
 
+    @staticmethod
+    def _last_user_index(messages: list[dict[str, Any]]) -> int:
+        users = [i for i, m in enumerate(messages) if m.get("role") == "user"]
+        assert users, "view must contain the user's request"
+        return users[-1]
+
     def test_reasoning_survives_an_uncompacted_view(self) -> None:
-        view = build_api_view("system prompt", self._history().messages, 10_000_000)
-        replayed = [m for m in view.messages if m.get("reasoning_content")]
-        assert len(replayed) == 12
-        assert view.stats.reasoning_chars_replayed > 0
+        h = self._history()
+        input_messages = h.messages
+        view = build_api_view("system prompt", input_messages, 10_000_000)
+        boundary = self._last_user_index(view.messages)
+
+        # Every assistant message after the last user message keeps its
+        # reasoning — this is the one that prevents the 400.
+        after = [m for m in view.messages[boundary + 1:] if m.get("role") == "assistant"]
+        assert len(after) == 2
+        assert all(m.get("reasoning_content") for m in after)
+        # Finished turns before the boundary shed it entirely.
+        before = [m for m in view.messages[:boundary] if m.get("role") == "assistant"]
+        assert len(before) == 10
+        assert all("reasoning_content" not in m for m in before)
+        # The counter accounts for exactly what was removed: five finished
+        # turns × two reasoning blocks each (22 + 19 chars).
+        assert view.stats.reasoning_chars_dropped == 5 * (22 + 19)
+        assert view.stats.reasoning_chars_replayed == 22 + 19
+        # Canonical history is never mutated by the strip.
+        assert sum(
+            len(m.get("reasoning_content") or "")
+            for m in input_messages if m.get("role") == "assistant"
+        ) == 6 * (22 + 19)
 
     @pytest.mark.parametrize("budget", [40_000, 8_000, 2_000, 400])
     def test_reasoning_survives_aggressive_compaction(self, budget) -> None:
         h = self._history()
         view = build_api_view(h.system_prompt, h.messages, budget)
 
-        retained_with_calls = [
-            m for m in view.messages
+        # The strip runs before the ladder, so the dropped-reasoning counter
+        # is identical at every budget, and whatever active-chain assistant
+        # survives compaction still carries its reasoning.
+        assert view.stats.reasoning_chars_dropped == 5 * (22 + 19)
+        boundary = self._last_user_index(view.messages)
+        active_chain = [
+            m for m in view.messages[boundary + 1:]
             if m.get("role") == "assistant" and m.get("tool_calls")
         ]
-        assert retained_with_calls, (
-            "compaction removed every tool-calling assistant, so this proves nothing"
-        )
-        for msg in retained_with_calls:
-            # Anything retained from storage keeps its reasoning; only the
-            # synthetic "compacted" notes have none, and they carry no tool_calls.
+        for msg in active_chain:
             assert msg.get("reasoning_content"), (
-                "a retained tool-calling assistant lost reasoning_content — "
+                "a retained active-chain assistant lost reasoning_content — "
                 "DeepSeek rejects this replay with a 400"
             )
         assert_tool_pairing_valid(view.messages)
@@ -188,6 +220,83 @@ class TestReasoningReplay:
         api = h.for_api()
         assistant = next(m for m in api if m["role"] == "assistant")
         assert assistant["reasoning_content"] == "deliberating\n"
+
+    def test_no_user_message_means_nothing_is_stripped(self) -> None:
+        """Conservative path: without a user message there is no boundary, so
+        every block keeps its reasoning."""
+        h = History()
+        h.set_system("s")
+        for msg in tool_block(
+            "c0", "read_files", {"paths": ["f0.py"]},
+            big_read_files_result(["f0.py"], 4_000),
+            reasoning="thinking\n",
+        ):
+            h.messages.append(msg)
+
+        view = build_api_view("s", h.messages, 10_000_000)
+        assert view.stats.reasoning_chars_dropped == 0
+        replayed = [m for m in view.messages if m.get("reasoning_content")]
+        assert len(replayed) == 1
+
+    def test_internal_steering_messages_are_the_provider_boundary(self) -> None:
+        """Aura's steering messages go out as role=user, so the provider sees
+        them as the boundary; reasoning before them is stripped."""
+        h = History()
+        h.set_system("s")
+        h.append_user_text("Fix the retry cap.")
+        for msg in tool_block(
+            "c1", "read_file", {"path": "m.py"},
+            json.dumps({"ok": True, "content": "x" * 200}),
+            reasoning="thinking about the cap\n",
+        ):
+            h.messages.append(msg)
+        h.append_internal_user_text("Loop guard: 12 discovery calls have run.")
+        h.append_assistant({
+            "role": "assistant",
+            "content": "on it",
+            "reasoning_content": "still thinking\n",
+        })
+
+        view = build_api_view("s", h.messages, 10_000_000)
+        boundary = self._last_user_index(view.messages)
+        assert view.messages[boundary]["content"].startswith("Loop guard:")
+        assert view.stats.reasoning_chars_dropped == len("thinking about the cap\n")
+        after = [m for m in view.messages[boundary + 1:] if m.get("role") == "assistant"]
+        assert all(m.get("reasoning_content") for m in after)
+
+    def test_strip_runs_before_compaction_not_after(self, monkeypatch) -> None:
+        """Reasoning is shed so evidence is not: with the strip, an overflowing
+        history fits with zero dropped blocks; without it, the ladder has to
+        drop whole blocks of tool results to make room."""
+        from aura.conversation import api_view as api_view_module
+
+        h = History()
+        h.set_system("system prompt")
+        for turn in range(6):
+            h.append_user_text(f"turn {turn} request")
+            for msg in tool_block(
+                f"c{turn}", "read_files",
+                {"paths": [f"f{turn}.py"]},
+                big_read_files_result([f"f{turn}.py"], 4_000),
+                reasoning=f"{turn}" * 30_000,
+            ):
+                h.messages.append(msg)
+            h.append_assistant({
+                "role": "assistant",
+                "content": f"answer {turn}",
+                "reasoning_content": f"summarising turn {turn}\n",
+            })
+
+        view_with = build_api_view(h.system_prompt, h.messages, 40_000)
+        assert view_with.stats.reasoning_chars_dropped > 0
+        assert view_with.stats.dropped_blocks == 0
+
+        monkeypatch.setattr(
+            api_view_module, "_strip_superseded_reasoning", lambda working, stats: None
+        )
+        view_without = build_api_view(h.system_prompt, h.messages, 40_000)
+        assert view_without.stats.reasoning_chars_dropped == 0
+        assert view_without.stats.dropped_blocks > 0
 
 
 # ── 2: for_api() does not mutate stored history ─────────────────────────────

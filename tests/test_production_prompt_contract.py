@@ -13,7 +13,12 @@ from pathlib import Path
 
 from aura.context_gearbox import sources
 from aura.context_gearbox.models import RuntimeRole
-from aura.context_gearbox.runtime import compose_system_prompt
+from aura.context_gearbox.runtime import (
+    FULL_REPLACEMENT_MARKER,
+    compose_system_prompt,
+    diagnose_custom_prompt,
+    format_custom_prompt_diagnostics,
+)
 from aura.roles import load_bundled_role_capsule
 
 
@@ -44,18 +49,22 @@ def _capsule_text() -> str:
 # ── the production contract ─────────────────────────────────────────────────
 
 
-def test_single_capsule_states_the_five_phase_production_contract() -> None:
+def test_single_capsule_states_the_four_clause_production_contract() -> None:
     text = _capsule_text()
 
-    for phase in ("DISCOVER:", "DECIDE:", "IMPLEMENT:", "VALIDATE:", "REPORT:"):
-        assert phase in text, f"production contract missing {phase}"
+    for clause in (
+        "Identify the owner and the edit surface.",
+        "Act once the choice is supported by repository evidence.",
+        "Validate the changed surface, and repair failures before you hand back.",
+        "Report what you actually did and what actually ran.",
+    ):
+        assert clause in text, f"production contract missing {clause!r}"
 
-    # Ordered, so the capsule reads as one pass rather than a menu.
-    positions = [
-        text.index(phase)
-        for phase in ("DISCOVER:", "DECIDE:", "IMPLEMENT:", "VALIDATE:", "REPORT:")
-    ]
-    assert positions == sorted(positions)
+    # The retired five-phase ceremony is gone. A phased ladder reappearing
+    # means the thrash-prone DISCOVER/DECIDE/IMPLEMENT/VALIDATE/REPORT
+    # workflow is being smuggled back into the capsule.
+    for phase in ("DISCOVER:", "DECIDE:", "IMPLEMENT:", "VALIDATE:", "REPORT:"):
+        assert phase not in text, f"retired phase marker {phase} is back"
 
 
 def test_single_capsule_forbids_reopening_settled_decisions() -> None:
@@ -75,7 +84,7 @@ def test_single_capsule_forbids_reopening_settled_decisions() -> None:
 def test_anti_circling_rules_reach_the_composed_production_prompt(tmp_path: Path) -> None:
     prompt = _single_prompt(_coding_workspace(tmp_path))
 
-    assert "DISCOVER: read enough to identify the owner and constraints." in prompt
+    assert "Act once the choice is supported by repository evidence." in prompt
     assert "do not reopen or restate it" in prompt
 
 
@@ -116,10 +125,15 @@ def test_receipt_honesty_has_one_owner_in_the_composed_prompt(tmp_path: Path) ->
 def test_read_before_editing_has_one_owner_in_the_composed_prompt(tmp_path: Path) -> None:
     prompt = _single_prompt(_coding_workspace(tmp_path))
 
-    # The kernel owns "do not claim what you have not read"; the capsule's
-    # DISCOVER phase owns "read enough to find the owner".  Neither is
-    # re-paraphrased by the coding contracts.
-    assert "Read files before making claims about repository contents." in prompt
+    # The kernel owns the rule, in intent phrasing: verify before you claim.
+    assert "Do not make claims about repository contents you have not verified" in prompt
+    # The old contradiction — the blanket "read files before making claims"
+    # instruction alongside an "already in context; do not re-read" exemption
+    # — must not come back as two separate, unqualified halves.
+    assert not (
+        "Read files before making claims about repository contents." in prompt
+        and "already in context; do not re-read" in prompt
+    )
     assert "Read them before editing" not in prompt
     assert "Do not describe the repository from memory" not in prompt
 
@@ -144,6 +158,48 @@ def test_response_discipline_does_not_restate_progress_message_shape(
 
     assert "Response discipline:" in prompt
     assert "emphasize target, decision, next step, and validation" not in prompt
+
+
+def test_each_generic_rule_has_exactly_one_owner(tmp_path: Path) -> None:
+    prompt = _single_prompt(_coding_workspace(tmp_path))
+
+    single_owner = (
+        # read before claiming
+        r"Do not make claims about repository contents you have not verified",
+        # scope discipline
+        r"Do not perform speculative cleanup",
+        # response length
+        r"Default to concise, useful replies",
+        # anti-circling
+        r"do not reopen or restate it",
+        # live TODO
+        r"update_worker_todo",
+        # validation selection
+        r"discover it rather than assuming",
+        # receipt honesty
+        r"never claim checks that were not run",
+        # code shape
+        r"Write code that reads like its neighbours",
+    )
+    for pattern in single_owner:
+        assert _count(prompt, pattern) == 1, f"{pattern!r} has multiple owners"
+
+
+def test_the_removed_contradictions_cannot_come_back(tmp_path: Path) -> None:
+    prompt = _single_prompt(_coding_workspace(tmp_path))
+
+    # "read files before making claims" must never coexist with an
+    # "already in context; do not re-read" exemption.
+    assert not (
+        "Read files before making claims about repository contents." in prompt
+        and "already in context; do not re-read" in prompt
+    )
+    # "match the surrounding code" and "do not imitate existing structure"
+    # must not reappear as separate, unqualified rules.
+    assert not (
+        "match the surrounding code" in prompt
+        and "do not imitate existing structure" in prompt
+    )
 
 
 # ── preserved behaviour ─────────────────────────────────────────────────────
@@ -187,7 +243,7 @@ def test_custom_prompts_remain_additive_over_the_contract(tmp_path: Path) -> Non
 
     assert "### Custom Instructions" in composed.system_prompt
     assert "Always prefer the Qt signal path." in composed.system_prompt
-    assert "DISCOVER: read enough to identify the owner and constraints." in composed.system_prompt
+    assert "Act once the choice is supported by repository evidence." in composed.system_prompt
 
 
 def test_single_remains_the_implementer(tmp_path: Path) -> None:
@@ -196,3 +252,60 @@ def test_single_remains_the_implementer(tmp_path: Path) -> None:
     assert "Never dispatch implementation to another coding model or agent." in prompt
     assert "### planner_dispatch_contract" not in prompt
     assert "### worker_execution_contract" not in prompt
+
+
+# ── custom prompt diagnostics ───────────────────────────────────────────────
+
+
+def test_blank_custom_prompt_diagnoses_as_empty() -> None:
+    diagnostics = diagnose_custom_prompt(RuntimeRole.SINGLE, "   ")
+
+    assert diagnostics.is_empty
+    assert diagnostics.char_count == 0
+    assert diagnostics.appended_char_count == 0
+    assert diagnostics.legacy_terms == ()
+    assert diagnostics.repeated_concepts == ()
+
+
+def test_edited_copy_of_the_default_reports_tiny_appended_size() -> None:
+    """The settings default is the role capsule itself; deduplication should
+    leave only the genuinely new lines as the appended size."""
+    edited = _capsule_text() + "\nPrefer QSignalSpy in tests.\n"
+
+    diagnostics = diagnose_custom_prompt(RuntimeRole.SINGLE, edited)
+
+    assert diagnostics.char_count > 1_000
+    assert diagnostics.appended_char_count < 200
+    assert not diagnostics.full_replacement
+
+
+def test_full_replacement_marker_skips_concept_probing() -> None:
+    custom = f"{FULL_REPLACEMENT_MARKER}You decide everything, Aura."
+    diagnostics = diagnose_custom_prompt(RuntimeRole.SINGLE, custom)
+
+    assert diagnostics.full_replacement
+    # "appended" is the whole prompt and "repeats a canonical block" is not
+    # a meaningful question for a prompt that owns the entire system prompt.
+    assert diagnostics.repeated_concepts == ()
+
+
+def test_legacy_vocabulary_is_flagged_but_the_current_todo_tool_is_not() -> None:
+    diagnostics = diagnose_custom_prompt(
+        RuntimeRole.SINGLE, "We use dispatch_to_worker and update_worker_todo."
+    )
+
+    assert "dispatch_to_worker" in diagnostics.legacy_terms
+    assert not any(
+        "update_worker_todo" in term for term in diagnostics.legacy_terms
+    )
+
+
+def test_diagnostics_output_is_pure_ascii() -> None:
+    """The diagnostics line goes to log handlers that may use the Windows
+    console code page; a stray non-ASCII character from the custom prompt must
+    never leak into it."""
+    diagnostics = diagnose_custom_prompt(RuntimeRole.SINGLE, "Üse à custom prompt — don't.")
+
+    line = format_custom_prompt_diagnostics(diagnostics, effective_prompt_chars=5_540)
+    assert line.isascii()
+    assert "Üse" not in line

@@ -152,9 +152,19 @@ class TestCapacityAndPolicyAreReportedSeparately:
 
         budget = resolve_model_budget("deepseek-v4-flash")
         stats = _FakeStats()
+        stats.tokens_after = 12_000
+        stats.reasoning_chars_replayed = 3_000
+        stats.reasoning_chars_dropped = 1_500
+        tool_defs = [{"type": "function", "function": {"name": "read_file"}}]
+        tool_schema_chars = len(json.dumps(tool_defs, ensure_ascii=False))
+        tool_schema_tokens = tool_schema_chars // 4
+        request_tokens = stats.tokens_after + tool_schema_tokens
+        request_headroom = (
+            budget.context_window_tokens - budget.output_reserve_tokens - request_tokens
+        )
 
         with caplog.at_level("INFO", logger="aura.conversation.manager"):
-            _log_context_round(budget, stats, tool_defs=None)
+            _log_context_round(budget, stats, tool_defs=tool_defs)
 
         line = caplog.text
         assert "window=1000000" in line
@@ -162,6 +172,15 @@ class TestCapacityAndPolicyAreReportedSeparately:
         assert "policy_cap=72000" in line
         assert "budget=72000" in line
         assert "capped_by_policy=True" in line
+        # The same line now also reports the full request shape: tool schema
+        # tokens ride outside the working-set budget, and the headroom is what
+        # is actually left of the provider window after the whole request.
+        assert f"tool_schema_chars={tool_schema_chars}" in line
+        assert f"tool_schema_tokens={tool_schema_tokens}" in line
+        assert f"request_tokens={request_tokens}" in line
+        assert f"request_headroom={request_headroom}" in line
+        assert "reasoning_chars_replayed=3000" in line
+        assert "reasoning_chars_dropped=1500" in line
 
 
 class _FakeStats:
@@ -176,6 +195,7 @@ class _FakeStats:
     dropped_blocks = 0
     repaired_messages = 0
     reasoning_chars_replayed = 0
+    reasoning_chars_dropped = 0
     over_budget = False
 
 

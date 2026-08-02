@@ -7,6 +7,7 @@ Planner/Worker dispatch path must remain unreachable.
 
 from __future__ import annotations
 
+import re
 import threading
 from pathlib import Path
 
@@ -62,19 +63,9 @@ class TestProductionToolCatalog:
         [
             # repository reads and searches
             "read_file",
-            "read_files",
-            "read_file_range",
-            "read_file_outline",
-            "list_directory",
             "glob",
             "grep_search",
             "search_codebase",
-            "find_usages",
-            # code intelligence
-            "code_intel_outline",
-            "code_intel_references",
-            "code_intel_dependents",
-            "code_intel_audit",
             # writes / patches / deletes
             "write_file",
             "patch_file",
@@ -101,6 +92,127 @@ class TestProductionToolCatalog:
     def test_production_mode_retains_capability(self, tool_name: str) -> None:
         defs = ToolCatalog().build_tool_defs(mode="single", read_only=False)
         assert tool_name in _tool_names(defs)
+
+    @pytest.mark.parametrize(
+        "tool_name",
+        [
+            "read_files",
+            "read_file_range",
+            "read_file_outline",
+            "list_directory",
+            "find_usages",
+            "code_intel_outline",
+            "code_intel_references",
+            "code_intel_dependents",
+            "code_intel_audit",
+        ],
+    )
+    def test_superseded_tools_leave_single_mode_but_stay_registered(
+        self, tool_name: str, tmp_path: Path
+    ) -> None:
+        """The superseded reads are gone from the production catalog, but their
+        handlers stay registered (a replayed historical call still executes)
+        and Planner, Worker, and read-only single mode keep them."""
+        from aura.conversation.tools.registry import TOOL_HANDLERS
+
+        single = _tool_names(
+            ToolCatalog().build_tool_defs(mode="single", read_only=False)
+        )
+        assert tool_name not in single, f"{tool_name} should not be in single mode"
+
+        # The replayed-call path must stay alive even though the schema is gone.
+        assert tool_name in TOOL_HANDLERS, f"{tool_name} lost its handler entirely"
+
+        for mode in ("planner", "worker"):
+            names = _tool_names(
+                ToolCatalog().build_tool_defs(mode=mode, read_only=False)
+            )
+            assert tool_name in names, f"{tool_name} missing from {mode} catalog"
+        read_only = _tool_names(
+            ToolCatalog().build_tool_defs(mode="single", read_only=True)
+        )
+        assert tool_name in read_only, f"{tool_name} missing from read-only catalog"
+
+    def test_replayed_read_files_call_still_executes(self, tmp_path: Path) -> None:
+        """A historical tool call from an old conversation still runs: the
+        schema left single mode, the handler did not."""
+        (tmp_path / "f0.py").write_text("x = 1\n", encoding="utf-8")
+        registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+        result = registry.execute(
+            "read_files",
+            {"paths": ["f0.py"]},
+            approval_cb=lambda request: None,
+            cancel_event=threading.Event(),
+        )
+        assert result.ok
+
+    def test_single_mode_catalog_is_exactly_the_expected_set(self) -> None:
+        """A literal set: any addition or removal is a deliberate, visible
+        diff, instead of silent drift between the capsule and the catalog."""
+        defs = ToolCatalog().build_tool_defs(mode="single", read_only=False)
+        assert _tool_names(defs) == {
+            # reads and searches
+            "read_file", "glob", "grep_search", "search_codebase",
+            "inspect_godot_assets", "inspect_godot_asset_preview",
+            "capture_godot_asset_preview", "inspect_godot_api",
+            "inspect_godot_editor",
+            # the live TODO tool
+            "update_worker_todo",
+            # writes / patches / deletes
+            "write_file", "patch_file", "delete_file",
+            "edit_godot_scene", "edit_godot_editor", "edit_godot_asset_preview",
+            "install_godot_editor_bridge",
+            # terminal + run-and-watch
+            "run_terminal_command", "run_and_watch",
+            # git
+            "git_status", "git_diff", "git_log", "git_show", "git_log_file",
+            "git_branch_list", "git_stash_list", "git_stash_show",
+            # diagnostics + snapshots
+            "run_diagnostic_command", "get_workspace_snapshot",
+            # web, drones
+            "web_search", "run_read_only_drone", "register_drone_folder",
+        }
+
+    def test_every_catalog_name_has_a_registered_handler(self, tmp_path: Path) -> None:
+        """A schema and its handler must never drift apart: every name any
+        catalog advertises resolves to a live handler — either the static
+        TOOL_HANDLERS table or a round runner that intercepts the tool before
+        the executor (manager_tool_round.py)."""
+        from aura.conversation.tools.registry import TOOL_HANDLERS
+
+        # Intercepted in manager_tool_round._execute_tool_call before the
+        # executor is reached; keep this list in sync with those branches.
+        round_runner_dispatch = {
+            "dispatch_to_worker",
+            "run_and_watch",
+            "run_terminal_command",
+        }
+        handled = set(TOOL_HANDLERS) | round_runner_dispatch
+        for mode in ("single", "planner", "worker"):
+            names = _tool_names(
+                ToolCatalog().build_tool_defs(mode=mode, read_only=False)
+            )
+            unhandled = sorted(names - handled)
+            assert not unhandled, f"{mode} exposes tools with no handler: {unhandled}"
+
+    def test_no_capsule_tool_name_is_missing_from_the_catalog(self) -> None:
+        """The SINGLE capsule must not tell the model to use a tool the catalog
+        no longer offers — the exact schema/capsule drift that shipped in §1.3."""
+        from aura.context_gearbox.models import RuntimeRole
+        from aura.conversation.tools.capability_groups import CAPABILITY_TOOLS
+        from aura.roles import load_bundled_role_capsule
+
+        capsule = load_bundled_role_capsule(RuntimeRole.SINGLE)
+        assert capsule is not None
+        known = {t for tools in CAPABILITY_TOOLS.values() for t in tools}
+        mentioned = set(re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", capsule.content))
+        single = _tool_names(
+            ToolCatalog().build_tool_defs(mode="single", read_only=False)
+        )
+        for name in sorted(mentioned & known):
+            assert name in single, (
+                f"capsule tells the model to use {name}, which single mode removed"
+            )
 
     def test_production_mode_extends_dynamic_and_mcp_tools(self) -> None:
         dynamic = [{"type": "function", "function": {"name": "project_build"}}]

@@ -315,11 +315,16 @@ class TestViewRemainsIntact:
 
         assert json.dumps(history.messages, sort_keys=True) == before
 
-    def test_reasoning_is_replayed_into_the_view(self) -> None:
+    def test_reasoning_before_the_last_user_message_is_shed(self) -> None:
+        """The provider-visible boundary is the last user message — here the
+        internal steering message — so the reasoning that preceded it is dead
+        weight and the stats say exactly what was removed."""
         history = self._history()
         view = build_api_view("system", history.messages, budget_tokens=200_000)
 
-        assert view.stats.reasoning_chars_replayed > 0
+        assert view.stats.reasoning_chars_replayed == 0
+        assert view.stats.reasoning_chars_dropped == len("thinking hard about the cap\n")
+        assert not any(m.get("reasoning_content") for m in view.messages)
 
     def test_pairing_survives_the_view(self) -> None:
         history = self._history()
