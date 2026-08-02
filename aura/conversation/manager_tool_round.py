@@ -172,28 +172,58 @@ def _edit_recovery_pending(state: _SendState) -> bool:
 
 
 def _result_payload_applied(payload: Any) -> bool:
-    """Return whether a write tool's result payload claims the change landed."""
+    """Return whether a write tool's result payload explicitly proves the change landed.
+
+    Fail-closed: an ambiguous result is not an applied write. A write counts
+    only when the payload's ``applied`` field is exactly ``True`` — a malformed
+    payload, a non-dict payload, or a payload with no ``applied`` field all mean
+    "do not treat as applied". The requested tool name and path never count as
+    proof; only the result payload does.
+    """
     data = payload
     if isinstance(payload, str):
         try:
             data = json.loads(payload)
         except (TypeError, ValueError):
-            return True
-    if isinstance(data, dict) and "applied" in data:
-        return bool(data["applied"])
-    return True
+            return False
+    if isinstance(data, dict):
+        return data.get("applied") is True
+    return False
+
+
+def _enclosing_result_success(res: dict[str, Any]) -> bool | None:
+    """Return the enclosing tool result's success, or ``None`` when unknown.
+
+    Write results carry the emitted ``ToolResult`` event and a ``flow_result``,
+    both reflecting the tool's authoritative ``ok``. When either is present it
+    must say success; ``None`` means the round recorded no such signal (synthetic
+    unit-test results), in which case the payload's own explicit ``applied``
+    field is the only evidence.
+    """
+    event = res.get("event")
+    if event is not None:
+        ok = getattr(event, "ok", None)
+        if ok is not None:
+            return bool(ok)
+    flow = res.get("flow_result")
+    if isinstance(flow, dict) and flow.get("ok") is not None:
+        return bool(flow["ok"])
+    return None
 
 
 def _applied_write_paths(
     tasks: list[dict[str, Any]],
     results_by_id: dict[str, dict[str, Any]],
 ) -> list[str]:
-    """Normalized paths of write tools whose result claims the change applied.
+    """Normalized paths of write tools whose result explicitly proved the change applied.
 
     Legacy dispatch reports modified files through ``planner_stale_read_files``
     on the dispatch result. Production SINGLE writes run directly, so the
     applied paths must come from the write tool's own result — otherwise the
-    silent post-write refresh never fires.
+    silent post-write refresh never fires. A path counts only when the result
+    payload says ``applied: True`` *and* the enclosing tool result (when the
+    round recorded one) also reports success; an ambiguous or failed result
+    never counts.
     """
     files: list[str] = []
     seen: set[str] = set()
@@ -205,6 +235,8 @@ def _applied_write_paths(
         if res is None:
             continue
         if not _result_payload_applied(res.get("result_payload")):
+            continue
+        if _enclosing_result_success(res) is False:
             continue
         path = _edit_shapes.tool_path(name, task["args"])
         if not path:

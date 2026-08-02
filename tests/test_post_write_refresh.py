@@ -25,6 +25,7 @@ from pathlib import Path
 
 import pytest
 
+from aura.client import ToolResult
 from aura.context_gearbox.models import RuntimeRole
 from aura.context_gearbox.runtime import (
     PLANNER_SYSTEM_PROMPT,
@@ -287,3 +288,119 @@ def test_combined_post_write_files_dedups_and_normalizes() -> None:
     )
 
     assert combined == ["app.py", "a/b.py", "c.py"]
+
+
+# ── fail-closed applied detection ──────────────────────────────────────────
+
+
+def test_applied_write_paths_rejects_malformed_payload() -> None:
+    """A result payload that is not valid JSON proves nothing and counts as
+    nothing — the refresh must not fire on a write whose outcome is unknown."""
+    results = {
+        "w1": {"result_payload": "{this is not valid json", "event": None},
+    }
+    tasks = [{"id": "w1", "name": "write_file", "args": {"path": "app.py"}}]
+
+    assert _applied_write_paths(tasks, results) == []
+
+
+def test_applied_write_paths_rejects_missing_applied() -> None:
+    """An ``ok: true`` payload without an explicit ``applied`` field is
+    ambiguous, and an ambiguous write is not an applied write."""
+    results = {
+        "w1": {"result_payload": json.dumps({"ok": True, "path": "app.py"})},
+    }
+    tasks = [{"id": "w1", "name": "write_file", "args": {"path": "app.py"}}]
+
+    assert _applied_write_paths(tasks, results) == []
+
+
+def test_applied_write_paths_rejects_ok_false_with_applied_true() -> None:
+    """The enclosing tool result's success outvotes the payload's own claim: an
+    ``applied: true`` field cannot make a failed write count as landed."""
+    results = {
+        "w1": {
+            "result_payload": json.dumps({"ok": True, "applied": True, "path": "app.py"}),
+            "event": ToolResult(
+                tool_call_id="w1", name="write_file", ok=False, result="boom"
+            ),
+        },
+    }
+    tasks = [{"id": "w1", "name": "write_file", "args": {"path": "app.py"}}]
+
+    assert _applied_write_paths(tasks, results) == []
+
+
+def test_applied_write_paths_explicit_write_success_with_confirming_result() -> None:
+    """A successful write with an explicit ``applied: true`` and a confirming
+    tool result is an applied write."""
+    results = {
+        "w1": {
+            "result_payload": json.dumps({"ok": True, "applied": True, "path": "app.py"}),
+            "event": ToolResult(
+                tool_call_id="w1", name="write_file", ok=True, result="ok"
+            ),
+        },
+    }
+    tasks = [{"id": "w1", "name": "write_file", "args": {"path": "app.py"}}]
+
+    assert _applied_write_paths(tasks, results) == ["app.py"]
+
+
+def test_applied_write_paths_explicit_delete_success_with_confirming_result() -> None:
+    """A successful delete carries ``applied: true`` and ``deleted: true``; the
+    confirming result keeps it an applied write."""
+    results = {
+        "d1": {
+            "result_payload": json.dumps(
+                {"ok": True, "applied": True, "deleted": True, "path": "old.py"}
+            ),
+            "event": ToolResult(
+                tool_call_id="d1", name="delete_file", ok=True, result="ok"
+            ),
+        },
+    }
+    tasks = [{"id": "d1", "name": "delete_file", "args": {"path": "old.py"}}]
+
+    assert _applied_write_paths(tasks, results) == ["old.py"]
+
+
+def test_rejected_write_causes_no_refresh_and_no_stale_invalidation(tmp_path: Path) -> None:
+    """A write the user rejects lands nothing: the system prompt stays stale and
+    the guard keeps its read fingerprints for the untouched path."""
+    (tmp_path / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+    history = History()
+    history.set_system(STALE)
+    history.append_user_text("Update app.py so the job pauses.")
+    tools = ToolRegistry(workspace_root=tmp_path, mode="single")
+    runner = ToolRoundRunner(
+        history=history,
+        tools=tools,
+        tool_runner=ToolRunner(history=history, workspace_root=tmp_path),
+        planner_refresh=_configured_refresh(tmp_path, RuntimeRole.SINGLE),
+    )
+    state = _SendState(mode="single", research_policy=None)
+    guard = state.pre_edit_guard
+    assert guard is not None
+    guard.record("read_file", {"path": "app.py"})
+
+    calls = [tool_call("c1", "write_file", {"path": "app.py", "content": "VALUE = 2\n"})]
+    history.append_assistant(
+        {"role": "assistant", "content": "", "tool_calls": calls}
+    )
+    runner.run(
+        tool_calls=calls,
+        state=state,
+        on_event=lambda _e: None,
+        approval_cb=lambda _req: ApprovalDecision(action="reject"),
+        cancel_event=threading.Event(),
+        dispatch_cb=None,
+        cleanup_cancelled=lambda _cb: None,
+    )
+
+    assert (tmp_path / "app.py").read_text(encoding="utf-8") == "VALUE = 1\n"
+    # No refresh: the system prompt is still the stale sentinel.
+    assert history.system_prompt == STALE
+    # No stale-path invalidation: the path's read fingerprint was not cleared,
+    # so once failure grace expires the reread is still a duplicate.
+    assert any("app.py" in fingerprint for fingerprint in guard.seen_reads)
