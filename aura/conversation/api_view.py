@@ -16,8 +16,9 @@ Two rules drive this module.
 
 Invariants held by `build_api_view`:
 
-* every retained assistant message keeps its ``reasoning_content`` — DeepSeek
-  rejects a thinking-mode replay that drops it;
+* every assistant message in the *active* tool-call chain keeps its
+  ``reasoning_content`` — DeepSeek rejects a thinking-mode replay that drops it
+  (see ``_strip_superseded_reasoning`` for where the chain begins);
 * an assistant message with ``tool_calls`` is always accompanied by exactly the
   tool messages for those ids, so compaction can never orphan a tool message;
 * a tool result that started as valid JSON is still valid JSON afterwards.
@@ -79,6 +80,7 @@ class CompactionStats:
     _counted: set[int] = field(default_factory=set, repr=False, compare=False)
     repaired_messages: int = 0
     reasoning_chars_replayed: int = 0
+    reasoning_chars_dropped: int = 0
     over_budget: bool = False
 
 
@@ -403,6 +405,45 @@ def _drop_block(messages: list[dict[str, Any]], start: int, end: int) -> None:
     messages[start:end] = [{"role": "assistant", "content": note}]
 
 
+def _strip_superseded_reasoning(
+    working: list[dict[str, Any]], stats: CompactionStats
+) -> None:
+    """Drop ``reasoning_content`` from assistant messages of finished turns.
+
+    DeepSeek's thinking-mode rule is narrower than "never strip reasoning".
+    Probed directly against the API, with ``thinking`` enabled and the array
+    ending on a tool result (Aura's mid-loop shape):
+
+    * stripping any assistant message that sits *after* the last user message
+      is rejected -- 400 "The `reasoning_content` in the thinking mode must be
+      passed back to the API";
+    * stripping assistant messages *before* the last user message is accepted.
+
+    So the requirement binds the active tool-call chain, not the transcript.
+    Thinking from turns the user has already moved past is dead weight: it is
+    replayed on every subsequent round, and in measured production turns it
+    accounted for 46-98% of all replayed reasoning -- crowding out tool
+    results that then had to be dropped and re-read.
+
+    The last user message is the boundary the provider itself sees, which
+    includes Aura's internal steering messages (they are sent as ``role:
+    user``). Canonical history is untouched; this only shapes one request.
+    """
+    boundary = -1
+    for index, msg in enumerate(working):
+        if msg.get("role") == "user":
+            boundary = index
+    if boundary < 0:
+        return
+
+    for msg in working[:boundary]:
+        if msg.get("role") != "assistant":
+            continue
+        rc = msg.pop("reasoning_content", None)
+        if isinstance(rc, str):
+            stats.reasoning_chars_dropped += len(rc)
+
+
 def build_api_view(
     system_prompt: str | None,
     messages: list[dict[str, Any]],
@@ -426,6 +467,10 @@ def build_api_view(
     names = _tool_name_map(working)
     stats.source_result_chars_generated = _source_result_chars(working, names)
     stats.tokens_before = estimate_tokens(working, system_prompt)
+
+    # Before compaction, so the space this frees is space the ladder does not
+    # have to take out of tool results.
+    _strip_superseded_reasoning(working, stats)
 
     _compact_to_budget(working, system_prompt, budget_tokens, names, stats, keep_last_n_turns)
 
