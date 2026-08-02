@@ -33,9 +33,13 @@ class _FakeBridge:
         self.cancel_called = False
         self.cancel_call_count = 0
         self.pre_worker_snapshot = None
+        self.target_file_calls: list[tuple[str, ...]] = []
 
     def is_running(self) -> bool:
         return self._running
+
+    def set_turn_target_files(self, target_files) -> None:
+        self.target_file_calls.append(tuple(target_files))
 
     def send(self, **kwargs) -> None:
         self.send_calls.append(kwargs)

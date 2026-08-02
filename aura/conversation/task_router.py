@@ -69,11 +69,12 @@ def classify_user_request(text: str) -> TaskRoute:
         )
 
     if _looks_like_implementation(normalized):
+        action = _implementation_action(normalized)
         return TaskRoute(
             TaskLane.implementation,
-            "implementation",
+            action,
             0.85,
-            "matched implementation/change request",
+            f"matched {action} request",
         )
 
     return TaskRoute(TaskLane.chat, "chat", 0.6, "no task-lane trigger matched")
@@ -175,6 +176,34 @@ def _looks_like_implementation(normalized: str) -> bool:
             normalized,
         )
     )
+
+
+
+# Shapes of work inside the implementation lane. Every value here is one the
+# context system already recognizes as a coding task kind, so naming the shape
+# sharpens the terrain the turn carries without inventing a second vocabulary —
+# and without a semantic classifier. Order matters: a request to "fix the
+# refactored loader" is a bugfix, not a refactor.
+_BUGFIX_RE = re.compile(
+    r"\b(?:bug|bugs|bugfix|broken|crash|crashes|crashing|error|errors|exception|"
+    r"fail|fails|failing|failure|fix|fixes|fixing|regression|repair|traceback)\b"
+)
+_REFACTOR_RE = re.compile(
+    r"\b(?:refactor|refactors|refactoring|restructure|reorganize|extract)\b"
+)
+_CLEANUP_RE = re.compile(
+    r"\b(?:clean\s*up|cleanup|tidy|declutter|dead\s+code|unused)\b"
+)
+
+
+def _implementation_action(normalized: str) -> str:
+    if _BUGFIX_RE.search(normalized):
+        return "bugfix"
+    if _REFACTOR_RE.search(normalized):
+        return "refactor"
+    if _CLEANUP_RE.search(normalized):
+        return "cleanup"
+    return "implementation"
 
 
 __all__ = ["TaskLane", "TaskRoute", "classify_user_request"]

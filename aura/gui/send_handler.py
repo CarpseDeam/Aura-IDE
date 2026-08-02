@@ -19,6 +19,7 @@ _log = logging.getLogger(__name__)
 from dataclasses import dataclass
 
 from aura.config import PROVIDERS, AppSettings, ModelInfo, ThinkingMode, has_usable_provider_configuration
+from aura.conversation.target_files import extract_target_files
 from aura.conversation.task_router import TaskLane, TaskRoute, classify_user_request
 from aura.gui.input_panel import Attachment
 from aura.git_ops import (
@@ -250,10 +251,14 @@ class SendHandler(QObject):
             self._chat.add_error("Retry", "No user message to retry.")
             return False
 
-        # Derive the route from the retained user text so a stale
-        # _last_sent_route from another conversation cannot leak.
-        route = self._route_for_retained_turn()
+        # Derive both the route and the target files from the retained user
+        # text so stale turn state from another conversation cannot leak.
+        retained_text = self._bridge.history.latest_real_user_text()
+        route = (
+            classify_user_request(retained_text) if retained_text is not None else None
+        )
         self._last_sent_route = route
+        self._declare_turn_target_files(retained_text)
 
         self._message_queue.clear()
         self._input.set_queued_messages(0)
@@ -269,18 +274,17 @@ class SendHandler(QObject):
         )
         return True
 
-    def _route_for_retained_turn(self) -> TaskRoute | None:
-        """Reclassify the retained user turn to get its route.
+    def _declare_turn_target_files(self, text: str | None) -> None:
+        """Hand this turn's explicitly named files to the bridge.
 
-        ``classify_user_request`` is deterministic, so reclassifying the
-        unchanged text always reproduces the same route. The history helper
-        skips Aura's own ``aura_internal`` steering messages, so retry
-        replays the real request rather than a nudge.
+        Always called before a send, including when nothing was named: the
+        empty tuple clears the previous turn's targets so scope from an
+        earlier request cannot leak into this one.
         """
-        text = self._bridge.history.latest_real_user_text()
-        if text is None:
-            return None
-        return classify_user_request(text)
+        target_files = extract_target_files(text, self._workspace_root)
+        if target_files:
+            _log.info("turn_target_files %s", ", ".join(target_files))
+        self._bridge.set_turn_target_files(target_files)
 
     # ---- drone construction --------------------------------------------------
 
@@ -521,6 +525,10 @@ class SendHandler(QObject):
         self._chat.add_user(display_text, [a.b64 for a in image_atts] or None)
         self._chat.scroll_to_bottom(force=True)
         self._chat.begin_assistant()
+
+        # The user's own words plus attachment references — not the vision
+        # block, whose paths are model-generated rather than user-named.
+        self._declare_turn_target_files(text)
 
         _log.info(
             "send_start model=%s thinking=%s workspace_root=%s",

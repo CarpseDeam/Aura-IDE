@@ -890,7 +890,12 @@ class ConversationBridge(QObject):
         )
 
     def set_turn_target_files(self, target_files: list[str] | tuple[str, ...]) -> None:
-        """Declare the files this turn is known to target (optional)."""
+        """Declare the files this turn is known to target.
+
+        The send layer calls this before every send with the paths the user
+        actually named — and with an empty tuple when they named none, so the
+        previous turn's scope does not carry over.
+        """
         self._turn_target_files = tuple(str(path) for path in target_files if str(path).strip())
 
 
@@ -901,16 +906,20 @@ def _dummy_root():
 def _task_kind_from_route(route: TaskRoute) -> str | None:
     """Project a deterministic ``TaskRoute`` onto the turn's task kind.
 
-    The lane is a lossless, first-class value from the existing router — no
-    second classifier. Research keeps the router's action (``web_research`` /
-    ``research_then_worker``, both research-shaped for the context system);
-    implementation and validation surface their lane names; chat and built-in
-    actions have no production task kind and yield ``None``.
+    The route is a lossless, first-class value from the existing router — no
+    second classifier here. Every lane that has a production task kind simply
+    surfaces the router's own action: research keeps ``web_research`` /
+    ``research_then_worker``, implementation keeps the shape it was routed as
+    (``bugfix``, ``refactor``, ``cleanup``, ``implementation``), and validation
+    keeps ``validation``. Chat and built-in actions have no production task
+    kind and yield ``None``.
     """
-    if route.lane == TaskLane.research:
+    if route.lane in (
+        TaskLane.research,
+        TaskLane.implementation,
+        TaskLane.validation,
+    ):
         return route.action
-    if route.lane in (TaskLane.implementation, TaskLane.validation):
-        return route.lane.value
     return None
 
 
@@ -922,16 +931,10 @@ def _research_task_kind_for_text(text: str) -> str | None:
 
 
 def _latest_user_text(history: History) -> str:
-    for message in reversed(history.messages):
-        if message.get("role") != "user":
-            continue
-        content = message.get("content")
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            parts: list[str] = []
-            for item in content:
-                if isinstance(item, dict) and item.get("type") == "text":
-                    parts.append(str(item.get("text") or ""))
-            return "\n".join(part for part in parts if part)
-    return ""
+    """This turn's content terrain: the real user request.
+
+    Aura's own ``aura_internal`` steering is ``role="user"`` too, and letting a
+    nudge stand in as terrain would drive skill selection off Aura's words
+    rather than the user's. ``History`` owns that distinction.
+    """
+    return history.latest_real_user_text() or ""

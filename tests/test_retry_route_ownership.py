@@ -24,9 +24,13 @@ class _FakeBridge:
     def __init__(self) -> None:
         self.history = History()
         self.send_calls: list[dict] = []
+        self.target_file_calls: list[tuple[str, ...]] = []
 
     def is_running(self) -> bool:
         return False
+
+    def set_turn_target_files(self, target_files) -> None:
+        self.target_file_calls.append(tuple(target_files))
 
     def send(self, **kwargs) -> None:
         self.send_calls.append(kwargs)
@@ -106,7 +110,7 @@ def test_immediate_retry_retains_correct_route(monkeypatch, tmp_path) -> None:
     assert handler.handle_retry_last(model="m", thinking="off") is True
     retry_route = handler._bridge.send_calls[-1]["route"]
     assert retry_route.lane == TaskLane.implementation
-    assert retry_route.action == "implementation"
+    assert retry_route.action == "bugfix"
 
 
 def test_switching_conversation_cannot_leak_prior_route(monkeypatch, tmp_path) -> None:
@@ -193,7 +197,7 @@ def test_retry_skips_trailing_internal_steering(monkeypatch, tmp_path) -> None:
 
     retry_route = handler._bridge.send_calls[-1]["route"]
     assert retry_route.lane == TaskLane.implementation
-    assert retry_route.action == "implementation"
+    assert retry_route.action == "bugfix"
 
 
 def test_rewind_drops_response_and_internal_steering(monkeypatch, tmp_path) -> None:

@@ -29,9 +29,13 @@ class _FakeBridge:
     def __init__(self) -> None:
         self.history = _FakeHistory()
         self.send_calls = []
+        self.target_file_calls: list[tuple[str, ...]] = []
 
     def is_running(self) -> bool:
         return False
+
+    def set_turn_target_files(self, target_files) -> None:
+        self.target_file_calls.append(tuple(target_files))
 
     def send(self, **kwargs) -> None:
         self.send_calls.append(kwargs)
@@ -137,7 +141,8 @@ def test_implementation_request_reaches_bridge_as_implementation(monkeypatch, tm
     assert len(handler._bridge.send_calls) == 1
     route = handler._bridge.send_calls[0]["route"]
     assert route.lane == TaskLane.implementation
-    assert route.action == "implementation"
+    # "bug" names the shape of the work inside the implementation lane.
+    assert route.action == "bugfix"
     # The same route is retained so a later retry keeps this classification.
     assert handler._last_sent_route is route
 
@@ -237,7 +242,7 @@ def test_retry_reuses_last_sent_route(monkeypatch, tmp_path):
     # handler-global _last_sent_route — but the deterministic classifier
     # reproduces the same lane and action for unchanged text.
     assert retry_call["route"].lane == TaskLane.implementation
-    assert retry_call["route"].action == "implementation"
+    assert retry_call["route"].action == "bugfix"
 
 
 def test_selected_provider_without_credentials_is_rejected(monkeypatch, tmp_path):

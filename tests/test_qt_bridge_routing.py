@@ -65,6 +65,55 @@ def test_implementation_route_reaches_context_as_implementation(bridge):
     assert bridge._captured["task_kind"] == "implementation"
 
 
+@pytest.mark.parametrize(
+    ("action", "text"),
+    [
+        ("bugfix", "fix the crash in the queue drainer"),
+        ("refactor", "refactor the send handler into smaller units"),
+        ("cleanup", "clean up the unused imports"),
+        ("implementation", "add a retry button to the toolbar"),
+    ],
+)
+def test_implementation_shape_reaches_context_intact(bridge, action, text):
+    """Plan test 2: a bugfix request reaches context composition as ``bugfix``.
+
+    The lane alone would flatten every coding turn to one kind; the router's
+    action carries the shape, and each value is one the context system already
+    treats as a coding task kind.
+    """
+    route = TaskRoute(TaskLane.implementation, action, 0.85, "test")
+    _prepare(bridge, route, text)
+
+    assert bridge._turn_task_kind == action
+    assert bridge._captured["task_kind"] == action
+
+
+def test_target_files_reach_context_composition(bridge):
+    """Files declared for the turn are handed to context composition."""
+    bridge.set_turn_target_files(["aura/conversation/pre_edit_loop_guard.py"])
+    _prepare(
+        bridge,
+        TaskRoute(TaskLane.implementation, "bugfix", 0.85, "test"),
+        "fix the guard",
+    )
+
+    assert bridge._captured["target_files"] == (
+        "aura/conversation/pre_edit_loop_guard.py",
+    )
+
+
+def test_internal_steering_is_not_turn_content(bridge):
+    """Aura's own nudge must not become the turn's content terrain."""
+    bridge._history.append_user_text("fix the crash in parser.py")
+    bridge._history.append_internal_user_text("stop searching and edit now")
+    bridge._turn_task_route = TaskRoute(
+        TaskLane.implementation, "bugfix", 0.85, "test"
+    )
+    bridge._prepare_turn_context()
+
+    assert bridge._turn_content == "fix the crash in parser.py"
+
+
 def test_validation_route_reaches_context_as_validation(bridge):
     route = TaskRoute(TaskLane.validation, "validation", 0.9, "test")
     _prepare(bridge, route, "run pytest tests/test_queue_behavior.py")
