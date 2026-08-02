@@ -99,11 +99,19 @@ def _log_context_round(budget, stats, tool_defs: list[dict[str, Any]] | None) ->
     except (TypeError, ValueError):
         tool_schema_chars = -1
 
+    # Tool schemas ride outside the working-set budget — they are passed to the
+    # provider separately and never pruned. Report them in the same unit as the
+    # budget, plus the total, so the log answers "how big was the request?"
+    # rather than only "how big was the part we budgeted?".
+    tool_schema_tokens = max(tool_schema_chars, 0) // 4
+    request_tokens = stats.tokens_after + tool_schema_tokens
+
     _log.info(
         "context_round model=%s provider=%s window=%d reserve=%d derived_budget=%d "
         "policy_cap=%s budget=%d capped_by_policy=%s budget_source=%s "
         "tokens_before=%d tokens_after=%d messages_before=%d messages_after=%d "
-        "system_chars=%d tool_schema_chars=%d "
+        "system_chars=%d tool_schema_chars=%d tool_schema_tokens=%d "
+        "request_tokens=%d request_headroom=%d "
         "source_chars_generated=%d source_chars_retained=%d "
         "compacted_results=%d dropped_blocks=%d repaired=%d "
         "reasoning_chars_replayed=%d over_budget=%s",
@@ -122,6 +130,9 @@ def _log_context_round(budget, stats, tool_defs: list[dict[str, Any]] | None) ->
         stats.messages_after,
         stats.system_prompt_chars,
         tool_schema_chars,
+        tool_schema_tokens,
+        request_tokens,
+        budget.context_window_tokens - budget.output_reserve_tokens - request_tokens,
         stats.source_result_chars_generated,
         stats.source_result_chars_retained,
         stats.compacted_results,
