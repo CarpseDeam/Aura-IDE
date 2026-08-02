@@ -44,6 +44,11 @@ from aura.conversation.completion_guard import (
     is_repetitive_completion_final,
 )
 from aura.conversation.context_budget import resolve_model_budget
+from aura.conversation.dispatch import (
+    DispatchCallback,
+    WorkerDispatchRequest,
+    WorkerDispatchResult,
+)
 from aura.conversation.focused_action import (
     FOCUSED_ACTION_THINKING,
     OUTCOME_BLOCKER,
@@ -54,18 +59,12 @@ from aura.conversation.focused_action import (
     should_enter_focused_action,
     tool_call_names,
 )
-from aura.conversation.workflow_state import WorkflowStatus
-from aura.conversation.dispatch import (
-    DispatchCallback,
-    WorkerDispatchRequest,
-    WorkerDispatchResult,
-)
 from aura.conversation.history import History
 from aura.conversation.manager_send_state import _SendState
 from aura.conversation.manager_tool_round import ToolRoundRunner
 from aura.conversation.planner_dispatch_gate import maybe_force_worker_dispatch
-from aura.conversation.planner_stream_hygiene import PlannerStreamHygiene
 from aura.conversation.planner_refresh import PlannerRefreshState
+from aura.conversation.planner_stream_hygiene import PlannerStreamHygiene
 from aura.conversation.stream_event_router import StreamEventRouter
 from aura.conversation.task_router import TaskRoute
 from aura.conversation.tool_runner import ToolRunner
@@ -78,14 +77,15 @@ from aura.conversation.tools.registry import ToolRegistry
 from aura.conversation.worker_finalization_gate import (
     handle_worker_candidate_finalization,
 )
-from aura.events import EventBus
-from aura.lifecycle import LifecycleHooks
-from aura.work_artifact.model import ValidationCommandSpec
 from aura.conversation.worker_finish import (
     build_worker_unrecoverable_message,
 )
+from aura.conversation.workflow_state import WorkflowStatus
+from aura.events import EventBus
+from aura.lifecycle import LifecycleHooks
 from aura.model_streams import PRODUCTION_STREAM_HOOK, model_streams
 from aura.research.policy import decide_research_policy
+from aura.work_artifact.model import ValidationCommandSpec
 
 EventCallback = Callable[[Event], None]
 
@@ -268,6 +268,7 @@ class ConversationManager:
             mode=mode,
             research_policy=decide_research_policy(_latest_user_text(self._history)),
             task_route=task_route,
+            tool_effect=self._tools.tool_effect,
         )
         state.focused_action.selected_thinking = str(thinking)
         if state.mode == "worker":

@@ -19,7 +19,7 @@ PATCH_CANDIDATE_INVALID_SYNTAX_ACTION = (
 )
 
 WORKER_EDIT_RECOVERY_INSTRUCTION = (
-    "Previous edit failed recoverably. Re-read the affected file with read_file or read_file_range, "
+    "Previous edit failed recoverably. Re-read the affected file with read_file, "
     "then retry patch_file once with corrected hunks and the current expected_file_hash. "
     "Do not use write_file as a fallback for an existing-file edit. "
     "Finish only after the edit is applied and touched Python files pass py_compile."

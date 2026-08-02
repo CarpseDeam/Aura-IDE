@@ -54,12 +54,12 @@ def worker_terminal_command_allowed(
             allowed=False,
             reason=(
                 "Worker terminal source inspection is blocked. Use read_file, "
-                "read_file_range, or grep_search instead."
+                "or grep_search instead."
             ),
             failure_class="source_inspection_command_blocked",
             suggested_next_tool="read_file",
             suggested_next_action=(
-                "Use read_file or read_file_range for source inspection, then run "
+                "Use read_file for source inspection, then run "
                 "terminal commands only for validation or execution."
             ),
         )

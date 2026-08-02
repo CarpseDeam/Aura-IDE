@@ -368,7 +368,7 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
             "name": "read_file_range",
             "description": (
                 "Read a specific range of lines from a file (1-based, inclusive). "
-                "Use this after read_file_outline or a previous read_file tells you which line "
+                "Use this after a bounded read_file (offset and limit) tells you which line "
                 "numbers to inspect — it is far more context-efficient than re-reading the whole "
                 "file when you only need a specific function or section. "
                 "Also use this to recover when a previous read_file result was truncated: "
@@ -405,7 +405,7 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
                     "description": (
                         "Discover candidate files and locations by searching workspace file contents "
                         "for a given string or regex pattern. This is a discovery tool, not proof of "
-                        "exact edited content; use read_file or read_file_range to verify known files. "
+                        "exact edited content; use read_file to verify known files. "
                         "Returns matching file paths, line numbers, the matching line content, "
                         "and the column where the match starts, plus search metadata such as the "
                         "engine used, searched file count, skipped file count, truncation, and regex hint state. "
@@ -534,8 +534,8 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
                     "description": (
                         "Get a structural outline of a file using language-aware code intelligence. "
                         "Returns classes, functions, and imports. Use this as an alternative to "
-                        "read_file_outline when you want richer language-specific parsing. "
-                        "Always prefer read_file_outline for lightweight use."
+                        "read_file when you want richer language-specific parsing. "
+                        "Always prefer a bounded read_file (offset and limit) for lightweight use."
                     ),
                     "parameters": {
                         "type": "object",
@@ -877,8 +877,8 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                         "Worker should inspect and edit. Include line numbers only when they "
                         "come from a read_file in this dispatch turn; stale line numbers are "
                         "worse than no line numbers. This lets the Worker anchor on the symbol, "
-                        "use read_file_outline and read_file_range around the current target "
-                        "area, then patch with expected_file_hash from the range read."
+                        "use bounded read_file (offset and limit) windows around the current target "
+                        "area, then patch with expected_file_hash from the read."
                     ),
                 },
                 "spec": {
@@ -1431,7 +1431,7 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                 "For normal existing-file edits, read the file first and use patch_file instead. "
                 "For intentional whole-file replacement of an existing file, set full_replace_existing "
                 "to true and provide replacement_reason; these fields are not for patch_file failure recovery. "
-                "If a patch_file hunk is missing or ambiguous, recover with read_file/read_file_range and "
+                "If a patch_file hunk is missing or ambiguous, recover with read_file and "
                 "a corrected patch_file hunk, not write_file. "
                 "The user MUST approve every write through a diff dialog before it is applied. "
                 "Existing files are backed up before being overwritten."
@@ -1503,7 +1503,7 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                 "Apply multiple exact-text replacement hunks to one existing workspace file as a single "
                 "atomic, approval-gated transaction. Use this for normal existing-file edits after "
                 "reading the file. In Worker mode, after reading an existing file, pass the "
-                "content_hash returned by read_file, read_files, or read_file_range as "
+                "content_hash returned by read_file or read_files as "
                 "expected_file_hash. Every hunk is applied to an in-memory copy first; "
                 "if any hunk is missing or ambiguous, nothing is written. Use occurrence to disambiguate "
                 "repeated exact text, or add more surrounding context to the old block. Craft reviews the full "
@@ -1550,8 +1550,8 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                     "expected_file_hash": {
                         "type": "string",
                         "description": (
-                            "SHA-256 hex digest of the current whole file from read_file, "
-                            "read_files, or read_file_range. Required by Worker mode for existing files."
+                            "SHA-256 hex digest of the current whole file from read_file "
+                            "or read_files. Required by Worker mode for existing files."
                         ),
                     },
                     "description": {
@@ -1691,8 +1691,8 @@ TERMINAL_TOOL_DEF: dict[str, Any] = {
             "not long-running watchers, dev servers, REPLs, or commands that wait for "
             "interactive input. Prefer targeted validation commands over watch mode. "
             "In Worker mode this tool supports validation/build/test commands and "
-            "dependency installs; use read_file/read_files/grep_search/"
-            "read_file_outline for source inspection. "
+            "dependency installs; use read_file/read_files/"
+            "grep_search for source inspection. "
             "Prefer detected project-local tools. For Python projects, validation prefers "
             "the project-local .venv interpreter when present. If a dependency is needed "
             "for the current coding task, install it with an appropriate command such as "
@@ -1833,8 +1833,8 @@ CODE_INTEL_OUTLINE_TOOL_DEF: dict[str, Any] = {
         "description": (
             "Get a structural outline of a file using language-aware code intelligence. "
             "Returns classes, functions, and imports. Use this as an alternative to "
-            "read_file_outline when you want richer language-specific parsing. "
-            "Always prefer read_file_outline for lightweight use."
+            "read_file when you want richer language-specific parsing. "
+            "Always prefer a bounded read_file (offset and limit) for lightweight use."
         ),
         "parameters": {
             "type": "object",

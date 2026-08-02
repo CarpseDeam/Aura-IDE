@@ -268,7 +268,7 @@ def worker_recovery_block(
             failure_class=str(prior.get("failure_class") or "edit_mechanics_blocked"),
             error="Repeated failed edit tactic. Do not retry this edit shape. Re-read the file and use patch_file for existing-file code changes.",
             suggested_next_tool="patch_file",
-            suggested_next_action="Use read_file/read_file_outline, then submit one patch_file with exact hunks.",
+            suggested_next_action="Use a bounded read_file (offset and limit), then submit one patch_file with exact hunks.",
         )
         payload["previous_error"] = prior.get("error", "")
         record_recovery_block(payload, block_key, recovery_block_counts)
@@ -282,7 +282,7 @@ def worker_recovery_block(
                 failure_class="edit_mechanics_blocked",
                 error="Repeated failed edit tactic. Do not retry this edit shape. Re-read the file and use patch_file for existing-file code changes.",
                 suggested_next_tool="patch_file",
-                suggested_next_action="Use read_file/read_file_outline, then submit one patch_file with exact hunks.",
+                suggested_next_action="Use a bounded read_file (offset and limit), then submit one patch_file with exact hunks.",
             )
             record_recovery_block(payload, shape, recovery_block_counts)
             return blocked_tool_result(tool_call_id, name, payload)
@@ -316,7 +316,7 @@ def worker_patch_invalid_syntax_block(
             path=pending_path,
             failure_class=PATCH_CANDIDATE_INVALID_SYNTAX_FAILURE_CLASS,
             error="patch_file candidate syntax recovery requires re-reading the suggested range before any other tool.",
-            suggested_next_tool="read_file_range",
+            suggested_next_tool="read_file",
             suggested_next_action=PATCH_CANDIDATE_INVALID_SYNTAX_ACTION,
         )
         payload["applied"] = False
@@ -523,7 +523,7 @@ def update_worker_recovery_state(
         patch_failed_cycles[patch_shape] = failed_cycles
         parsed["patch_failed_cycles"] = failed_cycles
         parsed["patch_shape"] = _edit_shapes.shape_digest(patch_shape)
-        parsed["suggested_next_tool"] = "read_file_range"
+        parsed["suggested_next_tool"] = "read_file"
         parsed["suggested_next_action"] = PATCH_CANDIDATE_INVALID_SYNTAX_ACTION
         patch_invalid_syntax_required[_normalize_worker_path(path)] = {
             "failure_class": PATCH_CANDIDATE_INVALID_SYNTAX_FAILURE_CLASS,
@@ -547,7 +547,7 @@ def update_worker_recovery_state(
         parsed["suggested_next_tool"] = "read_file"
         if failure_class == "patch_file_hash_mismatch":
             parsed["suggested_next_action"] = (
-                "Re-read the file with read_file or read_file_range, then retry patch_file once "
+                "Re-read the file with a bounded read_file (offset and limit), then retry patch_file once "
                 "with expected_file_hash set to the returned content_hash."
             )
         else:

@@ -395,8 +395,8 @@ def propose_patch_file(
             extra: dict[str, Any] = {
                 "applied": False,
                 "write_outcome": "not_applied_edit_mechanics_blocked",
-                "suggested_tool": "read_file_range",
-                "suggested_next_tool": "read_file_range",
+                "suggested_tool": "read_file",
+                "suggested_next_tool": "read_file",
                 "suggested_next_action": PATCH_CANDIDATE_INVALID_SYNTAX_ACTION,
                 "suggested_start_line": suggested_start_line,
                 "suggested_end_line": suggested_end_line,

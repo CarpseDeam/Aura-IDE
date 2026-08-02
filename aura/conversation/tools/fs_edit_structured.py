@@ -241,7 +241,7 @@ def propose_edit_symbol(
         error_extra = info.get("error", f"Symbol '{symbol_name}' not found")
         suggested_tool = "patch_file" if has_symbols else "write_file"
         suggested_next_action = (
-            "Use read_file_outline or read_file to inspect available symbols, then use patch_file with current exact text."
+            "Use a bounded read_file (offset and limit) to inspect available symbols, then use patch_file with current exact text."
             if has_symbols
             else "No parseable symbols were available. Use write_file for a full-file repair or replacement."
         )
@@ -262,7 +262,7 @@ def propose_edit_symbol(
             "suggested_next_action": suggested_next_action,
             "available_symbols": available,
             "suggested_fallback": (
-                "read_file_outline/read_file then patch_file"
+                "bounded read_file then patch_file"
                 if has_symbols
                 else "write_file"
             ),

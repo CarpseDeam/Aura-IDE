@@ -218,8 +218,8 @@ class FsReadHandler:
 
         def continuation(from_line: int) -> str:
             return (
-                f"read_file_range(path='{rel}', start_line={from_line}, end_line={from_line + 400}) "
-                f"— repeat to walk forward, or read_file_outline(path='{rel}') to locate a symbol first."
+                f"read_file(path='{rel}', offset={from_line}, limit=400) "
+                f"— repeat to walk forward, or use grep_search to locate a symbol first."
             )
 
         # No budget left: keep the metadata, skip the bytes.

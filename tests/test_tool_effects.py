@@ -195,6 +195,15 @@ def test_mcp_tool_declared_effect_and_default(tmp_path: Path) -> None:
     assert registry.tool_effect("server_readonly_hint") is ToolEffect.OBSERVATION
     assert registry.tool_effect("totally_unknown_tool") is ToolEffect.OBSERVATION
 
+    # ``register_tool_def`` back-compat-registers a handler in the module-global
+    # TOOL_HANDLERS.  Drop these names so the catalog enumeration test
+    # (``_builtin_tool_names`` reads TOOL_HANDLERS) is not order-dependent under
+    # pytest-randomly.
+    from aura.conversation.tools.registry import TOOL_HANDLERS
+
+    for _name in ("server_mutator", "server_observer", "server_readonly_hint"):
+        TOOL_HANDLERS.pop(_name, None)
+
 
 def test_builtin_spot_checks() -> None:
     registry = ToolRegistry(Path.cwd())

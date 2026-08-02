@@ -7,13 +7,14 @@ with a compact, readable state setup instead of a wall of local declarations.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from aura.conversation.edit_orchestrator import EditRetryLedger
 from aura.conversation.focused_action import FocusedActionState
 from aura.conversation.pre_edit_loop_guard import PreEditLoopGuard
 from aura.conversation.single_content_gate import SingleContentGate
 from aura.conversation.tool_limits import ToolLimitState
+from aura.conversation.tools.effects import ToolEffect
 from aura.conversation.validation_ledger import WorkerValidationLedger
 from aura.conversation.worker_flow import WorkerFlowHarness
 from aura.conversation.worker_stream_buffer import WorkerStreamBuffer
@@ -40,6 +41,12 @@ class _SendState:
     """The deterministic ``TaskRoute`` selected for this turn, when the caller
     supplied one. The focused action turn reads its lane; nothing here
     reclassifies the request."""
+
+    tool_effect: Callable[[str], ToolEffect] | None = None
+    """The live registry's authoritative tool-effect classifier, wired in by
+    the send loop so the pre-edit guard never re-derives intent from a tool's
+    name. ``None`` falls back to the built-in table plus the registry's
+    observation default."""
 
     # --- per-round state ---
     reject_all_for_turn: bool = False
@@ -111,7 +118,12 @@ class _SendState:
             self.worker_flow = WorkerFlowHarness()
         elif self.mode == "single":
             self.content_gate = SingleContentGate()
-            self.pre_edit_guard = PreEditLoopGuard()
+            if self.tool_effect is not None:
+                self.pre_edit_guard = PreEditLoopGuard(
+                    effect_lookup=self.tool_effect
+                )
+            else:
+                self.pre_edit_guard = PreEditLoopGuard()
 
     # ── Write-count helpers (honest signals from WorkerFlowHarness) ──
 

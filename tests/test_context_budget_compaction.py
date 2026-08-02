@@ -542,7 +542,8 @@ class TestReadFilesKeepsEveryPath:
         assert entry["truncated"] is True
         assert 0 < len(entry["content"]) < READ_FILES_FULL_INCLUDE_CHARS
         assert entry["included_range"]["start_line"] == 1
-        assert "read_file_range" in entry["continuation"]
+        assert "read_file" in entry["continuation"]
+        assert "offset" in entry["continuation"]
         assert entry["reason"]
 
     def test_missing_and_escaping_paths_still_get_entries(self, read_workspace) -> None:
@@ -569,7 +570,8 @@ class TestReadFilesKeepsEveryPath:
         assert entry["content"] == ""
         assert entry["file_size"] > 0
         assert entry["content_hash"]
-        assert "read_file_range" in entry["continuation"]
+        assert "read_file" in entry["continuation"]
+        assert "offset" in entry["continuation"]
 
     def test_every_path_survives_history_compaction(self, read_workspace) -> None:
         paths = ["small.py", "medium.py", "big.py", "huge.py", "nope.py"]

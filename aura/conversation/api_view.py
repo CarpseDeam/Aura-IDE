@@ -56,8 +56,8 @@ CURRENT_TURN_SOURCE_FLOORS: tuple[int, ...] = (24_000, 16_000, 8_000, 4_000)
 MIN_LEAF_CHARS: int = 160
 
 _CONTINUE_HINT = (
-    "Use read_file_outline or grep_search to anchor the symbol, then one narrow "
-    "read_file_range around that target."
+    "Use grep_search to anchor the symbol, then one bounded read_file "
+    "(offset and limit) around that target."
 )
 
 

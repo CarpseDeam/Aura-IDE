@@ -22,7 +22,6 @@ from aura.conversation.manager_recovery import (
     worker_recovery_block,
 )
 from aura.conversation.manager_send_state import _SendState
-from aura.work_artifact.model import ValidationCommandSpec
 from aura.conversation.planner_refresh import PlannerRefreshState
 from aura.conversation.terminal_tool_round import (
     handle_run_and_watch_round,
@@ -36,6 +35,7 @@ from aura.conversation.tool_round_events import (
 )
 from aura.conversation.tool_runner import ToolRunner
 from aura.conversation.tools._types import ApprovalCallback
+from aura.conversation.tools.effects import ToolEffect
 from aura.conversation.tools.registry import ToolRegistry
 from aura.conversation.worker_pre_tool_gate import (
     WorkerPreToolGateContext,
@@ -49,16 +49,109 @@ from aura.conversation.worker_recovery_payload import (
 from aura.conversation.workflow_state import WorkflowStatus
 from aura.events import EventBus
 from aura.lifecycle import LifecycleHooks
+from aura.work_artifact.model import ValidationCommandSpec
 
 EventCallback = Callable[[Event], None]
 
-_READ_ONLY_TOOLS = {
-    "read_file",
-    "read_file_outline",
-    "list_directory",
-    "grep_search",
-    "glob",
-}
+
+def _invalid_call_reason(invalid: dict[str, Any]) -> str:
+    """Return the human reason an invalid preflight call was rejected."""
+    kind = invalid.get("kind")
+    if kind == "parse":
+        return "invalid tool arguments"
+    if kind == "limit":
+        info = invalid.get("limit_info") or {}
+        return str(info.get("reason") or "tool limit reached")
+    if kind == "guard":
+        info = invalid.get("repeat_info") or {}
+        return str(info.get("reason") or "loop guard rejection")
+    return "invalid call"
+
+
+def _reject_tool_call_batch(
+    *,
+    tool_calls: list[dict[str, Any]],
+    invalid: dict[str, Any],
+    context: ToolRoundEventsContext,
+    on_event: EventCallback,
+) -> None:
+    """Reject a whole tool-call batch without executing any call.
+
+    Every rejected tool call receives exactly one paired ``ToolResult``: the
+    invalid call gets its own rejection payload, and every valid sibling gets
+    a coherent batch-rejection payload explaining that nothing ran, so an
+    accepted prefix can never execute ahead of the call that vetoes the batch.
+    """
+    invalid_id = invalid["tool_call_id"]
+    invalid_name = invalid["name"]
+    invalid_reason = _invalid_call_reason(invalid)
+    for tc in tool_calls:
+        fn = tc["function"]
+        name = fn["name"]
+        tool_call_id = tc["id"]
+        if tool_call_id == invalid_id:
+            if invalid["kind"] == "parse":
+                error = str(invalid.get("error", "invalid tool arguments"))
+                payload = json.dumps({"ok": False, "error": error})
+                context.history.append_tool_result(tool_call_id, payload)
+                on_event(
+                    ToolResult(
+                        tool_call_id=tool_call_id,
+                        name=name,
+                        ok=False,
+                        result=error,
+                    )
+                )
+            elif invalid["kind"] == "limit":
+                append_limit_tool_result(
+                    context=context,
+                    tool_call_id=tool_call_id,
+                    name=name,
+                    info=invalid["limit_info"],
+                    on_event=on_event,
+                )
+            else:
+                append_limit_tool_result(
+                    context=context,
+                    tool_call_id=tool_call_id,
+                    name=name,
+                    info=invalid["repeat_info"],
+                    on_event=on_event,
+                )
+            continue
+        payload = json.dumps(
+            {
+                "ok": False,
+                "recoverable": True,
+                "reason": "tool_batch_rejected_before_execution",
+                "tool": name,
+                "batch_rejected": True,
+                "rejected_sibling_call_id": invalid_id,
+                "rejected_sibling_tool": invalid_name,
+                "rejected_sibling_reason": invalid_reason,
+                "message": (
+                    f"No call in this batch executed. Sibling call {invalid_id} "
+                    f"({invalid_name}) was invalid before execution "
+                    f"({invalid_reason}), so the whole batch was rejected "
+                    "rather than running an accepted prefix. Re-issue the "
+                    "valid calls alone."
+                ),
+            },
+            ensure_ascii=False,
+        )
+        context.history.append_tool_result(tool_call_id, payload)
+        on_event(
+            ToolResult(
+                tool_call_id=tool_call_id,
+                name=name,
+                ok=False,
+                result=payload,
+                extras={
+                    "batch_rejected": True,
+                    "reason": "tool_batch_rejected_before_execution",
+                },
+            )
+        )
 
 
 def _edit_recovery_pending(state: _SendState) -> bool:
@@ -127,7 +220,14 @@ class ToolRoundRunner:
             guard.begin_round()
         recovery_pending = _edit_recovery_pending(state)
 
-        tasks: list[dict[str, Any]] = []
+        # ── Batch preflight ──────────────────────────────────────────────
+        # Every proposed call is parsed, classified against the registry's
+        # authoritative tool-effect metadata, and checked by the limit and
+        # loop-guard gates *before any call executes*.  If any call is invalid
+        # the whole batch is rejected coherently: no accepted prefix runs, and
+        # every rejected tool call receives exactly one paired tool result.
+        preflighted: list[dict[str, Any]] = []
+        invalid: dict[str, Any] | None = None
         for tc in tool_calls:
             fn = tc["function"]
             name = fn["name"]
@@ -135,53 +235,68 @@ class ToolRoundRunner:
             try:
                 args = json.loads(fn.get("arguments") or "{}")
             except json.JSONDecodeError as exc:
-                err = f"failed to parse tool arguments as JSON: {exc}"
-                self._history.append_tool_result(
-                    tool_call_id, json.dumps({"ok": False, "error": err})
-                )
-                on_event(
-                    ToolResult(
-                        tool_call_id=tool_call_id,
-                        name=name,
-                        ok=False,
-                        result=err,
-                    )
-                )
-                continue
+                invalid = {
+                    "tool_call_id": tool_call_id,
+                    "name": name,
+                    "kind": "parse",
+                    "error": f"failed to parse tool arguments as JSON: {exc}",
+                }
+                break
 
+            effect = self._tools.tool_effect(name)
             allowed, limit_info = state.limits.check(name)
             if not allowed:
-                append_limit_tool_result(
-                    context=ToolRoundEventsContext(history=self._history),
-                    tool_call_id=tool_call_id,
-                    name=name,
-                    info=limit_info,
-                    on_event=on_event,
-                )
+                invalid = {
+                    "tool_call_id": tool_call_id,
+                    "name": name,
+                    "kind": "limit",
+                    "limit_info": limit_info,
+                }
                 if is_recoverable_phase_boundary(limit_info):
                     worker_phase_boundary_info = limit_info
-                continue
+                break
 
             if guard is not None:
                 repeat_info = guard.check(
                     name, args, recovery_pending=recovery_pending
                 )
                 if repeat_info is not None:
-                    append_limit_tool_result(
-                        context=ToolRoundEventsContext(history=self._history),
-                        tool_call_id=tool_call_id,
-                        name=name,
-                        info=repeat_info,
-                        on_event=on_event,
-                    )
-                    continue
+                    invalid = {
+                        "tool_call_id": tool_call_id,
+                        "name": name,
+                        "kind": "guard",
+                        "repeat_info": repeat_info,
+                    }
+                    break
 
-            state.limits.record(name)
+            preflighted.append(
+                {"id": tool_call_id, "name": name, "args": args, "effect": effect}
+            )
+
+        if invalid is not None:
+            _reject_tool_call_batch(
+                tool_calls=tool_calls,
+                invalid=invalid,
+                context=ToolRoundEventsContext(history=self._history),
+                on_event=on_event,
+            )
             if guard is not None:
-                guard.record(name, args)
+                guard.end_round()
+            if worker_phase_boundary_info is not None:
+                if worker_phase_boundary_info.get("message"):
+                    self._history.append_user_text(
+                        str(worker_phase_boundary_info["message"])
+                    )
+                return ToolRoundOutcome(action="continue")
+            return ToolRoundOutcome(action="next_round")
+
+        tasks = preflighted
+        for task in tasks:
+            state.limits.record(task["name"])
+            if guard is not None:
+                guard.record(task["name"], task["args"])
             if state.worker_flow is not None:
-                state.worker_flow.observe_tool_call(name, args)
-            tasks.append({"id": tool_call_id, "name": name, "args": args})
+                state.worker_flow.observe_tool_call(task["name"], task["args"])
 
         if cancel_event.is_set():
             cleanup_cancelled(on_event)
@@ -214,7 +329,7 @@ class ToolRoundRunner:
                 if cancel_event.is_set():
                     break
 
-                if task["name"] in _READ_ONLY_TOOLS:
+                if task["effect"] is ToolEffect.OBSERVATION:
                     futures[executor.submit(process_task, task)] = task
                 else:
                     for fut in concurrent.futures.as_completed(futures):

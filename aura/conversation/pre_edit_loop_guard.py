@@ -62,11 +62,16 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from aura.conversation.tool_limits import TERMINAL_TOOLS, WRITE_TOOLS
+from aura.conversation.tools.effects import BUILTIN_TOOL_EFFECTS, ToolEffect
 
-#: Reads whose exact repetition before the first edit carries no new evidence.
+#: Built-in names whose effect is observation.  Historical name set kept for
+#: tests and back-compat: the runtime classifies every call through the
+#: registry's authoritative tool-effect metadata
+#: (:meth:`ToolRegistry.tool_effect`), which also covers Git, Godot, dynamic,
+#: MCP, drone, workspace, and web tools.  Nothing here decides behaviour.
 READ_ONLY_TOOLS: frozenset[str] = frozenset({
     "read_file",
     "read_files",
@@ -83,30 +88,57 @@ READ_ONLY_TOOLS: frozenset[str] = frozenset({
     "code_intel_dependents",
 })
 
-#: Reads that pull a bounded slice of one already-identified file.  These are
-#: how a turn *narrows down*, so they stay available after the discovery budget
-#: is spent — provided the file is already a known candidate.
+#: Historical narrow read tool names, kept for transcript replay.  The
+#: canonical narrow read is ``read_file`` with actual bounded ``offset`` and
+#: ``limit``; see :func:`is_narrow_read`.
 NARROW_READ_TOOLS: frozenset[str] = frozenset({
     "read_file_range",
     "read_file_outline",
 })
 
-#: Read-only tools that open new ground.  Everything the registry already
-#: exposes for finding source, plus ``read_task_context``, which is a compound
-#: discovery call and belongs in the same budget.  No registry redesign: this
-#: is just the read-only set minus the narrow reads.
+#: Historical read-only-minus-narrow set.  Superseded by
+#: :meth:`PreEditLoopGuard._is_discovery`, which uses the effect metadata and
+#: the bounded-window rule; kept for tests and back-compat.
 DISCOVERY_TOOLS: frozenset[str] = frozenset(READ_ONLY_TOOLS - NARROW_READ_TOOLS)
 
-#: Commands the agent runs against the workspace.  A *successful* one is
-#: progress; a failed one is not, and neither is merely asking for one.
+#: Historical progress sets.  Superseded by the effect classification in
+#: :meth:`PreEditLoopGuard.observe_result`; kept for tests and back-compat.
 DIAGNOSTIC_TOOLS: frozenset[str] = frozenset({"run_diagnostic_command"})
 COMMAND_TOOLS: frozenset[str] = frozenset(TERMINAL_TOOLS | DIAGNOSTIC_TOOLS)
-
-#: Tools whose *successful result* counts as forward progress and resets the
-#: stall counter.  Membership here never licenses the call itself: progress is
-#: recorded in :meth:`PreEditLoopGuard.observe_result`, never in
-#: :meth:`PreEditLoopGuard.record`.
 PROGRESS_TOOLS: frozenset[str] = frozenset(WRITE_TOOLS | COMMAND_TOOLS)
+
+
+def is_narrow_read(name: str, args: Any) -> bool:
+    """Return whether a call pulls a bounded slice of one known file.
+
+    ``read_file`` with actual bounded ``offset`` and ``limit`` is the canonical
+    narrow read; the historical range/outline tools stay narrow for transcript
+    replay.  An unbounded ``read_file`` — and every other observation call — is
+    broad observation.
+    """
+    if name in NARROW_READ_TOOLS:
+        return True
+    if name != "read_file" or not isinstance(args, dict):
+        return False
+    offset = args.get("offset")
+    limit = args.get("limit")
+    return (
+        isinstance(offset, int)
+        and not isinstance(offset, bool)
+        and isinstance(limit, int)
+        and not isinstance(limit, bool)
+        and offset >= 1
+        and limit >= 1
+    )
+
+
+def _default_effect_lookup(name: str) -> ToolEffect:
+    """Classify without a live registry: the built-in table, else observation.
+
+    Matches the registry's own default for dynamic, MCP, drone, and workspace
+    tools that declare no effect metadata.
+    """
+    return BUILTIN_TOOL_EFFECTS.get(name, ToolEffect.OBSERVATION)
 
 #: Rounds of tools-without-new-evidence tolerated before one steering message.
 MAX_STAGNANT_ROUNDS_BEFORE_STEER: int = 2
@@ -177,10 +209,10 @@ DUPLICATE_READ_REASON = "duplicate_read_before_first_edit"
 DISCOVERY_EXHAUSTED_REASON = "discovery_budget_exhausted_before_first_edit"
 
 #: Named in the rejection payload so the recovery path is explicit rather than
-#: something the model has to guess at.
+#: something the model has to guess at.  ``read_file`` stays available only as
+#: a bounded offset/limit window of a file the turn already knows.
 _STILL_AVAILABLE_TOOLS: tuple[str, ...] = (
-    "read_file_range",
-    "read_file_outline",
+    "read_file",
     "write_file",
     "patch_file",
 )
@@ -205,7 +237,7 @@ _FOCUS_MESSAGE = (
     "Loop guard: {calls} discovery calls have run in this turn and nothing has "
     "been written yet. Stop surveying and commit to a target. Name the "
     "specific file(s) you are about to change, then confirm only what you "
-    "still need with read_file_range or read_file_outline on those files and "
+    "still need with a bounded read_file (offset and limit) on those files and "
     "make the edit. You have about {remaining} more broad discovery calls "
     "before they are refused; narrow reads of files you have already found "
     "stay available either way. If you genuinely cannot identify a target, say "
@@ -216,11 +248,11 @@ _DISCOVERY_EXHAUSTED_MESSAGE = (
     "This turn has spent its broad-discovery budget ({calls} discovery calls) "
     "without applying a single edit, so further exploration is refused. This "
     "is not a failure of the tool and not a reason to try a different search: "
-    "read_file_range and read_file_outline on the files you have already found "
-    "still work, and so do write_file and patch_file. Narrow to a target file, "
-    "confirm the lines you need, and make the change. Once any edit applies, "
-    "this limit is lifted for the rest of the turn. If you truly cannot "
-    "proceed, name the blocker in one sentence and stop."
+    "read_file with a bounded offset/limit window on the files you have "
+    "already found still works, and so do write_file and patch_file. Narrow to "
+    "a target file, confirm the lines you need, and make the change. Once any "
+    "edit applies, this limit is lifted for the rest of the turn. If you truly "
+    "cannot proceed, name the blocker in one sentence and stop."
 )
 
 
@@ -301,6 +333,13 @@ def _condense(text: str) -> str:
 class PreEditLoopGuard:
     """Track read repetition, stagnant rounds, and discovery spend pre-write."""
 
+    #: Authoritative effect classifier — the live registry's ``tool_effect``
+    #: when one is wired in, else the built-in table plus the observation
+    #: default.  The guard never re-derives intent from a tool's name.
+    effect_lookup: Callable[[str], ToolEffect] = field(
+        default=_default_effect_lookup, repr=False, compare=False
+    )
+
     seen_reads: dict[str, int] = field(default_factory=dict)
     seen_evidence: set[str] = field(default_factory=set)
     stagnant_rounds: int = 0
@@ -363,6 +402,28 @@ class PreEditLoopGuard:
                 return
             self.candidate_files.add(path)
 
+    # ---- effect classification -------------------------------------------
+
+    def _effect(self, name: str) -> ToolEffect:
+        return self.effect_lookup(name)
+
+    def _is_observation(self, name: str) -> bool:
+        """Whether the registry classifies *name* as a read-only inspection."""
+        return self._effect(name) is ToolEffect.OBSERVATION
+
+    def _is_mutation(self, name: str) -> bool:
+        """Whether the registry classifies *name* as a workspace/file edit."""
+        return self._effect(name) is ToolEffect.MUTATION
+
+    def _is_command(self, name: str) -> bool:
+        """Whether the registry classifies *name* as an external command."""
+        return self._effect(name) is ToolEffect.COMMAND
+
+    def _is_discovery(self, name: str, args: Any) -> bool:
+        """Whether the call opens new ground: an observation that is not a
+        bounded narrow read of a file the turn already knows."""
+        return self._is_observation(name) and not is_narrow_read(name, args)
+
     # ---- round lifecycle -------------------------------------------------
 
     def begin_round(self) -> None:
@@ -396,7 +457,7 @@ class PreEditLoopGuard:
         * an unjustified exact repeat read, and
         * broad discovery after the cumulative budget is spent.
         """
-        if self.write_applied or name not in READ_ONLY_TOOLS:
+        if self.write_applied or not self._is_observation(name):
             return None
         if self._grace_rounds > 0 or recovery_pending:
             # A failure, a stale-file notice, or a pending edit-recovery step
@@ -417,11 +478,12 @@ class PreEditLoopGuard:
                 "message": _DUPLICATE_READ_MESSAGE,
             }
 
-        # Narrow reads are not in DISCOVERY_TOOLS, so ranges and outlines of
-        # files already found stay available past this point — that is how the
-        # turn narrows down to an edit. They remain subject to the duplicate
-        # check above, since an exact repeat still returns the same bytes.
-        if name in DISCOVERY_TOOLS and self.discovery_exhausted:
+        # Narrow reads — a bounded read_file window, plus the historical range
+        # and outline tools kept for replay — stay available past this point,
+        # so the turn can always narrow down to an edit. They remain subject
+        # to the duplicate check above, since an exact repeat still returns the
+        # same bytes.
+        if self._is_discovery(name, args) and self.discovery_exhausted:
             self.blocked_calls += 1
             return {
                 "ok": False,
@@ -448,11 +510,11 @@ class PreEditLoopGuard:
         :meth:`observe_result`.
         """
         self._round_had_tools = True
-        if name in READ_ONLY_TOOLS:
+        if self._is_observation(name):
             fingerprint = read_fingerprint(name, args)
             self.seen_reads[fingerprint] = self.seen_reads.get(fingerprint, 0) + 1
             self._note_candidates(args)
-        if name in DISCOVERY_TOOLS and not self.write_applied:
+        if self._is_discovery(name, args) and not self.write_applied:
             # Counted per accepted call, regardless of whether the result was
             # new: a turn can survey forever while every call returns something.
             self.discovery_calls += 1
@@ -469,17 +531,17 @@ class PreEditLoopGuard:
         if not ok:
             self.note_failure(name, payload)
             return
-        if name in WRITE_TOOLS and _payload_applied(payload):
+        if self._is_mutation(name) and _payload_applied(payload):
             self.write_applied = True
             self.stagnant_rounds = 0
             self._round_made_progress = True
             return
-        if name in COMMAND_TOOLS:
+        if self._is_command(name):
             # A command that actually ran and succeeded is real work: the
             # validation landed, so the turn moved.
             self._round_made_progress = True
             return
-        if name in READ_ONLY_TOOLS:
+        if self._is_observation(name):
             self._note_candidates(_decode_payload(payload))
             fingerprint = evidence_fingerprint(name, payload)
             if fingerprint is not None and fingerprint not in self.seen_evidence:

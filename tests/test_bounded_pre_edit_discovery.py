@@ -107,8 +107,8 @@ class TestCumulativeDiscoveryTriggersFocus:
         burn_discovery(guard, BEFORE)
         message = guard.take_focus_message()
 
-        assert "read_file_range" in message
-        assert "read_file_outline" in message
+        assert "bounded read_file" in message
+        assert "offset and limit" in message
 
     def test_read_task_context_counts_toward_the_budget(self) -> None:
         assert "read_task_context" in DISCOVERY_TOOLS
@@ -224,10 +224,10 @@ class TestContinuedBroadDiscoveryIsRejected:
         rejection = guard.check("glob", {"pattern": "**/*.py"})
 
         assert set(rejection["still_available"]) == {
-            "read_file_range", "read_file_outline", "write_file", "patch_file",
+            "read_file", "write_file", "patch_file",
         }
         assert "src/module_1.py" in rejection["known_candidate_files"]
-        assert "read_file_range" in rejection["message"]
+        assert "bounded offset/limit window" in rejection["message"]
 
     def test_the_rejection_payload_serializes(self) -> None:
         """It travels to the model as a tool result, so it must be JSON."""
