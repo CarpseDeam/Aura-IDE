@@ -19,6 +19,10 @@ Invariants held by `build_api_view`:
 * every assistant message in the *active* tool-call chain keeps its
   ``reasoning_content`` — DeepSeek rejects a thinking-mode replay that drops it
   (see ``_strip_superseded_reasoning`` for where the chain begins);
+* reasoning from completed batches inside the *same* real user turn is shed
+  once a later batch opens: ``_mark_completed_step_boundary`` inserts a
+  transient ``aura_internal`` user message at the active chain's start, which
+  is what makes the strip provider-safe without touching canonical history;
 * an assistant message with ``tool_calls`` is always accompanied by exactly the
   tool messages for those ids, so compaction can never orphan a tool message;
 * a tool result that started as valid JSON is still valid JSON afterwards.
@@ -81,6 +85,7 @@ class CompactionStats:
     repaired_messages: int = 0
     reasoning_chars_replayed: int = 0
     reasoning_chars_dropped: int = 0
+    boundary_messages_inserted: int = 0
     over_budget: bool = False
 
 
@@ -405,6 +410,116 @@ def _drop_block(messages: list[dict[str, Any]], start: int, end: int) -> None:
     messages[start:end] = [{"role": "assistant", "content": note}]
 
 
+# The transient user message that marks the completed-step boundary. It is
+# emitted to the provider (DeepSeek's replay rule keys on the last ``role=user``
+# message) but is ``aura_internal``, so it is never persisted, never shown in
+# the transcript, and never counted as a real user turn.
+_STEP_BOUNDARY_TEXT = (
+    "[Aura internal: completed-step boundary. Continue the active step.]"
+)
+
+
+def is_step_boundary_message(msg: dict[str, Any]) -> bool:
+    """True for the transient completed-step boundary in an outbound view.
+
+    Identifies the boundary after ``_render`` has dropped the ``aura_internal``
+    marker, so a caller that persists a rendered view (``prune_for_context``)
+    can keep the fake user request out of storage.
+    """
+    return (
+        msg.get("role") == "user"
+        and msg.get("content") == _STEP_BOUNDARY_TEXT
+    )
+
+
+def _active_chain_start(messages: list[dict[str, Any]]) -> int | None:
+    """Index of the last assistant message carrying ``tool_calls``, or None.
+
+    In Aura's mid-loop shape the conversation ends on a tool result, so this is
+    the assistant whose results the model is about to continue from — the only
+    reasoning DeepSeek's thinking-mode replay still requires.
+    """
+    for i in range(len(messages) - 1, -1, -1):
+        msg = messages[i]
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            return i
+    return None
+
+
+def _completed_step_boundary_index(
+    messages: list[dict[str, Any]],
+) -> int | None:
+    """Index at which to insert the completed-step boundary, or None.
+
+    Within one real user turn a tool loop runs many rounds. Reasoning on every
+    finished batch is dead weight that the provider nevertheless forces us to
+    replay, because it only recognises one boundary: the last ``role=user``
+    message. This returns the start of the *active* chain when completed steps
+    sit behind it, so ``_mark_completed_step_boundary`` can insert an
+    ``aura_internal`` user message there. That message is exactly what makes the
+    strip provider-safe: assistant messages before it (the completed steps) may
+    shed reasoning while the active chain after it keeps its own.
+
+    Returns ``None`` when there is nothing to shed — no open chain, no completed
+    step ahead of it, no reasoning in the completed span, or a user message
+    already bounding the chain.
+    """
+    if not messages or messages[-1].get("role") != "tool":
+        # Only the mid-loop shape has an open chain the provider will continue.
+        return None
+    active = _active_chain_start(messages)
+    if active is None:
+        return None
+
+    last_user = -1
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].get("role") == "user":
+            last_user = i
+            break
+    if active <= last_user:
+        # A real turn or internal steering already bounds the chain.
+        return None
+
+    # A completed step (assistant tool-call block) must sit between the last
+    # user message and the active chain, and it must carry reasoning worth
+    # shedding — otherwise the boundary buys nothing but a visible marker.
+    for i in range(last_user + 1, active):
+        msg = messages[i]
+        if msg.get("role") != "assistant" or not msg.get("tool_calls"):
+            continue
+        if isinstance(msg.get("reasoning_content"), str) and msg.get(
+            "reasoning_content"
+        ):
+            return active
+    return None
+
+
+def _mark_completed_step_boundary(
+    working: list[dict[str, Any]], stats: CompactionStats
+) -> None:
+    """Insert the completed-step boundary when reasoning is there to shed.
+
+    The boundary is an ``aura_internal`` user message: transient (this is a deep
+    copy, never persisted), invisible to the user (the transcript and persistence
+    skip ``aura_internal``), and never a real user turn (so routing, skill
+    selection, research policy, and rewind are untouched). The provider sees it
+    as the last user message, which is exactly what makes
+    ``_strip_superseded_reasoning`` legal for the completed steps before it.
+    """
+    idx = _completed_step_boundary_index(working)
+    if idx is None:
+        return
+    working.insert(
+        idx,
+        {
+            "role": "user",
+            "content": _STEP_BOUNDARY_TEXT,
+            "aura_internal": True,
+        },
+    )
+    stats.boundary_messages_inserted += 1
+
+
 def _strip_superseded_reasoning(
     working: list[dict[str, Any]], stats: CompactionStats
 ) -> None:
@@ -427,7 +542,9 @@ def _strip_superseded_reasoning(
 
     The last user message is the boundary the provider itself sees, which
     includes Aura's internal steering messages (they are sent as ``role:
-    user``). Canonical history is untouched; this only shapes one request.
+    user``) and, inside one real user turn, the completed-step boundary that
+    ``_mark_completed_step_boundary`` inserts at the active chain's start.
+    Canonical history is untouched; this only shapes one request.
     """
     boundary = -1
     for index, msg in enumerate(working):
@@ -469,7 +586,10 @@ def build_api_view(
     stats.tokens_before = estimate_tokens(working, system_prompt)
 
     # Before compaction, so the space this frees is space the ladder does not
-    # have to take out of tool results.
+    # have to take out of tool results. The completed-step boundary first:
+    # within one real user turn it makes reasoning from finished batches
+    # provider-safe to shed while the active chain keeps its own.
+    _mark_completed_step_boundary(working, stats)
     _strip_superseded_reasoning(working, stats)
 
     _compact_to_budget(working, system_prompt, budget_tokens, names, stats, keep_last_n_turns)

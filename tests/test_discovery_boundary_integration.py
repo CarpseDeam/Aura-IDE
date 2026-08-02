@@ -338,6 +338,52 @@ class TestViewRemainsIntact:
 
         assert_tool_pairing_valid([m for m in view.messages if m.get("role") != "system"])
 
+    def test_completed_step_reasoning_does_not_grow_round_after_round(self) -> None:
+        """The production regression: one real request drives a multi-round
+        tool loop, and every finished batch used to replay its reasoning on
+        every subsequent round. Building the view the way ``send()`` does —
+        assistant + paired result per round — must replay only the active
+        batch, and that batch must stay provider-valid."""
+        history = History()
+        history.set_system("system")
+        history.append_user_text("Fix the retry cap so the job pauses.")
+        for i in range(4):
+            history.append_assistant({
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": f"working on round {i}\n",
+                "tool_calls": [tool_call(f"r{i}", "read_file", {"path": f"m{i}.py"})],
+            })
+            history.append_tool_result(
+                f"r{i}",
+                json.dumps({"ok": True, "path": f"m{i}.py", "content": f"b{i}"}),
+            )
+            view = build_api_view("system", history.messages, budget_tokens=200_000)
+
+            replayed = [
+                m.get("reasoning_content")
+                for m in view.messages
+                if m.get("role") == "assistant" and m.get("reasoning_content")
+            ]
+            assert replayed == [f"working on round {i}\n"], (
+                f"after round {i} the view replayed {replayed!r}; reasoning "
+                "grew with every completed batch"
+            )
+            # The active chain the provider is about to continue still carries
+            # its reasoning — the DeepSeek 400 boundary.
+            users = [j for j, m in enumerate(view.messages) if m.get("role") == "user"]
+            boundary = users[-1]
+            for m in view.messages[boundary + 1:]:
+                assert m.get("reasoning_content") or not m.get("tool_calls")
+            assert_tool_pairing_valid(
+                [m for m in view.messages if m.get("role") != "system"]
+            )
+        # The transient boundary never reached the stored log.
+        assert not any(
+            m.get("role") == "user" and "completed-step boundary" in str(m.get("content"))
+            for m in history.messages
+        )
+
 
 # ── single-mode content gating is unaffected ────────────────────────────────
 

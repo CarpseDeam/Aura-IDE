@@ -26,7 +26,11 @@ from typing import Any
 
 import pytest
 
-from aura.conversation.api_view import _turn_starts, build_api_view
+from aura.conversation.api_view import (
+    _turn_starts,
+    build_api_view,
+    is_step_boundary_message,
+)
 from aura.conversation.history import History
 
 # ── helpers ─────────────────────────────────────────────────────────────────
@@ -356,3 +360,86 @@ class TestOnlyInternalUserMessages:
         view = build_api_view(h.system_prompt, h.messages, 1_000)
         assert view.messages
         assert_tool_pairing_valid(view.messages)
+
+
+# ── 5: the completed-step boundary inside one real user turn ────────────────
+
+
+class TestCompletedStepBoundary:
+    """A finished tool batch in the *same* real user turn sheds its reasoning
+    while the active chain keeps its own — without persisting or displaying a
+    fake user request."""
+
+    def _history(self, steps: int = 3) -> History:
+        h = History()
+        h.set_system("s")
+        h.append_user_text("Fix the retry cap so the job pauses.")
+        for i in range(steps):
+            for msg in tool_block(
+                f"c{i}", "read_files", {"paths": [f"f{i}.py"]},
+                source_result(f"f{i}.py", 4_000),
+                reasoning=f"thinking about step {i}\n",
+            ):
+                h.messages.append(msg)
+        return h
+
+    def test_the_boundary_reaches_the_model_as_an_internal_user_message(
+        self,
+    ) -> None:
+        h = self._history()
+        view = h.build_api_payload(10_000_000)
+
+        boundaries = [m for m in view.messages if is_step_boundary_message(m)]
+        assert len(boundaries) == 1, "the boundary was not placed in the view"
+        assert "aura_internal" not in boundaries[0], (
+            "the internal marker leaked into the outbound payload"
+        )
+
+    def test_the_boundary_is_never_persisted(self) -> None:
+        h = self._history()
+        before = json.dumps(h.messages, sort_keys=True)
+
+        h.build_api_payload(10_000_000)
+
+        assert json.dumps(h.messages, sort_keys=True) == before, (
+            "canonical history was edited to fit the request"
+        )
+        assert not any(is_step_boundary_message(m) for m in h.messages)
+
+    def test_the_boundary_does_not_start_a_real_user_turn(self) -> None:
+        h = self._history()
+        h.build_api_payload(10_000_000)
+
+        assert _turn_starts(h.messages) == [0], (
+            "the boundary leaked into real user-turn counting"
+        )
+
+    def test_completed_steps_shed_reasoning_but_the_active_chain_keeps_its_own(
+        self,
+    ) -> None:
+        h = self._history()
+        view = h.build_api_payload(10_000_000)
+
+        assistants = [m for m in view.messages if m.get("role") == "assistant"]
+        # c0 and c1 are completed — their reasoning is shed.
+        assert "reasoning_content" not in assistants[0]
+        assert "reasoning_content" not in assistants[1]
+        # c2 is the active chain — its reasoning is replayed (DeepSeek rule).
+        assert assistants[2]["reasoning_content"] == "thinking about step 2\n"
+        assert view.stats.reasoning_chars_replayed == len("thinking about step 2\n")
+        assert view.stats.reasoning_chars_dropped == 2 * len("thinking about step 0\n")
+
+    @pytest.mark.parametrize("budget", [10_000_000, 4_000, 800, 200])
+    def test_pairing_and_the_active_chain_survive_every_budget(self, budget) -> None:
+        h = self._history()
+        view = h.build_api_payload(budget)
+
+        assert_tool_pairing_valid(view.messages)
+        boundaries = [
+            i for i, m in enumerate(view.messages) if is_step_boundary_message(m)
+        ]
+        assert boundaries, "compaction removed the completed-step boundary"
+        for m in view.messages[boundaries[-1] + 1:]:
+            assert m.get("reasoning_content") or not m.get("tool_calls"), (
+                "the active chain lost reasoning while the boundary is present"
+            )

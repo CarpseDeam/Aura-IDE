@@ -298,6 +298,93 @@ class TestReasoningReplay:
         assert view_without.stats.reasoning_chars_dropped == 0
         assert view_without.stats.dropped_blocks > 0
 
+    # ── the completed-step boundary inside one real user turn ─────────────
+
+    def _multi_step_turn(self, steps: int = 3) -> History:
+        """One real request whose tool loop has run several completed batches,
+        the newest still active — the array ends on a tool result, Aura's
+        production mid-loop shape."""
+        h = History()
+        h.set_system("system prompt")
+        h.append_user_text("Fix the retry cap so the job pauses.")
+        for i in range(steps):
+            for msg in tool_block(
+                f"c{i}", "read_files", {"paths": [f"f{i}.py"]},
+                big_read_files_result([f"f{i}.py"], 4_000),
+                reasoning=f"step {i} thinking\n",
+            ):
+                h.messages.append(msg)
+        return h
+
+    def test_completed_steps_in_the_same_turn_shed_reasoning(self) -> None:
+        """No budget pressure is needed: once a later batch opens, finished
+        batches' reasoning is shed while the active chain keeps its own."""
+        h = self._multi_step_turn(3)
+        view = build_api_view(h.system_prompt, h.messages, 10_000_000)
+
+        assert view.stats.boundary_messages_inserted == 1
+        assert view.stats.reasoning_chars_dropped == 2 * len("step 0 thinking\n")
+        replayed = [
+            m for m in view.messages
+            if m.get("role") == "assistant" and m.get("reasoning_content")
+        ]
+        assert len(replayed) == 1
+        assert replayed[0]["reasoning_content"] == "step 2 thinking\n"
+        # The active chain — the tail after the boundary — stays provider-valid.
+        boundary = self._last_user_index(view.messages)
+        for m in view.messages[boundary + 1:]:
+            assert m.get("reasoning_content") or not m.get("tool_calls"), (
+                "the active chain lost reasoning — DeepSeek rejects this with a 400"
+            )
+        assert_tool_pairing_valid(view.messages)
+        # Canonical history keeps every step's reasoning intact.
+        assert sum(
+            len(m.get("reasoning_content") or "")
+            for m in h.messages if m.get("role") == "assistant"
+        ) == 3 * len("step 0 thinking\n")
+
+    def test_completed_step_reasoning_does_not_grow_across_rounds(self) -> None:
+        """The regression: replayed reasoning used to accumulate on every
+        round of one long tool loop. Now the view after each completed batch
+        replays only the active chain's reasoning."""
+        h = History()
+        h.set_system("system prompt")
+        h.append_user_text("Fix the retry cap so the job pauses.")
+        for i in range(4):
+            for msg in tool_block(
+                f"c{i}", "read_files", {"paths": [f"f{i}.py"]},
+                big_read_files_result([f"f{i}.py"], 4_000),
+                reasoning=f"round {i} reasoning\n",
+            ):
+                h.messages.append(msg)
+            view = build_api_view(h.system_prompt, h.messages, 10_000_000)
+            replayed = [
+                m.get("reasoning_content")
+                for m in view.messages
+                if m.get("role") == "assistant" and m.get("reasoning_content")
+            ]
+            assert replayed == [f"round {i} reasoning\n"], (
+                f"after round {i} the view replayed {replayed!r}; "
+                "completed-step reasoning grew on every round"
+            )
+            boundary = self._last_user_index(view.messages)
+            for m in view.messages[boundary + 1:]:
+                assert m.get("reasoning_content") or not m.get("tool_calls")
+            assert_tool_pairing_valid(view.messages)
+
+    @pytest.mark.parametrize("budget", [40_000, 8_000, 2_000, 400])
+    def test_the_boundary_survives_aggressive_compaction(self, budget) -> None:
+        """Even when the ladder cuts the current turn's own evidence, the
+        active chain keeps its reasoning and tool pairing holds."""
+        h = self._multi_step_turn(3)
+        view = build_api_view(h.system_prompt, h.messages, budget)
+
+        assert view.stats.boundary_messages_inserted == 1
+        boundary = self._last_user_index(view.messages)
+        for m in view.messages[boundary + 1:]:
+            assert m.get("reasoning_content") or not m.get("tool_calls")
+        assert_tool_pairing_valid(view.messages)
+
 
 # ── 2: for_api() does not mutate stored history ─────────────────────────────
 

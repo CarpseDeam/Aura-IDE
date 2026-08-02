@@ -196,6 +196,7 @@ class _FakeStats:
     repaired_messages = 0
     reasoning_chars_replayed = 0
     reasoning_chars_dropped = 0
+    boundary_messages_inserted = 0
     over_budget = False
 
 
