@@ -33,7 +33,9 @@ GODOT = "godot"
 
 CAPABILITY_TOOLS: dict[str, frozenset[str]] = {
     CORE_READ: frozenset({"read_file", "glob"}),
-    CORE_SEARCH: frozenset({"grep_search"}),
+    # Two searches that do not overlap: an exact-string sweep, and ranked
+    # recall of whole files by what they are about.
+    CORE_SEARCH: frozenset({"grep_search", "search_codebase"}),
     CORE_EDIT: frozenset({"write_file", "patch_file", "delete_file"}),
     CORE_TERMINAL: frozenset({"run_terminal_command", "run_and_watch"}),
     CORE_TODO: frozenset({"update_worker_todo"}),
@@ -46,10 +48,9 @@ CAPABILITY_TOOLS: dict[str, frozenset[str]] = {
         "read_task_context",
         "list_directory",
     }),
-    # Superseded by grep_search.
+    # Superseded by grep_search and read_file.
     CODE_INTEL: frozenset({
         "find_usages",
-        "search_codebase",
         "code_intel_outline",
         "code_intel_references",
         "code_intel_dependents",

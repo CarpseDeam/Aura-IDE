@@ -409,12 +409,11 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
                         "Returns matching file paths, line numbers, the matching line content, "
                         "and the column where the match starts, plus search metadata such as the "
                         "engine used, searched file count, skipped file count, truncation, and regex hint state. "
-                        "Use this to find where functions are defined, variables are used, "
-                        "error messages, or any text pattern across the codebase. "
-                        "For exact symbol usages before a rename, anchor the pattern with word "
-                        "boundaries, e.g. '\\bcount_items\\b'. To recall a file by what it does "
-                        "rather than by an exact string, search for a distinctive term you expect "
-                        "in it and widen from the hits."
+                        "Use this whenever you know the text you are looking for: where a function "
+                        "is defined, where a variable is used, an error message, any pattern. "
+                        "For exact symbol usages before a rename, anchor with word boundaries, "
+                        "e.g. '\\bcount_items\\b'. When you cannot name the text and only know what "
+                        "the code does, use search_codebase instead."
                     ),
                     "parameters": {
                         "type": "object",
@@ -505,12 +504,11 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
                 "function": {
                     "name": "search_codebase",
                     "description": (
-                        "Semantic search over the workspace codebase using a local BM25 index. "
-                        "Use this to recall files, functions, or code patterns when you need context "
-                        "that may have been pruned from the conversation history. This is NOT a grep — "
-                        "it ranks entire files by relevance to your query. Great for re-discovering "
-                        "\"the file that handled authentication\" or \"the database migration script\" "
-                        "without knowing the exact path or keyword."
+                        "Rank whole files by how well they match a description, using a local BM25 "
+                        "index. Use this only when you cannot name the text to search for: "
+                        "\"the file that handled authentication\", \"the database migration script\". "
+                        "If you know the string, path, or symbol, use grep_search — it is exact and "
+                        "immediate, where this is ranked and builds an index on first use."
                     ),
                     "parameters": {
                         "type": "object",
