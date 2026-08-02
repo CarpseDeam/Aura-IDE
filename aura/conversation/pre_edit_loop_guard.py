@@ -35,15 +35,19 @@ name.
 
 **Progress is owned by results, never by intent.**  Issuing a terminal or
 diagnostic call proves nothing — the command may not even start.  Only an
-*applied* write and a *successful* command count as forward progress and clear
-the failure state.  A failed command leaves the round stalled, but a distinct
-failure opens recovery: rereads are allowed while it is open, and the focused
-transition waits so the agent can fix the command and recover.  Re-running the
-same command into the same failure is not a new distinct failure and renews
-nothing; once the recovery round closes without progress or new evidence, the
-reread grace is spent.  A corrected command is never blocked by this guard —
-commands are outside its gate entirely — and when the correction succeeds,
-recovery closes like any other progress.
+*applied* write — one whose result payload explicitly says ``applied: True`` —
+and a *successful* command count as forward progress and clear the failure
+state.  A failed command leaves the round stalled, but a distinct failure opens
+recovery: rereads are allowed while it is open, and the focused transition waits
+so the agent can fix the command and recover.  Recovery is exactly one round
+long.  Progress or genuinely new evidence resolves it; another distinct failure
+opens its own round; and a granted round that ends with neither closes recovery
+outright — the reread grace is spent *and* that same stalled round becomes the
+focused transition, because a turn that cannot recover must still act rather
+than circle.  Re-running the same command into the same failure is not a new
+distinct failure and renews nothing.  A corrected command is never blocked by
+this guard — commands are outside its gate entirely — and when the correction
+succeeds, recovery closes like any other progress.
 
 There is deliberately no semantic classification of model output, no
 planner/worker workflow, and no phase state machine here.  The 300-call
@@ -57,7 +61,11 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from aura.conversation.tool_limits import TERMINAL_TOOLS, WRITE_TOOLS
-from aura.conversation.tools.effects import BUILTIN_TOOL_EFFECTS, ToolEffect
+from aura.conversation.tools.effects import (
+    BUILTIN_TOOL_EFFECTS,
+    DEFAULT_EXTENSIBLE_TOOL_EFFECT,
+    ToolEffect,
+)
 
 #: Built-in names whose effect is observation.  Historical name set kept for
 #: tests and back-compat: the runtime classifies every call through the
@@ -125,12 +133,13 @@ def is_narrow_read(name: str, args: Any) -> bool:
 
 
 def _default_effect_lookup(name: str) -> ToolEffect:
-    """Classify without a live registry: the built-in table, else observation.
+    """Classify without a live registry: the built-in table, else fail safe.
 
-    Matches the registry's own default for dynamic, MCP, drone, and workspace
-    tools that declare no effect metadata.
+    Matches the registry's own resolution, including its fail-safe default for
+    extensible and unrecognised tools — an unclassified name is treated as
+    consequential, never as a free observation whose repeats can be gated.
     """
-    return BUILTIN_TOOL_EFFECTS.get(name, ToolEffect.OBSERVATION)
+    return BUILTIN_TOOL_EFFECTS.get(name, DEFAULT_EXTENSIBLE_TOOL_EFFECT)
 
 
 #: Argument and result keys that name a file.  Used only to remember which
@@ -304,9 +313,10 @@ class PreEditLoopGuard:
     repeated_failures: int = 0
 
     #: Whether an unresolved distinct failure blocks the focused transition.
-    #: Set by a distinct failure, cleared only by recovery (new evidence or
-    #: forward progress).  While true, a stalled round is a recovery round, not
-    #: a signal to force a mutation.
+    #: Set by a distinct failure and cleared either by recovery (new evidence or
+    #: forward progress) or by the one granted recovery round ending without
+    #: either.  While true, a stalled round is a recovery round, not a signal to
+    #: force a mutation; it is never latched past that one round.
     _failure_active: bool = False
     #: Whether a reread is currently justified because the previous round
     #: opened a failure recovery.  Bounded: it is spent when the round after a
@@ -362,16 +372,18 @@ class PreEditLoopGuard:
             # it, and keeps the focused transition waiting.
             self._failure_pending = True
         else:
-            # One recovery round is spent: whatever reread grace a failure
-            # bought is used up.  Recovery may still be open (no new evidence
-            # yet), which is why ``_failure_active`` is separate.
+            # The granted recovery round is over and it recovered nothing.
+            # Recovery closes here — both the reread grace and the hold on the
+            # focused transition — so this same stalled round is free to be the
+            # transition below.  Recovery is opened only by a *distinct*
+            # failure, so re-running one broken command into the failure it
+            # already produced cannot keep re-granting this round forever.
             self._failure_pending = False
+            self._failure_active = False
 
         if recovered or self._round_fresh_failure:
             return
         if not self._round_had_tools or not self._round_observed:
-            return
-        if self._failure_active:
             return
         # A round that ran tools, saw their results, and neither advanced the
         # turn nor gathered evidence has stopped moving: hand the send loop the
@@ -566,18 +578,25 @@ def _iter_paths(value: Any, _depth: int = 0):
 
 
 def _payload_applied(payload: Any) -> bool:
-    """Return whether a write tool's result claims the change actually landed."""
+    """Return whether a write tool's result *proves* the change actually landed.
+
+    Fail-closed, matching the direct-write refresh contract in
+    :func:`aura.conversation.manager_tool_round._result_payload_applied`: a
+    mutation counts as applied only when its authoritative payload explicitly
+    carries ``applied is True``.  A malformed payload, a non-dictionary payload,
+    a payload with no ``applied`` field, and a truthy-but-not-``True`` value are
+    all "not applied" — an ambiguous result must never be read as a landed edit,
+    because that would clear the guard's pre-write gates on no evidence.
+    """
     data: Any = payload
     if isinstance(payload, str):
         try:
             data = json.loads(payload)
         except (TypeError, ValueError):
-            return True
+            return False
     if not isinstance(data, dict):
-        return True
-    if "applied" in data:
-        return bool(data["applied"])
-    return True
+        return False
+    return data.get("applied") is True
 
 
 __all__ = [

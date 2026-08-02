@@ -408,51 +408,57 @@ class TestCandidateTracking:
         assert len(guard.candidate_files) <= guard_module._MAX_CANDIDATE_FILES
 
 
-# ── failure recovery blocks the focused transition ──────────────────────────
+# ── failure recovery holds the focused transition for exactly one round ─────
 
 
-class TestFailureRecoveryBlocksFocus:
+def _failing_command_round(guard: PreEditLoopGuard) -> None:
+    guard.begin_round()
+    guard.record("run_diagnostic_command", {"command": "pytest -q"})
+    guard.observe_result(
+        "run_diagnostic_command",
+        False,
+        json.dumps({"requested_command": "pytest -q", "failure_class": "boom"}),
+    )
+    guard.end_round()
 
-    def test_a_stalled_round_after_a_distinct_failure_is_not_a_transition(
-        self,
-    ) -> None:
-        """A failure explains the stall; the next round is for fixing it, not
-        for forcing a mutation."""
+
+class TestFailureRecoveryHoldsFocusForOneRound:
+
+    def test_the_failing_round_itself_is_not_a_transition(self) -> None:
+        """A failure explains the stall; the round after it is for fixing the
+        failure, not for forcing a mutation."""
         guard = PreEditLoopGuard()
         burn_discovery(guard, 1)
-        # A failing command opens recovery.
-        guard.begin_round()
-        guard.record("run_diagnostic_command", {"command": "pytest -q"})
-        guard.observe_result(
-            "run_diagnostic_command",
-            False,
-            json.dumps({"requested_command": "pytest -q", "failure_class": "boom"}),
-        )
-        guard.end_round()
-        # The recovery round itself repeats the same bytes: no progress, no new
-        # evidence — but failure recovery holds the transition off.
-        stall_round(guard, which=0)
+        _failing_command_round(guard)
 
         assert guard.focused is False
+        assert guard._failure_active is True
+
+    def test_a_recovery_round_that_recovers_nothing_is_the_transition(
+        self,
+    ) -> None:
+        """The granted recovery round repeats the same bytes: no progress, no
+        new evidence, no new distinct failure.  Recovery closes there and that
+        same stalled round becomes the focused transition — it must not stay
+        latched open, suppressing focus for the rest of the turn."""
+        guard = PreEditLoopGuard()
+        burn_discovery(guard, 1)
+        _failing_command_round(guard)
+
+        stall_round(guard, which=0)
+
+        assert guard.focused is True
+        assert guard._failure_active is False
 
     def test_recovery_clears_the_block_and_new_evidence_never_fires_focus(
         self,
     ) -> None:
         guard = PreEditLoopGuard()
         burn_discovery(guard, 1)
-        guard.begin_round()
-        guard.record("run_diagnostic_command", {"command": "pytest -q"})
-        guard.observe_result(
-            "run_diagnostic_command",
-            False,
-            json.dumps({"requested_command": "pytest -q", "failure_class": "boom"}),
-        )
-        guard.end_round()
-        stall_round(guard, which=0)
-        assert guard.focused is False
+        _failing_command_round(guard)
 
-        # The corrected command succeeds: recovery closes and the turn is
-        # moving again, so focus never fires from that round either.
+        # The corrected command succeeds inside the granted recovery round:
+        # recovery closes and the turn is moving again, so focus never fires.
         guard.begin_round()
         guard.record("run_diagnostic_command", {"command": "pytest -q"})
         guard.observe_result(
@@ -463,6 +469,7 @@ class TestFailureRecoveryBlocksFocus:
         guard.end_round()
 
         assert guard._failure_active is False
+        assert guard._failure_pending is False
         assert guard.focused is False
 
 

@@ -5,7 +5,11 @@ from pathlib import Path
 from typing import Any
 
 from aura.conversation.tools.dynamic import parse_tool_schema
-from aura.conversation.tools.effects import ToolEffect, parse_dynamic_effect_metadata
+from aura.conversation.tools.effects import (
+    DEFAULT_EXTENSIBLE_TOOL_EFFECT,
+    ToolEffect,
+    parse_dynamic_effect_metadata,
+)
 
 
 class DynamicToolRegistry:
@@ -90,12 +94,27 @@ class DynamicToolRegistry:
         return self._cache.get(name)
 
     def effect(self, name: str) -> ToolEffect | None:
-        """Effect a dynamic tool declares via ``AURA_TOOL_EFFECT``, or None.
+        """Effect a dynamic tool *declares* via ``AURA_TOOL_EFFECT``, or None.
 
-        None means the script declared no metadata; the caller applies the
-        observation default.
+        None means the script declared no valid metadata.  This is the raw
+        declaration; :meth:`resolved_effect` is the authoritative answer.
         """
         path = self.get(name)
         if path is None:
             return None
         return parse_dynamic_effect_metadata(path)
+
+    def resolved_effect(self, name: str) -> ToolEffect | None:
+        """Authoritative effect for a registered dynamic tool, or None if unknown.
+
+        A registered script always resolves to *some* effect: its declaration
+        when it made one, otherwise the fail-safe consequential default — an
+        undeclared script is arbitrary local code, and nothing about its
+        presence establishes it as read-only.  ``None`` means only that this
+        registry has no such tool.
+        """
+        path = self.get(name)
+        if path is None:
+            return None
+        declared = parse_dynamic_effect_metadata(path)
+        return declared if declared is not None else DEFAULT_EXTENSIBLE_TOOL_EFFECT

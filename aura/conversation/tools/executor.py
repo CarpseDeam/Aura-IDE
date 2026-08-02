@@ -65,9 +65,11 @@ class ToolExecutor:
             if handler is not None:
                 return handler(self._owner, args, approval_cb, reject_all)
 
-            # 2. MCP tools
+            # 2. MCP tools.  The approval gate is the registry's resolved
+            # effect — an unannotated server tool is consequential and is
+            # approved like one; only an established observation is free.
             if self._mcp_tools.can_execute(name):
-                if is_consequential(name):
+                if self._mcp_tools.requires_approval(name):
                     if reject_all:
                         return ToolExecResult(
                             ok=False,

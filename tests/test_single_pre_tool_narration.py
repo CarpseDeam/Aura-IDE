@@ -806,18 +806,23 @@ class TestStalledDiscoveryFiresTheFocusedRequest:
         assert guard.focused is False
 
     def test_failing_terminal_commands_open_recovery_not_focus(self) -> None:
-        """The bug: intent was recorded as progress before the command ran."""
+        """The bug: intent was recorded as progress before the command ran.
+
+        The failing round opens recovery rather than forcing a mutation. The
+        round after it is the one granted recovery round — and if it recovers
+        nothing, it is the transition, so recovery cannot latch focus off.
+        """
         guard = PreEditLoopGuard()
-        for _ in range(2):
-            guard.begin_round()
-            guard.record("read_file", {"path": "a"})
-            guard.record("run_terminal_command", {"command": "pytest -q"})
-            guard.observe_result(
-                "run_terminal_command",
-                False,
-                json.dumps({"exit_code": 1, "command": "pytest -q"}),
-            )
-            guard.end_round()
+        guard.begin_round()
+        guard.record("read_file", {"path": "a"})
+        guard.record("run_terminal_command", {"command": "pytest -q"})
+        guard.observe_result(
+            "run_terminal_command",
+            False,
+            json.dumps({"exit_code": 1, "command": "pytest -q"}),
+        )
+        guard.end_round()
+
         assert guard.focused is False
         assert guard._failure_active is True
 

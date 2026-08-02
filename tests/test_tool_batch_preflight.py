@@ -379,8 +379,22 @@ class TestGuardEffectClassification:
     ) -> None:
         """Git, Godot, web, workspace, drone, dynamic, and MCP observation
         calls are all counted as evidence — the guard never falls back to a
-        built-in name set."""
+        built-in name set.
+
+        Extensible channels have to *declare* the observation: an unannotated
+        dynamic script or MCP tool resolves consequentially, so it is not
+        counted as evidence here.
+        """
         (tmp_path / "alpha.py").write_text("alpha = 1\n", encoding="utf-8")
+        tools_dir = tmp_path / ".aura" / "tools"
+        tools_dir.mkdir(parents=True)
+        (tools_dir / "some_dynamic_observer.py").write_text(
+            'AURA_TOOL_EFFECT = "observation"\n'
+            "def some_dynamic_observer(path: str) -> str:\n"
+            '    """A declared read-only dynamic tool."""\n'
+            '    return "ok"\n',
+            encoding="utf-8",
+        )
         registry = ToolRegistry(workspace_root=tmp_path, mode="single")
         # Registering an MCP tool also touches the module-global TOOL_HANDLERS
         # (back-compat path); clean it up so the catalog enumeration test in
@@ -390,6 +404,7 @@ class TestGuardEffectClassification:
                 "name": "server_observer",
                 "description": "reads server side",
                 "inputSchema": {"type": "object"},
+                "annotations": {"readOnlyHint": True},
             },
             _FakeMCPClient(),
         )
@@ -408,8 +423,8 @@ class TestGuardEffectClassification:
             "web_search",               # web
             "get_workspace_snapshot",   # workspace
             "launch_read_only_drone",   # drone
-            "some_dynamic_observer",    # dynamic default -> observation
-            "server_observer",          # MCP default -> observation
+            "some_dynamic_observer",    # dynamic, declared observation
+            "server_observer",          # MCP, readOnlyHint observation
         ]
         guard.begin_round()
         for i, name in enumerate(observation_names):
@@ -426,6 +441,44 @@ class TestGuardEffectClassification:
         )
         assert guard.focused is False, (
             "a round full of new evidence through every channel must not stall"
+        )
+
+    def test_unannotated_extensible_tools_are_not_observations(
+        self, tmp_path,
+    ) -> None:
+        """The fail-safe default reaches the guard: a tool that declared
+        nothing is not read-only, so its result is not filed as evidence."""
+        tools_dir = tmp_path / ".aura" / "tools"
+        tools_dir.mkdir(parents=True)
+        (tools_dir / "silent_tool.py").write_text(
+            "def silent_tool(path: str) -> str:\n"
+            '    """Declares no effect at all."""\n'
+            '    return "ok"\n',
+            encoding="utf-8",
+        )
+        registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+        registry._mcp_tools.register_tool_def(
+            {
+                "name": "server_silent",
+                "description": "declares nothing",
+                "inputSchema": {"type": "object"},
+            },
+            _FakeMCPClient(),
+        )
+        TOOL_HANDLERS.pop("server_silent", None)
+
+        guard = PreEditLoopGuard(effect_lookup=registry.tool_effect)
+        for name in ("silent_tool", "server_silent", "never_registered_tool"):
+            assert not guard._is_observation(name), name
+
+        guard.begin_round()
+        guard.record("silent_tool", {"path": "m.py"})
+        guard.observe_result("silent_tool", True, json.dumps({"path": "m.py"}))
+        guard.end_round()
+
+        assert guard.seen_evidence == set()
+        assert guard.seen_reads == {}, (
+            "a consequential tool must not be tracked as a repeatable read"
         )
 
     def test_mutation_and_command_classifications_are_not_observation(

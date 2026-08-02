@@ -17,7 +17,17 @@ The model is owned by the tool catalog and registry:
   name that has none, so a newly exposed built-in cannot remain unclassified.
 * Dynamic tools may declare ``AURA_TOOL_EFFECT`` in their script; MCP tools
   may declare ``x-aura-effect`` (or the standard MCP ``annotations``
-  ``readOnlyHint``).  Anything without declared metadata is ``observation``.
+  ``readOnlyHint``).
+
+**Extensible tools fail safe.**  A dynamic or MCP tool that declares no valid
+effect metadata — and any tool name the runtime does not recognise at all —
+resolves to :data:`DEFAULT_EXTENSIBLE_TOOL_EFFECT`, a *consequential* effect,
+never ``observation``.  These tools are third-party code the runtime cannot
+inspect: a server tool called ``notion_delete_page`` is not read-only because
+nobody annotated it, and treating silence as "harmless" is how an unannotated
+tool slips past approval, past read-only mode, and past the loop guard's
+progress accounting.  Observation is a claim that has to be made, not a default
+that is assumed.
 
 This model intentionally does not reuse the consequential-approval
 name-prefix heuristic (``is_consequential``): classification is explicit and
@@ -45,6 +55,15 @@ class ToolEffect(enum.Enum):
     MUTATION = "mutation"
     COMMAND = "command/validation"
     BOOKKEEPING = "bookkeeping/control"
+
+
+#: Effect assumed for any extensible tool without valid effect metadata, and
+#: for any unrecognised tool name.  ``COMMAND`` rather than ``MUTATION``
+#: because an unannotated tool most plausibly runs something on the other side
+#: of a boundary the runtime cannot see; both are consequential, and that is
+#: the property every caller relies on.  This constant is the single place the
+#: fail-safe default is stated — resolution belongs to the registry layer.
+DEFAULT_EXTENSIBLE_TOOL_EFFECT: ToolEffect = ToolEffect.COMMAND
 
 
 #: Explicit classification for every built-in production tool.  The catalog
@@ -120,7 +139,8 @@ def effect_from_metadata(value: Any) -> ToolEffect | None:
 
     Accepts a string effect name (``"mutation"``, ``"command/validation"``,
     ...) or a mapping with an ``effect``/``class`` key.  Unknown or missing
-    metadata returns None so callers apply the observation default.
+    metadata returns None, and the registry layer then applies the fail-safe
+    :data:`DEFAULT_EXTENSIBLE_TOOL_EFFECT`.
     """
     if isinstance(value, dict):
         value = value.get("effect", value.get("class"))
@@ -136,8 +156,8 @@ def effect_from_metadata(value: Any) -> ToolEffect | None:
 def parse_dynamic_effect_metadata(file_path: Path) -> ToolEffect | None:
     """Parse a dynamic tool script's ``AURA_TOOL_EFFECT`` declaration.
 
-    Returns None when the script declares no (valid) metadata so the caller
-    applies the observation default.
+    Returns None when the script declares no (valid) metadata, so the caller
+    applies the fail-safe :data:`DEFAULT_EXTENSIBLE_TOOL_EFFECT`.
     """
     try:
         tree = ast.parse(file_path.read_text(encoding="utf-8"), filename=str(file_path))

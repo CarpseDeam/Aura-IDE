@@ -29,7 +29,11 @@ from aura.conversation.tools._write_mixin import WriteHandlersMixin
 from aura.conversation.tools.backup import backup_existing  # noqa: F401
 from aura.conversation.tools.catalog import ToolCatalog
 from aura.conversation.tools.dynamic_registry import DynamicToolRegistry
-from aura.conversation.tools.effects import BUILTIN_TOOL_EFFECTS, ToolEffect
+from aura.conversation.tools.effects import (
+    BUILTIN_TOOL_EFFECTS,
+    DEFAULT_EXTENSIBLE_TOOL_EFFECT,
+    ToolEffect,
+)
 from aura.conversation.tools.executor import ToolExecutor
 from aura.conversation.tools.find_usages import find_usages  # noqa: F401
 from aura.conversation.tools.fs_handler import FsReadHandler
@@ -139,11 +143,19 @@ class ToolRegistry(
 
     def tool_defs(self) -> list[dict[str, Any]]:
         dynamic_schemas = self._dynamic_tools.schemas() if not self._read_only else []
+        # Read-only mode exposes only the MCP tools resolved as observations.
+        # An unannotated or consequential server tool has no place in a surface
+        # whose whole promise is that nothing it offers can change anything.
+        mcp_schemas = (
+            self._mcp_tools.observation_schemas
+            if self._read_only
+            else self._mcp_tools.schemas
+        )
         return self._catalog.build_tool_defs(
             mode=self._mode,
             read_only=self._read_only,
             dynamic_schemas=dynamic_schemas or None,
-            mcp_schemas=self._mcp_tools.schemas or None,
+            mcp_schemas=mcp_schemas or None,
         )
 
     def focused_action_tool_defs(self) -> list[dict[str, Any]]:
@@ -160,22 +172,22 @@ class ToolRegistry(
 
         Built-in tools carry an explicit classification in the model; the
         catalog enumeration test proves every exposed built-in is classified.
-        Dynamic and MCP tools may declare metadata; without it they default
-        to observation.  Unknown names default to observation as well.
+        Everything else is extensible surface the runtime cannot inspect, so it
+        fails safe: an MCP or dynamic tool resolves to its declared effect when
+        it declared one and to the consequential
+        :data:`DEFAULT_EXTENSIBLE_TOOL_EFFECT` otherwise, and a name this
+        runtime does not recognise at all resolves the same way.  Nothing here
+        is ever assumed to be an observation.
         """
         if name in BUILTIN_TOOL_EFFECTS:
             return BUILTIN_TOOL_EFFECTS[name]
-        mcp_effect = self._mcp_tools.effect(name)
+        mcp_effect = self._mcp_tools.resolved_effect(name)
         if mcp_effect is not None:
             return mcp_effect
-        dynamic_effect = self._dynamic_tools.effect(name)
+        dynamic_effect = self._dynamic_tools.resolved_effect(name)
         if dynamic_effect is not None:
             return dynamic_effect
-        if self._mcp_tools.can_execute(name):
-            return ToolEffect.OBSERVATION
-        if self._dynamic_tools.get(name) is not None:
-            return ToolEffect.OBSERVATION
-        return ToolEffect.OBSERVATION
+        return DEFAULT_EXTENSIBLE_TOOL_EFFECT
 
     def connect_mcp_server(self, server_command: str) -> int:
         return self._mcp_tools.connect_server(server_command)

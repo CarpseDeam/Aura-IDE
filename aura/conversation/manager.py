@@ -55,6 +55,7 @@ from aura.conversation.focused_action import (
     OUTCOME_PROVIDER_CONTRACT_FAILURE,
     OUTCOME_WRITE,
     REPORT_BLOCKER,
+    focused_contract_ok,
     provider_contract_failure_message,
     should_enter_focused_action,
     tool_call_names,
@@ -417,6 +418,12 @@ class ConversationManager:
                 # call. Prose is a provider-contract violation: hold it so it is
                 # discarded, never streamed to chat.
                 discard_prose_final=focused.active,
+                # Whether the response honours that contract is only knowable
+                # once the full message has been inspected below, so the
+                # provider's Done is held until then: a violating response must
+                # not project a Done of its own and then receive the factual
+                # contract-failure Done as well.
+                defer_done=focused.active,
             )
 
             # The outbound view is compacted against *this* model's budget;
@@ -452,6 +459,9 @@ class ConversationManager:
                     full_message = result.full_message
                 if result.api_error is not None:
                     _log.info("%s_api_error model=%s", label, model)
+                    # An API error is not a contract verdict either: anything
+                    # the stream had already completed keeps its terminal event.
+                    router.release_deferred_done()
                     return
 
             _log.info("%s_done model=%s", label, model)
@@ -464,6 +474,10 @@ class ConversationManager:
                 state.content_gate.flush(on_event)
 
             if cancel_event.is_set():
+                # Cancellation is not a contract verdict: whatever the stream
+                # already completed keeps its terminal event, exactly as it did
+                # before the focused Done was deferred.
+                router.release_deferred_done()
                 # If we have some content but no tool calls, we can keep it.
                 # If it's empty or has orphaned tool calls, we must strip it.
                 if full_message is not None:
@@ -486,7 +500,10 @@ class ConversationManager:
                 return
 
             if full_message is None:
-                # Should not happen in normal stream completion
+                # Should not happen in normal stream completion. There is no
+                # message to validate, so nothing can be held back on its
+                # behalf: release any deferred terminal event.
+                router.release_deferred_done()
                 return
 
             tool_calls = full_message.get("tool_calls") or []
@@ -500,14 +517,14 @@ class ConversationManager:
                 selected = tool_call_names(full_message)
                 focused.selected_action = selected[0] if selected else ""
 
-                # The focused provider contract: exactly one tool call whose
-                # name is non-empty and in this round's exposed action set.
-                # Zero calls, multiple calls, or an unknown/unexposed name are
-                # all contract failures — none of them execute anything.
-                contract_ok = (
-                    len(selected) == 1
-                    and bool(selected[0])
-                    and selected[0] in focused.exposed_tools
+                # The focused provider contract, checked against the raw
+                # ``tool_calls`` collection: exactly one entry, well-formed,
+                # naming a tool in this round's exposed action set. Zero calls,
+                # multiple calls, a malformed entry alongside a valid one, or an
+                # unknown/unexposed name are all contract failures — none of
+                # them execute anything.
+                contract_ok = focused_contract_ok(
+                    full_message, focused.exposed_tools
                 )
                 if not contract_ok:
                     focused.contract_violated = True
@@ -521,10 +538,12 @@ class ConversationManager:
                         focused.selected_thinking,
                         FOCUSED_ACTION_THINKING,
                     )
-                    # Discard the provider's prose buffer and its reasoning;
-                    # do not store the violating assistant message. The turn
-                    # owes exactly one factual failure response and nothing
-                    # else, and it is never retried.
+                    # Discard the provider's prose buffer, its reasoning, and
+                    # its held terminal event; do not store the violating
+                    # assistant message. The turn owes exactly one factual
+                    # failure response — with exactly one Done, the one emitted
+                    # below — and it is never retried.
+                    router.discard_deferred_done()
                     if state.content_gate is not None:
                         state.content_gate.discard_buffer()
                     content, failure_message = provider_contract_failure_message()
@@ -539,6 +558,9 @@ class ConversationManager:
                     if REPORT_BLOCKER in selected
                     else OUTCOME_WRITE
                 )
+                # The response is valid: the provider's own Done is forwarded
+                # now, exactly once, before the single tool runs.
+                router.release_deferred_done()
 
             if state.worker_flow is not None:
                 state.worker_flow.observe_assistant_message(full_message)

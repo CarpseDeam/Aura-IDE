@@ -14,11 +14,13 @@ The contract asserted here:
 * a **successful** terminal or diagnostic result is progress;
 * a **failed** command is not, so the round stays stalled and failure recovery
   opens instead of a push into mutation;
-* one distinct failure opens recovery; repeating the same command into the
-  same failure renews nothing and is not new evidence;
+* one distinct failure opens recovery **for exactly one round**; repeating the
+  same command into the same failure renews nothing and is not new evidence;
 * a corrected command is never blocked, and when it succeeds recovery closes;
-* while any distinct failure is unresolved the focused action request never
-  fires — the agent fixes the failing step rather than being forced to mutate;
+* a distinct failure holds the focused action request off for its one recovery
+  round — the agent gets a chance to fix the failing step rather than being
+  forced to mutate — but a recovery round that recovers nothing closes recovery
+  and is itself the focused transition, so recovery cannot latch forever;
 * driven through the real manager loop, a turn that starts with a failing
   validation still reaches an edit — or a clear stop — in a bounded number of
   rounds, with its tool output and structured failures intact.
@@ -168,7 +170,47 @@ class TestResultsDecideProgress:
         guard.end_round()
 
         assert guard.write_applied is False
-        assert guard.focused is False, "still inside failure recovery"
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            "not json at all",
+            json.dumps(["applied", True]),
+            json.dumps({"ok": True, "path": "notes.md"}),
+            json.dumps({"applied": "yes"}),
+            json.dumps({"applied": 1}),
+            None,
+            42,
+            {"ok": True},
+        ],
+    )
+    def test_an_ambiguous_write_payload_is_never_an_applied_write(
+        self, payload
+    ) -> None:
+        """Fail-closed: only an explicit ``applied: True`` proves a write landed.
+
+        A malformed payload, a non-dictionary payload, a payload with no
+        ``applied`` field, and a truthy-but-not-``True`` value are all "not
+        applied" — matching the direct-write refresh contract.
+        """
+        guard = PreEditLoopGuard()
+        guard.begin_round()
+        guard.record("write_file", {"path": "notes.md"})
+        guard.observe_result("write_file", True, payload)
+        guard.end_round()
+
+        assert guard.write_applied is False
+        assert guard._round_made_progress is False
+
+    def test_an_explicit_applied_true_payload_is_an_applied_write(self) -> None:
+        guard = PreEditLoopGuard()
+        guard.begin_round()
+        guard.record("write_file", {"path": "notes.md"})
+        guard.observe_result("write_file", True, {"ok": True, "applied": True})
+        guard.end_round()
+
+        assert guard.write_applied is True
+        assert guard._round_made_progress is True
 
 
 # ── failure grace is spent once per distinct failure ────────────────────────
@@ -237,7 +279,31 @@ class TestFailureGrace:
             failing_round(guard, "run_terminal_command", FAILED_COMMAND)
 
         assert guard.seen_evidence == set()
-        assert guard.focused is False
+
+    def test_a_repeated_failure_does_not_reopen_recovery(self) -> None:
+        """The second identical failure is a recovery round that recovered
+        nothing — it closes recovery instead of granting another one."""
+        guard = PreEditLoopGuard()
+        failing_round(guard, "run_terminal_command", FAILED_COMMAND)
+        assert guard._failure_active is True
+
+        failing_round(guard, "run_terminal_command", FAILED_COMMAND)
+
+        assert guard.repeated_failures == 1
+        assert guard._failure_active is False, "recovery must not renew itself"
+        assert guard._failure_pending is False
+        assert guard.focused is True, (
+            "a recovery round that recovered nothing is the focused transition"
+        )
+
+    def test_recovery_is_never_latched_open(self) -> None:
+        """However long the same command keeps failing, recovery is one round."""
+        guard = PreEditLoopGuard()
+        for _ in range(8):
+            failing_round(guard, "run_diagnostic_command", FAILED_COMMAND)
+
+        assert guard._failure_active is False
+        assert guard._failure_pending is False
 
     def test_the_same_failure_has_one_fingerprint(self) -> None:
         first = failure_fingerprint("run_diagnostic_command", json.dumps(FAILED_COMMAND))
@@ -254,21 +320,29 @@ class TestFailureGrace:
 # ── failures hold focus off; corrections still work ─────────────────────────
 
 
-class TestFailuresHoldFocusOff:
+class TestFailuresHoldFocusOffForOneRound:
 
-    def test_repeated_command_failures_never_push_into_focused_mutation(self) -> None:
+    def test_the_failing_round_itself_never_pushes_into_focused_mutation(
+        self,
+    ) -> None:
         guard = PreEditLoopGuard()
-        for _ in range(8):
-            failing_round(guard, "run_diagnostic_command", FAILED_COMMAND)
+        burn_discovery(guard, 2)
+        failing_round(guard, "run_diagnostic_command", FAILED_COMMAND)
 
         assert guard.focused is False, (
-            "an unresolved distinct failure must keep the mutation request off"
+            "a fresh distinct failure must not force a mutation; it grants the "
+            "agent one round to correct the failing step"
         )
         assert guard._failure_active is True
 
-    def test_a_distinct_failure_holds_a_stalled_round_off_focus(self) -> None:
-        """Discovery evidence, then a failure, then a stall: the stall after
-        the failure is a recovery round, not a transition to mutation."""
+    def test_a_stagnant_recovery_round_enters_focused_action(self) -> None:
+        """Discovery evidence, then a failure, then a stall.
+
+        The stall is the granted recovery round. It recovered nothing — no
+        progress, no new evidence, no new distinct failure — so recovery closes
+        there and that same round is the focused transition. Latching recovery
+        open instead is what let the turn circle indefinitely.
+        """
         guard = PreEditLoopGuard()
         burn_discovery(guard, 4)
         failing_round(guard, "run_terminal_command", FAILED_COMMAND)
@@ -280,7 +354,8 @@ class TestFailuresHoldFocusOff:
         )
         guard.end_round()
 
-        assert guard.focused is False
+        assert guard.focused is True
+        assert guard._failure_active is False
 
     def test_a_corrected_command_is_never_blocked(self) -> None:
         guard = PreEditLoopGuard()
@@ -292,13 +367,45 @@ class TestFailuresHoldFocusOff:
 
     def test_a_successful_correction_closes_recovery_without_focus(self) -> None:
         guard = PreEditLoopGuard()
-        for _ in range(4):
-            failing_round(guard, "run_diagnostic_command", FAILED_COMMAND)
+        failing_round(guard, "run_diagnostic_command", FAILED_COMMAND)
         assert guard._failure_active is True
 
         succeeding_round(guard, "run_diagnostic_command", OK_COMMAND)
 
         assert guard._failure_active is False
+        assert guard.focused is False
+
+    def test_new_evidence_in_the_recovery_round_resolves_recovery(self) -> None:
+        """Recovery is resolved by evidence as well as by progress, and the
+        turn keeps its ordinary reasoning round."""
+        guard = PreEditLoopGuard()
+        burn_discovery(guard, 1)
+        failing_round(guard, "run_terminal_command", FAILED_COMMAND)
+
+        guard.begin_round()
+        guard.record("read_file", {"path": "src/new.py"})
+        guard.observe_result(
+            "read_file", True, json.dumps({"path": "src/new.py", "body": "fresh"})
+        )
+        guard.end_round()
+
+        assert guard._failure_active is False
+        assert guard._failure_pending is False
+        assert guard.focused is False
+
+    def test_a_second_distinct_failure_opens_its_own_recovery_round(self) -> None:
+        guard = PreEditLoopGuard()
+        failing_round(guard, "run_diagnostic_command", FAILED_COMMAND)
+        failing_round(
+            guard,
+            "run_diagnostic_command",
+            {**FAILED_COMMAND,
+             "failure_class": "diagnostic_command_path_escapes_workspace",
+             "requested_command": "cat ../../etc/passwd"},
+        )
+
+        assert guard._failure_active is True
+        assert guard._failure_pending is True
         assert guard.focused is False
 
 
@@ -331,7 +438,6 @@ class TestBoundedProgressionThroughTheRealLoop:
     def _script(self, tail: list) -> list:
         return [
             tool_round([("d0", "run_diagnostic_command", {"command": BAD_COMMAND})]),
-            tool_round([("d1", "run_diagnostic_command", {"command": BAD_COMMAND})]),
             *tail,
         ]
 
@@ -354,15 +460,16 @@ class TestBoundedProgressionThroughTheRealLoop:
         run(manager, recorder)
 
         # Bounded: the scripted turn ran to its end, no extra rounds.
-        assert len(backend.calls) == 5, "the turn must not circle"
+        assert len(backend.calls) == 4, "the turn must not circle"
         # The edit really landed.
         assert (project / "notes.md").read_text(encoding="utf-8") == (
             "# Notes\n\nfixed body\n"
         )
-        # The two failures never pushed the turn into a focused mutation
-        # request: the distinct failure opened recovery, the corrected command
-        # closed it, and the write went through the ordinary path. The old code
-        # laundered the failures as progress and hid the decision entirely.
+        # The failure never pushed the turn into a focused mutation request:
+        # the distinct failure opened recovery, the corrected command closed it
+        # inside the granted round, and the write went through the ordinary
+        # path. The old code laundered the failure as progress and hid the
+        # decision entirely.
         assert no_focused_request_fired(backend)
 
     def test_the_failures_stay_visible_and_structured(
@@ -380,7 +487,7 @@ class TestBoundedProgressionThroughTheRealLoop:
         run(manager, recorder)
 
         results = [r for r in recorder.tool_results if r.name == "run_diagnostic_command"]
-        assert [r.ok for r in results] == [False, False, True]
+        assert [r.ok for r in results] == [False, True]
         rejected = json.dumps([m for m in manager.history.messages if m.get("role") == "tool"])
         assert "diagnostic_command_mutating" in rejected
         assert "install" in rejected
@@ -390,8 +497,11 @@ class TestBoundedProgressionThroughTheRealLoop:
     def test_a_turn_that_only_fails_stops_instead_of_circling(
         self, project, isolated_streams  # noqa: F811
     ) -> None:
+        """The recovery round re-runs the same broken command and recovers
+        nothing, so the turn stops circling: recovery closes and the focused
+        action request fires instead of a third identical validation round."""
         rounds = self._script([
-            tool_round([("d2", "run_diagnostic_command", {"command": BAD_COMMAND})]),
+            tool_round([("d1", "run_diagnostic_command", {"command": BAD_COMMAND})]),
             final_round("Blocked: this command cannot run as a diagnostic."),
         ])
         backend = ScriptedBackend(rounds)
@@ -400,10 +510,12 @@ class TestBoundedProgressionThroughTheRealLoop:
 
         run(manager, Recorder())
 
-        assert len(backend.calls) == 4
-        # The unresolved distinct failure kept the focused mutation request off
-        # the whole turn; nothing was written and nothing pretended otherwise.
-        assert no_focused_request_fired(backend)
+        assert len(backend.calls) == 3, "the turn must not circle"
+        assert [bool(c.get("require_tool_call")) for c in backend.calls] == [
+            False, False, True,
+        ], "the stagnant recovery round hands the loop the focused request"
+        # Nothing was written and nothing pretended otherwise: the focused
+        # request was answered with prose, which is a provider-contract failure.
         assert (project / "notes.md").read_text(encoding="utf-8") == (
             "# Notes\n\nold body\n"
         )

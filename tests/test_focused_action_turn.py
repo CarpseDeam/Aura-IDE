@@ -39,7 +39,9 @@ from aura.client.events import ApiError, ContentDelta, Done, ToolResult
 from aura.conversation.focused_action import (
     PROVIDER_CONTRACT_FAILURE_MESSAGE,
     FocusedActionState,
+    focused_contract_ok,
     should_enter_focused_action,
+    tool_call_names,
 )
 from aura.conversation.history import History
 from aura.conversation.manager import ConversationManager
@@ -453,6 +455,21 @@ class TestFocusedProviderContract:
             "the failure ends in exactly one terminal Done, not a retry"
         )
         assert dones[-1].full_message["content"] == PROVIDER_CONTRACT_FAILURE_MESSAGE
+        # The violating response never projected a Done of its own. Only the
+        # two discovery rounds and the single factual failure are terminal in
+        # this turn: a response that is discarded whole must not first hand the
+        # UI a terminal event claiming it finished.
+        assert len(dones) == 3, (
+            "the provider's Done for the violating focused round was forwarded"
+        )
+        projected_call_ids = {
+            call["id"]
+            for done in dones
+            for call in (done.full_message.get("tool_calls") or [])
+        }
+        assert projected_call_ids == {"d0", "d1"}, (
+            "the violating round's tool calls reached the UI through its Done"
+        )
         # The violating response never reached history — not its prose, not its
         # reasoning, not its tool calls. The only stored tool-call messages are
         # the two discovery rounds that led the guard into the focused request.
@@ -519,6 +536,142 @@ class TestFocusedProviderContract:
             ),
         )
         self._assert_nothing_executed(harness)
+
+    @pytest.mark.parametrize(
+        "malformed",
+        [
+            "not-a-dict",
+            None,
+            42,
+            {"id": "x2"},                                   # no function
+            {"id": "x2", "function": "write_file"},         # function not a dict
+            {"id": "x2", "function": {}},                   # no name
+            {"id": "x2", "function": {"name": ""}},         # empty name
+            {"id": "x2", "function": {"name": None}},       # name not a string
+        ],
+        ids=lambda v: str(v)[:24],
+    )
+    def test_one_valid_call_plus_a_malformed_raw_entry_executes_nothing(
+        self, tmp_path, malformed,
+    ) -> None:
+        """The raw ``tool_calls`` collection is what the contract validates.
+
+        Filtering the names first would silently drop the unreadable entry and
+        present this response as a single clean call — executing a mutation
+        while the provider in fact asked for two acts, one of them unreadable.
+        """
+        message = assistant(
+            tool_call("x1", "write_file", {"path": "alpha.py", "content": "a = 2\n"}),
+        )
+        message["tool_calls"].append(malformed)
+        harness = self._run(tmp_path, message)
+        self._assert_nothing_executed(harness)
+
+    @pytest.mark.parametrize(
+        "tool_calls",
+        ["write_file", {"function": {"name": "write_file"}}, 7],
+        ids=["string", "dict", "int"],
+    )
+    def test_a_non_list_tool_calls_field_executes_nothing(
+        self, tmp_path, tool_calls,
+    ) -> None:
+        message = assistant(content="")
+        message["tool_calls"] = tool_calls
+        harness = self._run(tmp_path, message)
+        self._assert_nothing_executed(harness)
+
+
+EXPOSED = ("write_file", "patch_file", "report_blocker")
+
+
+@pytest.mark.parametrize(
+    "message, expected",
+    [
+        (None, False),
+        ("not a message", False),
+        ({}, False),
+        ({"tool_calls": None}, False),
+        ({"tool_calls": []}, False),
+        ({"tool_calls": "write_file"}, False),
+        ({"tool_calls": [tool_call("a", "write_file", {})]}, True),
+        ({"tool_calls": [tool_call("a", "report_blocker", {})]}, True),
+        ({"tool_calls": [tool_call("a", "read_file", {})]}, False),
+        ({"tool_calls": [tool_call("a", "Write_File", {})]}, False),
+        (
+            {"tool_calls": [
+                tool_call("a", "write_file", {}),
+                tool_call("b", "patch_file", {}),
+            ]},
+            False,
+        ),
+        ({"tool_calls": [tool_call("a", "write_file", {}), None]}, False),
+        ({"tool_calls": [{"function": {"name": "write_file"}}]}, True),
+        ({"tool_calls": [{"function": ["write_file"]}]}, False),
+        ({"tool_calls": [{"function": {"name": " "}}]}, False),
+    ],
+)
+def test_focused_contract_ok_reads_the_raw_collection(message, expected) -> None:
+    assert focused_contract_ok(message, EXPOSED) is expected
+
+
+def test_tool_call_names_never_raises_on_a_malformed_collection() -> None:
+    """Reporting must survive what validation rejects."""
+    assert tool_call_names({"tool_calls": 7}) == []
+    assert tool_call_names({"tool_calls": ["x", None, 3]}) == []
+    assert tool_call_names({"tool_calls": [tool_call("a", "write_file", {}), 3]}) == [
+        "write_file"
+    ]
+
+
+class TestFocusedDoneIsDeferredUntilValidated:
+    """The provider's ``Done`` for a focused round is held until the response
+    has been validated: forwarded once if the contract held, never projected if
+    it did not."""
+
+    def test_a_valid_focused_response_forwards_one_original_done(
+        self, focused_write,
+    ) -> None:
+        dones = [e for e in focused_write.events if isinstance(e, Done)]
+        write_dones = [
+            d for d in dones
+            if any(
+                call.get("id") == "w1"
+                for call in (d.full_message.get("tool_calls") or [])
+            )
+        ]
+        assert len(write_dones) == 1, (
+            "a valid focused response forwards the provider's own Done exactly "
+            "once — deferring it must not drop or duplicate it"
+        )
+        # One Done per round, still: two discovery rounds, the focused write,
+        # and the final answer.
+        assert len(dones) == 4
+        assert (focused_write.root / "alpha.py").read_text(encoding="utf-8") == (
+            "alpha = 2\n"
+        )
+
+    def test_the_deferred_done_precedes_the_tool_result(
+        self, focused_write,
+    ) -> None:
+        """Order is unchanged from ordinary rounds: the round's terminal event
+        first, then the single tool it authorized."""
+        kinds = [
+            ("done", e.full_message.get("tool_calls"))
+            if isinstance(e, Done)
+            else ("result", getattr(e, "name", ""))
+            for e in focused_write.events
+            if isinstance(e, (Done, ToolResult))
+        ]
+        done_index = next(
+            i for i, (kind, payload) in enumerate(kinds)
+            if kind == "done"
+            and any(c.get("id") == "w1" for c in (payload or []))
+        )
+        result_index = next(
+            i for i, (kind, payload) in enumerate(kinds)
+            if kind == "result" and payload == "write_file"
+        )
+        assert done_index < result_index
 
 
 # ── read-only mode exposes no focused mutation request ──────────────────────

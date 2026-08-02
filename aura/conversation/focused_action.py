@@ -122,11 +122,20 @@ def should_enter_focused_action(
 
 
 def tool_call_names(full_message: dict[str, Any] | None) -> list[str]:
-    """Return the tool names in an assistant message, in call order."""
+    """Return the tool names in an assistant message, in call order.
+
+    Reporting only: unreadable entries are skipped and a ``tool_calls`` field
+    that is not a list yields nothing, so a malformed response can be described
+    without crashing.  It cannot be *validated* from this — that is
+    :func:`focused_contract_ok`, which reads the raw collection.
+    """
     if not isinstance(full_message, dict):
         return []
+    calls = full_message.get("tool_calls")
+    if not isinstance(calls, list):
+        return []
     names: list[str] = []
-    for call in full_message.get("tool_calls") or []:
+    for call in calls:
         if not isinstance(call, dict):
             continue
         function = call.get("function")
@@ -135,6 +144,45 @@ def tool_call_names(full_message: dict[str, Any] | None) -> list[str]:
             if name:
                 names.append(name)
     return names
+
+
+def focused_contract_ok(
+    full_message: dict[str, Any] | None,
+    exposed_tools: tuple[str, ...] | frozenset[str] | set[str] | list[str],
+) -> bool:
+    """Whether a focused response honours the exactly-one-tool-call contract.
+
+    Validated against the *raw* ``tool_calls`` collection, not against the
+    filtered names :func:`tool_call_names` returns.  That filter silently skips
+    entries it cannot read, so a response carrying one valid call plus a
+    malformed extra entry would otherwise present itself as a single clean call
+    and execute — while the provider in fact asked for two acts, one of them
+    unreadable.  Every structural requirement is checked here instead:
+
+    * ``tool_calls`` is a list;
+    * its raw length is exactly one — before any filtering;
+    * the sole entry is a dictionary;
+    * its ``function`` is a dictionary;
+    * ``name`` is a non-empty string;
+    * that name is in this round's exact exposed action set.
+
+    Anything else is a provider-contract failure and executes nothing.
+    """
+    if not isinstance(full_message, dict):
+        return False
+    calls = full_message.get("tool_calls")
+    if not isinstance(calls, list) or len(calls) != 1:
+        return False
+    call = calls[0]
+    if not isinstance(call, dict):
+        return False
+    function = call.get("function")
+    if not isinstance(function, dict):
+        return False
+    name = function.get("name")
+    if not isinstance(name, str) or not name:
+        return False
+    return name in set(exposed_tools)
 
 
 def provider_contract_failure_message() -> tuple[str, dict[str, Any]]:
@@ -157,6 +205,7 @@ __all__ = [
     "OUTCOME_WRITE",
     "PROVIDER_CONTRACT_FAILURE_MESSAGE",
     "REPORT_BLOCKER",
+    "focused_contract_ok",
     "provider_contract_failure_message",
     "should_enter_focused_action",
     "tool_call_names",
