@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from aura.client import Event, ToolResult
+from aura.conversation import _edit_shapes
 from aura.conversation.attempt_brief import render_for_planner
 from aura.conversation.completion_guard import tool_result_completes_action
 from aura.conversation.dispatch import DispatchCallback
@@ -168,6 +169,67 @@ def _edit_recovery_pending(state: _SendState) -> bool:
         or state.syntax_validation_required
         or state.patch_invalid_syntax_required
     )
+
+
+def _result_payload_applied(payload: Any) -> bool:
+    """Return whether a write tool's result payload claims the change landed."""
+    data = payload
+    if isinstance(payload, str):
+        try:
+            data = json.loads(payload)
+        except (TypeError, ValueError):
+            return True
+    if isinstance(data, dict) and "applied" in data:
+        return bool(data["applied"])
+    return True
+
+
+def _applied_write_paths(
+    tasks: list[dict[str, Any]],
+    results_by_id: dict[str, dict[str, Any]],
+) -> list[str]:
+    """Normalized paths of write tools whose result claims the change applied.
+
+    Legacy dispatch reports modified files through ``planner_stale_read_files``
+    on the dispatch result. Production SINGLE writes run directly, so the
+    applied paths must come from the write tool's own result — otherwise the
+    silent post-write refresh never fires.
+    """
+    files: list[str] = []
+    seen: set[str] = set()
+    for task in tasks:
+        name = task["name"]
+        if name not in WRITE_TOOLS:
+            continue
+        res = results_by_id.get(task["id"])
+        if res is None:
+            continue
+        if not _result_payload_applied(res.get("result_payload")):
+            continue
+        path = _edit_shapes.tool_path(name, task["args"])
+        if not path:
+            continue
+        normalized = str(path).replace("\\", "/")
+        if normalized not in seen:
+            files.append(normalized)
+            seen.add(normalized)
+    return files
+
+
+def _combined_post_write_files(
+    planner_files: list[str], write_files: list[str]
+) -> list[str]:
+    """Merge dispatch-reported and direct-write file lists, deduplicated."""
+    seen: set[str] = set()
+    merged: list[str] = []
+    for group in (planner_files, write_files):
+        for raw in group:
+            path = str(raw or "").replace("\\", "/")
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            merged.append(path)
+    return merged
 
 
 @dataclass(frozen=True)
@@ -346,6 +408,10 @@ class ToolRoundRunner:
 
         results_by_id = {r.get("id"): r for r in results_to_append if r is not None}
 
+        # Direct write tools (production SINGLE) report their applied paths in
+        # the result; legacy dispatch reports them via planner_stale_read_files.
+        applied_write_paths = _applied_write_paths(tasks, results_by_id)
+
         # Whether a ``report_blocker`` call in this round actually succeeded
         # with the structured blocker payload. The manager's blocker
         # finalization must be terminal only on this fact, never on the tool
@@ -384,7 +450,10 @@ class ToolRoundRunner:
             )
             if res.get("blocker"):
                 self._planner_refresh.handle_post_write_notices(
-                    self._history, planner_stale_read_files
+                    self._history,
+                    _combined_post_write_files(
+                        planner_stale_read_files, applied_write_paths
+                    ),
                 )
                 blocker_reason = str(res.get("blocker_reason", ""))
                 failure_constraint = res.get("failure_constraint", "")
@@ -442,12 +511,17 @@ class ToolRoundRunner:
                 on_event(res["event"])
 
         self._planner_refresh.handle_post_write_notices(
-            self._history, planner_stale_read_files
+            self._history,
+            _combined_post_write_files(planner_stale_read_files, applied_write_paths),
         )
 
         if guard is not None:
             # A stale-file notice makes the named paths worth reading again.
-            guard.note_stale_paths(planner_stale_read_files)
+            guard.note_stale_paths(
+                _combined_post_write_files(
+                    planner_stale_read_files, applied_write_paths
+                )
+            )
             guard.end_round()
 
         if worker_phase_boundary_info is not None:

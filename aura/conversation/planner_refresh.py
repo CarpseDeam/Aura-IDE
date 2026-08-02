@@ -53,7 +53,10 @@ class PlannerRefreshState:
     def __init__(self) -> None:
         self._base_system_prompt: str | None = None
         self._workspace_root: Path | None = None
-        self._role: RuntimeRole = RuntimeRole.PLANNER
+        # SINGLE is the normal product; the legacy Planner path opts in through
+        # ``configure_for_planner``. An unconfigured manager must never append
+        # Planner notices to a production turn.
+        self._role: RuntimeRole = RuntimeRole.SINGLE
         self._model: str | None = None
         self._task_kind: str | None = None
         self._content: str | None = None
@@ -130,18 +133,33 @@ class PlannerRefreshState:
     def handle_post_write_notices(
         self, history, modified_files: list[str]
     ) -> None:
-        """Handle all post-Writer-write notices in one call.
+        """Handle all post-write context updates, owned by the active role.
+
+        Production ``SINGLE`` refreshes Tier 1 context *silently*: the repo map
+        and system prompt recompose after a write, but no ``Planner stale-read
+        invalidation`` message and no dependency notice are appended, so the
+        turn keeps exactly one user boundary — the real request. Nothing here
+        touches the pre-edit guard or edit-recovery state; those live in the
+        tool round and are unchanged.
+
+        Legacy ``PLANNER`` keeps the historical notices: the stale-read
+        invalidation user message, then the Tier 1 refresh, then the dependent
+        planner notice.
 
         1. If modified_files is empty, return.
-        2. Append stale-read notice to history.
-        3. Refresh Tier 1 context.
-        4. Append dependent planner notice (with force_graph=True) if applicable.
+        2. Refresh Tier 1 context.
+        3. (PLANNER only) Append stale-read notice.
+        4. (PLANNER only) Append dependent planner notice (force_graph=True).
         """
         if not modified_files:
             return
 
-        history.append_user_text(stale_read_notice(modified_files))
         # Files the run just wrote are the target files we now know about.
+        if self._role == RuntimeRole.SINGLE:
+            self.refresh_tier1_after_writes(history, tuple(modified_files))
+            return
+
+        history.append_user_text(stale_read_notice(modified_files))
         self.refresh_tier1_after_writes(history, tuple(modified_files))
 
         if self._workspace_root is not None:
