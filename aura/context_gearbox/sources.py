@@ -12,7 +12,7 @@ from aura.skills.text import SkillPack, build_skill_pack
 
 CORE_KERNEL_TEXT = """Core kernel:
 - Work inside the selected workspace.
-- Read files before making claims about repository contents.
+- Do not make claims about repository contents you have not verified.
 - Keep the response and any changes scoped to the user's request."""
 
 PLANNER_DISPATCH_CONTRACT = """### planner_dispatch_contract
@@ -50,7 +50,8 @@ CODE_QUALITY_CONTRACT = """### code_quality_contract
 - Preserve public behavior unless the spec requires a change.
 - The current contents of your target files are already in context; do not re-read them without a named reason.
 - Use the real imports, types, and helpers that already exist. Never invent an API, re-declare a constant, or re-implement a helper the codebase already provides.
-- Do not imitate existing structure for its own sake. Do not extend god files, copy ceremony, or reproduce over-engineering. Put each change where responsibility belongs and leave the code better-shaped than you found it.
+- Write code that reads like its neighbours: match local naming, typing, comment density, and idiom.
+- Matching local style is not the same as copying local structure. Do not extend god files, copy ceremony, or reproduce over-engineering. Put each change where responsibility belongs and leave the code better-shaped than you found it.
 - Prefer narrow edits over broad rewrites, but a narrow edit in the wrong place is not correct — split or relocate when the right home does not exist.
 - Do not swallow errors silently."""
 
