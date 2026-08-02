@@ -17,6 +17,13 @@ class ModelInfo:
     output_per_m_usd: float
     cache_hit_per_m_usd: float
     supports_vision: bool = False
+    # Context metadata used to derive the per-request working-set budget.
+    # 0 means "unknown" — callers fall back to the conservative defaults in
+    # aura.conversation.context_budget rather than assuming a large window.
+    # Both default to 0 so ModelInfo(**cached_dict) keeps working for caches
+    # written before these fields existed.
+    context_window_tokens: int = 0
+    max_output_tokens: int = 0
 
 
 @dataclass

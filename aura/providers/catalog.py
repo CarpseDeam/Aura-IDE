@@ -19,6 +19,8 @@ DEEPSEEK_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=0.14,
         output_per_m_usd=0.28,
         cache_hit_per_m_usd=0.0028,
+        context_window_tokens=128_000,
+        max_output_tokens=8_192,
     ),
     "deepseek-v4-pro": ModelInfo(
         id="deepseek-v4-pro",
@@ -26,6 +28,8 @@ DEEPSEEK_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=0.435,
         output_per_m_usd=0.87,
         cache_hit_per_m_usd=0.003625,
+        context_window_tokens=128_000,
+        max_output_tokens=8_192,
     ),
 }
 DEEPSEEK_PRICING: dict[str, dict[str, float]] = {
@@ -40,6 +44,8 @@ OPENAI_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=10.00,
         output_per_m_usd=40.00,
         cache_hit_per_m_usd=5.00,
+        context_window_tokens=400_000,
+        max_output_tokens=128_000,
     ),
     "gpt-5.4": ModelInfo(
         id="gpt-5.4",
@@ -47,6 +53,8 @@ OPENAI_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=2.50,
         output_per_m_usd=10.00,
         cache_hit_per_m_usd=1.25,
+        context_window_tokens=400_000,
+        max_output_tokens=128_000,
     ),
     "gpt-5.4-mini": ModelInfo(
         id="gpt-5.4-mini",
@@ -54,6 +62,8 @@ OPENAI_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=0.15,
         output_per_m_usd=0.60,
         cache_hit_per_m_usd=0.075,
+        context_window_tokens=400_000,
+        max_output_tokens=128_000,
     ),
     "gpt-5.4-nano": ModelInfo(
         id="gpt-5.4-nano",
@@ -61,6 +71,8 @@ OPENAI_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=0.10,
         output_per_m_usd=0.40,
         cache_hit_per_m_usd=0.05,
+        context_window_tokens=400_000,
+        max_output_tokens=128_000,
     ),
 }
 OPENAI_PRICING: dict[str, dict[str, float]] = {
@@ -77,6 +89,8 @@ ANTHROPIC_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=15.00,
         output_per_m_usd=75.00,
         cache_hit_per_m_usd=1.50,
+        context_window_tokens=200_000,
+        max_output_tokens=64_000,
     ),
     "claude-sonnet-4-6": ModelInfo(
         id="claude-sonnet-4-6",
@@ -84,6 +98,8 @@ ANTHROPIC_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=3.00,
         output_per_m_usd=15.00,
         cache_hit_per_m_usd=0.30,
+        context_window_tokens=200_000,
+        max_output_tokens=64_000,
     ),
     "claude-haiku-4-5": ModelInfo(
         id="claude-haiku-4-5",
@@ -91,6 +107,8 @@ ANTHROPIC_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=0.25,
         output_per_m_usd=1.25,
         cache_hit_per_m_usd=0.025,
+        context_window_tokens=200_000,
+        max_output_tokens=64_000,
     ),
     "claude-haiku-4-5-20251001": ModelInfo(
         id="claude-haiku-4-5-20251001",
@@ -98,6 +116,8 @@ ANTHROPIC_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=0.25,
         output_per_m_usd=1.25,
         cache_hit_per_m_usd=0.025,
+        context_window_tokens=200_000,
+        max_output_tokens=64_000,
     ),
 }
 ANTHROPIC_PRICING: dict[str, dict[str, float]] = {
@@ -114,6 +134,8 @@ OPENROUTER_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=0.15,
         output_per_m_usd=0.60,
         cache_hit_per_m_usd=0.075,
+        context_window_tokens=128_000,
+        max_output_tokens=8_192,
     ),
     "openai/gpt-oss-120b": ModelInfo(
         id="openai/gpt-oss-120b",
@@ -121,6 +143,8 @@ OPENROUTER_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=2.00,
         output_per_m_usd=8.00,
         cache_hit_per_m_usd=1.00,
+        context_window_tokens=131_072,
+        max_output_tokens=32_768,
     ),
     "openai/gpt-oss-20b": ModelInfo(
         id="openai/gpt-oss-20b",
@@ -128,6 +152,8 @@ OPENROUTER_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=0.40,
         output_per_m_usd=1.60,
         cache_hit_per_m_usd=0.20,
+        context_window_tokens=131_072,
+        max_output_tokens=32_768,
     ),
     "qwen/qwen3-coder:free": ModelInfo(
         id="qwen/qwen3-coder:free",
@@ -135,6 +161,8 @@ OPENROUTER_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=0.0,
         output_per_m_usd=0.0,
         cache_hit_per_m_usd=0.0,
+        context_window_tokens=262_144,
+        max_output_tokens=32_768,
     ),
     "meta-llama/llama-3.3-70b-instruct:free": ModelInfo(
         id="meta-llama/llama-3.3-70b-instruct:free",
@@ -142,6 +170,8 @@ OPENROUTER_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=0.0,
         output_per_m_usd=0.0,
         cache_hit_per_m_usd=0.0,
+        context_window_tokens=131_072,
+        max_output_tokens=16_384,
     ),
     "openrouter/owl-alpha": ModelInfo(
         id="openrouter/owl-alpha",
@@ -169,6 +199,8 @@ GOOGLE_CLOUD_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=1.25,
         output_per_m_usd=5.00,
         cache_hit_per_m_usd=0.3125,
+        context_window_tokens=1_048_576,
+        max_output_tokens=65_536,
     ),
     "gemini-2.5-flash": ModelInfo(
         id="gemini-2.5-flash",
@@ -176,6 +208,8 @@ GOOGLE_CLOUD_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=0.075,
         output_per_m_usd=0.30,
         cache_hit_per_m_usd=0.01875,
+        context_window_tokens=1_048_576,
+        max_output_tokens=65_536,
     ),
     "gemini-2.0-flash": ModelInfo(
         id="gemini-2.0-flash",
@@ -183,6 +217,8 @@ GOOGLE_CLOUD_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=0.10,
         output_per_m_usd=0.40,
         cache_hit_per_m_usd=0.025,
+        context_window_tokens=1_048_576,
+        max_output_tokens=8_192,
     ),
     "gemini-1.5-pro": ModelInfo(
         id="gemini-1.5-pro",
@@ -190,6 +226,8 @@ GOOGLE_CLOUD_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=1.25,
         output_per_m_usd=5.00,
         cache_hit_per_m_usd=0.3125,
+        context_window_tokens=2_097_152,
+        max_output_tokens=8_192,
     ),
     "gemini-1.5-flash": ModelInfo(
         id="gemini-1.5-flash",
@@ -197,6 +235,8 @@ GOOGLE_CLOUD_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=0.075,
         output_per_m_usd=0.30,
         cache_hit_per_m_usd=0.01875,
+        context_window_tokens=1_048_576,
+        max_output_tokens=8_192,
     ),
 }
 GOOGLE_CLOUD_PRICING: dict[str, dict[str, float]] = {

@@ -213,9 +213,13 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
             "name": "read_files",
             "description": (
                 "Batched version of read_file — read multiple files in a single call. "
-                "Each file is capped at 200KB. Combined output is capped at 500KB total; "
-                "paths beyond the limit will return an error. Returns per-file results "
-                "with ok/error or ok/content/content_hash/file_size/truncated/path for each path. "
+                "EVERY requested path always comes back with metadata, even when its "
+                "content did not fit: path, file_size, content_hash, line_count, "
+                "status (complete | summarized | truncated | omitted | error), reason, "
+                "included_range, and continuation (the exact follow-up call for the rest). "
+                "Small files are returned in full; large files return a bounded head slice "
+                "plus a structural outline. When status is not 'complete', use the "
+                "continuation call rather than re-issuing the same read_files. "
                 "All paths must be relative to the workspace root."
             ),
             "parameters": {

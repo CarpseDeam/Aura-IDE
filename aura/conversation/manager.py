@@ -43,6 +43,7 @@ from aura.conversation.completion_guard import (
     assistant_message_text,
     is_repetitive_completion_final,
 )
+from aura.conversation.context_budget import resolve_model_budget
 from aura.conversation.workflow_state import WorkflowStatus
 from aura.conversation.dispatch import (
     DispatchCallback,
@@ -85,6 +86,46 @@ def _stream_log_label(hook_name: str) -> str:
     if "worker" in hook_name:
         return "worker_stream"
     return "production_stream"
+
+
+def _log_context_round(budget, stats, tool_defs: list[dict[str, Any]] | None) -> None:
+    """One line per model round describing where the context budget went.
+
+    Deliberately a single log record, not a telemetry framework — enough to
+    answer "why was this turn's evidence cut?" from a normal log file.
+    """
+    try:
+        tool_schema_chars = len(json.dumps(tool_defs, ensure_ascii=False)) if tool_defs else 0
+    except (TypeError, ValueError):
+        tool_schema_chars = -1
+
+    _log.info(
+        "context_round model=%s window=%d reserve=%d budget=%d budget_source=%s "
+        "tokens_before=%d tokens_after=%d messages_before=%d messages_after=%d "
+        "system_chars=%d tool_schema_chars=%d "
+        "source_chars_generated=%d source_chars_retained=%d "
+        "compacted_results=%d dropped_blocks=%d repaired=%d "
+        "reasoning_chars_replayed=%d over_budget=%s",
+        budget.model_id,
+        budget.context_window_tokens,
+        budget.output_reserve_tokens,
+        budget.working_set_tokens,
+        "fallback" if budget.is_fallback else "catalog",
+        stats.tokens_before,
+        stats.tokens_after,
+        stats.messages_before,
+        stats.messages_after,
+        stats.system_prompt_chars,
+        tool_schema_chars,
+        stats.source_result_chars_generated,
+        stats.source_result_chars_retained,
+        stats.compacted_results,
+        stats.dropped_blocks,
+        stats.repaired_messages,
+        stats.reasoning_chars_replayed,
+        stats.over_budget,
+    )
+
 
 class ConversationManager:
     def __init__(
@@ -245,9 +286,15 @@ class ConversationManager:
                 content_gate=state.content_gate,
             )
 
+            # The outbound view is compacted against *this* model's budget;
+            # self._history.messages is left exact.
+            budget = resolve_model_budget(model)
+            api_view = self._history.build_api_payload(budget.working_set_tokens)
+            _log_context_round(budget, api_view.stats, tool_defs)
+
             for ev in model_streams.trigger(
                 hook_name,
-                messages=self._history.for_api(),
+                messages=api_view.messages,
                 tools=tool_defs,
                 model=model,
                 thinking=thinking,

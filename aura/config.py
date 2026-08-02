@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import shutil
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from pathlib import Path
 from typing import Any
 
@@ -211,6 +211,14 @@ def fetch_provider_models(provider_id: str) -> tuple[dict[str, ModelInfo], dict[
             modalities = m.get("architecture", {}).get("modalities", [])
             supports_vision = "image" in modalities
 
+            # OpenRouter advertises real context metadata; keep it when sane so
+            # dynamic models get a real budget instead of the fallback.
+            ctx_tokens = _coerce_token_count(m.get("context_length"))
+            top_provider = m.get("top_provider")
+            max_out = 0
+            if isinstance(top_provider, dict):
+                max_out = _coerce_token_count(top_provider.get("max_completion_tokens"))
+
             models[mid] = ModelInfo(
                 id=mid,
                 label=name,
@@ -218,6 +226,8 @@ def fetch_provider_models(provider_id: str) -> tuple[dict[str, ModelInfo], dict[
                 output_per_m_usd=out_m,
                 cache_hit_per_m_usd=hit_m,
                 supports_vision=supports_vision,
+                context_window_tokens=ctx_tokens,
+                max_output_tokens=max_out,
             )
             pricing[mid] = {"in_miss": in_m, "in_hit": hit_m, "out": out_m}
     else:
@@ -236,10 +246,18 @@ def fetch_provider_models(provider_id: str) -> tuple[dict[str, ModelInfo], dict[
 
             label = mid.split("/")[-1].replace("-", " ").title()
 
+            # A provider "models" listing rarely carries context metadata, so
+            # inherit whatever the seeded catalog already knows rather than
+            # letting a refresh downgrade a known model to the fallback.
             supports_vision = False
+            ctx_tokens = 0
+            max_out = 0
             for p_cfg in provider_registry.all().values():
                 if mid in p_cfg.models:
-                    supports_vision = p_cfg.models[mid].supports_vision
+                    known = p_cfg.models[mid]
+                    supports_vision = known.supports_vision
+                    ctx_tokens = known.context_window_tokens
+                    max_out = known.max_output_tokens
                     break
 
             models[mid] = ModelInfo(
@@ -249,10 +267,21 @@ def fetch_provider_models(provider_id: str) -> tuple[dict[str, ModelInfo], dict[
                 output_per_m_usd=out_m,
                 cache_hit_per_m_usd=hit_m,
                 supports_vision=supports_vision,
+                context_window_tokens=ctx_tokens,
+                max_output_tokens=max_out,
             )
             pricing[mid] = {"in_miss": in_m, "in_hit": hit_m, "out": out_m}
 
     return models, pricing, None
+
+
+def _coerce_token_count(value: Any) -> int:
+    """Return a positive int token count, or 0 when the value is unusable."""
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return count if count > 0 else 0
 
 
 def redact_secrets(text: str) -> str:
@@ -290,8 +319,32 @@ PRICING: dict[str, dict[str, float]] = dict(provider_registry.get("deepseek").pr
 MAX_TOOL_ROUNDS = 300
 MAX_READ_BYTES = 200 * 1024
 MAX_GLOB_RESULTS = 200
-MAX_CONTEXT_TOKENS = 60_000
 TRUNCATE_TOOL_RESULT_CHARS = 500
+
+# ---- context-window budgeting ---------------------------------------------
+#
+# The working set is the token budget for everything we *send* (system prompt,
+# tool schemas, and history). It is deliberately a fraction of what remains
+# after reserving room for the model's own output — filling the advertised
+# window is what turns a long coding turn into a token furnace.
+#
+#   working_set = (context_window - output_reserve) * CONTEXT_WORKING_SET_FRACTION
+#
+# Unknown / dynamically discovered models fall back to a small window rather
+# than optimistically assuming a large one.
+
+CONTEXT_WORKING_SET_FRACTION: float = 0.60
+FALLBACK_CONTEXT_WINDOW_TOKENS: int = 64_000
+FALLBACK_MAX_OUTPUT_TOKENS: int = 8_192
+# Never reserve less than this for the response, even if a model advertises a
+# tiny max_output_tokens.
+MIN_OUTPUT_RESERVE_TOKENS: int = 4_096
+# Never shrink the working set below this — below it, no coding turn can work.
+MIN_WORKING_SET_TOKENS: int = 8_000
+
+# Legacy hard cap. Retained so existing callers keep a sane default; the
+# production send path now passes a per-model budget instead.
+MAX_CONTEXT_TOKENS = 60_000
 
 SKIP_DIRS = {
     "__pycache__",
@@ -409,6 +462,27 @@ def save_dynamic_catalog(provider_id: str, models: dict[str, ModelInfo], pricing
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
+_MODEL_INFO_FIELDS: frozenset[str] = frozenset(f.name for f in fields(ModelInfo))
+
+
+def _model_info_from_cache(m_data: dict, known: ModelInfo | None) -> ModelInfo:
+    """Build a ModelInfo from a cached dict without losing context metadata.
+
+    Caches written before context metadata existed carry no window/output
+    fields, and a plain ``ModelInfo(**m_data)`` would silently downgrade a
+    known model to "unknown" and push it onto the conservative fallback
+    budget. Unrecognised keys are dropped so a cache from a newer build cannot
+    raise TypeError here.
+    """
+    clean = {k: v for k, v in m_data.items() if k in _MODEL_INFO_FIELDS}
+    if known is not None:
+        if _coerce_token_count(clean.get("context_window_tokens")) == 0:
+            clean["context_window_tokens"] = known.context_window_tokens
+        if _coerce_token_count(clean.get("max_output_tokens")) == 0:
+            clean["max_output_tokens"] = known.max_output_tokens
+    return ModelInfo(**clean)
+
+
 def load_dynamic_catalog() -> None:
     """Load cached models and update the provider registry."""
     path = catalog_cache_path()
@@ -431,7 +505,7 @@ def load_dynamic_catalog() -> None:
             # OpenRouter pricing is authoritative — never overwrite zero pricing
             # with seed defaults (free models are genuinely free).
             for mid, m_data in cached_models.items():
-                cfg.models[mid] = ModelInfo(**m_data)
+                cfg.models[mid] = _model_info_from_cache(m_data, cfg.models.get(mid))
             for mid, p_data in cached_pricing.items():
                 cfg.pricing[mid] = p_data
         else:
@@ -443,8 +517,8 @@ def load_dynamic_catalog() -> None:
                             m_data["input_per_m_usd"] = hc_m.input_per_m_usd
                             m_data["output_per_m_usd"] = hc_m.output_per_m_usd
                             m_data["cache_hit_per_m_usd"] = hc_m.cache_hit_per_m_usd
-                cfg.models[mid] = ModelInfo(**m_data)
-                
+                cfg.models[mid] = _model_info_from_cache(m_data, cfg.models.get(mid))
+
             for mid, p_data in cached_pricing.items():
                 if p_data.get("in_miss", 0.0) == 0.0 and p_data.get("out", 0.0) == 0.0:
                     hc_p = cfg.pricing.get(mid, {})
