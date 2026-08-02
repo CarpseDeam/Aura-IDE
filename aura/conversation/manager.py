@@ -44,6 +44,16 @@ from aura.conversation.completion_guard import (
     is_repetitive_completion_final,
 )
 from aura.conversation.context_budget import resolve_model_budget
+from aura.conversation.focused_action import (
+    FOCUSED_ACTION_THINKING,
+    OUTCOME_BLOCKER,
+    OUTCOME_PROVIDER_CONTRACT_FAILURE,
+    OUTCOME_WRITE,
+    REPORT_BLOCKER,
+    provider_contract_failure_message,
+    should_enter_focused_action,
+    tool_call_names,
+)
 from aura.conversation.workflow_state import WorkflowStatus
 from aura.conversation.dispatch import (
     DispatchCallback,
@@ -57,6 +67,7 @@ from aura.conversation.planner_dispatch_gate import maybe_force_worker_dispatch
 from aura.conversation.planner_stream_hygiene import PlannerStreamHygiene
 from aura.conversation.planner_refresh import PlannerRefreshState
 from aura.conversation.stream_event_router import StreamEventRouter
+from aura.conversation.task_router import TaskRoute
 from aura.conversation.tool_runner import ToolRunner
 from aura.conversation.tools._types import (
     ApprovalCallback,
@@ -230,6 +241,7 @@ class ConversationManager:
         hook_name: str = PRODUCTION_STREAM_HOOK,
         explicit_validation_commands: list[ValidationCommandSpec] | None = None,
         declared_run_command: str | None = None,
+        task_route: TaskRoute | None = None,
     ) -> None:
         """Run the model -> tool -> model loop until the model stops calling tools.
 
@@ -239,6 +251,11 @@ class ConversationManager:
         only mode that exposes the `dispatch_to_worker` tool). If the tool is
         called and `dispatch_cb` is None, the call returns an error result so
         the planner can recover rather than blocking forever.
+
+        `task_route` is the deterministic ``TaskRoute`` the send layer already
+        selected for this turn. It is read, never recomputed, and only the
+        focused action turn consults it (see
+        :mod:`aura.conversation.focused_action`).
 
         `hook_name` controls which hook to trigger for model generation.
         Normal production coding uses `generate_production_code` (the default).
@@ -250,7 +267,9 @@ class ConversationManager:
         state = _SendState(
             mode=mode,
             research_policy=decide_research_policy(_latest_user_text(self._history)),
+            task_route=task_route,
         )
+        state.focused_action.selected_thinking = str(thinking)
         if state.mode == "worker":
             state.loaded_target_files = list(loaded_target_files or [])
             if worker_dispatch_request is not None:
@@ -277,7 +296,41 @@ class ConversationManager:
                 return
 
             full_message: dict[str, Any] | None = None
-            tool_defs = self._tools.tool_defs()
+
+            # ── Focused action turn ──────────────────────────────────────
+            # Discovery is already over by the loop's own deterministic
+            # reckoning, so this one request serializes the decision into a
+            # single act instead of opening another reasoning stream. The
+            # user's thinking selection is untouched — it is simply not the
+            # mode for this request, and the next round runs on it again.
+            focused = state.focused_action
+            focused.active = should_enter_focused_action(
+                mode=state.mode,
+                route=state.task_route,
+                guard=state.pre_edit_guard,
+                task_completion_context=state.task_completion_context,
+                state=focused,
+            )
+            if focused.active:
+                tool_defs = self._tools.focused_action_tool_defs()
+                round_thinking: ThinkingMode = FOCUSED_ACTION_THINKING
+                focused.exposed_tools = tuple(
+                    str(t.get("function", {}).get("name", "")) for t in tool_defs
+                )
+                _log.info(
+                    "focused_action_start route_lane=%s route_action=%s "
+                    "selected_thinking=%s focused_action_thinking=%s "
+                    "action_tools=%s",
+                    getattr(getattr(state.task_route, "lane", None), "value", ""),
+                    getattr(state.task_route, "action", ""),
+                    focused.selected_thinking,
+                    FOCUSED_ACTION_THINKING,
+                    ",".join(focused.exposed_tools),
+                )
+            else:
+                tool_defs = self._tools.tool_defs()
+                round_thinking = thinking
+
             if state.stream_buffer is not None:
                 state.stream_buffer.begin_round()
             if state.content_gate is not None:
@@ -285,8 +338,8 @@ class ConversationManager:
 
             label = _stream_log_label(hook_name)
             _log.info(
-                "%s_start model=%s thinking=%s hook_name=%s",
-                label, model, thinking, hook_name,
+                "%s_start model=%s thinking=%s hook_name=%s focused_action=%s",
+                label, model, round_thinking, hook_name, focused.active,
             )
             _first_event = True
             planner_hygiene = (
@@ -309,14 +362,22 @@ class ConversationManager:
             api_view = self._history.build_api_payload(budget.working_set_tokens)
             _log_context_round(budget, api_view.stats, tool_defs)
 
+            # ``require_tool_call`` is only passed when it is actually
+            # required, so every other request reaches the backend with the
+            # exact call signature it has always had.
+            stream_kwargs: dict[str, Any] = {}
+            if focused.active:
+                stream_kwargs["require_tool_call"] = True
+
             for ev in model_streams.trigger(
                 hook_name,
                 messages=api_view.messages,
                 tools=tool_defs,
                 model=model,
-                thinking=thinking,
+                thinking=round_thinking,
                 cancel_event=cancel_event,
                 temperature=temperature,
+                **stream_kwargs,
             ):
                 if _first_event:
                     _log.info("%s_first_event model=%s", label, model)
@@ -366,6 +427,40 @@ class ConversationManager:
                 return
 
             tool_calls = full_message.get("tool_calls") or []
+
+            if focused.active:
+                # The request is spent either way — nothing below re-enters
+                # focused action, and nothing retries it. ``active`` stays set
+                # until this round's tool results have been folded in; the top
+                # of the next round recomputes it and finds ``spent``.
+                focused.spent = True
+                selected = tool_call_names(full_message)
+                focused.selected_action = selected[0] if selected else ""
+                if not tool_calls:
+                    focused.contract_violated = True
+                    focused.outcome = OUTCOME_PROVIDER_CONTRACT_FAILURE
+                    _log.info(
+                        "focused_action_outcome outcome=%s selected_action=%s "
+                        "selected_thinking=%s focused_action_thinking=%s",
+                        focused.outcome,
+                        "<none>",
+                        focused.selected_thinking,
+                        FOCUSED_ACTION_THINKING,
+                    )
+                    self._history.append_assistant(full_message)
+                    content, failure_message = provider_contract_failure_message()
+                    self._history.append_assistant(failure_message)
+                    on_event(ContentDelta(text=content))
+                    on_event(
+                        Done(finish_reason="stop", full_message=failure_message)
+                    )
+                    return
+                focused.outcome = (
+                    OUTCOME_BLOCKER
+                    if REPORT_BLOCKER in selected
+                    else OUTCOME_WRITE
+                )
+
             if state.worker_flow is not None:
                 state.worker_flow.observe_assistant_message(full_message)
             if (
@@ -428,7 +523,34 @@ class ConversationManager:
                 explicit_validation_commands=explicit_validation_commands,
                 declared_run_command=declared_run_command,
             )
-            if state.pre_edit_guard is not None:
+            if focused.active:
+                focused.active = False
+                write_applied = bool(
+                    state.pre_edit_guard is not None
+                    and state.pre_edit_guard.write_applied
+                )
+                if focused.outcome == OUTCOME_BLOCKER:
+                    # No mutation happened and none will: the attempt ends
+                    # here and the turn owes exactly one factual final
+                    # response, which the existing completion path produces.
+                    focused.blocked = True
+                    state.task_completion_context = True
+                _log.info(
+                    "focused_action_outcome outcome=%s selected_action=%s "
+                    "write_applied=%s selected_thinking=%s "
+                    "focused_action_thinking=%s",
+                    focused.outcome,
+                    focused.selected_action or "<none>",
+                    write_applied,
+                    focused.selected_thinking,
+                    FOCUSED_ACTION_THINKING,
+                )
+            if state.pre_edit_guard is not None and not focused.blocked:
+                # A reported blocker has already ended the implementation
+                # attempt, so the guard's "make the change now" steering would
+                # contradict the turn's own conclusion. Everything else is
+                # unchanged.
+                #
                 # Internal steering only — appended as aura_internal so it never
                 # redefines the real user-turn boundary.
                 for steering in state.pre_edit_guard.take_internal_messages():

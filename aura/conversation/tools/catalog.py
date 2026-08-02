@@ -17,6 +17,7 @@ from aura.conversation.tools._schemas import (
     DISPATCH_TOOL_DEF,
     GIT_TOOL_DEFS,
     READ_TOOL_DEFS,
+    REPORT_BLOCKER_TOOL_DEF,
     RUN_AND_WATCH_TOOL_DEF,
     SUMMON_DRONE_TOOL_DEF,
     TERMINAL_TOOL_DEF,
@@ -78,6 +79,11 @@ NORMAL_WORKER_WRITE_TOOL_NAMES = {
     "edit_godot_asset_preview",
     "install_godot_editor_bridge",
 }
+
+#: The production mutation tools — the only tools that can carry out an
+#: implementation decision. Same set the normal catalogs already register; the
+#: focused action request narrows to these rather than introducing replacements.
+MUTATION_TOOL_NAMES: frozenset[str] = frozenset(NORMAL_WORKER_WRITE_TOOL_NAMES)
 
 
 def _tool_name(tool_def: dict[str, Any]) -> str:
@@ -187,3 +193,20 @@ class ToolCatalog:
             tools.extend(mcp_schemas)
 
         return tools
+
+    def build_focused_action_tool_defs(self) -> list[dict[str, Any]]:
+        """Build the tool set for one focused action request.
+
+        Exactly the production mutation tools already registered, plus
+        ``report_blocker``. Nothing here is a replacement editing tool and
+        nothing is invented: this is the normal write catalog with everything
+        that invites another round of thinking — reads, search, research, TODO,
+        git, terminal, diagnostics, drones, inspection, MCP, dynamic tools —
+        left out, because the decision those tools serve has already been made.
+        """
+        mutation_tools = [
+            copy.deepcopy(tool)
+            for tool in WRITE_TOOL_DEFS
+            if _tool_name(tool) in MUTATION_TOOL_NAMES
+        ]
+        return mutation_tools + [copy.deepcopy(REPORT_BLOCKER_TOOL_DEF)]

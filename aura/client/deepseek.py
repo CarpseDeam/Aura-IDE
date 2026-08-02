@@ -139,6 +139,7 @@ class DeepSeekClient:
         thinking: ThinkingMode,
         cancel_event: threading.Event | None = None,
         temperature: float = 0.7,
+        require_tool_call: bool = False,
     ) -> Iterator[Event]:
         if self._provider == "anthropic":
             yield from _stream_anthropic(
@@ -150,6 +151,7 @@ class DeepSeekClient:
                 thinking=thinking,
                 cancel_event=cancel_event,
                 temperature=temperature,
+                require_tool_call=require_tool_call,
             )
             return
 
@@ -160,8 +162,16 @@ class DeepSeekClient:
             "stream_options": {"include_usage": True},
         }
         if tools:
+            # ``required`` is the OpenAI-compatible spelling of "answer with a
+            # tool call, not prose"; DeepSeek and OpenRouter accept the same
+            # field. Parallel tool use is switched off so the response
+            # serializes exactly one action.
             kwargs["tools"] = tools
-            kwargs["tool_choice"] = "auto"
+            if require_tool_call:
+                kwargs["tool_choice"] = "required"
+                kwargs["parallel_tool_calls"] = False
+            else:
+                kwargs["tool_choice"] = "auto"
 
         reasoning = resolve_reasoning_request(self._provider, thinking)
         if reasoning.extra_body is not None:
@@ -173,9 +183,12 @@ class DeepSeekClient:
 
         _log.info(
             "provider_stream_start provider=%s model=%s thinking=%s "
+            "tool_choice=%s parallel_tool_calls=%s "
             "reasoning_effort=%s effort_sent=%s effort_policy=%s "
             "base_url_host=%s timeout_connect=%s timeout_read=%s",
             self._provider, model, thinking,
+            kwargs.get("tool_choice", "<none>"),
+            kwargs.get("parallel_tool_calls", "<default>"),
             reasoning.reasoning_effort or "<omitted>",
             reasoning.effort_sent,
             reasoning.effort_policy,

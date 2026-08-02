@@ -126,6 +126,7 @@ class _Worker(QObject):
         max_tool_rounds: int | None = None,
         production_session: "ProductionExecutionSession | None" = None,
         hook_name: str = PRODUCTION_STREAM_HOOK,
+        task_route: TaskRoute | None = None,
     ) -> None:
         super().__init__()
         self._manager = manager
@@ -139,6 +140,7 @@ class _Worker(QObject):
         self._max_tool_rounds = max_tool_rounds
         self._production_session = production_session
         self._hook_name = hook_name
+        self._task_route = task_route
 
     @Slot()
     def run(self) -> None:
@@ -164,6 +166,7 @@ class _Worker(QObject):
                 temperature=self._temperature,
                 hook_name=self._hook_name,
                 max_tool_rounds=self._max_tool_rounds,
+                task_route=self._task_route,
             )
         except Exception as exc:
             from aura.config import redact_secrets
@@ -761,6 +764,7 @@ class ConversationBridge(QObject):
             max_tool_rounds=max_tool_rounds,
             production_session=self._production_session,
             hook_name=PRODUCTION_STREAM_HOOK,
+            task_route=self._turn_task_route,
         )
         self._worker.moveToThread(self._thread)
 

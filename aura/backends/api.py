@@ -34,6 +34,7 @@ class APIAgentBackend(AgentBackend):
         thinking: ThinkingMode,
         cancel_event: threading.Event | None = None,
         temperature: float = 0.7,
+        require_tool_call: bool = False,
     ) -> Iterator[Event]:
         return self.client.stream(
             messages=messages,
@@ -42,4 +43,5 @@ class APIAgentBackend(AgentBackend):
             thinking=thinking,
             cancel_event=cancel_event,
             temperature=temperature,
+            require_tool_call=require_tool_call,
         )

@@ -7,6 +7,7 @@ from typing import Any
 
 from aura.codebase_index.indexer import CodebaseIndex  # noqa: F401
 from aura.codebase_index.tool import search_codebase as _search_codebase  # noqa: F401
+from aura.conversation.tools._blocker_mixin import BlockerHandlersMixin
 from aura.conversation.tools._code_intel_mixin import CodeIntelHandlersMixin
 from aura.conversation.tools._diagnostic_mixin import DiagnosticHandlersMixin
 from aura.conversation.tools._git_mixin import GitHandlersMixin
@@ -54,6 +55,7 @@ TOOL_HANDLERS: dict[str, Any] = {}
 
 
 class ToolRegistry(
+    BlockerHandlersMixin,
     CodeIntelHandlersMixin,
     TaskContextHandlersMixin,
     ReadHandlersMixin,
@@ -142,6 +144,15 @@ class ToolRegistry(
             dynamic_schemas=dynamic_schemas or None,
             mcp_schemas=self._mcp_tools.schemas or None,
         )
+
+    def focused_action_tool_defs(self) -> list[dict[str, Any]]:
+        """Tool defs for one focused action request: mutations + report_blocker.
+
+        Deliberately independent of ``read_only`` mode plumbing and of the
+        dynamic/MCP schemas — a focused action request exposes the fixed
+        action surface and nothing else.
+        """
+        return self._catalog.build_focused_action_tool_defs()
 
     def connect_mcp_server(self, server_command: str) -> int:
         return self._mcp_tools.connect_server(server_command)
@@ -234,6 +245,7 @@ TOOL_HANDLERS["edit_godot_editor"] = ToolRegistry._handle_edit_godot_editor
 TOOL_HANDLERS["edit_godot_asset_preview"] = ToolRegistry._handle_edit_godot_asset_preview
 TOOL_HANDLERS["install_godot_editor_bridge"] = ToolRegistry._handle_install_godot_editor_bridge
 TOOL_HANDLERS["update_worker_todo"] = ToolRegistry._handle_update_worker_todo
+TOOL_HANDLERS["report_blocker"] = ToolRegistry._handle_report_blocker
 
 TOOL_HANDLERS["search_project_memory"] = ToolRegistry._handle_search_project_memory
 TOOL_HANDLERS["save_to_project_memory"] = ToolRegistry._handle_save_to_project_memory

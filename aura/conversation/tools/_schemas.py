@@ -1947,3 +1947,48 @@ WEB_SEARCH_TOOL_DEF: dict[str, Any] = {
     },
 }
 
+
+#: The one control tool exposed during a focused action request.
+#:
+#: It is deliberately absent from every ordinary catalog: the model may only
+#: reach it when the send loop has already decided that discovery is finished
+#: and this turn owes exactly one action. It mutates nothing — it serializes
+#: "I cannot make this edit, and here is why" into structured data so the turn
+#: can end honestly instead of reopening planning.
+REPORT_BLOCKER_TOOL_DEF: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "report_blocker",
+        "description": (
+            "Report that the implementation you scoped cannot be carried out, and "
+            "end the attempt. Use this ONLY when no edit is possible — not to ask "
+            "for more discovery, not to restate a plan, and not instead of a write "
+            "you are able to make. Performs no mutation."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "blocker": {
+                    "type": "string",
+                    "description": (
+                        "One concrete sentence naming what prevents the edit."
+                    ),
+                },
+                "needed": {
+                    "type": "string",
+                    "description": (
+                        "Optional: the specific thing that would unblock it."
+                    ),
+                },
+                "target_files": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Optional: the files the edit would have touched."
+                    ),
+                },
+            },
+            "required": ["blocker"],
+        },
+    },
+}

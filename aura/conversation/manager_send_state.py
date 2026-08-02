@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from aura.conversation.edit_orchestrator import EditRetryLedger
+from aura.conversation.focused_action import FocusedActionState
 from aura.conversation.pre_edit_loop_guard import PreEditLoopGuard
 from aura.conversation.single_content_gate import SingleContentGate
 from aura.conversation.tool_limits import ToolLimitState
@@ -35,6 +36,11 @@ class _SendState:
     research_policy: Any
     """Result of ``decide_research_policy()`` for this turn."""
 
+    task_route: Any = None
+    """The deterministic ``TaskRoute`` selected for this turn, when the caller
+    supplied one. The focused action turn reads its lane; nothing here
+    reclassifies the request."""
+
     # --- per-round state ---
     reject_all_for_turn: bool = False
     rounds_used: int = 0
@@ -54,6 +60,9 @@ class _SendState:
 
     pre_edit_guard: PreEditLoopGuard | None = field(init=False)
     """Deterministic repeat-read / stagnant-discovery guard before the first write."""
+
+    focused_action: FocusedActionState = field(default_factory=FocusedActionState)
+    """The one action-serialization request this turn may spend."""
 
     # --- worker recovery state ---
     worker_flow_last_steering: str = ""
