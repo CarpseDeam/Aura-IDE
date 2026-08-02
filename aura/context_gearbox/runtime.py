@@ -7,7 +7,12 @@ from typing import Any, Iterable
 
 _log = logging.getLogger(__name__)
 
-from aura.context_gearbox.models import ComposedContext, ContextLedgerEntry, RuntimeRole
+from aura.context_gearbox.models import (
+    ComposedContext,
+    ContextLedgerEntry,
+    CustomPromptDiagnostics,
+    RuntimeRole,
+)
 from aura.context_gearbox.sources import collect_source_text, iter_registered_sources
 from aura.roles import load_bundled_role_capsule
 
@@ -356,3 +361,171 @@ def _custom_prompt_extension(custom: str, canonical_blocks: list[str]) -> str:
             continue
         collapsed.append(line)
     return "\n".join(collapsed).strip()
+
+
+# Vocabulary from the retired Planner/Worker product. A custom prompt is
+# usually an edited copy of an older default, so these survive long after the
+# runtime stopped having two coding models.
+_LEGACY_ROLE_TERMS: tuple[str, ...] = (
+    "planner",
+    "worker",
+    "dispatch_to_worker",
+    "dispatch to worker",
+    "work artifact",
+    "sub-agent",
+    "subagent",
+)
+
+# Concepts the canonical prompt already owns, and phrasings that indicate a
+# custom prompt is re-stating one. Exact-block removal cannot catch these —
+# they are paraphrases, which is precisely why they need to be visible.
+_CANONICAL_CONCEPT_MARKERS: dict[str, tuple[str, ...]] = {
+    "read before claiming (core kernel)": (
+        "read the file",
+        "read files before",
+        "before making claims",
+        "do not describe the repository from memory",
+    ),
+    "scope discipline (core kernel)": (
+        "stay in scope",
+        "do not expand scope",
+        "scope creep",
+        "only what was asked",
+    ),
+    "response length (response discipline)": (
+        "be concise",
+        "keep it short",
+        "avoid essays",
+        "lead with the answer",
+    ),
+    "anti-circling (production capsule)": (
+        "do not circle",
+        "do not overthink",
+        "act quickly",
+        "stop searching",
+        "one or two tool calls",
+    ),
+    "live todo (production capsule)": (
+        "update_worker_todo",
+        "checklist",
+        "todo list",
+    ),
+    "validation selection (validation_selection_contract)": (
+        "run the tests",
+        "py_compile",
+        "focused test",
+        "validate the change",
+    ),
+    "receipt honesty (receipt_contract)": (
+        "list changed files",
+        "do not claim",
+        "final receipt",
+        "summarize what changed",
+    ),
+    "code quality (code_quality_contract)": (
+        "no placeholders",
+        "no stubs",
+        "match local style",
+        "do not invent",
+    ),
+}
+
+
+def diagnose_custom_prompt(
+    role: RuntimeRole | str,
+    custom_prompt: str | None,
+) -> CustomPromptDiagnostics:
+    """Describe what a custom prompt adds on top of the canonical one.
+
+    Reports size, whether it opted into full replacement, retired
+    Planner/Worker vocabulary, and canonical concepts it appears to restate.
+    Purely observational: composition is unchanged by anything measured here.
+    """
+    runtime_role = RuntimeRole.from_value(role)
+    custom = (custom_prompt or "").strip()
+    if not custom:
+        return CustomPromptDiagnostics(
+            char_count=0,
+            appended_char_count=0,
+            full_replacement=False,
+            legacy_terms=(),
+            repeated_concepts=(),
+        )
+
+    full_replacement = FULL_REPLACEMENT_MARKER in custom
+    if full_replacement:
+        # The custom prompt is the whole prompt, so all of it reaches the model
+        # and "repeats a canonical block" is not a meaningful question.
+        appended = custom.replace(FULL_REPLACEMENT_MARKER, "").strip()
+        repeated: tuple[str, ...] = ()
+    else:
+        canonical_blocks = [
+            CONTEXT_PLACEHOLDER,
+            _RESPONSE_DISCIPLINE,
+            _role_prompt_text(runtime_role),
+        ]
+        appended = _custom_prompt_extension(custom, canonical_blocks)
+        repeated = _repeated_canonical_concepts(appended)
+
+    return CustomPromptDiagnostics(
+        char_count=len(custom),
+        appended_char_count=len(appended),
+        full_replacement=full_replacement,
+        legacy_terms=_legacy_role_terms(custom),
+        repeated_concepts=repeated,
+    )
+
+
+# Current tool names that contain retired role vocabulary. Stripped before the
+# legacy scan so a prompt that correctly names today's TODO tool is not
+# reported as carrying Planner/Worker language.
+_CURRENT_NAMES_WITH_LEGACY_WORDS: tuple[str, ...] = (
+    "update_worker_todo",
+    "worker_todo",
+)
+
+
+def _legacy_role_terms(text: str) -> tuple[str, ...]:
+    lowered = text.lower()
+    for name in _CURRENT_NAMES_WITH_LEGACY_WORDS:
+        lowered = lowered.replace(name, "")
+    return tuple(term for term in _LEGACY_ROLE_TERMS if term in lowered)
+
+
+def _repeated_canonical_concepts(appended: str) -> tuple[str, ...]:
+    lowered = appended.lower()
+    return tuple(
+        concept
+        for concept, markers in _CANONICAL_CONCEPT_MARKERS.items()
+        if any(marker in lowered for marker in markers)
+    )
+
+
+def format_custom_prompt_diagnostics(
+    diagnostics: CustomPromptDiagnostics,
+    *,
+    effective_prompt_chars: int | None = None,
+) -> str:
+    """One compact line for the settings page and the composition log.
+
+    ASCII only: this also goes to log handlers, which on Windows may be
+    encoding with the console code page rather than UTF-8.
+    """
+    if diagnostics.is_empty:
+        line = "Custom prompt: none (using the built-in default)."
+        if effective_prompt_chars is not None:
+            line += f" Effective system prompt: {effective_prompt_chars:,} chars."
+        return line
+
+    parts = [f"Custom prompt: {diagnostics.char_count:,} chars"]
+    if diagnostics.full_replacement:
+        parts.append("replaces the canonical prompt entirely")
+    else:
+        parts.append(f"{diagnostics.appended_char_count:,} appended after de-duplication")
+    if diagnostics.legacy_terms:
+        parts.append("legacy Planner/Worker terms: " + ", ".join(diagnostics.legacy_terms))
+    if diagnostics.repeated_concepts:
+        parts.append("may restate: " + "; ".join(diagnostics.repeated_concepts))
+    if effective_prompt_chars is not None:
+        parts.append(f"effective system prompt {effective_prompt_chars:,} chars")
+    return " | ".join(parts) + "."

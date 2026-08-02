@@ -12,6 +12,11 @@ from PySide6.QtWidgets import (
 )
 
 from aura.config import AppSettings
+from aura.context_gearbox.models import RuntimeRole
+from aura.context_gearbox.runtime import (
+    diagnose_custom_prompt,
+    format_custom_prompt_diagnostics,
+)
 from aura.gui.theme import FG_DIM
 
 
@@ -62,8 +67,24 @@ class PromptsPage(QWidget):
         single_widget.setLayout(single_row)
         form.addRow("Production:", single_widget)
 
+        # A custom prompt is appended to the canonical one, so overlap is easy
+        # to create and impossible to see in the editor alone. This says what
+        # actually survives de-duplication and what it appears to restate.
+        self._diagnostics_label = QLabel()
+        self._diagnostics_label.setStyleSheet(f"color: {FG_DIM}; font-size: 10px;")
+        self._diagnostics_label.setWordWrap(True)
+        form.addRow("", self._diagnostics_label)
+        self._single_prompt_edit.textChanged.connect(self._refresh_diagnostics)
+        self._refresh_diagnostics()
+
         layout.addLayout(form)
         layout.addStretch()
+
+    def _refresh_diagnostics(self) -> None:
+        diagnostics = diagnose_custom_prompt(
+            RuntimeRole.SINGLE, self._single_prompt_edit.toPlainText()
+        )
+        self._diagnostics_label.setText(format_custom_prompt_diagnostics(diagnostics))
 
     def collect_settings(self, settings: AppSettings) -> None:
         settings.system_prompt = self._single_prompt_edit.toPlainText().strip()

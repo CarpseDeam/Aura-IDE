@@ -41,6 +41,27 @@ class ContextLedgerEntry:
 
 
 @dataclass(frozen=True)
+class CustomPromptDiagnostics:
+    """What a user's custom prompt adds to the canonical one, made visible.
+
+    Nothing here rewrites the custom prompt. Verbatim canonical blocks are
+    already dropped during composition; these fields describe what survives
+    that, so a paraphrase of a rule that already has an owner is legible
+    rather than silent.
+    """
+
+    char_count: int
+    appended_char_count: int
+    full_replacement: bool
+    legacy_terms: tuple[str, ...]
+    repeated_concepts: tuple[str, ...]
+
+    @property
+    def is_empty(self) -> bool:
+        return self.char_count == 0
+
+
+@dataclass(frozen=True)
 class ComposedContext:
     role: RuntimeRole
     system_prompt: str

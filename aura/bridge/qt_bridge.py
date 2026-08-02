@@ -72,6 +72,8 @@ from aura.context_gearbox.runtime import (
     SINGLE_SYSTEM_PROMPT,
     compose_system_prompt,
     context_gearbox_metadata,
+    diagnose_custom_prompt,
+    format_custom_prompt_diagnostics,
 )
 from aura.conversation import (
     ConversationManager,
@@ -358,6 +360,7 @@ class ConversationBridge(QObject):
         self._planner_system_prompt: str = ""
         self._tier1_context: str = ""
         self._context_gearbox_metadata: dict = {}
+        self._custom_prompt_diagnostics = diagnose_custom_prompt(RuntimeRole.SINGLE, "")
         self._auto_dispatch: bool = False
         self._pre_worker_sha: str | None = None
         self._active_prompt_mode: str | None = None
@@ -576,6 +579,15 @@ class ConversationBridge(QObject):
         )
         self._context_gearbox_metadata = context_gearbox_metadata(
             composed.ledger, workspace_root=self._registry.workspace_root,
+        )
+        self._custom_prompt_diagnostics = diagnose_custom_prompt(role, custom_prompt)
+        _log.info(
+            "prompt_composed role=%s %s",
+            role.value,
+            format_custom_prompt_diagnostics(
+                self._custom_prompt_diagnostics,
+                effective_prompt_chars=len(composed.system_prompt),
+            ),
         )
         self._tier1_context = composed.context_text
         self._dispatch_proxy.set_tier1_context(self._tier1_context)
