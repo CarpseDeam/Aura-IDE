@@ -26,10 +26,6 @@ from aura.conversation.tools._types import (
 from aura.conversation.tools._worker_todo_mixin import WorkerTodoHandlersMixin
 from aura.conversation.tools._write_mixin import WriteHandlersMixin
 from aura.conversation.tools.backup import backup_existing  # noqa: F401
-from aura.conversation.tools.capability_groups import (
-    select_capabilities,
-    tool_names_for,
-)
 from aura.conversation.tools.catalog import ToolCatalog
 from aura.conversation.tools.dynamic_registry import DynamicToolRegistry
 from aura.conversation.tools.executor import ToolExecutor
@@ -95,11 +91,6 @@ class ToolRegistry(
         # The turn's cancel event, supplied per execute() call by the tool
         # round. The registry never creates one — it only relays the caller's.
         self._cancel_event: threading.Event | None = None
-        # Turn scope for progressive capability exposure (single mode only).
-        # None means "no scope declared" — the full built-in catalog, which is
-        # what every non-production caller and every test gets by default.
-        self._turn_scope: dict[str, Any] | None = None
-        self._turn_used_tools: set[str] = set()
         self._executor = ToolExecutor(
             owner=self,
             dynamic_tools=self._dynamic_tools,
@@ -143,55 +134,13 @@ class ToolRegistry(
         """
         return self._cancel_event
 
-    def begin_turn(
-        self,
-        *,
-        task_kind: str | None = None,
-        target_files: tuple[str, ...] | list[str] = (),
-        request_text: str = "",
-    ) -> None:
-        """Declare the scope of the turn about to run.
-
-        Production calls this once per send. It resets the turn's continuity
-        record, so capabilities earned by the previous turn's tool use do not
-        carry into this one. Callers that never declare a scope keep the full
-        built-in catalog.
-        """
-        self._turn_scope = {
-            "task_kind": task_kind,
-            "target_files": tuple(str(path) for path in target_files),
-            "request_text": request_text or "",
-        }
-        self._turn_used_tools = set()
-
-    def clear_turn_scope(self) -> None:
-        """Drop the declared scope and return to the full built-in catalog."""
-        self._turn_scope = None
-        self._turn_used_tools = set()
-
-    def active_capabilities(self) -> frozenset[str] | None:
-        """The capability groups exposed right now, or None when unscoped."""
-        if self._turn_scope is None or self._mode != "single" or self._read_only:
-            return None
-        return select_capabilities(
-            task_kind=self._turn_scope["task_kind"],
-            target_files=self._turn_scope["target_files"],
-            request_text=self._turn_scope["request_text"],
-            workspace_root=self._root,
-            used_tools=frozenset(self._turn_used_tools),
-        )
-
     def tool_defs(self) -> list[dict[str, Any]]:
         dynamic_schemas = self._dynamic_tools.schemas() if not self._read_only else []
-        capabilities = self.active_capabilities()
         return self._catalog.build_tool_defs(
             mode=self._mode,
             read_only=self._read_only,
             dynamic_schemas=dynamic_schemas or None,
             mcp_schemas=self._mcp_tools.schemas or None,
-            allowed_tool_names=(
-                None if capabilities is None else tool_names_for(capabilities)
-            ),
         )
 
     def connect_mcp_server(self, server_command: str) -> int:
@@ -248,10 +197,6 @@ class ToolRegistry(
         cancel_event: threading.Event | None = None,
     ) -> ToolExecResult:
         self._cancel_event = cancel_event
-        # Continuity: a capability the model has reached for stays exposed for
-        # the rest of the turn, whatever the call's outcome. Losing a tool
-        # mid-workflow is worse than carrying one extra group.
-        self._turn_used_tools.add(name)
         try:
             return self._executor.execute(name, args, approval_cb, reject_all)
         finally:

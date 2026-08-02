@@ -429,17 +429,29 @@ def list_directory(workspace_root: Path, target: Path) -> dict[str, Any]:
 
 
 def glob_files(workspace_root: Path, pattern: str) -> dict[str, Any]:
+    """Match paths against a glob pattern with standard glob semantics.
+
+    ``*`` matches within one path segment and ``**`` recurses, so ``*`` lists
+    the workspace root, ``aura/gui/*`` lists one directory, and ``**/*.py``
+    walks the tree. Directories come back with a trailing slash, which is what
+    lets this answer "what is in here?" as well as "where are the .py files?".
+    """
     matches: list[str] = []
-    for p in workspace_root.rglob(pattern):
-        if _should_skip(safe_relative_to(p, workspace_root)):
+    directories: list[str] = []
+    for p in sorted(workspace_root.glob(pattern)):
+        rel = safe_relative_to(p, workspace_root)
+        if _should_skip(rel):
             continue
-        if p.is_file():
-            matches.append(safe_relative_to(p, workspace_root).as_posix())
-        if len(matches) >= MAX_GLOB_RESULTS:
+        if p.is_dir():
+            directories.append(rel.as_posix() + "/")
+        elif p.is_file():
+            matches.append(rel.as_posix())
+        if len(matches) + len(directories) >= MAX_GLOB_RESULTS:
             break
     return {
         "ok": True,
         "pattern": pattern,
         "matches": matches,
-        "truncated": len(matches) >= MAX_GLOB_RESULTS,
+        "directories": directories,
+        "truncated": len(matches) + len(directories) >= MAX_GLOB_RESULTS,
     }

@@ -11,6 +11,9 @@ from typing import Any, Callable
 
 from aura.conversation.tools.fs_read import glob_files, list_directory, read_file, read_file_outline, read_file_range
 
+# How many lines read_file returns when given an offset but no limit.
+DEFAULT_READ_WINDOW_LINES: int = 2000
+
 # read_files budgeting.
 #
 # The point of these caps is that *every requested path keeps its metadata* even
@@ -91,16 +94,43 @@ class FsReadHandler:
         self._resolve = resolve_fn
 
     def handle_read_file(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Read a single file from the workspace.
+        """Read a file, or a window of it.
+
+        ``offset``/``limit`` select a 1-based line window and route to the
+        streaming range reader, which can reach any line in a large file. With
+        neither, the whole file comes back (capped at MAX_READ_BYTES).
 
         Args:
-            args: Must contain "path" key with a workspace-relative path string.
+            args: "path" (required), plus optional "offset" and "limit".
 
         Returns:
-            Payload dict from read_file().
+            Payload dict from read_file() or read_file_range().
         """
-        target = self._resolve(args.get("path", ""))
-        return read_file(self._root, target)
+        offset = args.get("offset")
+        limit = args.get("limit")
+        if offset is None and limit is None:
+            target = self._resolve(args.get("path", ""))
+            return read_file(self._root, target)
+
+        if offset is not None and not isinstance(offset, int):
+            return {"ok": False, "error": "offset must be an integer"}
+        if limit is not None and not isinstance(limit, int):
+            return {"ok": False, "error": "limit must be an integer"}
+        start_line = 1 if offset is None else offset
+        if start_line < 1:
+            return {"ok": False, "error": "offset must be >= 1"}
+        if limit is None:
+            end_line = start_line + DEFAULT_READ_WINDOW_LINES - 1
+        elif limit < 1:
+            return {"ok": False, "error": "limit must be >= 1"}
+        else:
+            end_line = start_line + limit - 1
+
+        try:
+            target = self._resolve(args.get("path", ""))
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+        return read_file_range(self._root, target, start_line, end_line)
 
     def handle_read_files(self, args: dict[str, Any]) -> dict[str, Any]:
         """Read multiple files in one call, keeping metadata for every path.

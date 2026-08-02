@@ -26,6 +26,21 @@ from aura.conversation.tools._schemas import (
     WRITE_TOOL_DEFS,
 )
 from aura.conversation.tools._types import RegistryMode
+from aura.conversation.tools.capability_groups import BULK_READ, CODE_INTEL, tool_names_for
+
+# Read and search tools the production single-agent catalog no longer offers.
+#
+# Every one of these is reachable through a tool that remains: line windows via
+# ``read_file``'s offset/limit, multi-file reads via several ``read_file`` calls
+# in one round, directory listing via ``glob``, and symbol/structure lookup via
+# ``grep_search``. Presenting all of them made the model choose an approach
+# before it could choose an action.
+#
+# The handlers stay registered, so a replayed historical tool call still runs,
+# and Planner/Worker mode keep their existing sets.
+SINGLE_SUPERSEDED_READ_TOOL_NAMES: frozenset[str] = tool_names_for(
+    {BULK_READ, CODE_INTEL}
+)
 
 PLANNER_TOOL_NAMES = {
     "read_file",
@@ -99,16 +114,8 @@ class ToolCatalog:
         read_only: bool,
         dynamic_schemas: list[dict[str, Any]] | None = None,
         mcp_schemas: list[dict[str, Any]] | None = None,
-        allowed_tool_names: frozenset[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Build tool definitions for the given mode and state.
-
-        ``allowed_tool_names`` narrows the production single-agent catalog to
-        the capabilities the current turn actually calls for.  It applies only
-        to ``single`` mode and only to the built-in catalog: Planner/Worker
-        keep their fixed sets, and dynamic/MCP schemas are appended afterwards
-        with their own gating.  ``None`` means no narrowing.
-        """
+        """Build tool definitions for the given mode and state."""
         if read_only:
             tools: list[dict[str, Any]] = list(READ_TOOL_DEFS) + list(GIT_TOOL_DEFS)
         elif mode == "planner":
@@ -155,8 +162,12 @@ class ToolCatalog:
         else:
             # Production single-agent mode: one continuous model owns
             # inspection → live TODO → edits → validation → repair.
+            single_read_tools = [
+                tool for tool in READ_TOOL_DEFS
+                if _tool_name(tool) not in SINGLE_SUPERSEDED_READ_TOOL_NAMES
+            ]
             tools = (
-                list(READ_TOOL_DEFS)
+                single_read_tools
                 + [dict(WORKER_TODO_TOOL_DEF)]
                 + list(WRITE_TOOL_DEFS)
                 + [dict(TERMINAL_TOOL_DEF)]
@@ -168,11 +179,6 @@ class ToolCatalog:
                 + [dict(RUN_READ_ONLY_DRONE_TOOL_DEF)]
                 + [dict(REGISTER_DRONE_FOLDER_TOOL_DEF)]
             )
-            if allowed_tool_names is not None:
-                tools = [
-                    tool for tool in tools
-                    if _tool_name(tool) in allowed_tool_names
-                ]
 
         if not read_only and mode != "planner" and dynamic_schemas:
             tools.extend(dynamic_schemas)

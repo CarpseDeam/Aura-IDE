@@ -191,8 +191,12 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
         "function": {
             "name": "read_file",
             "description": (
-                "Read a UTF-8 text file from the workspace. Returns its full contents (capped at 200KB). "
+                "Read a UTF-8 text file from the workspace. By default returns the full contents "
+                "(capped at 200KB). Pass offset/limit to read a specific window of lines instead — "
+                "far more context-efficient than re-reading a whole file when you already know which "
+                "lines you need, and it can reach any line in a file too large to return in full. "
                 "Use this to inspect the user's source code, configs, or notes before answering or editing. "
+                "To read several files, issue several read_file calls in the same round. "
                 "The path argument MUST be relative to the workspace root."
             ),
             "parameters": {
@@ -201,7 +205,15 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
                     "path": {
                         "type": "string",
                         "description": "Workspace-relative path, e.g. 'scripts/player.gd'.",
-                    }
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Optional first line to read (1-based, inclusive).",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Optional number of lines to read starting at offset.",
+                    },
                 },
                 "required": ["path"],
             },
@@ -308,8 +320,11 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
         "function": {
             "name": "glob",
             "description": (
-                "Recursively find files matching a glob pattern relative to the workspace root. "
-                "Examples: '**/*.gd', 'scripts/**/*.py', '*.md'. Capped at 200 matches."
+                "Find files and directories matching a glob pattern relative to the workspace "
+                "root. '*' matches within one path segment, '**' recurses: use '**/*.gd' or "
+                "'scripts/**/*.py' to walk the tree, and '*' or 'aura/gui/*' to list one "
+                "directory's immediate contents. Returns 'matches' (files) and 'directories' "
+                "(trailing slash), capped at 200 entries total."
             ),
             "parameters": {
                 "type": "object",
@@ -395,7 +410,11 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
                         "and the column where the match starts, plus search metadata such as the "
                         "engine used, searched file count, skipped file count, truncation, and regex hint state. "
                         "Use this to find where functions are defined, variables are used, "
-                        "error messages, or any text pattern across the codebase."
+                        "error messages, or any text pattern across the codebase. "
+                        "For exact symbol usages before a rename, anchor the pattern with word "
+                        "boundaries, e.g. '\\bcount_items\\b'. To recall a file by what it does "
+                        "rather than by an exact string, search for a distinctive term you expect "
+                        "in it and widen from the hits."
                     ),
                     "parameters": {
                         "type": "object",
