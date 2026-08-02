@@ -1,12 +1,33 @@
-"""MCP tool registry — owns MCP clients, schemas, and execution dispatch."""
+"""MCP tool registry — owns MCP clients, schemas, and execution dispatch.
+
+Registration is the security boundary for extensible tools, so three
+properties hold here rather than being left to whoever connects a server.
+
+**Instance-owned.**  Registered tools live on the registry that connected the
+server and nowhere else.  Publishing them to the process-global
+``TOOL_HANDLERS`` made every registry in the process — a second window, a
+Planner alongside its Worker — able to call a server it never connected, with
+another registry's client and another workspace's root.
+
+**Collision-safe.**  A server does not get to name its tool ``write_file``.
+The built-in handlers are checked before this registry, so a shadowing name
+would either be silently unreachable or, when it reached the global table,
+replace the real write path — approval, backup, and path jail included — with
+an arbitrary subprocess.  Both outcomes are refusals here instead.
+
+**Atomic.**  A server's tools are validated as a set and committed as a set.
+A failure part-way through leaves the registry exactly as it was and closes
+the client, rather than exposing half a server that cannot be named,
+disconnected, or reasoned about.
+"""
 from __future__ import annotations
 
-import json
 import os as _os
 import shlex
+import threading
 from typing import Any
 
-from aura.conversation.tools._types import ApprovalRequest, ToolExecResult
+from aura.conversation.tools._types import ToolExecResult
 from aura.conversation.tools.consequential import is_consequential
 from aura.conversation.tools.effects import (
     DEFAULT_EXTENSIBLE_TOOL_EFFECT,
@@ -38,74 +59,122 @@ except ModuleNotFoundError as exc:
         }
 
 
-def _make_mcp_handler(
-    registry: "MCPToolRegistry", mcp_client: MCPClient, tool_name: str
-):
-    """Create a handler closure for an MCP tool.
+class MCPRegistrationError(ValueError):
+    """A server tool was refused registration.
 
-    The approval gate is the registry's resolved effect, not the tool's name:
-    an unannotated server tool is consequential and must be approved however
-    innocuous it is called.
+    Raised for a name that collides with a built-in or an already-registered
+    tool, and for a malformed tool definition.  Connecting the server fails as
+    a whole; nothing partial is left behind.
     """
-    def handler(self, args, approval_cb, reject_all):
-        if registry.requires_approval(tool_name):
-            if reject_all:
-                return ToolExecResult(
-                    ok=False,
-                    payload={"ok": False, "rejected": True, "error": f"rejected: {tool_name}"},
-                )
-            if approval_cb is not None:
-                request = ApprovalRequest(
-                    tool_name=tool_name,
-                    rel_path=f"mcp:{tool_name}",
-                    old_content="",
-                    new_content=json.dumps(args),
-                    is_new_file=True,
-                )
-                decision = approval_cb(request)
-                if decision.action in ("reject", "reject_all"):
-                    return ToolExecResult(
-                        ok=False,
-                        payload={
-                            "ok": False,
-                            "rejected": True,
-                            "error": f"rejected: {tool_name}",
-                            "decision": decision.action,
-                        },
-                    )
-        result = mcp_client.call_tool(tool_name, args)
-        return ToolExecResult(ok=result.get("ok", False), payload=result)
-    return handler
+
+
+def _builtin_tool_names() -> frozenset[str]:
+    """Names the built-in catalog owns, which no server tool may take.
+
+    Read at call time: the table is populated when
+    ``aura.conversation.tools.registry`` finishes importing, and this module
+    is imported on the way there.
+    """
+    from aura.conversation.tools.registry import TOOL_HANDLERS
+
+    return frozenset(TOOL_HANDLERS)
 
 
 class MCPToolRegistry:
     """Owns MCP server connections, tool schemas, and execution."""
 
     def __init__(self) -> None:
+        self._lock = threading.RLock()
         self._clients: dict[str, MCPClient] = {}   # tool_name -> MCPClient
-        self._schemas: list[dict[str, Any]] = []
         self._effects: dict[str, ToolEffect] = {}  # tool_name -> declared effect
         # tool_name -> its OpenAI schema, so exposure can be filtered by the
         # resolved effect without re-deriving anything from the schema list.
+        # Insertion-ordered, which is also the exposure order.
         self._schema_by_name: dict[str, dict[str, Any]] = {}
+        # server key -> the tool names it owns, so a disconnect removes
+        # exactly that server's surface and nothing else.
+        self._server_tools: dict[str, list[str]] = {}
+        self._server_clients: dict[str, MCPClient] = {}
+
+    # ── registration ────────────────────────────────────────────────────
+
+    def _check_name(self, tool_name: Any, pending: set[str]) -> str:
+        """Validate one candidate tool name, or raise MCPRegistrationError."""
+        if not isinstance(tool_name, str) or not tool_name.strip():
+            raise MCPRegistrationError(
+                "MCP tool definition has no usable 'name'"
+            )
+        name = tool_name.strip()
+        if name in _builtin_tool_names():
+            raise MCPRegistrationError(
+                f"MCP tool '{name}' collides with a built-in tool of the same "
+                "name; built-in tools cannot be shadowed by a server"
+            )
+        if name in self._clients or name in pending:
+            raise MCPRegistrationError(
+                f"MCP tool '{name}' is already registered; tool names must be "
+                "unique across connected servers"
+            )
+        return name
+
+    @staticmethod
+    def _declared_effect(tool_def: dict[str, Any]) -> ToolEffect | None:
+        effect = effect_from_metadata(tool_def.get(SCHEMA_EFFECT_KEY))
+        if effect is None:
+            annotations = tool_def.get("annotations") or {}
+            if annotations.get("readOnlyHint") is True:
+                effect = ToolEffect.OBSERVATION
+        return effect
 
     def connect_server(self, server_command: str) -> int:
-        """Launch an MCP server, fetch its tools, and register them.
+        """Launch an MCP server, fetch its tools, and register them atomically.
 
-        Returns the number of tools registered.
-        Raises RuntimeError if the server fails to launch.
+        Returns the number of tools registered.  Raises ``RuntimeError`` if the
+        server fails to launch and :class:`MCPRegistrationError` if any of its
+        tools is unregisterable — in which case *none* of them are registered
+        and the client is closed, so a rejected server leaves no trace.
         """
         parsed = shlex.split(server_command, posix=(_os.name != "nt"))
         client = MCPClient(parsed)
         client.connect()
-        tool_defs = client.list_tools()
+        try:
+            tool_defs = client.list_tools()
+            with self._lock:
+                if server_command in self._server_tools:
+                    raise MCPRegistrationError(
+                        f"MCP server {server_command!r} is already connected"
+                    )
+                # Validate the whole set before committing any of it.
+                pending: set[str] = set()
+                prepared: list[tuple[str, dict[str, Any], ToolEffect | None]] = []
+                for tool_def in tool_defs:
+                    if not isinstance(tool_def, dict):
+                        raise MCPRegistrationError(
+                            "MCP tool definition must be an object"
+                        )
+                    name = self._check_name(tool_def.get("name"), pending)
+                    pending.add(name)
+                    prepared.append((
+                        name,
+                        _convert_tool_to_openai_schema(tool_def),
+                        self._declared_effect(tool_def),
+                    ))
 
-        count = 0
-        for tool_def in tool_defs:
-            self.register_tool_def(tool_def, client)
-            count += 1
-
-        return count
+                for name, schema, effect in prepared:
+                    self._schema_by_name[name] = schema
+                    self._clients[name] = client
+                    if effect is not None:
+                        self._effects[name] = effect
+                self._server_tools[server_command] = [n for n, _, _ in prepared]
+                self._server_clients[server_command] = client
+                return len(prepared)
+        except Exception:
+            # Nothing was committed; do not leave the subprocess running.
+            try:
+                client.close()
+            except Exception:
+                pass
+            raise
 
     def register_tool_def(
         self, tool_def: dict[str, Any], client: MCPClient
@@ -115,29 +184,55 @@ class MCPToolRegistry:
         Effect metadata may come from ``x-aura-effect`` or the standard MCP
         ``annotations.readOnlyHint``; absence means the tool resolves to the
         fail-safe consequential default at lookup time.
-        """
-        schema = _convert_tool_to_openai_schema(tool_def)
-        tool_name = tool_def["name"]
-        self._schemas.append(schema)
-        self._schema_by_name[tool_name] = schema
-        self._clients[tool_name] = client
-        effect = effect_from_metadata(tool_def.get(SCHEMA_EFFECT_KEY))
-        if effect is None:
-            annotations = tool_def.get("annotations") or {}
-            if annotations.get("readOnlyHint") is True:
-                effect = ToolEffect.OBSERVATION
-        if effect is not None:
-            self._effects[tool_name] = effect
-        # Backward compatibility: also register in global TOOL_HANDLERS
-        from aura.conversation.tools.registry import TOOL_HANDLERS
 
-        TOOL_HANDLERS[tool_name] = _make_mcp_handler(self, client, tool_name)
-        return schema
+        Raises :class:`MCPRegistrationError` for a name that shadows a built-in
+        or is already registered.  The registration is local to this registry:
+        another registry in the same process is unaffected and cannot call it.
+        """
+        with self._lock:
+            tool_name = self._check_name(tool_def.get("name"), set())
+            schema = _convert_tool_to_openai_schema(tool_def)
+            self._schema_by_name[tool_name] = schema
+            self._clients[tool_name] = client
+            effect = self._declared_effect(tool_def)
+            if effect is not None:
+                self._effects[tool_name] = effect
+            return schema
+
+    def disconnect_server(self, server_command: str) -> int:
+        """Remove a connected server's tools and close its client.
+
+        Returns the number of tools removed.  Removal is by the server's own
+        recorded tool list, so a server never takes another server's tool with
+        it, and the surface the model is offered next turn matches what is
+        actually connected.
+        """
+        with self._lock:
+            names = self._server_tools.pop(server_command, None)
+            client = self._server_clients.pop(server_command, None)
+            if names is None:
+                return 0
+            for name in names:
+                self._schema_by_name.pop(name, None)
+                self._clients.pop(name, None)
+                self._effects.pop(name, None)
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
+        return len(names)
+
+    def connected_servers(self) -> list[str]:
+        """Server commands currently connected to this registry."""
+        with self._lock:
+            return list(self._server_tools)
 
     @property
     def schemas(self) -> list[dict[str, Any]]:
         """Return the list of MCP tool schemas (for tool_defs)."""
-        return list(self._schemas)
+        with self._lock:
+            return list(self._schema_by_name.values())
 
     @property
     def observation_schemas(self) -> list[dict[str, Any]]:

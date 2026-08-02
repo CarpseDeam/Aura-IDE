@@ -14,6 +14,7 @@ def find_usages(
     include_pattern: str | None = None,
     max_results: int = 100,
     case_sensitive: bool = False,
+    cancel_event: Any | None = None,
 ) -> dict[str, Any]:
     """Find all usages of *symbol* across the workspace.
 
@@ -37,4 +38,5 @@ def find_usages(
         case_sensitive=case_sensitive,
         max_results=max_results,
         include_pattern=include_pattern,
+        cancel_event=cancel_event,
     )

@@ -10,6 +10,18 @@ from pathlib import Path
 from typing import Any
 
 from aura.config import SKIP_DIRS, SKIP_FILE_SUFFIXES, get_subprocess_kwargs
+from aura.conversation.tools.search_scope import (
+    ESCAPED_SKIP_REASON,
+    SENSITIVE_SKIP_REASON,
+    is_sensitive_path,
+    path_within_root,
+    resolve_include_scope,
+)
+
+#: Wall-clock ceiling for one ripgrep invocation. A search is part of a turn,
+#: and a turn the user cannot end is worse than a search that reports it ran
+#: out of time.
+RIPGREP_TIMEOUT_SECONDS = 60.0
 
 
 def _should_skip(path: Path) -> bool:
@@ -27,17 +39,6 @@ def _safe_relative_to(path: Path, root: Path) -> Path:
     return safe_relative_to(path, root)
 
 
-def _resolve_include_scope(root: Path, include_pattern: str | None) -> tuple[list[Path] | None, str | None]:
-    if not include_pattern:
-        return None, None
-
-    exact = root / include_pattern
-    if exact.is_file():
-        return [exact], None
-
-    return None, include_pattern
-
-
 def grep_files(
     workspace_root: Path,
     pattern: str,
@@ -45,10 +46,32 @@ def grep_files(
     case_sensitive: bool = False,
     max_results: int = 50,
     include_pattern: str | None = None,
+    cancel_event: Any | None = None,
 ) -> dict[str, Any]:
-    """Search file contents under workspace_root for the given pattern."""
+    """Search file contents under workspace_root for the given pattern.
+
+    The scope is jailed to the workspace and credential files are skipped
+    identically by both engines, so which one runs is a performance detail and
+    never a difference in what the model can read.
+    """
     if not pattern:
         return {"ok": False, "error": "pattern is required"}
+
+    # A turn that is already over does not get to start a new search.
+    if cancel_event is not None and cancel_event.is_set():
+        return {
+            "ok": False,
+            "error": "search cancelled",
+            "failure_class": "search_cancelled",
+        }
+
+    _, _, scope_error = resolve_include_scope(workspace_root, include_pattern)
+    if scope_error is not None:
+        return {
+            "ok": False,
+            "error": scope_error,
+            "failure_class": "search_scope_escape",
+        }
 
     rg_path = shutil.which("rg")
     if rg_path:
@@ -60,6 +83,7 @@ def grep_files(
             max_results,
             include_pattern,
             rg_path=rg_path,
+            cancel_event=cancel_event,
         )
 
     return _grep_python(
@@ -69,6 +93,7 @@ def grep_files(
         case_sensitive,
         max_results,
         include_pattern,
+        cancel_event=cancel_event,
     )
 
 
@@ -147,6 +172,45 @@ def _rg_path_text_to_rel(raw_path: str, root: Path, root_resolved: Path) -> str:
         return raw_path
 
 
+def _run_ripgrep(
+    cmd: list[str],
+    cancel_event: Any | None,
+) -> tuple[subprocess.Popen[str] | None, str, str, int, str | None]:
+    """Run *cmd*, returning ``(proc, stdout, stderr, returncode, error)``.
+
+    A cancelled turn and an over-running search both end the same way: the
+    process is killed and the caller is told which happened, instead of the
+    turn blocking on a search nobody is waiting for any more.
+    """
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        **get_subprocess_kwargs(),
+    )
+    deadline_step = 0.1 if cancel_event is not None else RIPGREP_TIMEOUT_SECONDS
+    waited = 0.0
+    while True:
+        try:
+            stdout, stderr = proc.communicate(timeout=deadline_step)
+            return proc, stdout or "", stderr or "", proc.returncode, None
+        except subprocess.TimeoutExpired:
+            waited += deadline_step
+            if cancel_event is not None and cancel_event.is_set():
+                proc.kill()
+                proc.communicate()
+                return proc, "", "", -1, "search cancelled"
+            if waited >= RIPGREP_TIMEOUT_SECONDS:
+                proc.kill()
+                proc.communicate()
+                return proc, "", "", -1, (
+                    f"search timed out after {RIPGREP_TIMEOUT_SECONDS:.0f}s"
+                )
+
+
 def _grep_ripgrep(
     root: Path,
     pattern: str,
@@ -155,11 +219,14 @@ def _grep_ripgrep(
     max_results: int,
     include: str | None,
     rg_path: str | None = None,
+    cancel_event: Any | None = None,
 ) -> dict[str, Any]:
     exe = rg_path or shutil.which("rg") or "rg"
 
     cmd = [exe, "--json", "--column", "--hidden", "--no-ignore"]
-    exact_files, glob = _resolve_include_scope(root, include)
+    exact_files, glob, scope_error = resolve_include_scope(root, include)
+    if scope_error is not None:
+        return {"ok": False, "error": scope_error, "failure_class": "search_scope_escape"}
     if not regex:
         cmd.append("--fixed-strings")
     if not case_sensitive:
@@ -176,23 +243,41 @@ def _grep_ripgrep(
     cmd.extend(["--", pattern, *[str(path) for path in targets]])
 
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            **get_subprocess_kwargs(),
-        )
-        if proc.returncode not in (0, 1):
-            return {"ok": False, "error": proc.stderr or f"ripgrep failed with code {proc.returncode}"}
+        _proc, stdout, stderr, returncode, run_error = _run_ripgrep(cmd, cancel_event)
+        if run_error is not None:
+            return {
+                "ok": False,
+                "error": run_error,
+                "failure_class": (
+                    "search_cancelled" if "cancelled" in run_error else "search_timeout"
+                ),
+            }
+        if returncode not in (0, 1):
+            return {"ok": False, "error": stderr or f"ripgrep failed with code {returncode}"}
 
         matches: list[dict[str, Any]] = []
         truncated = False
         root_resolved = root.resolve()
         searched_paths: set[str] = set()
+        skipped_files = 0
+        skipped_details: list[dict[str, Any]] = []
+        skipped_seen: set[str] = set()
         summary_searches: int | None = None
 
-        for line in proc.stdout.splitlines():
+        def _reject(rel: str, raw: str) -> bool:
+            """Record and reject a path policy will not report a match from."""
+            if not path_within_root(Path(raw), root_resolved):
+                reason = ESCAPED_SKIP_REASON
+            elif is_sensitive_path(rel):
+                reason = SENSITIVE_SKIP_REASON
+            else:
+                return False
+            if rel not in skipped_seen:
+                skipped_seen.add(rel)
+                skipped_details.append({"path": rel, "reason": reason})
+            return True
+
+        for line in stdout.splitlines():
             if not line.strip():
                 continue
             try:
@@ -204,7 +289,9 @@ def _grep_ripgrep(
             if event_type == "begin":
                 path_text = data.get("data", {}).get("path", {}).get("text")
                 if path_text:
-                    searched_paths.add(_rg_path_text_to_rel(path_text, root, root_resolved))
+                    rel = _rg_path_text_to_rel(path_text, root, root_resolved)
+                    if not _reject(rel, path_text):
+                        searched_paths.add(rel)
                 continue
 
             if event_type == "summary":
@@ -219,6 +306,8 @@ def _grep_ripgrep(
             match_data = data["data"]
             raw_match_path = match_data["path"]["text"]
             rel_path = _rg_path_text_to_rel(raw_match_path, root, root_resolved)
+            if _reject(rel_path, raw_match_path):
+                continue
             searched_paths.add(rel_path)
 
             if len(matches) >= max_results:
@@ -232,13 +321,19 @@ def _grep_ripgrep(
                 "match_column": match_data["submatches"][0]["start"],
             })
 
-        searched_files = summary_searches if summary_searches is not None else len(searched_paths)
+        skipped_files = len(skipped_details)
+        # ripgrep's own count includes the files policy rejected after the
+        # fact, so the reported total must not claim them as searched.
+        if summary_searches is not None:
+            searched_files = max(summary_searches - skipped_files, 0)
+        else:
+            searched_files = len(searched_paths)
         return _build_result(
             matches=matches,
             engine="ripgrep",
             searched_files=searched_files,
-            skipped_files=0,
-            skipped_details=[],
+            skipped_files=skipped_files,
+            skipped_details=skipped_details,
             truncated=truncated,
             regex_mode=regex,
             include_pattern=include,
@@ -255,6 +350,7 @@ def _grep_python(
     case_sensitive: bool,
     max_results: int,
     include_pattern: str | None,
+    cancel_event: Any | None = None,
 ) -> dict[str, Any]:
     """Search file contents under workspace_root for the given pattern."""
     if not pattern:
@@ -274,7 +370,9 @@ def _grep_python(
     skipped_files = 0
     skipped_details: list[dict[str, Any]] = []
     candidates: list[Path] = []
-    exact_files, glob = _resolve_include_scope(workspace_root, include_pattern)
+    exact_files, glob, scope_error = resolve_include_scope(workspace_root, include_pattern)
+    if scope_error is not None:
+        return {"ok": False, "error": scope_error, "failure_class": "search_scope_escape"}
 
     if exact_files is not None:
         candidates = exact_files
@@ -300,8 +398,26 @@ def _grep_python(
 
     candidates.sort(key=lambda path: _safe_relative_to(path, workspace_root).as_posix())
 
+    root_resolved = workspace_root.resolve()
     for file_path in candidates:
+        if cancel_event is not None and cancel_event.is_set():
+            return {
+                "ok": False,
+                "error": "search cancelled",
+                "failure_class": "search_cancelled",
+            }
         rel = _safe_relative_to(file_path, workspace_root).as_posix()
+        # Same policy the ripgrep engine applies: a symlink out of the
+        # workspace and a credential file are both unsearchable, and the skip
+        # is reported rather than hidden.
+        if not path_within_root(file_path, root_resolved):
+            skipped_files += 1
+            skipped_details.append({"path": rel, "reason": ESCAPED_SKIP_REASON})
+            continue
+        if is_sensitive_path(rel):
+            skipped_files += 1
+            skipped_details.append({"path": rel, "reason": SENSITIVE_SKIP_REASON})
+            continue
         try:
             with open(file_path, "r", encoding="utf-8", errors="strict") as f:
                 for line_num, raw_line in enumerate(f, start=1):

@@ -30,6 +30,7 @@ from aura.conversation.tool_runner_terminal_policy import (
 from aura.conversation.validation_orchestrator import (
     MALFORMED_VALIDATION_COMMAND,
     VALIDATION_COMMAND_UNRUNNABLE,
+    ValidationCommand,
     classify_command_outcome,
     classify_terminal_run,
     classify_validation_run,
@@ -222,10 +223,21 @@ class ToolRunner:
             )
             return {"_terminal_payload": {"ok": False, "error": "command is required", "command": ""}}
 
-        validation_command = parse_validation_command(
-            requested_command,
-            source="worker_command" if mode == "worker" else "single_command",
-        )
+        if "\n" in requested_command or "\r" in requested_command:
+            # A multiline command is a real shell script, not validation
+            # prose.  ``parse_validation_command`` extracts a single command
+            # line from a longer text; applying it here would truncate the
+            # command at its first newline and silently drop the rest.
+            validation_command = ValidationCommand(
+                raw_text=requested_command,
+                command=requested_command,
+                source="worker_command" if mode == "worker" else "single_command",
+            )
+        else:
+            validation_command = parse_validation_command(
+                requested_command,
+                source="worker_command" if mode == "worker" else "single_command",
+            )
         requested_cwd = str(args.get("cwd") or args.get("working_directory") or "").strip()
         try:
             if requested_cwd and validation_command.cwd:

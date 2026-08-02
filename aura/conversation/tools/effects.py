@@ -111,6 +111,9 @@ BUILTIN_TOOL_EFFECTS: dict[str, ToolEffect] = {
     "edit_godot_editor": ToolEffect.MUTATION,
     "edit_godot_asset_preview": ToolEffect.MUTATION,
     "install_godot_editor_bridge": ToolEffect.MUTATION,
+    # Writes a drone folder's ui_contract.json through the approved atomic
+    # write path — a workspace mutation, never bookkeeping that writes.
+    "declare_ui_contract": ToolEffect.MUTATION,
     # --- command/validation: runs an external command or validation ---
     "run_terminal_command": ToolEffect.COMMAND,
     "run_and_watch": ToolEffect.COMMAND,
@@ -121,7 +124,6 @@ BUILTIN_TOOL_EFFECTS: dict[str, ToolEffect] = {
     "dispatch_to_worker": ToolEffect.BOOKKEEPING,
     "summon_drone": ToolEffect.BOOKKEEPING,
     "register_drone_folder": ToolEffect.BOOKKEEPING,
-    "declare_ui_contract": ToolEffect.BOOKKEEPING,
     "save_to_project_memory": ToolEffect.BOOKKEEPING,
 }
 

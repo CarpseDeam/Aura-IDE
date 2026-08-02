@@ -29,6 +29,12 @@ from aura.conversation.terminal_tool_round import (
     handle_run_terminal_command_round,
 )
 from aura.conversation.tool_limits import WRITE_TOOLS
+from aura.conversation.tool_preflight import (
+    decode_arguments,
+    exposed_tool_schemas,
+    preflight_structural,
+    schema_errors,
+)
 from aura.conversation.tool_round_events import (
     ToolRoundEventsContext,
     append_dispatch_blocker_message,
@@ -58,8 +64,8 @@ EventCallback = Callable[[Event], None]
 def _invalid_call_reason(invalid: dict[str, Any]) -> str:
     """Return the human reason an invalid preflight call was rejected."""
     kind = invalid.get("kind")
-    if kind == "parse":
-        return "invalid tool arguments"
+    if kind in ("parse", "structure", "schema", "exposure"):
+        return str(invalid.get("error") or "invalid tool call")
     if kind == "limit":
         info = invalid.get("limit_info") or {}
         return str(info.get("reason") or "tool limit reached")
@@ -82,28 +88,34 @@ def _reject_tool_call_batch(
     invalid call gets its own rejection payload, and every valid sibling gets
     a coherent batch-rejection payload explaining that nothing ran, so an
     accepted prefix can never execute ahead of the call that vetoes the batch.
+
+    The rejection is defensive: a malformed call may lack ``id`` or
+    ``function.name``, so every access falls back to a placeholder that keeps
+    the pairing one-result-per-call intact.
     """
-    invalid_id = invalid["tool_call_id"]
-    invalid_name = invalid["name"]
+    invalid_id = invalid.get("tool_call_id") or ""
+    invalid_name = invalid.get("name") or "<unknown>"
+    invalid_kind = invalid.get("kind") or "invalid"
     invalid_reason = _invalid_call_reason(invalid)
-    for tc in tool_calls:
-        fn = tc["function"]
-        name = fn["name"]
-        tool_call_id = tc["id"]
+    invalid_error = str(invalid.get("error") or "invalid tool call")
+    failure_class = str(
+        invalid.get("failure_class")
+        or _invalid_call_failure_class(invalid_kind)
+    )
+    for index, tc in enumerate(tool_calls):
+        fn = tc.get("function") if isinstance(tc, dict) else None
+        name = (
+            str(fn.get("name")) if isinstance(fn, dict) and fn.get("name") else "<unknown>"
+        )
+        tool_call_id = (
+            tc.get("id")
+            if isinstance(tc, dict)
+            and isinstance(tc.get("id"), str)
+            and tc.get("id")
+            else f"__malformed_call_{index}__"
+        )
         if tool_call_id == invalid_id:
-            if invalid["kind"] == "parse":
-                error = str(invalid.get("error", "invalid tool arguments"))
-                payload = json.dumps({"ok": False, "error": error})
-                context.history.append_tool_result(tool_call_id, payload)
-                on_event(
-                    ToolResult(
-                        tool_call_id=tool_call_id,
-                        name=name,
-                        ok=False,
-                        result=error,
-                    )
-                )
-            elif invalid["kind"] == "limit":
+            if invalid_kind == "limit":
                 append_limit_tool_result(
                     context=context,
                     tool_call_id=tool_call_id,
@@ -111,13 +123,46 @@ def _reject_tool_call_batch(
                     info=invalid["limit_info"],
                     on_event=on_event,
                 )
-            else:
+            elif invalid_kind == "guard":
                 append_limit_tool_result(
                     context=context,
                     tool_call_id=tool_call_id,
                     name=name,
                     info=invalid["repeat_info"],
                     on_event=on_event,
+                )
+            else:
+                payload = json.dumps(
+                    {
+                        "ok": False,
+                        "error": invalid_error,
+                        "recoverable": True,
+                        "failure_class": failure_class,
+                        "tool": name,
+                        "call_rejected": True,
+                        "reason": "tool_call_invalid_before_execution",
+                        "message": (
+                            f"No call in this batch executed. Call {tool_call_id} "
+                            f"({name}) was invalid before execution "
+                            f"({invalid_reason}), so the whole batch was rejected. "
+                            "Re-issue the corrected call(s)."
+                        ),
+                    },
+                    ensure_ascii=False,
+                )
+                context.history.append_tool_result(tool_call_id, payload)
+                on_event(
+                    ToolResult(
+                        tool_call_id=tool_call_id,
+                        name=name,
+                        ok=False,
+                        result=payload,
+                        extras={
+                            "call_rejected": True,
+                            "reason": "tool_call_invalid_before_execution",
+                            "failure_class": failure_class,
+                        },
+                    )
                 )
             continue
         payload = json.dumps(
@@ -153,6 +198,42 @@ def _reject_tool_call_batch(
                 },
             )
         )
+
+
+def _invalid_call_failure_class(kind: str) -> str:
+    return {
+        "structure": "tool_call_malformed",
+        "parse": "tool_call_arguments_unparsable",
+        "schema": "tool_call_schema_violation",
+        "exposure": "tool_call_not_exposed",
+    }.get(kind, "tool_call_invalid")
+
+
+def _observe_preflight_failure(guard: Any, invalid: dict[str, Any]) -> None:
+    """Open the guard's failure recovery for a non-guard preflight rejection.
+
+    A call rejected as malformed, unparsable, schema-violating, or
+    not-exposed is a tool failure the model must recover from by re-reading
+    and re-proposing: opening failure recovery keeps the next round's rereads
+    unblocked.  Guard and limit rejections deliberately do not open it — they
+    are the guard's own brake, and re-opening recovery would let a repeat
+    read retry.
+    """
+    invalid_kind = invalid.get("kind")
+    if invalid_kind not in ("structure", "parse", "schema", "exposure"):
+        return
+    guard.observe_result(
+        str(invalid.get("name") or "<unknown>"),
+        False,
+        json.dumps(
+            {
+                "ok": False,
+                "error": str(invalid.get("error") or "invalid tool call"),
+                "failure_class": _invalid_call_failure_class(invalid_kind),
+            },
+            ensure_ascii=False,
+        ),
+    )
 
 
 def _edit_recovery_pending(state: _SendState) -> bool:
@@ -304,10 +385,18 @@ class ToolRoundRunner:
         cleanup_cancelled: Callable[[EventCallback], None],
         explicit_validation_commands: list[ValidationCommandSpec] | None = None,
         declared_run_command: str | None = None,
+        tool_defs: list[dict[str, Any]] | None = None,
     ) -> ToolRoundOutcome:
         terminal_dispatch = False
         worker_phase_boundary_info: dict[str, Any] | None = None
         enter_silent_preflight = False
+
+        # The exact tool surface the request that produced these calls offered.
+        # Callers that know the request's own catalog (focused action, blocked
+        # turn) pass it; otherwise the registry's current catalog is the best
+        # approximation of what was exposed.
+        if tool_defs is None:
+            tool_defs = self._tools.tool_defs()
 
         guard = state.pre_edit_guard
         if guard is not None:
@@ -315,25 +404,67 @@ class ToolRoundRunner:
         recovery_pending = _edit_recovery_pending(state)
 
         # ── Batch preflight ──────────────────────────────────────────────
-        # Every proposed call is parsed, classified against the registry's
-        # authoritative tool-effect metadata, and checked by the limit and
-        # loop-guard gates *before any call executes*.  If any call is invalid
-        # the whole batch is rejected coherently: no accepted prefix runs, and
-        # every rejected tool call receives exactly one paired tool result.
+        # Every proposed call is structurally validated, checked against the
+        # tools actually exposed in this request, JSON-schema validated,
+        # classified against the registry's authoritative tool-effect
+        # metadata, and checked by the limit and loop-guard gates *before any
+        # call executes*.  If any call is invalid the whole batch is rejected
+        # coherently: no accepted prefix runs, and every rejected tool call
+        # receives exactly one paired tool result.
+        invalid: dict[str, Any] | None = preflight_structural(tool_calls)
+        if invalid is not None:
+            _reject_tool_call_batch(
+                tool_calls=tool_calls,
+                invalid=invalid,
+                context=ToolRoundEventsContext(history=self._history),
+                on_event=on_event,
+            )
+            if guard is not None:
+                _observe_preflight_failure(guard, invalid)
+                guard.end_round()
+            return ToolRoundOutcome(action="next_round")
+
+        # The callable surface is the exposed catalog plus the observation-only
+        # names this mode withholds but still honours on replay. Anything else
+        # is not callable, so a withheld mutation stays withheld.
+        exposed = exposed_tool_schemas(tool_defs)
+        for name, schema in exposed_tool_schemas(self._tools.replayable_tool_defs()).items():
+            exposed.setdefault(name, schema)
         preflighted: list[dict[str, Any]] = []
-        invalid: dict[str, Any] | None = None
         for tc in tool_calls:
             fn = tc["function"]
             name = fn["name"]
             tool_call_id = tc["id"]
-            try:
-                args = json.loads(fn.get("arguments") or "{}")
-            except json.JSONDecodeError as exc:
+            args, parse_error = decode_arguments(fn.get("arguments"))
+            if parse_error is not None:
                 invalid = {
                     "tool_call_id": tool_call_id,
                     "name": name,
                     "kind": "parse",
-                    "error": f"failed to parse tool arguments as JSON: {exc}",
+                    "error": parse_error,
+                }
+                break
+
+            if name not in exposed:
+                invalid = {
+                    "tool_call_id": tool_call_id,
+                    "name": name,
+                    "kind": "exposure",
+                    "error": (
+                        f"tool '{name}' is not exposed in this request; only the "
+                        "exposed tool catalog is callable"
+                    ),
+                }
+                break
+
+            schema_violations = schema_errors(name, args, exposed[name])
+            if schema_violations:
+                invalid = {
+                    "tool_call_id": tool_call_id,
+                    "name": name,
+                    "kind": "schema",
+                    "error": "; ".join(schema_violations),
+                    "failure_class": "tool_call_schema_violation",
                 }
                 break
 
@@ -375,6 +506,7 @@ class ToolRoundRunner:
                 on_event=on_event,
             )
             if guard is not None:
+                _observe_preflight_failure(guard, invalid)
                 guard.end_round()
             if worker_phase_boundary_info is not None:
                 if worker_phase_boundary_info.get("message"):
@@ -398,17 +530,51 @@ class ToolRoundRunner:
 
         def process_task(task: dict[str, Any]) -> dict[str, Any]:
             nonlocal terminal_dispatch, worker_phase_boundary_info
-            result = self._process_task(
-                task=task,
-                state=state,
-                on_event=on_event,
-                approval_cb=approval_cb,
-                cancel_event=cancel_event,
-                dispatch_cb=dispatch_cb,
-                workflow_state_cb=workflow_state_cb,
-                explicit_validation_commands=explicit_validation_commands,
-                declared_run_command=declared_run_command,
-            )
+            try:
+                result = self._process_task(
+                    task=task,
+                    state=state,
+                    on_event=on_event,
+                    approval_cb=approval_cb,
+                    cancel_event=cancel_event,
+                    dispatch_cb=dispatch_cb,
+                    workflow_state_cb=workflow_state_cb,
+                    explicit_validation_commands=explicit_validation_commands,
+                    declared_run_command=declared_run_command,
+                )
+            except Exception as exc:
+                # Last-resort containment: an unexpected exception from any
+                # task processor (executor, dispatch, terminal) becomes one
+                # redacted internal error result instead of crashing the
+                # round or the worker.
+                from aura.config import redact_secrets
+
+                redacted = redact_secrets(f"{type(exc).__name__}: {exc}")
+                payload = {
+                    "ok": False,
+                    "error": "internal tool error — the harness could not run this call",
+                    "failure_class": "internal_tool_error",
+                    "internal_error": redacted,
+                    "tool": task["name"],
+                }
+                payload_json = json.dumps(payload, ensure_ascii=False)
+                return {
+                    "id": task["id"],
+                    "result_payload": payload_json,
+                    "event": ToolResult(
+                        tool_call_id=task["id"],
+                        name=task["name"],
+                        ok=False,
+                        result=payload_json,
+                        extras={"internal_tool_error": True},
+                    ),
+                    "flow_result": {
+                        "name": task["name"],
+                        "args": task["args"],
+                        "ok": False,
+                        "result_payload": payload_json,
+                    },
+                }
             if result.pop("terminal_dispatch", False):
                 terminal_dispatch = True
             phase_boundary = result.pop("_worker_phase_boundary_info", None)
@@ -711,13 +877,47 @@ class ToolRoundRunner:
                 },
             }
 
-        exec_result = self._tools.execute(
-            name=name,
-            args=args,
-            approval_cb=approval_cb,
-            reject_all=False,
-            cancel_event=cancel_event,
-        )
+        try:
+            exec_result = self._tools.execute(
+                name=name,
+                args=args,
+                approval_cb=approval_cb,
+                reject_all=False,
+                cancel_event=cancel_event,
+            )
+        except Exception as exc:
+            # A handler bug must never escape the tool round or crash the
+            # worker: it becomes a redacted internal error result for this one
+            # call.  Only the exception type is exposed to the model; the
+            # message is redacted of known secrets.
+            from aura.config import redact_secrets
+
+            redacted = redact_secrets(f"{type(exc).__name__}: {exc}")
+            payload = {
+                "ok": False,
+                "error": "internal tool error — the harness could not run this call",
+                "failure_class": "internal_tool_error",
+                "internal_error": redacted,
+                "tool": name,
+            }
+            payload_json = json.dumps(payload, ensure_ascii=False)
+            return {
+                "id": tool_call_id,
+                "result_payload": payload_json,
+                "event": ToolResult(
+                    tool_call_id=tool_call_id,
+                    name=name,
+                    ok=False,
+                    result=payload_json,
+                    extras={"internal_tool_error": True},
+                ),
+                "flow_result": {
+                    "name": name,
+                    "args": args,
+                    "ok": False,
+                    "result_payload": payload_json,
+                },
+            }
 
         if exec_result.extras.get("approval") == "reject_all":
             state.reject_all_for_turn = True

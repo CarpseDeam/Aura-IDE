@@ -18,8 +18,13 @@ import stat
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 from aura.conversation.tools._types import ApprovalRequest, ToolExecResult
+from aura.conversation.tools.fs_write import (
+    _raw_sha256,
+    stale_approval_reason,
+)
 from aura.conversation.tools.write_payloads import _mark_not_applied, _mark_delete_not_applied
 from aura.conversation.path_utils import normalize_worker_path as _shared_normalize_worker_path
 from aura.paths import safe_relative_to
@@ -415,6 +420,15 @@ class WriteHandlersMixin:
             )
 
         old_content = target.read_text(encoding="utf-8", errors="replace")
+        try:
+            delete_snapshot = {
+                "exists": True,
+                "is_file": True,
+                "raw_content_hash": _raw_sha256(target),
+                "size": target.stat().st_size,
+            }
+        except OSError:
+            delete_snapshot = None
         req = ApprovalRequest(
             tool_name="delete_file",
             rel_path=rel_path,
@@ -455,6 +469,38 @@ class WriteHandlersMixin:
                     "approval": "reject_all",
                     "rel_path": rel_path,
                     "approval_metadata": decision.metadata,
+                },
+            )
+
+        # Verify the target the user approved still exists and is unchanged;
+        # deleting different content than what was shown would be a surprise.
+        stale_reason = stale_approval_reason(target, delete_snapshot)
+        if stale_reason is not None:
+            return ToolExecResult(
+                ok=False,
+                payload=_mark_delete_not_applied({
+                    "ok": False,
+                    "path": rel_path,
+                    "rel_path": rel_path,
+                    "error": (
+                        "The delete target changed after approval and before the "
+                        f"deletion: {stale_reason}. Nothing was deleted."
+                    ),
+                    "failure_class": "stale_approval",
+                    "stale_approval": True,
+                    "write_outcome": "not_deleted_stale_approval",
+                    "suggested_tool": "read_file",
+                    "suggested_next_tool": "read_file",
+                    "suggested_next_action": (
+                        "Re-read the file and the surrounding directory, then "
+                        "re-propose the deletion if it is still correct."
+                    ),
+                    "reason": reason,
+                }, "stale_approval"),
+                extras={
+                    "approval": "approve",
+                    "stale_approval": True,
+                    "rel_path": rel_path,
                 },
             )
 
@@ -705,7 +751,41 @@ class WriteHandlersMixin:
                 },
             )
 
-        # Approve — capture pre-write state, back up, write new content.
+        # Approve — but first verify the live target still matches the exact
+        # snapshot the user approved.  If it changed while approval was
+        # pending, applying the approved bytes would clobber different
+        # content: apply nothing and ask the model to re-read and re-propose.
+        stale_reason = stale_approval_reason(target, proposal.get("_target_snapshot"))
+        if stale_reason is not None:
+            return ToolExecResult(
+                ok=False,
+                payload=_mark_not_applied({
+                    "ok": False,
+                    "path": req.rel_path,
+                    "rel_path": req.rel_path,
+                    "error": (
+                        "The target changed after approval and before the write "
+                        f"landed: {stale_reason}. Nothing was written."
+                    ),
+                    "failure_class": "stale_approval",
+                    "stale_approval": True,
+                    "recoverable": True,
+                    "write_outcome": "not_applied_stale_approval",
+                    "suggested_tool": "read_file",
+                    "suggested_next_tool": "read_file",
+                    "suggested_next_action": (
+                        "Re-read the current file, then re-propose the change with "
+                        "the current content and expected_file_hash."
+                    ),
+                }, "stale_approval"),
+                extras={
+                    "approval": "approve",
+                    "stale_approval": True,
+                    "rel_path": req.rel_path,
+                },
+            )
+
+        # Capture pre-write state, back up, write new content.
         self._capture_before_write(self, req.rel_path)
         target.parent.mkdir(parents=True, exist_ok=True)
         backup_path = _reg.backup_existing(self._root, target)

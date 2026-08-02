@@ -45,6 +45,61 @@ def _logical_text_hash(text: str) -> str:
     return hashlib.sha256(_normalize_newlines(text, "\n").encode("utf-8")).hexdigest()
 
 
+def _target_snapshot(
+    *,
+    exists: bool,
+    is_file: bool,
+    raw_content_hash: str | None = None,
+    size: int | None = None,
+) -> dict[str, Any]:
+    """Authoritative pre-approval facts about a write target.
+
+    These are the facts the approval was shown against.  Immediately before
+    the approved write, patch, or delete lands, the live target is re-checked
+    against this snapshot; any mismatch means the user approved a different
+    target state and nothing is applied.
+    """
+    return {
+        "exists": exists,
+        "is_file": is_file,
+        "raw_content_hash": raw_content_hash,
+        "size": size,
+    }
+
+
+def _raw_sha256(target: Path) -> str | None:
+    """Return the raw-byte SHA-256 of *target*, or ``None`` when unreadable."""
+    try:
+        return hashlib.sha256(target.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def stale_approval_reason(target: Path, snapshot: dict[str, Any] | None) -> str | None:
+    """Return why the live *target* no longer matches *snapshot*, or ``None``.
+
+    ``None`` means the target still matches what the user approved.  A
+    mismatch (existence, file type, or raw content hash) means the approved
+    snapshot is stale and the change must not apply.
+    """
+    if not isinstance(snapshot, dict):
+        return "the approval carried no target snapshot"
+    exists = snapshot.get("exists")
+    is_file = snapshot.get("is_file")
+    if exists != target.exists():
+        return "file existence changed since the approval was shown"
+    if exists and is_file != target.is_file():
+        return "file type changed since the approval was shown"
+    expected_hash = snapshot.get("raw_content_hash")
+    if exists and isinstance(expected_hash, str) and expected_hash:
+        live_hash = _raw_sha256(target)
+        if live_hash is None:
+            return "the file could not be re-read for stale-approval verification"
+        if live_hash != expected_hash:
+            return "file content changed since the approval was shown"
+    return None
+
+
 def expected_file_hash_matches(text: str, raw_hash: str, expected_hash: str | None) -> bool:
     if expected_hash is None:
         return True
@@ -120,7 +175,7 @@ def propose_write(workspace_root: Path, target: Path, content: str) -> dict[str,
     rel = _rel_path(workspace_root, target)
     if target.exists() and target.is_file():
         try:
-            old_content, _current_hash, _file_size = read_file_snapshot(target)
+            old_content, current_hash, file_size = read_file_snapshot(target)
         except UnicodeDecodeError:
             return {
                 "ok": False,
@@ -132,8 +187,18 @@ def propose_write(workspace_root: Path, target: Path, content: str) -> dict[str,
                 "error": "file is not valid UTF-8 text",
                 "failure_class": "internal_error",
             }
+        snapshot = _target_snapshot(
+            exists=True,
+            is_file=True,
+            raw_content_hash=current_hash,
+            size=file_size,
+        )
     else:
         old_content = ""
+        snapshot = _target_snapshot(
+            exists=target.exists(),
+            is_file=target.exists() and target.is_file(),
+        )
     return {
         "ok": True,
         "path": rel,
@@ -141,6 +206,7 @@ def propose_write(workspace_root: Path, target: Path, content: str) -> dict[str,
         "old_content": old_content,
         "new_content": content,
         "is_new_file": not target.exists(),
+        "_target_snapshot": snapshot,
     }
 
 
@@ -176,7 +242,7 @@ def propose_line_range_edit(
         return _failure_payload(workspace_root, target, f"not a regular file: {rel}", "path_error")
 
     try:
-        original, _current_hash, _file_size = read_file_snapshot(target)
+        original, current_hash, current_size = read_file_snapshot(target)
     except UnicodeDecodeError:
         return _failure_payload(workspace_root, target, "file is not valid UTF-8 text", "internal_error")
     except OSError:
@@ -252,6 +318,12 @@ def propose_line_range_edit(
         "is_new_file": False,
         "start_line": start_line,
         "end_line": end_line,
+        "_target_snapshot": _target_snapshot(
+            exists=True,
+            is_file=True,
+            raw_content_hash=current_hash,
+            size=current_size,
+        ),
     }
 
 
@@ -282,7 +354,7 @@ def propose_patch_file(
     if not target.is_file():
         return _failure_payload(workspace_root, target, f"not a regular file: {rel}", "path_error")
     try:
-        original, current_hash, _file_size = read_file_snapshot(target)
+        original, current_hash, current_size = read_file_snapshot(target)
     except UnicodeDecodeError:
         return _failure_payload(workspace_root, target, "file is not valid UTF-8 text", "internal_error")
     except OSError:
@@ -424,6 +496,12 @@ def propose_patch_file(
         "is_new_file": False,
         "hunk_count": len(edits),
         "description": description or "",
+        "_target_snapshot": _target_snapshot(
+            exists=True,
+            is_file=True,
+            raw_content_hash=current_hash,
+            size=current_size,
+        ),
     }
 
 
@@ -436,7 +514,7 @@ def propose_edit(
     if not target.is_file():
         return _failure_payload(workspace_root, target, f"not a regular file: {rel}", "path_error")
     try:
-        original, _current_hash, _file_size = read_file_snapshot(target)
+        original, current_hash, current_size = read_file_snapshot(target)
     except UnicodeDecodeError:
         return _failure_payload(workspace_root, target, "file is not valid UTF-8 text", "internal_error")
 
@@ -456,6 +534,12 @@ def propose_edit(
             "new_content": str(match["content"]),
             "is_new_file": False,
             "match_tier": match.get("match_tier", "exact"),
+            "_target_snapshot": _target_snapshot(
+                exists=True,
+                is_file=True,
+                raw_content_hash=current_hash,
+                size=current_size,
+            ),
         }
         for key in ("fuzzy_ratio", "sanitized"):
             if key in match:

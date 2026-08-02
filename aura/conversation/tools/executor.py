@@ -143,6 +143,26 @@ class ToolExecutor:
                 ok=False,
                 payload={"ok": False, "error": str(exc), "failure_class": "internal_error"},
             )
+        except Exception as exc:
+            # A handler bug must never escape the tool round or crash a
+            # worker: it becomes a redacted internal error result for this
+            # one call.  The model learns the failure class and that an
+            # exception happened; the exception type name is the only detail
+            # surfaced and the message is redacted of known secrets.
+            from aura.config import redact_secrets
+
+            redacted = redact_secrets(f"{type(exc).__name__}: {exc}")
+            return ToolExecResult(
+                ok=False,
+                payload={
+                    "ok": False,
+                    "error": "internal tool error — the harness could not run this call",
+                    "failure_class": "internal_tool_error",
+                    "internal_error": redacted,
+                    "tool": name,
+                },
+                extras={"internal_tool_error": True},
+            )
 
 
 def _planner_write_tool_correction(name: str) -> ToolExecResult:

@@ -424,7 +424,9 @@ def project(tmp_path: Path) -> Path:
 
 
 BAD_COMMAND = "npm install left-pad"
-GOOD_COMMAND = 'python -c "print(2+2)"'
+# Read-only and allowed: `python -c` is refused outright, since whether an
+# inline program only inspects is not a judgement the tool can make.
+GOOD_COMMAND = "python --version"
 
 
 def no_focused_request_fired(backend: ScriptedBackend) -> bool:
@@ -492,7 +494,7 @@ class TestBoundedProgressionThroughTheRealLoop:
         assert "diagnostic_command_mutating" in rejected
         assert "install" in rejected
         # The corrected command's real output survives to the transcript.
-        assert "4" in rejected
+        assert "Python" in rejected
 
     def test_a_turn_that_only_fails_stops_instead_of_circling(
         self, project, isolated_streams  # noqa: F811

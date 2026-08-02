@@ -43,7 +43,8 @@ from aura.project_env import (
 )
 from aura.python_env import PYTHON_VENV_CANDIDATES
 
-ALLOWED_EXECUTABLES = {
+#: Programs that exist and mean the same thing on every platform Aura runs on.
+PORTABLE_EXECUTABLES = {
     "python",
     "python3",
     "py",
@@ -57,6 +58,13 @@ ALLOWED_EXECUTABLES = {
     "cmake",
     "git",
     "rg",
+}
+
+#: Coreutils. Absent from a stock Windows install, and ``find`` is worse than
+#: absent there — ``find.exe`` ships with Windows and is an unrelated
+#: string-search program, so allowing the name cross-platform means the same
+#: command runs two different tools. Offered only where they are real.
+POSIX_ONLY_EXECUTABLES = {
     "ls",
     "cat",
     "head",
@@ -64,6 +72,32 @@ ALLOWED_EXECUTABLES = {
     "wc",
     "find",
 }
+
+#: Read-only subcommands of tools whose ordinary use is to build.
+#: ``cargo build``/``go build``/``make`` write build output into the workspace,
+#: which is a mutation however it is spelled, so these tools are allowed only
+#: for the inspection subcommands they also happen to provide.
+READ_ONLY_SUBCOMMANDS: dict[str, frozenset[str]] = {
+    "npm": frozenset({"ls", "list", "view", "outdated", "why", "doctor", "root", "prefix"}),
+    "cargo": frozenset({"check", "tree", "metadata", "verify-project", "locate-project"}),
+    "go": frozenset({"version", "env", "list", "vet", "doc"}),
+    "make": frozenset({"-n", "--dry-run", "--just-print", "--recon", "-p", "--print-data-base"}),
+    "cmake": frozenset({"-E", "--help-module-list", "--system-information"}),
+}
+
+#: Flags that only ever report and never act, accepted for any allowed tool.
+VERSION_FLAGS = frozenset({"--version", "-V", "-v", "--help", "-h"})
+
+
+def allowed_executables() -> set[str]:
+    """The diagnostic allowlist for the platform this is running on."""
+    if os.name == "nt":
+        return set(PORTABLE_EXECUTABLES)
+    return PORTABLE_EXECUTABLES | POSIX_ONLY_EXECUTABLES
+
+
+#: Backwards-compatible snapshot of the allowlist for this platform.
+ALLOWED_EXECUTABLES = allowed_executables()
 BLOCKED_GIT_SUBCOMMANDS = {
     "reset",
     "clean",
@@ -114,15 +148,18 @@ SHELL_OPERATORS = {"|", "&", ";", "<", ">", "`", "\n", "\r"}
 #: Names treated as a Python interpreter for identity purposes.
 PYTHON_EXECUTABLE_NAMES = {"python", "python3", "py", "pythonw"}
 
-FORBIDDEN_PYTHON_C_SUBSTRINGS = (
-    "exec",
-    "compile",
-    "__import__",
-    "open(",
-    "write",
-    "eval",
-    "breakpoint",
-)
+#: ``python -c`` is refused outright rather than screened.
+#:
+#: The screen used to be a substring blacklist ("exec", "eval", "open(", …),
+#: which is wrong in both directions: ``chr(101)+chr(120)+chr(101)+chr(99)``
+#: reaches ``exec`` without containing it, while ``print('compiler design')``
+#: was rejected for containing "compile". Deciding whether a program is
+#: read-only by looking for words in its source is not a decision that can be
+#: made correctly, so the tool does not try — ``python -c`` is arbitrary code,
+#: and arbitrary code belongs to ``run_terminal_command``, which is approved.
+#:
+#: ``python -m pytest``, ``python --version`` and the rest are unaffected.
+PYTHON_C_FLAGS = frozenset({"-c"})
 
 _EXECUTABLE_SUFFIXES = (".exe", ".cmd", ".bat", ".com")
 
@@ -565,20 +602,40 @@ def _validate_executable_identity(token: str) -> None:
             details={"executable": identity},
         )
 
-    if identity not in ALLOWED_EXECUTABLES:
+    allowed = allowed_executables()
+    if identity not in allowed:
+        # A coreutil on Windows is not merely unavailable: `find` names a
+        # different program there, so the same command would do something else.
+        if identity in POSIX_ONLY_EXECUTABLES:
+            error = (
+                f"Command rejected: '{identity}' is a Unix tool and is not "
+                "available or does not mean the same thing on this platform."
+            )
+            correction = (
+                "Use read_file to read a file, glob or list_directory to list "
+                "one, and grep_search or 'rg' to search — all of which work on "
+                "every platform."
+            )
+        else:
+            error = (
+                f"Command rejected: executable '{identity}' is not in the "
+                "diagnostic allowlist."
+            )
+            correction = (
+                "Use a read-only inspection tool "
+                f"({', '.join(sorted(allowed))}), or run_terminal_command "
+                "for anything else."
+            )
         raise DiagnosticCommandRejected(
             failure_class="diagnostic_command_executable_not_allowed",
-            error=f"Command rejected: executable '{identity}' is not in the diagnostic allowlist.",
-            correction=(
-                "Use a read-only inspection tool "
-                f"({', '.join(sorted(ALLOWED_EXECUTABLES))}), or run_terminal_command "
-                "for anything else."
-            ),
+            error=error,
+            correction=correction,
             component="executable",
             offending_token=token,
             details={
                 "executable": identity,
-                "allowed_executables": sorted(ALLOWED_EXECUTABLES),
+                "allowed_executables": sorted(allowed),
+                "platform": os.name,
                 "suggested_next_tool": "run_terminal_command",
             },
         )
@@ -629,25 +686,25 @@ def _validate_argv(
                 )
 
     if identity in PYTHON_EXECUTABLE_NAMES:
-        for position, token in enumerate(argv):
-            if token != "-c" or position + 1 >= len(argv):
-                continue
-            script = argv[position + 1].lower()
-            for forbidden in FORBIDDEN_PYTHON_C_SUBSTRINGS:
-                if forbidden in script:
-                    raise DiagnosticCommandRejected(
-                        failure_class="diagnostic_command_unsafe_python_script",
-                        error=(
-                            "Command rejected: the python -c script contains "
-                            f"'{forbidden}', which can execute or write."
-                        ),
-                        correction=(
-                            "Inspect with a read-only expression, or use read_file / "
-                            "run_terminal_command instead."
-                        ),
-                        component="python_script",
-                        offending_token=forbidden,
-                    )
+        for token in argv[1:]:
+            if token in PYTHON_C_FLAGS:
+                raise DiagnosticCommandRejected(
+                    failure_class="diagnostic_command_inline_script",
+                    error=(
+                        "Command rejected: 'python -c' runs an arbitrary program, "
+                        "and diagnostics are read-only."
+                    ),
+                    correction=(
+                        "Use read_file or grep_search to inspect, 'python -m <tool>' "
+                        "to run a tool, or run_terminal_command when you really need "
+                        "to execute a script."
+                    ),
+                    component="python_script",
+                    offending_token=token,
+                    details={"suggested_next_tool": "run_terminal_command"},
+                )
+
+    _validate_read_only_subcommand(identity, argv)
 
     for token in argv[1:]:
         offending = _workspace_escape(token, workspace_root, working_directory)
@@ -660,6 +717,51 @@ def _validate_argv(
                 offending_token=token,
                 details={"resolved_path": offending},
             )
+
+
+def _validate_read_only_subcommand(identity: str, argv: list[str]) -> None:
+    """Restrict build tools to the subcommands that only inspect.
+
+    ``cargo build``, ``go build``, ``npm run build`` and a bare ``make`` all
+    write build output into the workspace. That is a workspace mutation, and a
+    diagnostic that mutates is exactly the thing this tool exists not to be —
+    so these tools are admitted only for the inspection subcommands they
+    happen to provide, and everything else is redirected to the approved
+    terminal path.
+    """
+    allowed = READ_ONLY_SUBCOMMANDS.get(identity)
+    if allowed is None:
+        return
+
+    subcommand: str | None = None
+    for token in argv[1:]:
+        if token in VERSION_FLAGS:
+            return
+        subcommand = token
+        break
+
+    if subcommand is not None and subcommand in allowed:
+        return
+
+    raise DiagnosticCommandRejected(
+        failure_class="diagnostic_command_build_not_read_only",
+        error=(
+            f"Command rejected: '{identity} {subcommand}' builds or changes the "
+            f"workspace."
+            if subcommand
+            else f"Command rejected: bare '{identity}' builds the workspace."
+        ),
+        correction=(
+            f"Use a read-only {identity} subcommand "
+            f"({', '.join(sorted(allowed))}), or run_terminal_command to build."
+        ),
+        component="subcommand",
+        offending_token=subcommand or identity,
+        details={
+            "read_only_subcommands": sorted(allowed),
+            "suggested_next_tool": "run_terminal_command",
+        },
+    )
 
 
 def _workspace_escape(
@@ -757,12 +859,18 @@ def run_diagnostic_command(
         )
 
     try:
+        # Explicit UTF-8: `text=True` alone decodes with the locale encoding,
+        # which is cp1252 on a default Windows install. The same command then
+        # produces different output text on different machines, and any
+        # non-Latin-1 byte in a test name or a diff either mojibakes or raises.
         proc = subprocess.run(
             argv,
             capture_output=True,
             timeout=timeout,
             cwd=working_directory,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             shell=False,
         )
         stdout = proc.stdout or ""
@@ -830,8 +938,14 @@ __all__ = [
     "DESTRUCTIVE_FLAGS",
     "DiagnosticCommandRejected",
     "MUTATING_ARGUMENTS",
+    "PORTABLE_EXECUTABLES",
+    "POSIX_ONLY_EXECUTABLES",
+    "PYTHON_C_FLAGS",
     "PYTHON_EXECUTABLE_NAMES",
+    "READ_ONLY_SUBCOMMANDS",
     "SHELL_OPERATORS",
+    "VERSION_FLAGS",
+    "allowed_executables",
     "canonical_argv",
     "executable_identity",
     "find_unquoted_shell_operator",

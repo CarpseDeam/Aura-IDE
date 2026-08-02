@@ -300,3 +300,116 @@ def test_godot_style_absolute_command_reaches_launcher_unchanged(
     assert payload["command"] == command
     assert payload["ok"] is False
     assert payload["failure_class"] == "execution_failed"
+
+
+# ── nested quoting and multiline/JSON python probes ─────────────────────────
+
+
+def test_python_dash_c_with_escaped_double_quotes(tmp_path: Path) -> None:
+    command = r'python -c "print(\"escaped double\")"'
+
+    payload, _ = _run_tool(tmp_path, command)
+
+    assert payload["ok"] is True
+    assert payload["output"].strip() == "escaped double"
+
+
+def test_python_dash_c_with_embedded_json_single_line(tmp_path: Path) -> None:
+    command = "python -c \"import json; print(json.dumps({'a': [1, 'x']}))\""
+
+    payload, _ = _run_tool(tmp_path, command)
+
+    assert payload["ok"] is True
+    assert payload["output"].strip() == '{"a": [1, "x"]}'
+
+
+def test_python_dash_c_then_chain(tmp_path: Path) -> None:
+    command = 'python -c "print(1)" && echo after'
+
+    payload, _ = _run_tool(tmp_path, command)
+
+    assert payload["ok"] is True
+    assert payload["output"].splitlines() == ["1", "after"]
+
+
+def test_quoted_argument_containing_shell_characters(tmp_path: Path) -> None:
+    command = 'echo "quoted & ampersand"'
+
+    payload, _ = _run_tool(tmp_path, command)
+
+    assert payload["ok"] is True
+    assert "quoted & ampersand" in payload["output"]
+
+
+def test_multiline_python_dash_c_json_probe(tmp_path: Path) -> None:
+    """cmd.exe cannot carry a newline inside a quoted argument; the launcher
+    must run a plain multiline argv directly so the probe keeps its newline."""
+    command = "python -c \"import json\nprint(json.dumps({'a': 1}))\""
+
+    payload, _ = _run_tool(tmp_path, command)
+
+    assert payload["ok"] is True, payload["output"]
+    assert payload["output"].strip() == '{"a": 1}'
+
+
+def test_multiline_python_dash_c_loop_keeps_indentation(tmp_path: Path) -> None:
+    command = "python -c \"for i in range(3):\n    print(i)\""
+
+    payload, _ = _run_tool(tmp_path, command)
+
+    assert payload["ok"] is True, payload["output"]
+    assert payload["output"].splitlines() == ["0", "1", "2"]
+
+
+def test_multiline_command_without_quotes_still_runs(tmp_path: Path) -> None:
+    """A multiline command with no quoted-argument newline keeps the CMD
+    contract (builtin fallback) and runs line by line."""
+    command = "echo line-one\necho line-two"
+
+    payload, _ = _run_tool(tmp_path, command)
+
+    assert payload["ok"] is True
+    assert payload["output"].splitlines() == ["line-one", "line-two"]
+
+
+# ── descendant process tree termination ─────────────────────────────────────
+
+
+def test_cancellation_kills_descendants_before_they_write_the_marker(
+    tmp_path: Path,
+) -> None:
+    """A delayed marker write from a grandchild of the wrapper shell must
+    never land when the terminal call is cancelled."""
+    marker = tmp_path / "marker.txt"
+    command = (
+        "python -c \"import time; time.sleep(30); "
+        "open('marker.txt', 'w').write('boom')\""
+    )
+
+    cancel_event = threading.Event()
+    timer = threading.Timer(1.0, cancel_event.set)
+    timer.start()
+    try:
+        payload, _ = _run_tool(tmp_path, command, cancel_event=cancel_event)
+    finally:
+        timer.cancel()
+
+    assert payload["ok"] is False
+    assert payload["cancelled"] is True
+    assert not marker.exists(), (
+        "a cancelled terminal call must terminate the complete descendant "
+        "tree, not only the wrapper shell"
+    )
+
+
+def test_timeout_kills_descendants_before_they_write_the_marker(tmp_path: Path) -> None:
+    marker = tmp_path / "marker.txt"
+    command = (
+        "python -c \"import time; time.sleep(30); "
+        "open('marker.txt', 'w').write('boom')\""
+    )
+
+    payload, _ = _run_tool(tmp_path, command, timeout=1)
+
+    assert payload["timed_out"] is True
+    assert not marker.exists()

@@ -283,13 +283,10 @@ def _register_mcp_fixture(mcp: MCPToolRegistry, client: _FakeMCPClient) -> None:
 
 @pytest.fixture
 def mcp_fixture() -> MCPToolRegistry:
+    # Registration is instance-owned, so there is no global table to clean up.
     mcp = MCPToolRegistry()
     _register_mcp_fixture(mcp, _FakeMCPClient())
-    yield mcp
-    from aura.conversation.tools.registry import TOOL_HANDLERS
-
-    for name in ("srv_reader", "srv_writer", "srv_silent"):
-        TOOL_HANDLERS.pop(name, None)
+    return mcp
 
 
 def test_mcp_resolved_effect_is_authoritative(mcp_fixture: MCPToolRegistry) -> None:
@@ -311,11 +308,9 @@ def test_mcp_approval_is_driven_by_effect_not_name(
     assert mcp_fixture.requires_approval("srv_silent") is True
 
 
-def test_mcp_handler_asks_approval_for_an_unannotated_tool(
-    mcp_fixture: MCPToolRegistry, tmp_path: Path
-) -> None:
-    from aura.conversation.tools.registry import TOOL_HANDLERS
-
+def test_mcp_handler_asks_approval_for_an_unannotated_tool(tmp_path: Path) -> None:
+    """Dispatched through the owning registry — MCP tools are instance-owned,
+    so the registry that connected the server is the only caller that has them."""
     asked: list[str] = []
 
     def approval_cb(request: ApprovalRequest) -> ApprovalDecision:
@@ -323,24 +318,24 @@ def test_mcp_handler_asks_approval_for_an_unannotated_tool(
         return ApprovalDecision(action="reject")
 
     owner = ToolRegistry(tmp_path)
+    _register_mcp_fixture(owner._mcp_tools, _FakeMCPClient())
 
-    result = TOOL_HANDLERS["srv_silent"](owner, {}, approval_cb, False)
+    result = owner.execute("srv_silent", {}, approval_cb, False)
     assert asked == ["srv_silent"], "an unannotated MCP tool must be approved"
     assert result.ok is False
     assert result.payload.get("rejected") is True
 
     asked.clear()
-    result = TOOL_HANDLERS["srv_reader"](owner, {}, approval_cb, False)
+    result = owner.execute("srv_reader", {}, approval_cb, False)
     assert asked == [], "an established observation stays approval-free"
     assert result.ok is True
 
 
-def test_mcp_handler_reject_all_blocks_unannotated_tool(
-    mcp_fixture: MCPToolRegistry, tmp_path: Path
-) -> None:
-    from aura.conversation.tools.registry import TOOL_HANDLERS
+def test_mcp_handler_reject_all_blocks_unannotated_tool(tmp_path: Path) -> None:
+    owner = ToolRegistry(tmp_path)
+    _register_mcp_fixture(owner._mcp_tools, _FakeMCPClient())
 
-    result = TOOL_HANDLERS["srv_silent"](ToolRegistry(tmp_path), {}, None, True)
+    result = owner.execute("srv_silent", {}, None, True)
     assert result.ok is False
     assert result.payload.get("rejected") is True
 

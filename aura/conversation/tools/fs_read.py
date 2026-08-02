@@ -23,28 +23,85 @@ def _should_skip(path: Path) -> bool:
     return False
 
 
+def _incremental_utf8_decoder():
+    """Strict incremental UTF-8 decoder.
+
+    Strict, so a binary file fails the way ``read_file`` fails it; incremental,
+    so a multi-byte character spanning two read chunks is not mistaken for one.
+    """
+    import codecs
+
+    return codecs.getincrementaldecoder("utf-8")("strict")
+
+
+def _decode_utf8_prefix(raw: bytes, complete: bool) -> tuple[str, int]:
+    """Decode *raw* as UTF-8, returning ``(text, decoded_byte_count)``.
+
+    When *complete* is False the buffer is a prefix of a larger file, so the
+    cut can land inside a multi-byte character.  Those trailing bytes are held
+    back rather than treated as corruption — otherwise any file over the read
+    limit containing a single non-ASCII character reports itself as not being
+    UTF-8 at all, and becomes permanently unreadable.
+
+    A decode failure anywhere else is genuine and propagates.
+    """
+    if complete:
+        return raw.decode("utf-8"), len(raw)
+    # A UTF-8 sequence is at most 4 bytes, so the truncated tail is short.
+    for back in range(0, min(4, len(raw))):
+        end = len(raw) - back
+        try:
+            return raw[:end].decode("utf-8"), end
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8"), len(raw)
+
+
 def read_file(workspace_root: Path, target: Path) -> dict[str, Any]:
     if not target.exists():
         return {"ok": False, "error": f"file not found: {safe_relative_to(target, workspace_root)}"}
     if not target.is_file():
         return {"ok": False, "error": f"not a regular file: {safe_relative_to(target, workspace_root)}"}
-    
-    truncated = False
-    try:
-        content_hash, file_size = _stream_file_version(target)
-        if file_size > MAX_READ_BYTES:
-            truncated = True
 
+    try:
+        # One read backs the content, the hash, and the size. Hashing in a
+        # separate pass let the file change in between, so `content_hash`
+        # could describe bytes the model never saw — and that hash is exactly
+        # what patch_file accepts as proof the file is unchanged.
         with target.open("rb") as fh:
-            raw = fh.read(MAX_READ_BYTES)
-        text = raw.decode("utf-8")
+            raw = fh.read(MAX_READ_BYTES + 1)
+            truncated = len(raw) > MAX_READ_BYTES
+            if truncated:
+                # Hash every byte read so far — including the read-ahead byte
+                # that proved the file was over the limit — before narrowing
+                # `raw` to what gets returned.
+                digest = hashlib.sha256(raw)
+                file_size = len(raw)
+                raw = raw[:MAX_READ_BYTES]
+                for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                    file_size += len(chunk)
+                    digest.update(chunk)
+                content_hash = digest.hexdigest()
+            else:
+                content_hash = hashlib.sha256(raw).hexdigest()
+                file_size = len(raw)
+
+        text, decoded_bytes = _decode_utf8_prefix(raw, complete=not truncated)
     except UnicodeDecodeError:
         return {"ok": False, "error": f"file cannot be decoded as UTF-8: {safe_relative_to(target, workspace_root)}"}
     except Exception as e:
         return {"ok": False, "error": f"error reading file: {e}"}
 
+    # Line count of what was actually returned, so "I read lines 1..N" is a
+    # claim the payload supports rather than one the model has to infer.
+    returned_lines = text.count("\n") + (1 if text and not text.endswith("\n") else 0)
+
     if truncated:
-        text += f"\n\n[... truncated at {MAX_READ_BYTES} bytes ...]"
+        text += (
+            f"\n\n[... truncated: showing {decoded_bytes} of {file_size} bytes "
+            f"({returned_lines} lines). Use read_file offset/limit or "
+            "read_file_range for the rest ...]"
+        )
     rel = safe_relative_to(target, workspace_root).as_posix()
     return {
         "ok": True,
@@ -53,6 +110,8 @@ def read_file(workspace_root: Path, target: Path) -> dict[str, Any]:
         "truncated": truncated,
         "content_hash": content_hash,
         "file_size": file_size,
+        "returned_bytes": decoded_bytes,
+        "returned_lines": returned_lines,
     }
 
 
@@ -96,18 +155,36 @@ def read_file_range(
     selected: list[str] = []
     total_lines = 0
     try:
-        content_hash, file_size = _stream_file_version(target)
-        with open(target, encoding="utf-8", errors="replace") as fh:
-            for lineno, line in enumerate(fh, start=1):
-                total_lines = lineno
+        # Hash and content come from one pass over one open file handle, so
+        # the returned hash always describes the bytes the lines came from.
+        # `errors="replace"` used to stand in here, which meant a binary file
+        # came back as U+FFFD noise that read like real content, while
+        # read_file rejected the same file outright.
+        digest = hashlib.sha256()
+        file_size = 0
+        with target.open("rb") as fh:
+            decoder = _incremental_utf8_decoder()
+            lineno = 0
+            pending = ""
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                file_size += len(chunk)
+                digest.update(chunk)
+                pending += decoder.decode(chunk)
+                while True:
+                    split = pending.find("\n")
+                    if split < 0:
+                        break
+                    line, pending = pending[: split + 1], pending[split + 1:]
+                    lineno += 1
+                    if start_line <= lineno <= end_line:
+                        selected.append(line)
+            pending += decoder.decode(b"", final=True)
+            if pending:
+                lineno += 1
                 if start_line <= lineno <= end_line:
-                    selected.append(line)
-                elif lineno > end_line:
-                    # Keep counting so total_lines is accurate, but stop
-                    # accumulating content.  Drain the remaining lines cheaply.
-                    for _ in fh:
-                        total_lines += 1
-                    break
+                    selected.append(pending)
+            total_lines = lineno
+        content_hash = digest.hexdigest()
     except UnicodeDecodeError:
         return {"ok": False, "error": f"file cannot be decoded as UTF-8: {safe_relative_to(target, workspace_root)}"}
     except Exception as e:

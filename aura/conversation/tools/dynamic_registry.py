@@ -1,4 +1,23 @@
-"""Dynamic-tool registry — scans .aura/tools/ for user-defined tool scripts."""
+"""Dynamic-tool registry — scans .aura/tools/ for user-defined tool scripts.
+
+A dynamic tool is a ``.py`` file dropped into the workspace, so its name is
+whatever the file says it is.  That makes name collisions the whole security
+question for this registry, and they are refused rather than resolved.
+
+A script named after a built-in cannot shadow it: the executor dispatches
+built-ins first, so the script would be unreachable anyway — but its *schema*
+would still be published to the model under the built-in's name, and preflight
+would then validate real ``write_file`` calls against the script's parameters
+and reject every one of them.  A file in the workspace must not be able to
+disable the write path.
+
+Two scripts claiming one name are refused the same way, in sorted filename
+order, so which tool answers a name does not depend on directory iteration
+order or on which file was edited most recently.
+
+Refusals are recorded in :attr:`collisions` rather than being silent, because
+"my tool never shows up" is otherwise indistinguishable from a parse error.
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,6 +31,13 @@ from aura.conversation.tools.effects import (
 )
 
 
+def _builtin_tool_names() -> frozenset[str]:
+    """Names the built-in catalog owns. Read at call time (import cycle)."""
+    from aura.conversation.tools.registry import TOOL_HANDLERS
+
+    return frozenset(TOOL_HANDLERS)
+
+
 class DynamicToolRegistry:
     """Scans .aura/tools/, caches schemas by mtime, and provides tool lookup."""
 
@@ -19,26 +45,46 @@ class DynamicToolRegistry:
         self._workspace_root = workspace_root
         self._cache: dict[str, Path] = {}       # tool_name -> file_path
         self._mtime_cache: dict[str, float] = {}  # str(file_path) -> mtime
+        self._name_cache: dict[str, str] = {}     # str(file_path) -> declared name
+        # file path -> why its declared name was refused.
+        self._collisions: dict[str, str] = {}
+
+    @property
+    def collisions(self) -> dict[str, str]:
+        """Scripts whose declared name was refused, and why."""
+        return dict(self._collisions)
 
     def set_workspace_root(self, root: Path) -> None:
         """Update workspace root and clear all cached state."""
         self._workspace_root = root
         self._cache.clear()
         self._mtime_cache.clear()
+        self._name_cache.clear()
+        self._collisions.clear()
 
     def scan(self) -> dict[str, Path]:
         """Scan .aura/tools/ for .py files and map tool names to file paths.
 
-        Uses per-file mtime caching to avoid re-parsing unchanged files.
+        The name map is rebuilt from the full directory listing on every scan,
+        in sorted filename order, so a claimed name is resolved against every
+        other file present rather than against whichever files happen to have
+        changed.  Per-file mtime caching still avoids re-parsing unchanged
+        sources — it caches the parse, not the decision.
+
         Returns a dict of {tool_name: file_path}.
         """
         tools_dir = self._workspace_root / ".aura" / "tools"
         if not tools_dir.is_dir():
             self._cache.clear()
             self._mtime_cache.clear()
+            self._collisions.clear()
             return {}
 
-        current_files: set[str] = set()
+        builtins = _builtin_tool_names()
+        resolved: dict[str, Path] = {}
+        collisions: dict[str, str] = {}
+        fresh_mtimes: dict[str, float] = {}
+
         for entry in sorted(tools_dir.iterdir()):
             if not entry.is_file() or entry.suffix != ".py":
                 continue
@@ -46,35 +92,42 @@ class DynamicToolRegistry:
                 continue
 
             key = str(entry)
-            current_files.add(key)
-            mtime = entry.stat().st_mtime
-
-            # Skip if unchanged since last parse
-            if key in self._mtime_cache and self._mtime_cache[key] == mtime:
+            try:
+                mtime = entry.stat().st_mtime
+            except OSError:
                 continue
 
-            try:
-                schema = parse_tool_schema(entry)
-                name = schema["function"]["name"]
-                # Remove any old mapping for this file path (name may have changed)
-                for old_name, old_path in list(self._cache.items()):
-                    if str(old_path) == key:
-                        del self._cache[old_name]
-                        break
-                self._cache[name] = entry
-                self._mtime_cache[key] = mtime
-            except (ValueError, SyntaxError):
-                pass
+            cached_name = self._name_cache.get(key)
+            if cached_name is not None and self._mtime_cache.get(key) == mtime:
+                name = cached_name
+            else:
+                try:
+                    name = parse_tool_schema(entry)["function"]["name"]
+                except (ValueError, SyntaxError, OSError):
+                    continue
+            fresh_mtimes[key] = mtime
+            self._name_cache[key] = name
 
-        # Remove entries for files that no longer exist
-        stale_keys = set(self._mtime_cache.keys()) - current_files
-        for key in stale_keys:
-            for name, path in list(self._cache.items()):
-                if str(path) == key:
-                    del self._cache[name]
-                    break
-            del self._mtime_cache[key]
+            if name in builtins:
+                collisions[key] = (
+                    f"declares the built-in tool name '{name}'; a workspace "
+                    "script cannot shadow or redefine a built-in tool"
+                )
+                continue
+            if name in resolved:
+                collisions[key] = (
+                    f"declares tool name '{name}', already claimed by "
+                    f"{resolved[name].name}"
+                )
+                continue
+            resolved[name] = entry
 
+        self._cache = resolved
+        self._mtime_cache = fresh_mtimes
+        self._name_cache = {
+            key: name for key, name in self._name_cache.items() if key in fresh_mtimes
+        }
+        self._collisions = collisions
         return dict(self._cache)
 
     def schemas(self) -> list[dict[str, Any]]:

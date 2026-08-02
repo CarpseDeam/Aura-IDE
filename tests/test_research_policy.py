@@ -69,6 +69,7 @@ def test_answer_only_research_blocks_worker_dispatch(tmp_path):
     tool_call = _dispatch_tool_call(
         {
             "goal": "Answer whether there are World Cup matches today.",
+            "files": [],
             "spec": "Use current web evidence.",
             "acceptance": "Answer the question.",
             "summary": "Answer current schedule question.",

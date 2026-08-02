@@ -195,6 +195,35 @@ class ToolCatalog:
 
         return tools
 
+    def build_replayable_tool_defs(
+        self,
+        *,
+        mode: RegistryMode,
+        read_only: bool,
+    ) -> list[dict[str, Any]]:
+        """Defs for tools this mode withholds but still accepts when called.
+
+        A mode narrows its catalog to shape *choice*, not to revoke capability:
+        the single-agent catalog drops the superseded read tools because
+        offering all of them made the model pick an approach before it could
+        pick an action, but their handlers stay registered so a replayed
+        historical tool call still runs.  Preflight rejects any name outside
+        the exposed catalog, so those withheld-but-callable names need their
+        schemas from here or the replay is rejected instead of executed.
+
+        Only observations qualify.  Nothing that can change the workspace is
+        callable from outside the catalog that offered it, which is what keeps
+        ``read_only`` and Planner mode's refusal to edit meaningful rather than
+        advisory.
+        """
+        if read_only or mode != "single":
+            return []
+        return [
+            tool for tool in READ_TOOL_DEFS
+            if _tool_name(tool) in SINGLE_SUPERSEDED_READ_TOOL_NAMES
+            and BUILTIN_TOOL_EFFECTS.get(_tool_name(tool)) is ToolEffect.OBSERVATION
+        ]
+
     def effect_for(self, name: str) -> ToolEffect:
         """Explicit effect classification for a built-in tool name.
 

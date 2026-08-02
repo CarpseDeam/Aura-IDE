@@ -129,10 +129,23 @@ def project_module_available(workspace_root: Path, module_name: str) -> bool:
     return True
 
 
+def _command_contains_newline(command: str) -> bool:
+    """True when *command* contains a literal newline.
+
+    The token rewrite that follows splits quoted arguments with ``shlex`` and
+    rejoins them, which mangles a newline that lives *inside* a quoted
+    argument (a multi-line ``python -c`` probe).  CMD cannot pass such a
+    newline anyway; the sandbox launches plain multiline argv directly and
+    resolves the interpreter itself, so the rewrite must leave these commands
+    untouched to preserve them faithfully.
+    """
+    return "\n" in command or "\r" in command
+
+
 def build_project_python_command(workspace_root: Path, command: str) -> PythonCommandPlan:
     env = detect_project_python_env(workspace_root)
     original = str(command or "")
-    if env.python is None:
+    if env.python is None or _command_contains_newline(original):
         return PythonCommandPlan(command=original, original_command=original)
 
     segments = _split_shell_segments(original)
@@ -161,8 +174,8 @@ def build_project_tool_command(
 
     env = detect_project_python_env(workspace_root)
     original = str(command or "")
-    if env.python is None:
-        tool = _first_python_module_tool(original)
+    if env.python is None or _command_contains_newline(original):
+        tool = _first_python_module_tool(original) if env.python is None else None
         if tool:
             return PythonCommandPlan(
                 command=original,

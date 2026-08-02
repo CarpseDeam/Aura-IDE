@@ -158,6 +158,19 @@ class ToolRegistry(
             mcp_schemas=mcp_schemas or None,
         )
 
+    def replayable_tool_defs(self) -> list[dict[str, Any]]:
+        """Defs for tools the current catalog withholds but still executes.
+
+        Preflight validates a call against the catalog the request exposed;
+        these are the observation-only names that stay callable anyway (see
+        :meth:`ToolCatalog.build_replayable_tool_defs`), supplied so a replayed
+        historical call is schema-checked rather than rejected as unexposed.
+        """
+        return self._catalog.build_replayable_tool_defs(
+            mode=self._mode,
+            read_only=self._read_only,
+        )
+
     def focused_action_tool_defs(self) -> list[dict[str, Any]]:
         """Tool defs for one focused action request: mutations + report_blocker.
 
@@ -191,6 +204,15 @@ class ToolRegistry(
 
     def connect_mcp_server(self, server_command: str) -> int:
         return self._mcp_tools.connect_server(server_command)
+
+    def disconnect_mcp_server(self, server_command: str) -> int:
+        """Remove a server's tools from this registry and close its client.
+
+        Returns the number of tools removed. Registration is instance-owned,
+        so this affects only this registry — another registry in the process
+        keeps whatever it connected itself.
+        """
+        return self._mcp_tools.disconnect_server(server_command)
 
     def set_contract(self, contract: ExplicitSpecContract | None) -> None:
         self._contract = contract

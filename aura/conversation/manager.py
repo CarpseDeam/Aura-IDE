@@ -623,6 +623,7 @@ class ConversationManager:
                 cleanup_cancelled=self._cleanup_cancelled,
                 explicit_validation_commands=explicit_validation_commands,
                 declared_run_command=declared_run_command,
+                tool_defs=tool_defs,
             )
             if focused.active:
                 focused.active = False

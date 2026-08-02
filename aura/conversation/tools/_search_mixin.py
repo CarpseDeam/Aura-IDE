@@ -37,6 +37,7 @@ class SearchHandlersMixin:
             case_sensitive=bool(args.get("case_sensitive", False)),
             max_results=int(args.get("max_results", 50)),
             include_pattern=args.get("include_pattern"),
+            cancel_event=self.active_cancel_event,
         )
         return ToolExecResult(ok=payload.get("ok", False), payload=payload)
 
@@ -50,6 +51,7 @@ class SearchHandlersMixin:
             include_pattern=args.get("include_pattern"),
             max_results=int(args.get("max_results", 100)),
             case_sensitive=bool(args.get("case_sensitive", False)),
+            cancel_event=self.active_cancel_event,
         )
         return ToolExecResult(ok=payload.get("ok", False), payload=payload)
 

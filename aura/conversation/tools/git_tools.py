@@ -7,17 +7,73 @@ from pathlib import Path
 from typing import Any
 
 from aura.config import get_subprocess_kwargs
+from aura.paths import safe_is_relative_to
+
+
+def _repo_root(workspace_root: Path) -> Path | None:
+    """Absolute path of the enclosing git repository, or None."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=10,
+            cwd=str(workspace_root),
+            **get_subprocess_kwargs(),
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    top = result.stdout.strip()
+    return Path(top).resolve() if top else None
+
+
+def _to_workspace_relative(
+    repo_relative: str,
+    repo_root: Path | None,
+    workspace_root: Path,
+) -> str | None:
+    """Map a repo-root-relative git path into the workspace, or None.
+
+    Porcelain output is always relative to the *repository* root, which is not
+    the workspace root when the workspace is a subdirectory of a larger repo.
+    Reporting those paths unchanged names files the tools cannot open and, for
+    siblings of the workspace, files outside it entirely — so anything that
+    does not land inside the workspace is dropped rather than renamed.
+    """
+    if repo_root is None:
+        return repo_relative
+    absolute = (repo_root / repo_relative).resolve()
+    if not safe_is_relative_to(absolute, workspace_root):
+        return None
+    import os
+
+    return Path(os.path.relpath(absolute, workspace_root)).as_posix()
+
+
+def _split_status_records(payload: bytes) -> list[str]:
+    """Split NUL-delimited porcelain output into fields.
+
+    ``-z`` is what makes the paths trustworthy: without it git escapes any
+    path containing a non-ASCII byte, a space, or a quote into a C-quoted
+    literal — ``sub/café.txt`` arrives as ``"sub/caf\\303\\251.txt"``, which
+    is not a file that exists. With ``-z`` the bytes are the real path and
+    there is nothing to unescape.
+    """
+    fields = payload.split(b"\x00")
+    return [field.decode("utf-8", errors="replace") for field in fields]
 
 
 def git_status(workspace_root: Path) -> dict[str, Any]:
     """Return the current branch, remote tracking info, and lists of staged, unstaged, and untracked files."""
     try:
-        # Use --branch --porcelain=v1 to get branch/tracking info in the ## header line.
+        # -z: NUL-delimited, unescaped, unambiguous paths.  Bytes, not text,
+        # because the delimiter is a byte and the paths are UTF-8.
         status_result = subprocess.run(
-            ["git", "status", "--branch", "--porcelain=v1"],
+            ["git", "status", "--branch", "--porcelain=v1", "-z"],
             capture_output=True,
-            text=True,
-            encoding="utf-8",
             timeout=10,
             cwd=str(workspace_root),
             **get_subprocess_kwargs(),
@@ -35,11 +91,31 @@ def git_status(workspace_root: Path) -> dict[str, Any]:
         staged: list[str] = []
         unstaged: list[str] = []
         untracked: list[str] = []
+        outside_workspace = 0
 
-        for line in status_result.stdout.splitlines():
-            if line.startswith("## "):
-                header = line[3:]  # Strip "## "
-                # Check for tracking pattern: "branch...remote/branch [ahead X, behind Y]"
+        repo_root = _repo_root(workspace_root)
+        workspace_resolved = Path(workspace_root).resolve()
+
+        def add(bucket: list[str], repo_relative: str) -> None:
+            nonlocal outside_workspace
+            mapped = _to_workspace_relative(repo_relative, repo_root, workspace_resolved)
+            if mapped is None:
+                outside_workspace += 1
+                return
+            if mapped not in bucket:
+                bucket.append(mapped)
+
+        fields = _split_status_records(status_result.stdout or b"")
+        index = 0
+        while index < len(fields):
+            entry = fields[index]
+            index += 1
+            if not entry:
+                continue
+
+            if entry.startswith("## "):
+                header = entry[3:]
+                # "branch...remote/branch [ahead X, behind Y]"
                 match = re.match(r'^(\S+?)(?:\.\.\.(\S+?))?(?:\s+\[(.*?)\])?$', header)
                 if match:
                     branch = match.group(1)
@@ -56,36 +132,26 @@ def git_status(workspace_root: Path) -> dict[str, Any]:
                     branch = header.strip()
                 continue
 
-            if not line:
+            if len(entry) < 3:
                 continue
-            # First two characters are the status codes XY.
-            x = line[0] if len(line) >= 1 else " "
-            y = line[1] if len(line) >= 2 else " "
-            # The filename starts after the 3rd character (index 2 is a space).
-            raw_path = line[3:].strip()
+            x, y = entry[0], entry[1]
+            # Exactly one space separates the codes from the path; the path is
+            # taken verbatim, since a leading or trailing space is part of it.
+            path = entry[3:]
 
-            # Remove surrounding quotes if present.
-            if len(raw_path) >= 2 and raw_path[0] == raw_path[-1] == '"':
-                raw_path = raw_path[1:-1]
+            # A rename or copy is two fields: the new path, then the old one.
+            if (x in ("R", "C") or y in ("R", "C")) and index < len(fields):
+                index += 1  # consume the source path; the new path is the subject
 
-            # Untracked files: "??"
             if x == "?" and y == "?":
-                untracked.append(raw_path)
+                add(untracked, path)
                 continue
 
-            # Staged changes: X is not space and not "?".
             if x != " " and x != "?":
-                if x in ("R", "C") and " -> " in raw_path:
-                    staged.append(raw_path.split(" -> ", 1)[1])
-                else:
-                    staged.append(raw_path)
+                add(staged, path)
 
-            # Unstaged changes: Y is not space and not "?".
             if y != " " and y != "?":
-                if y in ("R", "C") and " -> " in raw_path:
-                    unstaged.append(raw_path.split(" -> ", 1)[1])
-                else:
-                    unstaged.append(raw_path)
+                add(unstaged, path)
 
         # If no branch was found from ## header (empty repo), try show-current
         if not branch:
@@ -131,6 +197,9 @@ def git_status(workspace_root: Path) -> dict[str, Any]:
             "unstaged": unstaged,
             "untracked": untracked,
             "clean": not staged and not unstaged and not untracked,
+            # Changes in the repo but outside this workspace. Reported as a
+            # count so "clean" is not mistaken for "the repo has no changes".
+            "outside_workspace": outside_workspace,
         }
     except FileNotFoundError:
         return {"ok": False, "error": "git is not installed or not found on PATH."}

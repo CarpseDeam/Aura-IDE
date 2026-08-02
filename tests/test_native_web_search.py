@@ -636,7 +636,9 @@ def test_web_research_drone_id_is_retired(tmp_path):
             approval_cb=None,
             reject_all=False,
         )
-        assert result.ok is True
+        # The envelope must agree with the payload: a retired drone id is a
+        # failed call, not a successful call carrying a failure.
+        assert result.ok is False
         assert result.payload["ok"] is False
         assert result.payload["status"] == "unsupported"
         assert "web_search" in result.payload["error"]

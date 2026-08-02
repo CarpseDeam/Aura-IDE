@@ -324,7 +324,7 @@ class TestExecutableIdentity:
         absolute = workspace.joinpath(".venv", *VENV_PARTS)
         rejection = reject(workspace, f'"{absolute}" -c "__import__(\'os\').system(\'x\')"')
 
-        assert rejection.failure_class == "diagnostic_command_unsafe_python_script"
+        assert rejection.failure_class == "diagnostic_command_inline_script"
         assert rejection.component == "python_script"
 
     def test_bare_grep_is_still_refused(self, workspace) -> None:
@@ -418,7 +418,7 @@ class TestUnsafeCommandsAreRefused:
         assert rejection.failure_class == "diagnostic_command_mutating"
 
     def test_a_destructive_flag_is_refused(self, workspace) -> None:
-        rejection = reject(workspace, "find . -delete")
+        rejection = reject(workspace, "rg --force thing .")
 
         assert rejection.failure_class in {
             "diagnostic_command_destructive_flag",
@@ -432,7 +432,7 @@ class TestUnsafeCommandsAreRefused:
         assert argv[-1] == "tests/test_demo.py::test_delete_user"
 
     def test_a_path_escaping_the_workspace_is_refused(self, workspace) -> None:
-        rejection = reject(workspace, "cat ../../../etc/passwd")
+        rejection = reject(workspace, "rg secret ../../../etc")
 
         assert rejection.failure_class == "diagnostic_command_path_escapes_workspace"
 
@@ -441,12 +441,13 @@ class TestUnsafeCommandsAreRefused:
     ) -> None:
         outside = tmp_path / "elsewhere.txt"
         outside.write_text("x", encoding="utf-8")
-        rejection = reject(workspace, f'cat "{outside}"')
+        rejection = reject(workspace, f'rg secret "{outside}"')
 
         assert rejection.failure_class == "diagnostic_command_path_escapes_workspace"
 
     def test_a_workspace_relative_path_is_allowed(self, workspace) -> None:
-        assert argv_for(workspace, "cat tests/test_demo.py")[-1] == "tests/test_demo.py"
+        argv = argv_for(workspace, "rg secret tests/test_demo.py")
+        assert argv[-1] == "tests/test_demo.py"
 
     def test_trailing_whitespace_is_not_shell_syntax(self, workspace) -> None:
         assert argv_for(workspace, "git status\n")[1] == "status"
@@ -519,11 +520,12 @@ class TestRegisteredDiagnosticExecution:
         make_venv(root, real=True)
 
         result = self._registry(root)._handle_run_diagnostic_command(
-            {"command": 'python -c "print(2+2)"'}, None, False
+            {"command": "python --version"}, None, False
         )
 
         assert result.ok is True, result.payload
-        assert result.payload["stdout"].strip() == "4"
+        output = result.payload["stdout"] + result.payload["stderr"]
+        assert "Python" in output
         assert Path(result.payload["argv"][0]) == root.joinpath(".venv", *VENV_PARTS)
 
     def test_a_real_pytest_run_reports_its_own_failure_not_a_launch_error(
@@ -567,7 +569,13 @@ class TestRegisteredDiagnosticExecution:
             result.payload["project_venv_interpreters"]
         )
 
-    def test_the_registered_tool_runs_an_escaped_quote_script(self, tmp_path) -> None:
+    def test_an_escaped_quote_script_is_refused_as_a_script_not_as_a_pipe(
+        self, tmp_path,
+    ) -> None:
+        """``python -c`` is refused outright now, but *which* refusal still
+        proves the operator scan and the argv parser agree about the quotes:
+        if they disagreed, the ``|`` inside the quoted argument would be read
+        as a pipe and this would come back as shell syntax."""
         root = tmp_path / "escaped project"
         (root / "tests").mkdir(parents=True)
         (root / "pyproject.toml").write_text("[project]\nname='d'\n", encoding="utf-8")
@@ -577,8 +585,8 @@ class TestRegisteredDiagnosticExecution:
             {"command": r'python -c "print(\"a|b\")"'}, None, False
         )
 
-        assert result.ok is True, result.payload
-        assert result.payload["stdout"].strip() == "a|b"
+        assert result.ok is False
+        assert result.payload["failure_class"] == "diagnostic_command_inline_script"
 
     def test_a_registered_refusal_comes_back_structured(self, workspace) -> None:
         result = self._registry(workspace)._handle_run_diagnostic_command(

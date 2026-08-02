@@ -84,7 +84,11 @@ class PlannerHandlersMixin:
             exc = sys.exc_info()[1]
             return ToolExecResult(
                 ok=False,
-                payload={"error": str(exc), "workspace_root": str(self._root)},
+                payload={
+                    "ok": False,
+                    "error": str(exc),
+                    "workspace_root": str(self._root),
+                },
             )
 
     def _handle_web_search(
@@ -116,7 +120,10 @@ class PlannerHandlersMixin:
         )
         payload = result.to_dict()
         payload["answer_for_chat"] = format_research_answer(result)
-        return ToolExecResult(ok=True, payload=payload)
+        # An observation failure is a failure: never report a search that
+        # errored as a successful result.  ``ToolExecResult.ok`` and the
+        # payload's ``ok`` must agree.
+        return ToolExecResult(ok=bool(result.ok), payload=payload)
 
     def _handle_launch_read_only_drone(
         self,
@@ -238,7 +245,9 @@ class PlannerHandlersMixin:
                 drone=drone,
                 upstream=None,
             )
-            return ToolExecResult(ok=True, payload=result)
+            # The drone's own result carries the authoritative ok: a failed
+            # drone run must not be reported as a successful tool call.
+            return ToolExecResult(ok=bool(result.get("ok", False)), payload=result)
         except Exception as exc:
             return ToolExecResult(
                 ok=False,
@@ -276,8 +285,12 @@ class PlannerHandlersMixin:
                 payload={"ok": False, "error": f"Unknown run_id: '{run_id}'"},
             )
 
+        # A failed drone is a failed result. Reporting ok=True beside the
+        # job's own error made the payload contradict itself, and the model
+        # reads `ok` first.
+        job_failed = job.status == "failed"
         result: dict[str, Any] = {
-            "ok": True,
+            "ok": not job_failed,
             "run_id": job.run_id,
             "drone_id": job.drone_id,
             "drone_name": job.drone_name,
@@ -292,10 +305,11 @@ class PlannerHandlersMixin:
             result["elapsed_seconds"] = job.elapsed_seconds
             if include_receipt and job.receipt:
                 result["receipt"] = job.receipt
-        elif job.status == "failed":
+        elif job_failed:
             result["error"] = job.error or "Unknown error"
+            result["failure_class"] = "drone_run_failed"
 
-        return ToolExecResult(ok=True, payload=result)
+        return ToolExecResult(ok=not job_failed, payload=result)
 
     def _handle_register_drone_folder(
         self,
@@ -350,8 +364,19 @@ class PlannerHandlersMixin:
         approval_cb: Any,
         reject_all: bool,
     ) -> ToolExecResult:
-        """Write a ui_contract.json sidecar into a drone folder."""
+        """Write a ui_contract.json sidecar into a drone folder.
+
+        The write itself goes through Aura's normal approved atomic write
+        path (``write_file``): the folder's ``ui_contract.json`` is written
+        only with approval, via temp-file replace, with a backup, and after a
+        stale-approval check.  This handler never performs a direct
+        filesystem mutation.  In Planner mode the write tool refuses, so the
+        Planner learns to dispatch the write to a Worker — exactly one write
+        owner.
+        """
         import json
+
+        from aura.paths import safe_relative_to
 
         folder_raw = str(args.get("folder_path") or "").strip()
         if not folder_raw:
@@ -362,68 +387,65 @@ class PlannerHandlersMixin:
 
         try:
             folder = self._resolve_in_root(folder_raw)
-            if not folder.is_dir():
-                return ToolExecResult(
-                    ok=False,
-                    payload={"ok": False, "error": f"Drone folder does not exist: {folder_raw}"},
-                )
-
-            assertions = args.get("assertions")
-            if not isinstance(assertions, list) or not assertions:
-                return ToolExecResult(
-                    ok=False,
-                    payload={"ok": False, "error": "assertions must be a non-empty list"},
-                )
-
-            for i, assertion in enumerate(assertions):
-                if not isinstance(assertion, dict):
-                    return ToolExecResult(
-                        ok=False,
-                        payload={"ok": False, "error": f"assertions[{i}] must be an object"},
-                    )
-                a_type = assertion.get("type")
-                if a_type not in ("node_exists", "node_absent"):
-                    return ToolExecResult(
-                        ok=False,
-                        payload={
-                            "ok": False,
-                            "error": (
-                                f"assertions[{i}].type must be 'node_exists' or 'node_absent', "
-                                f"got '{a_type}'"
-                            ),
-                        },
-                    )
-                if not any(k in assertion for k in ("role", "name", "object_name")):
-                    return ToolExecResult(
-                        ok=False,
-                        payload={
-                            "ok": False,
-                            "error": (
-                                f"assertions[{i}] must have at least one of "
-                                "role, name, object_name"
-                            ),
-                        },
-                    )
-
-            contract = {"schema_version": 1, "assertions": assertions}
-            contract_path = folder / "ui_contract.json"
-            contract_text = json.dumps(contract, indent=2) + "\n"
-            contract_path.write_text(contract_text, encoding="utf-8")
-
-            return ToolExecResult(
-                ok=True,
-                payload={
-                    "ok": True,
-                    "contract_written": True,
-                    "path": str(contract_path),
-                    "assertion_count": len(assertions),
-                },
-            )
-        except Exception as e:
+        except ValueError as exc:
+            return ToolExecResult(ok=False, payload={"ok": False, "error": str(exc)})
+        if not folder.is_dir():
             return ToolExecResult(
                 ok=False,
-                payload={"ok": False, "error": str(e)},
+                payload={"ok": False, "error": f"Drone folder does not exist: {folder_raw}"},
             )
+
+        assertions = args.get("assertions")
+        if not isinstance(assertions, list) or not assertions:
+            return ToolExecResult(
+                ok=False,
+                payload={"ok": False, "error": "assertions must be a non-empty list"},
+            )
+
+        for i, assertion in enumerate(assertions):
+            if not isinstance(assertion, dict):
+                return ToolExecResult(
+                    ok=False,
+                    payload={"ok": False, "error": f"assertions[{i}] must be an object"},
+                )
+            a_type = assertion.get("type")
+            if a_type not in ("node_exists", "node_absent"):
+                return ToolExecResult(
+                    ok=False,
+                    payload={
+                        "ok": False,
+                        "error": (
+                            f"assertions[{i}].type must be 'node_exists' or 'node_absent', "
+                            f"got '{a_type}'"
+                        ),
+                    },
+                )
+            if not any(k in assertion for k in ("role", "name", "object_name")):
+                return ToolExecResult(
+                    ok=False,
+                    payload={
+                        "ok": False,
+                        "error": (
+                            f"assertions[{i}] must have at least one of "
+                            "role, name, object_name"
+                        ),
+                    },
+                )
+
+        contract = {"schema_version": 1, "assertions": assertions}
+        contract_text = json.dumps(contract, indent=2) + "\n"
+        rel_folder = safe_relative_to(folder, self._root).as_posix()
+        rel_path = f"{rel_folder}/ui_contract.json"
+
+        result = self._handle_write_file(
+            {"path": rel_path, "content": contract_text},
+            approval_cb,
+            reject_all,
+        )
+        if result.payload.get("applied") is True:
+            result.payload["contract_written"] = True
+            result.payload["assertion_count"] = len(assertions)
+        return result
 
 
 def _web_research_drone_retired_result() -> ToolExecResult:
@@ -431,13 +453,16 @@ def _web_research_drone_retired_result() -> ToolExecResult:
 
     The bundled web-research Drone (Bing/browser research) was replaced by
     the provider-native ``web_search`` tool.  Requesting it must return a
-    clear result instead of launching the old browser system.
+    clear result instead of launching the old browser system.  The result is
+    a failure — the requested tool did not run — and the enclosing
+    ``ToolExecResult.ok`` must agree with the payload's ``ok``.
     """
     return ToolExecResult(
-        ok=True,
+        ok=False,
         payload={
             "ok": False,
             "status": "unsupported",
+            "failure_class": "drone_retired_unsupported",
             "error": (
                 "The 'web-research' Drone is retired. Use the web_search "
                 "tool for live web research."

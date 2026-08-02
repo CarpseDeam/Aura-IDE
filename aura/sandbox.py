@@ -11,6 +11,7 @@ import os
 import queue
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -24,6 +25,11 @@ from aura.paths import safe_is_relative_to
 logger = logging.getLogger(__name__)
 
 SandboxMode = Literal["host", "docker", "wasm"]
+
+#: Marker ``_host_shell_invocation`` uses for the Windows batch-file path:
+#: ``(command_text, _BATCH_SHELL_SENTINEL)`` means "write *command_text* to a
+#: temporary .cmd file and run that file through CMD."
+_BATCH_SHELL_SENTINEL = "__aura_batch__"
 
 # The Docker image used for sandboxed execution.
 SANDBOX_DOCKER_IMAGE = "python:3.10-slim"
@@ -99,11 +105,140 @@ def _host_shell_invocation(command: str) -> tuple[str | list[str], str | None]:
     Windows needs CMD's native outer-quote convention.  Python's generic
     list-to-command-line conversion backslash-escapes embedded quotes, but
     CMD does not treat those backslashes as quote escapes.
+
+    The single-string ``"<shell>" /d /s /c "<command>"`` form is the primary
+    Windows launch contract and is pinned by integration tests for nested
+    quotes, quoted executables, embedded JSON, chains, pipes, and redirects.
+
+    One case CMD cannot handle at all: a literal newline inside a quoted
+    argument (``python -c "line1\\nline2"``) — CMD's line-based tokenizer
+    breaks the quoted token at the newline no matter how the command is
+    wrapped.  When the command contains a newline and parses as a *plain
+    argv* (no unquoted shell operators, a resolvable executable), it is
+    launched directly — the child's own command-line parser preserves
+    newlines inside quoted arguments.
+
+    A multiline command that is not a plain argv (CMD builtins like ``echo``
+    or ``set``, shell operators) is executed from a temporary batch file:
+    CMD runs batch files line by line, which is exactly the semantics a
+    multi-line script needs (and the reason ``set VAR=x`` followed by
+    ``echo %VAR%`` works line-by-line in a batch but not in a single
+    ``/c`` string).  The batch file is deleted after the process tree exits.
     """
     if os.name == "nt":
         shell = _resolve_windows_command_shell()
+        direct = _try_plain_windows_argv(command)
+        if direct is not None:
+            return direct, None
+        if "\n" in command or "\r" in command:
+            return command, _BATCH_SHELL_SENTINEL
         return f'"{shell}" /d /s /c "{command}"', shell
     return [_resolve_posix_command_shell(), "-c", command], None
+
+
+def _try_plain_windows_argv(command: str) -> list[str] | None:
+    """Return a direct argv for *command*, or ``None`` when CMD must run it.
+
+    Only multiline commands are candidates: single-line commands keep the
+    CMD contract so builtins, ``%``-expansion, chains, pipes, and redirects
+    behave exactly as the model wrote them.  A multiline command qualifies
+    when it parses cleanly under Windows command-line rules with no unquoted
+    shell operator and its executable resolves — i.e. the command is a plain
+    program invocation whose quoted arguments happen to contain newlines.
+    """
+    if "\n" not in command and "\r" not in command:
+        return None
+    from aura.conversation.tools.diagnostic_handler import (
+        DiagnosticCommandRejected,
+        _find_windows_unquoted_shell_operator,
+        split_command_line,
+    )
+
+    try:
+        argv = split_command_line(command)
+    except DiagnosticCommandRejected:
+        return None
+    if not argv:
+        return None
+    operator = _find_windows_unquoted_shell_operator(command)
+    if operator is not None and operator not in ("\n", "\r"):
+        return None
+
+    executable = _resolve_plain_executable(argv[0])
+    if executable is None:
+        return None
+    return [executable, *argv[1:]]
+
+
+def _write_windows_batch(command: str, *, cwd: Path) -> Path:
+    """Write *command* to a temporary UTF-8 .cmd file and return its path.
+
+    CMD runs batch files line by line, so a multiline script keeps the
+    semantics the model wrote (``set`` on one line, ``echo %VAR%`` on the
+    next).  ``@echo off`` keeps CMD from echoing every line; ``chcp 65001``
+    makes CMD read the rest of the file (and pass through the child's UTF-8
+    output) as UTF-8 rather than the OEM codepage.
+    """
+    import tempfile
+
+    handle, path = tempfile.mkstemp(suffix=".cmd", prefix="aura-cmd-", dir=str(cwd))
+    os.close(handle)
+    path = Path(path)
+    try:
+        # CMD only recognizes CRLF as a line break in batch files; normalize
+        # the model's LF newlines so every line runs on its own.
+        normalized = command.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r\n")
+        text = "@echo off\r\n@chcp 65001 >nul\r\n" + normalized + "\r\n"
+        path.write_text(text, encoding="utf-8", newline="")
+    except Exception:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        raise
+    return path
+
+
+#: CMD builtins that have no meaning as a standalone executable.  A multiline
+#: command starting with one of these must stay with CMD (batch-file path);
+#: executing ``echo`` as a real .exe from PATH (Git Bash ships one) would
+#: silently change semantics.
+_CMD_BUILTINS = frozenset({
+    "assoc", "break", "call", "cd", "chcp", "chdir", "cls", "color", "copy",
+    "date", "del", "dir", "echo", "endlocal", "erase", "exit", "for", "ftype",
+    "goto", "if", "md", "mkdir", "move", "path", "pause", "popd", "prompt",
+    "pushd", "rd", "rem", "ren", "rename", "rmdir", "set", "setlocal", "shift",
+    "start", "time", "title", "type", "ver", "verify", "vol",
+})
+
+
+def _resolve_plain_executable(raw: str) -> str | None:
+    """Resolve *raw* to a real executable, or ``None`` for CMD builtins.
+
+    Returning ``None`` sends the command back to CMD (the batch-file path for
+    multiline commands), preserving builtin semantics.  A PATH hit like Git
+    Bash's ``echo.EXE`` is deliberately ignored for builtin names.
+    """
+    import shutil as _shutil
+
+    identity = raw.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    for suffix in (".exe", ".cmd", ".bat", ".com"):
+        if identity.endswith(suffix):
+            identity = identity[: -len(suffix)]
+            break
+    if identity in _CMD_BUILTINS:
+        return None
+
+    if "/" in raw or "\\" in raw:
+        candidate = Path(raw)
+        try:
+            if candidate.is_file():
+                return str(candidate.resolve())
+        except OSError:
+            return None
+        return None
+    resolved = _shutil.which(raw)
+    return resolved if resolved else None
 
 
 def _is_missing_executable_output(output: str) -> bool:
@@ -725,6 +860,14 @@ class SandboxExecutor:
         The original command is kept as one argument so quoting, built-ins,
         chaining, pipes, and redirects are interpreted by the selected shell.
         ``shell=False`` ensures Python never chooses or wraps that shell for us.
+
+        The launched process tree is owned by this executor:
+
+        * Windows — the child is created with its own process group and,
+          when a Job Object is available, assigned to one with
+          ``KILL_ON_JOB_CLOSE``; stop terminates the whole tree.
+        * POSIX — the child is a session leader; stop signals its process
+          group.
         """
         from aura.config import get_subprocess_kwargs
 
@@ -741,7 +884,28 @@ class SandboxExecutor:
             "bufsize": 1,
         }
         popen_kwargs.update(get_subprocess_kwargs())
-        return subprocess.Popen(invocation, executable=executable, **popen_kwargs)
+        if os.name == "nt":
+            popen_kwargs["creationflags"] = (
+                int(popen_kwargs.get("creationflags", 0))
+                | subprocess.CREATE_NEW_PROCESS_GROUP
+            )
+        else:
+            # Own the whole descendant tree: the child becomes a session
+            # leader, so its process group is the group to signal on stop.
+            popen_kwargs["start_new_session"] = True
+        batch_path: Path | None = None
+        if executable == _BATCH_SHELL_SENTINEL:
+            batch_path = _write_windows_batch(command, cwd=cwd)
+            invocation = [str(_resolve_windows_command_shell()), "/d", "/c", str(batch_path)]
+            executable = None
+        proc = subprocess.Popen(invocation, executable=executable, **popen_kwargs)
+        if os.name == "nt":
+            from aura.win_job import WindowsJob
+
+            proc._aura_job = WindowsJob.try_assign(proc)  # type: ignore[attr-defined]
+        if batch_path is not None:
+            proc._aura_batch_path = batch_path  # type: ignore[attr-defined]
+        return proc
 
     def _resolve_working_directory(self, working_directory: Path | str | None) -> Path:
         root = self._workspace_root.resolve()
@@ -811,7 +975,7 @@ class SandboxExecutor:
                 drained_output = True
 
             if cancel_event is not None and cancel_event.is_set():
-                self._stop_process(proc)
+                self._stop_process_tree(proc)
                 emit("\n[CANCELLED]\n")
                 self._drain_output_queue(output_queue, emit)
                 return SandboxResult(
@@ -825,7 +989,7 @@ class SandboxExecutor:
 
             now = time.monotonic()
             if now >= deadline and proc.poll() is None:
-                self._stop_process(proc)
+                self._stop_process_tree(proc)
                 if timeout_is_success:
                     emit(f"\n[watch window elapsed: {timeout}s]\n")
                 else:
@@ -875,6 +1039,7 @@ class SandboxExecutor:
                     last_heartbeat_time = last_output_time
 
         self._drain_output_queue(output_queue, emit)
+        self._close_owned_job(proc)
         return SandboxResult(
             ok=proc.returncode == 0,
             stdout="".join(output_lines),
@@ -897,24 +1062,88 @@ class SandboxExecutor:
                 return
             emit(item)
 
-    def _stop_process(self, proc: subprocess.Popen[str]) -> None:
-        """Terminate a process promptly, then kill if it does not exit."""
+    def _close_owned_job(self, proc: subprocess.Popen[str]) -> None:
+        """Release the process tree's Job Object and launch artifacts."""
+        job = getattr(proc, "_aura_job", None)
+        if job is not None:
+            try:
+                job.close()
+            except Exception:
+                pass
+        batch_path = getattr(proc, "_aura_batch_path", None)
+        if batch_path is not None:
+            try:
+                Path(batch_path).unlink()
+            except OSError:
+                pass
+
+    def _stop_process_tree(self, proc: subprocess.Popen[str]) -> None:
+        """Terminate the complete descendant tree, then kill if needed.
+
+        Windows: terminate the owned Job Object (whole tree at once), falling
+        back to ``taskkill /T`` when no job was assigned.  POSIX: signal the
+        child's process group, which owns every descendant because the child
+        was launched as a session leader.
+        """
         try:
             if proc.poll() is not None:
+                self._close_owned_job(proc)
                 return
-            proc.terminate()
+
+            if os.name == "nt":
+                job = getattr(proc, "_aura_job", None)
+                if job is not None:
+                    try:
+                        job.terminate()
+                        self._close_owned_job(proc)
+                    except Exception:
+                        pass
+                else:
+                    self._taskkill_tree(proc)
+            else:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+
             try:
                 proc.wait(timeout=PROCESS_SHUTDOWN_GRACE_SECONDS)
                 return
             except subprocess.TimeoutExpired:
+                pass
+
+            if os.name != "nt":
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            try:
                 proc.kill()
                 proc.wait(timeout=PROCESS_SHUTDOWN_GRACE_SECONDS)
+            except Exception:
+                pass
         except Exception:
             try:
                 proc.kill()
                 proc.wait(timeout=PROCESS_SHUTDOWN_GRACE_SECONDS)
             except Exception:
                 pass
+        finally:
+            self._close_owned_job(proc)
+
+    def _taskkill_tree(self, proc: subprocess.Popen[str]) -> None:
+        """Kill *proc* and its descendants via ``taskkill /T``."""
+        from aura.config import get_subprocess_kwargs
+
+        try:
+            subprocess.run(
+                ["taskkill", "/pid", str(proc.pid), "/T", "/F"],
+                capture_output=True,
+                timeout=10,
+                **get_subprocess_kwargs(),
+            )
+        except Exception as exc:
+            logger.warning("taskkill tree termination failed: %s", exc)
 
 
 
