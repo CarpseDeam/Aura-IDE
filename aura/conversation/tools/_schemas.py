@@ -1677,6 +1677,11 @@ TERMINAL_TOOL_DEF: dict[str, Any] = {
         "name": "run_terminal_command",
         "description": (
             "Execute a shell command in the workspace or an optional workspace-relative cwd and stream its output. "
+            "Use this when the work genuinely needs the shell rather than a single read-only "
+            "check: shell behavior (pipes, redirects, chaining), streamed output from a longer "
+            "command, environment or project setup, dependency installs, or any command that "
+            "mutates the workspace. For a short, read-only, self-terminating inspection or "
+            "validation, prefer run_diagnostic_command. "
             "Use this to run project validation/build commands: linters, type checkers, "
             "test suites explicitly requested by the user, or other validation/build "
             "commands. The command runs with the workspace as its working "
@@ -1763,12 +1768,19 @@ DIAGNOSTIC_TOOL_DEF: dict[str, Any] = {
     "function": {
         "name": "run_diagnostic_command",
         "description": (
-            "Execute a short, read-only diagnostic command in the workspace or an optional workspace-relative cwd. "
-            "Use this to validate code with project-specific read-only commands, inspect git state (status, diff, log), "
-            "or search the filesystem (rg, ls, cat). "
-            "Rejects mutating, installing, or dangerous commands. "
-            "Returns stdout, stderr, exit_code, timed_out, and the original command. "
-            "Output is truncated at 100KB. "
+            "Run ONE short, read-only, self-terminating command to inspect or validate the "
+            "workspace, in the workspace root or an optional workspace-relative cwd. "
+            "This is the default choice for checking your work: test runs, linters, type "
+            "checks, git inspection (status, diff, log), and filesystem searches (rg, ls, cat). "
+            "There is NO shell: the command is parsed into a single argument list and executed "
+            "directly, so pipes, redirects, chaining (| & ; < > ` $(...)), installs, and any "
+            "mutating command are rejected — use run_terminal_command for those. "
+            "Quoting works normally and quoted arguments arrive unquoted, so pytest node IDs "
+            "with spaces or parameters are safe to pass. For Python projects the project-local "
+            ".venv interpreter is selected automatically from a bare 'python' or 'pytest'. "
+            "Returns stdout, stderr, exit_code, timed_out, the requested command, and the argv "
+            "that ran; a rejected command returns a failure_class, the offending token, and one "
+            "concrete correction. Output is truncated at 100KB. "
             "Use this instead of putting validation commands into Worker dispatch specs."
         ),
         "parameters": {

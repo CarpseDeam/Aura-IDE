@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+
 from aura.conversation.tools._types import ToolExecResult
 
 
@@ -13,7 +14,10 @@ class DiagnosticHandlersMixin:
         approval_cb: Any,
         reject_all: bool,
     ) -> ToolExecResult:
-        from aura.conversation.tools.diagnostic_handler import run_diagnostic_command
+        from aura.conversation.tools.diagnostic_handler import (
+            DiagnosticCommandRejected,
+            run_diagnostic_command,
+        )
 
         command = args.get("command", "")
         timeout = int(args.get("timeout", 30))
@@ -21,6 +25,12 @@ class DiagnosticHandlersMixin:
         try:
             result = run_diagnostic_command(command, timeout=timeout, workspace_root=self._root, cwd=cwd)
             return ToolExecResult(ok=result["ok"], payload=result)
+        except DiagnosticCommandRejected as rejected:
+            # A structured refusal is more actionable than a stringified error.
+            return ToolExecResult(
+                ok=False,
+                payload=rejected.payload(command=command, requested_command=command),
+            )
         except Exception:
             import sys
 

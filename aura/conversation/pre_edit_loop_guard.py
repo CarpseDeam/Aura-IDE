@@ -40,8 +40,18 @@ evidence.
 
 A reread is legitimate, and is allowed, when the previous round had a tool
 failure, when a stale-file notice invalidated that path, or while edit-recovery
-state is pending.  Failures buy exactly one round of grace; stale notices clear
-only the fingerprints for the paths they name.
+state is pending.  Stale notices clear only the fingerprints for the paths they
+name.
+
+**Progress is owned by results, never by intent.**  Issuing a terminal or
+diagnostic call proves nothing — the command may not even start.  Only an
+*applied* write and a *successful* command count as forward progress and reset
+the stall counter.  A failed command leaves the round stagnant, so steering
+still fires on a turn that is only failing.  One *distinct* failure shape buys
+one recovery round of reread grace; re-running the same command into the same
+failure buys nothing further, and is not new evidence.  A corrected command is
+never blocked by this guard — commands are outside its gate entirely — and when
+the correction succeeds, stagnation resets like any other progress.
 
 There is deliberately no semantic classification of model output, no
 planner/worker workflow, and no phase state machine here.  The 300-call
@@ -87,8 +97,16 @@ NARROW_READ_TOOLS: frozenset[str] = frozenset({
 #: is just the read-only set minus the narrow reads.
 DISCOVERY_TOOLS: frozenset[str] = frozenset(READ_ONLY_TOOLS - NARROW_READ_TOOLS)
 
-#: Tools that count as forward progress and reset the stall counter.
-PROGRESS_TOOLS: frozenset[str] = frozenset(WRITE_TOOLS | TERMINAL_TOOLS)
+#: Commands the agent runs against the workspace.  A *successful* one is
+#: progress; a failed one is not, and neither is merely asking for one.
+DIAGNOSTIC_TOOLS: frozenset[str] = frozenset({"run_diagnostic_command"})
+COMMAND_TOOLS: frozenset[str] = frozenset(TERMINAL_TOOLS | DIAGNOSTIC_TOOLS)
+
+#: Tools whose *successful result* counts as forward progress and resets the
+#: stall counter.  Membership here never licenses the call itself: progress is
+#: recorded in :meth:`PreEditLoopGuard.observe_result`, never in
+#: :meth:`PreEditLoopGuard.record`.
+PROGRESS_TOOLS: frozenset[str] = frozenset(WRITE_TOOLS | COMMAND_TOOLS)
 
 #: Rounds of tools-without-new-evidence tolerated before one steering message.
 MAX_STAGNANT_ROUNDS_BEFORE_STEER: int = 2
@@ -136,6 +154,24 @@ _NON_EVIDENCE_KEYS: frozenset[str] = frozenset({
     "regex_hint",
     "pattern",
 })
+
+#: Rounds of reread grace bought by one distinct failure.  Spent by the round
+#: that observed the failure and the one after it, so exactly one round may
+#: reread while recovering.
+FAILURE_GRACE_ROUNDS: int = 2
+
+#: Payload keys that identify *which* failure this is.  A failure is "the same
+#: shape" when the tool, the command, the failure class, the exit code and the
+#: first line of the error match — so a retry of the identical broken command
+#: is recognised as a repeat however much surrounding noise the payload carries.
+_FAILURE_IDENTITY_KEYS: tuple[str, ...] = (
+    "requested_command",
+    "command",
+    "failure_class",
+    "reason",
+    "exit_code",
+    "path",
+)
 
 DUPLICATE_READ_REASON = "duplicate_read_before_first_edit"
 DISCOVERY_EXHAUSTED_REASON = "discovery_budget_exhausted_before_first_edit"
@@ -231,6 +267,36 @@ def evidence_fingerprint(name: str, payload: Any) -> str | None:
     return f"{name}:{rendered}"
 
 
+def failure_fingerprint(name: str, payload: Any) -> str:
+    """Return a stable identity for the *shape* of one failed tool result.
+
+    Derived from the result, like every other signal here: the tool, the
+    command it was asked to run, the failure class, the exit code and the first
+    line of the error.  Two attempts at the same broken command share a
+    fingerprint even when the payload differs in timing or truncation, so a
+    retry cannot present itself as a new problem worth another recovery round.
+    """
+    data = _decode_payload(payload)
+    if not isinstance(data, dict):
+        rendered = str(payload).strip() if payload not in (None, "") else ""
+        return f"{name}:{_condense(rendered)}"
+    parts = [name]
+    for key in _FAILURE_IDENTITY_KEYS:
+        if key in data:
+            parts.append(f"{key}={_condense(str(data[key]))}")
+    for key in ("error", "stderr", "message"):
+        text = data.get(key)
+        if isinstance(text, str) and text.strip():
+            parts.append(f"{key}={_condense(text.strip().splitlines()[0])}")
+            break
+    return "|".join(parts)
+
+
+def _condense(text: str) -> str:
+    """Lowercase, collapse whitespace, and bound the length of *text*."""
+    return " ".join(text.lower().split())[:200]
+
+
 @dataclass
 class PreEditLoopGuard:
     """Track read repetition, stagnant rounds, and discovery spend pre-write."""
@@ -250,6 +316,11 @@ class PreEditLoopGuard:
     #: from result payloads. Narrow reads of these stay allowed after the
     #: budget is spent.
     candidate_files: set[str] = field(default_factory=set)
+    #: Failure shapes already seen this turn. A repeat buys no further grace.
+    seen_failures: set[str] = field(default_factory=set)
+    #: How many times a failure this turn had already been seen — the signal
+    #: that the agent is retrying the same broken command.
+    repeated_failures: int = 0
 
     # Grace budget in rounds; >0 means a reread is currently justified.
     _grace_rounds: int = 0
@@ -369,7 +440,13 @@ class PreEditLoopGuard:
         return None
 
     def record(self, name: str, args: Any) -> None:
-        """Record one accepted tool call for this round."""
+        """Record one accepted tool call for this round.
+
+        Deliberately records no progress.  Intent is not evidence: a command
+        that is about to fail, or never starts, must not reset the stall
+        counter before anyone has seen its result.  Progress is decided in
+        :meth:`observe_result`.
+        """
         self._round_had_tools = True
         if name in READ_ONLY_TOOLS:
             fingerprint = read_fingerprint(name, args)
@@ -379,22 +456,27 @@ class PreEditLoopGuard:
             # Counted per accepted call, regardless of whether the result was
             # new: a turn can survey forever while every call returns something.
             self.discovery_calls += 1
-        if name in PROGRESS_TOOLS:
-            self._round_made_progress = True
 
     # ---- evidence that justifies continued discovery ---------------------
 
     def observe_result(self, name: str, ok: bool, payload: Any = None) -> None:
-        """Fold one tool result into the guard's state."""
+        """Fold one tool result into the guard's state.
+
+        This is the only place progress is granted.  A failure — of any tool,
+        including a command — is never progress, so the round stays stagnant
+        and the ordinary steering still fires on a turn that is only failing.
+        """
         if not ok:
-            self.note_failure()
+            self.note_failure(name, payload)
             return
         if name in WRITE_TOOLS and _payload_applied(payload):
             self.write_applied = True
             self.stagnant_rounds = 0
             self._round_made_progress = True
             return
-        if name in TERMINAL_TOOLS:
+        if name in COMMAND_TOOLS:
+            # A command that actually ran and succeeded is real work: the
+            # validation landed, so the turn moved.
             self._round_made_progress = True
             return
         if name in READ_ONLY_TOOLS:
@@ -404,9 +486,20 @@ class PreEditLoopGuard:
                 self.seen_evidence.add(fingerprint)
                 self._round_new_evidence = True
 
-    def note_failure(self) -> None:
-        """A tool failed: the next round may reread whatever it needs."""
-        self._grace_rounds = 2
+    def note_failure(self, name: str = "", payload: Any = None) -> None:
+        """A tool failed: one *distinct* failure buys one round of reread grace.
+
+        Repeating a command into the failure it already produced is not new
+        information, so it renews nothing: the grace already granted runs out
+        on schedule and the round still counts as stagnant.  That is what stops
+        a broken command from reopening pre-edit planning indefinitely.
+        """
+        fingerprint = failure_fingerprint(name, payload)
+        if fingerprint in self.seen_failures:
+            self.repeated_failures += 1
+            return
+        self.seen_failures.add(fingerprint)
+        self._grace_rounds = FAILURE_GRACE_ROUNDS
 
     def note_stale_paths(self, paths: list[str] | tuple[str, ...]) -> None:
         """A stale-file notice landed: forget the reads that touched *paths*."""
@@ -522,9 +615,13 @@ def _payload_applied(payload: Any) -> bool:
 
 
 __all__ = [
+    "COMMAND_TOOLS",
+    "DIAGNOSTIC_TOOLS",
     "DISCOVERY_EXHAUSTED_REASON",
     "DISCOVERY_TOOLS",
     "DUPLICATE_READ_REASON",
+    "FAILURE_GRACE_ROUNDS",
+    "failure_fingerprint",
     "MAX_DISCOVERY_CALLS_AFTER_FOCUS",
     "MAX_DISCOVERY_CALLS_BEFORE_FOCUS",
     "MAX_STAGNANT_ROUNDS_BEFORE_STEER",

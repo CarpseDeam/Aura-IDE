@@ -766,14 +766,33 @@ class TestStagnantRoundsSteering:
             if "Loop guard:" in str(m.get("content"))
         ], "a turn that edited must never be nudged"
 
-    def test_terminal_commands_count_as_progress(self) -> None:
+    def test_successful_terminal_commands_count_as_progress(self) -> None:
+        """Progress is the command's *result*, not the decision to run one."""
         guard = PreEditLoopGuard()
         for _ in range(MAX_STAGNANT_ROUNDS_BEFORE_STEER + 2):
             guard.begin_round()
             guard.record("read_file", {"path": "a"})
             guard.record("run_terminal_command", {"command": "pytest -q"})
+            guard.observe_result(
+                "run_terminal_command", True, json.dumps({"exit_code": 0})
+            )
             guard.end_round()
         assert guard.take_steering_message() == ""
+
+    def test_failing_terminal_commands_do_not_count_as_progress(self) -> None:
+        """The bug: intent was recorded as progress before the command ran."""
+        guard = PreEditLoopGuard()
+        for _ in range(MAX_STAGNANT_ROUNDS_BEFORE_STEER + 2):
+            guard.begin_round()
+            guard.record("read_file", {"path": "a"})
+            guard.record("run_terminal_command", {"command": "pytest -q"})
+            guard.observe_result(
+                "run_terminal_command",
+                False,
+                json.dumps({"exit_code": 1, "command": "pytest -q"}),
+            )
+            guard.end_round()
+        assert guard.take_steering_message() != ""
 
     def test_the_todo_tool_does_not_launder_a_stagnant_round(self) -> None:
         """Bookkeeping is not evidence — it must not reset the counter."""
