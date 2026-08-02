@@ -44,11 +44,24 @@ WORKER_EXECUTION_CONTRACT = """### worker_execution_contract
 - Do not fabricate files, APIs, validation results, or receipts.
 - If required context or files are missing, stop and return a clear blocker with the next useful action."""
 
-CODE_QUALITY_CONTRACT = """### code_quality_contract
+# The code-quality contract's target-files line differs by role because the
+# legacy Worker harness preloads bodies into context (its edit gates treat
+# preloaded targets as read evidence), while production SINGLE mode sends a
+# compact manifest and loads bodies through the read tools.
+_TARGET_FILES_PRELOADED_LINE = (
+    "The current contents of your target files are already in context; "
+    "do not re-read them without a named reason."
+)
+_TARGET_FILES_MANIFEST_LINE = (
+    "Target files are listed as a manifest; their contents are not preloaded. "
+    "Read each target file with the read tools before editing it."
+)
+
+CODE_QUALITY_CONTRACT = f"""### code_quality_contract
 - Code must compile or parse when applicable.
 - Do not leave placeholders, stubs, incomplete implementations, or fake fallbacks.
 - Preserve public behavior unless the spec requires a change.
-- The current contents of your target files are already in context; do not re-read them without a named reason.
+- {_TARGET_FILES_PRELOADED_LINE}
 - Use the real imports, types, and helpers that already exist. Never invent an API, re-declare a constant, or re-implement a helper the codebase already provides.
 - Write code that reads like its neighbours: match local naming, typing, comment density, and idiom.
 - Matching local style is not the same as copying local structure. Do not extend god files, copy ceremony, or reproduce over-engineering. Put each change where responsibility belongs and leave the code better-shaped than you found it.
@@ -278,7 +291,7 @@ CONTEXT_SOURCES: tuple[ContextSource, ...] = (
         source_id="target_file_contents",
         kind="workspace_files",
         roles=(RuntimeRole.WORKER, RuntimeRole.SINGLE),
-        reason="live contents of the files this step edits",
+        reason="edit-surface files (Worker preloads bodies; SINGLE sends a compact manifest)",
     ),
     ContextSource(
         source_id="planner_dispatch_contract",
@@ -499,18 +512,22 @@ def _load_source_text(
             return "", "no Python/TypeScript files found"
         return repo_map, source.reason
     if source.source_id == "target_file_contents":
-        return _load_target_file_contents(workspace_root, target_files)
+        return _load_target_file_contents(workspace_root, target_files, role)
     return "", "unknown context source"
 
 
 def _load_target_file_contents(
     workspace_root: Path | None,
     target_files: tuple[str, ...] | None,
+    role: RuntimeRole,
 ) -> tuple[str, str]:
     if workspace_root is None:
         return "", "no workspace root"
     if not target_files:
         return "", "no target files"
+
+    if role == RuntimeRole.SINGLE:
+        return _load_target_file_manifest(workspace_root, target_files)
 
     blocks: list[str] = []
     omitted_files: list[str] = []
@@ -566,6 +583,38 @@ def _load_target_file_contents(
     if not blocks:
         return "", "no readable target files"
     return "\n\n".join(blocks), "live contents of the files this step edits"
+
+
+def _load_target_file_manifest(
+    workspace_root: Path,
+    target_files: tuple[str, ...],
+) -> tuple[str, str]:
+    """Render the compact target-file manifest for production SINGLE mode.
+
+    Only normalized workspace-relative paths survive — mentioning a file must
+    not inject its body into the system prompt. Bodies enter through the
+    explicit read tools. The ledger stays honest too: this source reports the
+    manifest's size, not hundreds of kilobytes of source.
+    """
+    resolved: list[str] = []
+    for raw_path in target_files:
+        resolved_pair = _resolve_target_file_path(workspace_root, raw_path)
+        if resolved_pair is None:
+            continue
+        path, relpath = resolved_pair
+        if not path.is_file():
+            continue
+        if relpath not in resolved:
+            resolved.append(relpath)
+    if not resolved:
+        return "", "no readable target files"
+    lines = [
+        "### Target files (manifest)",
+        "This step's edit surface. Contents are not preloaded; read each "
+        "file you will edit with the read tools before changing it.",
+    ]
+    lines.extend(f"- {relpath}" for relpath in resolved)
+    return "\n".join(lines), "manifest of target files; contents load through read tools"
 
 
 def loaded_target_files(
@@ -655,6 +704,13 @@ def _load_quality_contract(
     text = _CONTRACT_TEXT.get(source.source_id, "")
     if not text:
         return "", "unknown quality contract"
+    if role == RuntimeRole.SINGLE and source.source_id == "code_quality_contract":
+        # SINGLE does not preload bodies, so the preloaded-targets claim is a
+        # lie there. Swap it for the manifest phrasing; Worker keeps the claim.
+        text = text.replace(
+            f"- {_TARGET_FILES_PRELOADED_LINE}",
+            f"- {_TARGET_FILES_MANIFEST_LINE}",
+        )
     if role == RuntimeRole.SINGLE and not _single_contract_applies(
         source.source_id, task_kind, target_files,
     ):

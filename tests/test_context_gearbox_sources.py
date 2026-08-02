@@ -110,6 +110,78 @@ def test_target_file_contents_halts_at_total_cap_and_names_omitted_files(tmp_pat
     assert "three.py" in text
 
 
+def test_single_target_file_manifest_lists_paths_not_bodies(tmp_path: Path) -> None:
+    target = tmp_path / "aura" / "feature.py"
+    target.parent.mkdir()
+    target.write_text("VALUE = 42\n", encoding="utf-8")
+
+    text, entry, _extra = _collect_target_file_text(
+        tmp_path, ("aura/feature.py",), role=RuntimeRole.SINGLE
+    )
+
+    assert entry.included is True
+    assert "aura/feature.py" in text
+    assert "VALUE = 42" not in text
+    assert entry.reason == "manifest of target files; contents load through read tools"
+
+
+def test_single_manifest_is_compact_with_many_named_files(tmp_path: Path) -> None:
+    """Regression: naming many files must not inject their bodies; the source
+    stays a manifest no matter how large the named files are."""
+    for i in range(20):
+        (tmp_path / f"mod_{i}.py").write_text("x" * 10_000, encoding="utf-8")
+    targets = tuple(f"mod_{i}.py" for i in range(20))
+
+    text, entry, _extra = _collect_target_file_text(
+        tmp_path, targets, role=RuntimeRole.SINGLE
+    )
+
+    assert entry.included is True
+    assert entry.char_count == len(text)
+    assert entry.char_count < 5_000
+    assert all(f"mod_{i}.py" in text for i in range(20))
+    assert "x" * 10_000 not in text
+
+
+def test_single_manifest_drops_unresolvable_paths(tmp_path: Path) -> None:
+    (tmp_path / "real.py").write_text("BODY = 1\n", encoding="utf-8")
+
+    text, entry, _extra = _collect_target_file_text(
+        tmp_path, ("missing.py", "real.py"), role=RuntimeRole.SINGLE
+    )
+
+    assert entry.included is True
+    assert "real.py" in text
+    assert "missing.py" not in text
+    assert "BODY = 1" not in text
+
+
+def test_worker_keeps_body_preload_legacy_behavior(tmp_path: Path) -> None:
+    """Compatibility proof: the legacy Worker harness still depends on
+    preloaded target bodies — its edit gates treat preloaded targets as read
+    evidence, so Worker edits a target without a separate read. That contract
+    needs the bodies in context; SINGLE's manifest does not apply here."""
+    target = tmp_path / "app.py"
+    target.write_text("SENTINEL = 'worker preload'\n", encoding="utf-8")
+
+    text, entry, _extra = _collect_target_file_text(
+        tmp_path, ("app.py",), role=RuntimeRole.WORKER
+    )
+
+    assert entry.included is True
+    assert "### Target file: app.py" in text
+    assert "SENTINEL = 'worker preload'" in text
+
+
+def test_worker_composed_context_keeps_preloaded_targets_claim(tmp_path: Path) -> None:
+    target = tmp_path / "app.py"
+    target.write_text("VALUE = 1\n", encoding="utf-8")
+
+    worker = build_context_text(RuntimeRole.WORKER, tmp_path, target_files=("app.py",))
+
+    assert "already in context; do not re-read" in worker.context_text
+
+
 def test_target_file_contents_is_worker_context_not_planner_context(tmp_path: Path) -> None:
     target = tmp_path / "app.py"
     target.write_text("SENTINEL = 'worker only'\n", encoding="utf-8")

@@ -231,6 +231,41 @@ def test_single_still_loads_per_turn_skills_and_project_rules(tmp_path: Path) ->
     assert {"core_kernel", "project_rules", "skill_pack"} <= loaded
 
 
+def test_single_prompt_stays_compact_for_many_named_files(tmp_path: Path) -> None:
+    """The production regression: naming many real files must not inject their
+    bodies into the system prompt. The prompt stays a compact manifest and the
+    bodies only exist on disk, reachable through the read tools."""
+    root = _coding_workspace(tmp_path)
+    for i in range(20):
+        (root / "aura" / "gui" / f"mod_{i}.py").write_text(
+            "x" * 10_000, encoding="utf-8"
+        )
+    targets = tuple(f"aura/gui/mod_{i}.py" for i in range(20))
+
+    composed = compose_system_prompt(
+        RuntimeRole.SINGLE,
+        None,
+        root,
+        task_kind="bugfix",
+        target_files=targets,
+        content="fix the batch",
+    )
+
+    assert all(f"aura/gui/mod_{i}.py" in composed.system_prompt for i in range(20))
+    assert "x" * 10_000 not in composed.system_prompt
+    assert len(composed.system_prompt) < 20_000
+
+
+def test_single_prompt_no_longer_claims_target_contents_are_preloaded(
+    tmp_path: Path,
+) -> None:
+    prompt = _single_prompt(_coding_workspace(tmp_path))
+
+    assert "already in context; do not re-read" not in prompt
+    assert "contents are not preloaded" in prompt
+    assert "read tools before editing it" in prompt
+
+
 def test_custom_prompts_remain_additive_over_the_contract(tmp_path: Path) -> None:
     composed = compose_system_prompt(
         RuntimeRole.SINGLE,
