@@ -19,8 +19,8 @@ DEEPSEEK_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=0.14,
         output_per_m_usd=0.28,
         cache_hit_per_m_usd=0.0028,
-        context_window_tokens=128_000,
-        max_output_tokens=8_192,
+        context_window_tokens=1_000_000,
+        max_output_tokens=384_000,
     ),
     "deepseek-v4-pro": ModelInfo(
         id="deepseek-v4-pro",
@@ -28,8 +28,8 @@ DEEPSEEK_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=0.435,
         output_per_m_usd=0.87,
         cache_hit_per_m_usd=0.003625,
-        context_window_tokens=128_000,
-        max_output_tokens=8_192,
+        context_window_tokens=1_000_000,
+        max_output_tokens=384_000,
     ),
 }
 DEEPSEEK_PRICING: dict[str, dict[str, float]] = {
@@ -255,7 +255,7 @@ PROVIDER_CATALOG: dict[str, dict] = {
         "base_url": "https://api.deepseek.com",
         "env_key": "DEEPSEEK_API_KEY",
         "default_model": "deepseek-v4-flash",
-        "default_thinking": "high",
+        "default_thinking": "auto",
         "models": DEEPSEEK_MODELS,
         "pricing": DEEPSEEK_PRICING,
         "kind": "api_key",
@@ -341,7 +341,9 @@ PROVIDER_CATALOG: dict[str, dict] = {
 # Default model / thinking constants
 
 DEFAULT_MODEL: str = "deepseek-v4-flash"
-DEFAULT_THINKING: ThinkingMode = "high"
+#: Default for *new or unset* production settings only. An explicit saved
+#: off/high/max selection is preserved verbatim and never migrated to "auto".
+DEFAULT_THINKING: ThinkingMode = "auto"
 DEFAULT_PLANNER_MODEL: str = "deepseek-v4-flash"
 DEFAULT_WORKER_MODEL: str = "deepseek-v4-pro"
 DEFAULT_PLANNER_THINKING: ThinkingMode = "off"

@@ -332,6 +332,14 @@ def _google_thinking_config(types_module: Any, model: str, thinking: str) -> Any
             thinking_budget=budget,
             include_thoughts=False,
         )
+    if thinking == "auto":
+        # Gemini 2.5's documented dynamic thinking: budget -1 lets the model
+        # size its own reasoning per request. That native selection is exactly
+        # what "auto" promises, so Aura sends it instead of guessing a budget.
+        return types_module.ThinkingConfig(
+            thinking_budget=-1,
+            include_thoughts=True,
+        )
     if thinking == "high":
         return types_module.ThinkingConfig(
             thinking_budget=8192,

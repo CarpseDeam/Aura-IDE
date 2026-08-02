@@ -1,11 +1,21 @@
-"""Compound read-only task context tool."""
+"""Compound read-only task context tool.
+
+Query and symbol lookups walk the workspace under a hard candidate-file cap, so
+a large repository is only ever *partially* scanned. That makes a "no hits"
+answer ambiguous: the symbol may be absent, or it may simply live in a file the
+walk never reached. Every result therefore carries an explicit ``coverage``
+block — the candidate limit, how many files were considered, whether coverage
+was partial, and why the walk stopped — and a partial no-hit result says in
+plain words that it is inconclusive.
+"""
 
 from __future__ import annotations
 
 import os
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from aura.config import SKIP_DIRS, SKIP_FILE_SUFFIXES
 from aura.conversation.context_pack.budget import BudgetTracker
@@ -20,6 +30,78 @@ from aura.paths import safe_is_relative_to, safe_relative_to
 DEFAULT_MAX_CHARS = 16000
 _MAX_QUERY_HITS = 24
 _MAX_SYMBOL_HITS_PER_SYMBOL = 16
+
+#: Most workspace files one query/symbol walk will open. Named and configurable
+#: because it is the reason a result can be partial.
+CANDIDATE_FILE_LIMIT = 500
+
+#: Why a walk stopped — reported verbatim in ``coverage.stop_reason``.
+STOP_NOT_SCANNED = "not_scanned"
+STOP_CANDIDATE_FILE_LIMIT = "candidate_file_limit_reached"
+STOP_WORKSPACE_EXHAUSTED = "workspace_exhausted"
+
+_PARTIAL_NO_HIT_CAVEAT = (
+    "INCONCLUSIVE: {label} produced no hits, but only {considered} of the "
+    "workspace's files were examined (candidate limit {limit}). A no-hit "
+    "result under partial coverage does NOT mean the code is absent — narrow "
+    "the search with grep_search or name specific files instead of concluding "
+    "it does not exist."
+)
+
+
+@dataclass
+class _Coverage:
+    """How much of the workspace this call actually looked at."""
+
+    limit: int = CANDIDATE_FILE_LIMIT
+    files_considered: int = 0
+    scanned: bool = False
+    hit_limit: bool = False
+    passes: list[str] = field(default_factory=list)
+
+    def record_pass(self, label: str, considered: int, hit_limit: bool) -> None:
+        """Fold one walk's result in.
+
+        Passes walk the same tree, so the file count is the widest single pass
+        rather than a sum — reporting 1000 files considered for two 500-file
+        passes over the same 500 files would be a lie.
+        """
+        self.scanned = True
+        self.passes.append(label)
+        self.files_considered = max(self.files_considered, considered)
+        self.hit_limit = self.hit_limit or hit_limit
+
+    @property
+    def partial(self) -> bool:
+        return self.scanned and self.hit_limit
+
+    @property
+    def stop_reason(self) -> str:
+        if not self.scanned:
+            return STOP_NOT_SCANNED
+        return (
+            STOP_CANDIDATE_FILE_LIMIT if self.hit_limit else STOP_WORKSPACE_EXHAUSTED
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "candidate_file_limit": self.limit,
+            "files_considered": self.files_considered,
+            "scanned": self.scanned,
+            "partial": self.partial,
+            "stop_reason": self.stop_reason,
+            "passes": list(self.passes),
+        }
+
+    def no_hit_caveat(self, label: str) -> str | None:
+        """Return the inconclusive-result caveat, or ``None`` if coverage was full."""
+        if not self.partial:
+            return None
+        return _PARTIAL_NO_HIT_CAVEAT.format(
+            label=label,
+            considered=self.files_considered,
+            limit=self.limit,
+        )
 
 
 class TaskContextHandlersMixin:
@@ -62,16 +144,37 @@ def read_task_context(workspace_root: Path, args: dict[str, Any]) -> dict[str, A
             caveats.append(f"{rel_path}: {section.caveat}")
         tracker.add_section(_format_section(section))
 
+    coverage = _Coverage(limit=_coerce_candidate_limit(args.get("max_candidate_files")))
+
     if query:
-        query_section, query_truncated = _query_context_section(workspace_root, query)
+        query_section, query_truncated, query_had_hits = _query_context_section(
+            workspace_root, query, coverage
+        )
         if query_truncated:
             caveats.append("Query hits were truncated.")
+        if not query_had_hits:
+            no_hit_caveat = coverage.no_hit_caveat("the query scan")
+            caveats.append(
+                no_hit_caveat
+                if no_hit_caveat
+                else "The query found no hits across the full workspace scan."
+            )
         tracker.add_section(_format_section(query_section))
 
     if symbols:
-        symbol_section, symbol_truncated = _symbol_context_section(workspace_root, symbols)
+        symbol_section, symbol_truncated, missing_symbols = _symbol_context_section(
+            workspace_root, symbols, coverage
+        )
         if symbol_truncated:
             caveats.append("Symbol hits were truncated.")
+        if missing_symbols:
+            no_hit_caveat = coverage.no_hit_caveat("the symbol scan")
+            names = ", ".join(missing_symbols)
+            caveats.append(
+                f"{no_hit_caveat} Symbols with no hits: {names}."
+                if no_hit_caveat
+                else f"No hits across the full workspace scan for: {names}."
+            )
         tracker.add_section(_format_section(symbol_section))
 
     if include_tests and files:
@@ -86,6 +189,13 @@ def read_task_context(workspace_root: Path, args: dict[str, Any]) -> dict[str, A
     if tracker.truncated:
         caveats.append(f"context truncated at max_chars={max_chars}")
 
+    if coverage.partial:
+        caveats.append(
+            f"Partial workspace coverage: {coverage.files_considered} files "
+            f"examined, stopped at the candidate limit of {coverage.limit}. "
+            f"Results below describe only the files that were reached."
+        )
+
     return {
         "ok": True,
         "files": files,
@@ -93,8 +203,18 @@ def read_task_context(workspace_root: Path, args: dict[str, Any]) -> dict[str, A
         "symbols": symbols,
         "context": tracker.content,
         "truncated": tracker.truncated,
+        "coverage": coverage.to_dict(),
         "caveats": _dedupe(caveats),
     }
+
+
+def _coerce_candidate_limit(value: Any) -> int:
+    """Return a usable candidate-file cap, defaulting to CANDIDATE_FILE_LIMIT."""
+    try:
+        limit = int(value)
+    except (TypeError, ValueError):
+        return CANDIDATE_FILE_LIMIT
+    return max(1, limit)
 
 
 def _coerce_max_chars(value: Any) -> int:
@@ -158,14 +278,22 @@ def _normalize_string_list(value: Any, label: str) -> tuple[list[str], list[str]
     return items, caveats
 
 
-def _query_context_section(workspace_root: Path, query: str) -> tuple[ContextPackSection, bool]:
+def _query_context_section(
+    workspace_root: Path, query: str, coverage: _Coverage
+) -> tuple[ContextPackSection, bool, bool]:
+    """Return the query section, whether hits were truncated, and whether any hit."""
     terms = _query_terms(query)
     if not terms:
-        return ContextPackSection("Query Hits", ["(query has no searchable terms)"]), False
+        return (
+            ContextPackSection("Query Hits", ["(query has no searchable terms)"]),
+            False,
+            True,
+        )
 
     hits: list[tuple[int, dict[str, Any]]] = []
     truncated = False
-    for path in _iter_text_candidates(workspace_root):
+    walk = _CandidateWalk(workspace_root, coverage.limit)
+    for path in walk:
         rel = safe_relative_to(path, workspace_root).as_posix()
         try:
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -182,25 +310,40 @@ def _query_context_section(workspace_root: Path, query: str) -> tuple[ContextPac
         if truncated:
             break
 
+    coverage.record_pass("query", walk.files_considered, walk.hit_limit)
+
     if not hits:
-        return ContextPackSection("Query Hits", ["(no query hits found)"]), False
+        body_lines = ["(no query hits found)"]
+        caveat = coverage.no_hit_caveat("the query scan")
+        return (
+            ContextPackSection("Query Hits", body_lines, caveat=caveat)
+            if caveat
+            else ContextPackSection("Query Hits", body_lines),
+            False,
+            False,
+        )
 
     hits.sort(key=lambda item: (-item[0], item[1]["path"], item[1]["line_number"]))
     body_lines = [
         f"{hit['path']}:{hit['line_number']}: {hit['line']}"
         for _, hit in hits[:_MAX_QUERY_HITS]
     ]
-    return ContextPackSection("Query Hits", body_lines), truncated
+    return ContextPackSection("Query Hits", body_lines), truncated, True
 
 
-def _symbol_context_section(workspace_root: Path, symbols: list[str]) -> tuple[ContextPackSection, bool]:
+def _symbol_context_section(
+    workspace_root: Path, symbols: list[str], coverage: _Coverage
+) -> tuple[ContextPackSection, bool, list[str]]:
+    """Return the symbol section, whether hits were truncated, and the misses."""
     body_lines: list[str] = []
     truncated = False
+    missing: list[str] = []
     for symbol in symbols:
         pattern = re.compile(rf"\b{re.escape(symbol)}\b", re.IGNORECASE)
         body_lines.append(f"{symbol}:")
         count = 0
-        for path in _iter_text_candidates(workspace_root):
+        walk = _CandidateWalk(workspace_root, coverage.limit)
+        for path in walk:
             rel = safe_relative_to(path, workspace_root).as_posix()
             try:
                 lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -216,12 +359,48 @@ def _symbol_context_section(workspace_root: Path, symbols: list[str]) -> tuple[C
                     break
             if count >= _MAX_SYMBOL_HITS_PER_SYMBOL:
                 break
+        coverage.record_pass(f"symbol:{symbol}", walk.files_considered, walk.hit_limit)
         if count == 0:
+            missing.append(symbol)
             body_lines.append("  (no hits found)")
-    return ContextPackSection("Symbol Hits", body_lines), truncated
+            if coverage.partial:
+                body_lines.append(
+                    "  (coverage was partial — this is not evidence of absence)"
+                )
+    caveat = coverage.no_hit_caveat("the symbol scan") if missing else None
+    section = (
+        ContextPackSection("Symbol Hits", body_lines, caveat=caveat)
+        if caveat
+        else ContextPackSection("Symbol Hits", body_lines)
+    )
+    return section, truncated, missing
 
 
-def _iter_text_candidates(workspace_root: Path, *, max_files: int = 500):
+class _CandidateWalk:
+    """One bounded walk over workspace text files that reports its own coverage.
+
+    Iterating yields resolved file paths and updates ``files_considered`` /
+    ``hit_limit`` as it goes, so a caller that stops early still knows how much
+    of the workspace was actually reachable within the cap.
+    """
+
+    def __init__(self, workspace_root: Path, limit: int = CANDIDATE_FILE_LIMIT) -> None:
+        self.workspace_root = workspace_root
+        self.limit = limit
+        self.files_considered = 0
+        self.hit_limit = False
+
+    def __iter__(self) -> Iterator[Path]:
+        for path in _iter_text_candidates(self.workspace_root, max_files=self.limit):
+            self.files_considered += 1
+            if self.files_considered >= self.limit:
+                self.hit_limit = True
+            yield path
+
+
+def _iter_text_candidates(
+    workspace_root: Path, *, max_files: int = CANDIDATE_FILE_LIMIT
+):
     yielded = 0
     root = workspace_root.resolve()
     stack = [root]

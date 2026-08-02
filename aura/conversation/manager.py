@@ -100,16 +100,21 @@ def _log_context_round(budget, stats, tool_defs: list[dict[str, Any]] | None) ->
         tool_schema_chars = -1
 
     _log.info(
-        "context_round model=%s window=%d reserve=%d budget=%d budget_source=%s "
+        "context_round model=%s provider=%s window=%d reserve=%d derived_budget=%d "
+        "policy_cap=%s budget=%d capped_by_policy=%s budget_source=%s "
         "tokens_before=%d tokens_after=%d messages_before=%d messages_after=%d "
         "system_chars=%d tool_schema_chars=%d "
         "source_chars_generated=%d source_chars_retained=%d "
         "compacted_results=%d dropped_blocks=%d repaired=%d "
         "reasoning_chars_replayed=%d over_budget=%s",
         budget.model_id,
+        budget.provider_id,
         budget.context_window_tokens,
         budget.output_reserve_tokens,
+        budget.derived_working_set_tokens,
+        "none" if budget.policy_cap_tokens is None else budget.policy_cap_tokens,
         budget.working_set_tokens,
+        budget.capped_by_policy,
         "fallback" if budget.is_fallback else "catalog",
         stats.tokens_before,
         stats.tokens_after,
@@ -412,8 +417,9 @@ class ConversationManager:
                 declared_run_command=declared_run_command,
             )
             if state.pre_edit_guard is not None:
-                steering = state.pre_edit_guard.take_steering_message()
-                if steering:
+                # Internal steering only — appended as aura_internal so it never
+                # redefines the real user-turn boundary.
+                for steering in state.pre_edit_guard.take_internal_messages():
                     self._history.append_internal_user_text(steering)
             if tool_round.action == "return":
                 return

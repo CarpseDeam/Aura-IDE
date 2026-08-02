@@ -28,7 +28,33 @@ from aura.config import (
 from aura.gui.theme import ACCENT, BG_ALT, BG_RAISED, BORDER, FG_DIM, FG_MUTED, LABEL_PROJECTS, LABEL_THREAD
 from aura.gui.widgets.no_wheel_combo import NoWheelComboBox
 from aura.projects.store import ProjectStore
+from aura.providers.base import THINKING_MODES
 from aura.providers.registry import provider_registry
+
+#: Display labels for the reasoning selector, in THINKING_MODES order.
+_THINKING_LABELS: dict[str, str] = {
+    "off": "Off",
+    "auto": "Auto",
+    "high": "High",
+    "max": "Max",
+}
+
+
+def _populate_thinking_combo(combo: NoWheelComboBox) -> None:
+    """Fill a reasoning selector with Off · Auto · High · Max."""
+    for mode in THINKING_MODES:
+        combo.addItem(_THINKING_LABELS.get(mode, mode.title()), mode)
+
+
+def _select_thinking(combo: NoWheelComboBox, thinking: ThinkingMode) -> None:
+    """Select *thinking* if it is a known mode; otherwise leave the combo alone.
+
+    An unknown or legacy value is never silently rewritten to another mode —
+    the selector simply keeps whatever it already shows.
+    """
+    index = combo.findData(thinking)
+    if index >= 0:
+        combo.setCurrentIndex(index)
 
 
 class _ToggleToolButton(QToolButton):
@@ -395,10 +421,8 @@ class LeftPane(QFrame):
         planner_think_label.setStyleSheet(f"color: {FG_DIM};")
         planner_think_row.addWidget(planner_think_label)
         self._planner_thinking_combo = NoWheelComboBox()
-        self._planner_thinking_combo.addItem("Off", "off")
-        self._planner_thinking_combo.addItem("High", "high")
-        self._planner_thinking_combo.addItem("Max", "max")
-        self._planner_thinking_combo.setCurrentIndex(["off", "high", "max"].index(DEFAULT_PLANNER_THINKING))
+        _populate_thinking_combo(self._planner_thinking_combo)
+        _select_thinking(self._planner_thinking_combo, DEFAULT_PLANNER_THINKING)
         self._planner_thinking_combo.currentIndexChanged.connect(
             lambda: self.planner_thinking_changed.emit(self.current_planner_thinking())
         )
@@ -427,10 +451,8 @@ class LeftPane(QFrame):
         self._worker_thinking_label.setStyleSheet(f"color: {FG_DIM};")
         worker_think_row.addWidget(self._worker_thinking_label)
         self._worker_thinking_combo = NoWheelComboBox()
-        self._worker_thinking_combo.addItem("Off", "off")
-        self._worker_thinking_combo.addItem("High", "high")
-        self._worker_thinking_combo.addItem("Max", "max")
-        self._worker_thinking_combo.setCurrentIndex(["off", "high", "max"].index(DEFAULT_WORKER_THINKING))
+        _populate_thinking_combo(self._worker_thinking_combo)
+        _select_thinking(self._worker_thinking_combo, DEFAULT_WORKER_THINKING)
         self._worker_thinking_combo.currentIndexChanged.connect(
             lambda: self.worker_thinking_changed.emit(self.current_worker_thinking())
         )
@@ -505,9 +527,7 @@ class LeftPane(QFrame):
             self._planner_model_combo.setCurrentIndex(idx)
 
     def set_planner_thinking(self, thinking: ThinkingMode) -> None:
-        keys = ["off", "high", "max"]
-        if thinking in keys:
-            self._planner_thinking_combo.setCurrentIndex(keys.index(thinking))
+        _select_thinking(self._planner_thinking_combo, thinking)
 
     def set_worker_model(self, model: str) -> None:
         idx = self._worker_model_combo.findData(model)
@@ -515,9 +535,7 @@ class LeftPane(QFrame):
             self._worker_model_combo.setCurrentIndex(idx)
 
     def set_worker_thinking(self, thinking: ThinkingMode) -> None:
-        keys = ["off", "high", "max"]
-        if thinking in keys:
-            self._worker_thinking_combo.setCurrentIndex(keys.index(thinking))
+        _select_thinking(self._worker_thinking_combo, thinking)
 
     def set_planner_worker_mode(self, enabled: bool) -> None:
         self._worker_model_label.setVisible(enabled)

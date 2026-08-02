@@ -342,6 +342,28 @@ MIN_OUTPUT_RESERVE_TOKENS: int = 4_096
 # Never shrink the working set below this — below it, no coding turn can work.
 MIN_WORKING_SET_TOKENS: int = 8_000
 
+# ---- product working-set cap policy ---------------------------------------
+#
+# THIS IS NOT MODEL METADATA. The catalog states what a model can physically
+# hold; this states what Aura is willing to *spend* on an ordinary coding
+# request. The two are resolved independently and then combined as
+#
+#   effective_working_set = min(model_derived_working_set, policy_cap)
+#
+# Correcting a model's advertised window must never silently multiply the cost
+# of a normal turn, and a cap must never be smuggled into the catalog as a fake
+# window. Providers absent from this map are uncapped and keep their existing
+# purely model-derived behaviour.
+#
+# DeepSeek advertises a 1M window. 72_000 is deliberately set to the working
+# set ordinary coding requests already ran with, so correcting the metadata
+# changes capability reporting without changing spend. Raise it deliberately.
+DEEPSEEK_WORKING_SET_CAP_TOKENS: int = 72_000
+
+PROVIDER_WORKING_SET_CAP_TOKENS: dict[str, int] = {
+    "deepseek": DEEPSEEK_WORKING_SET_CAP_TOKENS,
+}
+
 # Legacy hard cap. Retained so existing callers keep a sane default; the
 # production send path now passes a per-model budget instead.
 MAX_CONTEXT_TOKENS = 60_000
@@ -465,7 +487,12 @@ def save_dynamic_catalog(provider_id: str, models: dict[str, ModelInfo], pricing
 _MODEL_INFO_FIELDS: frozenset[str] = frozenset(f.name for f in fields(ModelInfo))
 
 
-def _model_info_from_cache(m_data: dict, known: ModelInfo | None) -> ModelInfo:
+def _model_info_from_cache(
+    m_data: dict,
+    known: ModelInfo | None,
+    *,
+    trust_cached_capacity: bool = False,
+) -> ModelInfo:
     """Build a ModelInfo from a cached dict without losing context metadata.
 
     Caches written before context metadata existed carry no window/output
@@ -473,9 +500,22 @@ def _model_info_from_cache(m_data: dict, known: ModelInfo | None) -> ModelInfo:
     known model to "unknown" and push it onto the conservative fallback
     budget. Unrecognised keys are dropped so a cache from a newer build cannot
     raise TypeError here.
+
+    ``trust_cached_capacity`` says whether the cached window/output numbers are
+    real provider-advertised metadata. Only OpenRouter advertises them; for
+    every other provider a model listing carries no capacity at all, so the
+    cached values are just a snapshot of whatever the seeded catalog said when
+    the refresh ran. Letting that snapshot win means correcting a model's
+    capacity in the catalog would silently do nothing for anyone who has ever
+    refreshed models — so for known catalog entries the catalog is
+    authoritative. Dynamically discovered models (``known is None``) keep
+    whatever the cache holds either way.
     """
     clean = {k: v for k, v in m_data.items() if k in _MODEL_INFO_FIELDS}
     if known is not None:
+        if not trust_cached_capacity:
+            clean["context_window_tokens"] = known.context_window_tokens
+            clean["max_output_tokens"] = known.max_output_tokens
         if _coerce_token_count(clean.get("context_window_tokens")) == 0:
             clean["context_window_tokens"] = known.context_window_tokens
         if _coerce_token_count(clean.get("max_output_tokens")) == 0:
@@ -505,7 +545,9 @@ def load_dynamic_catalog() -> None:
             # OpenRouter pricing is authoritative — never overwrite zero pricing
             # with seed defaults (free models are genuinely free).
             for mid, m_data in cached_models.items():
-                cfg.models[mid] = _model_info_from_cache(m_data, cfg.models.get(mid))
+                cfg.models[mid] = _model_info_from_cache(
+                    m_data, cfg.models.get(mid), trust_cached_capacity=True
+                )
             for mid, p_data in cached_pricing.items():
                 cfg.pricing[mid] = p_data
         else:

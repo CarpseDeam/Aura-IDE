@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from collections.abc import Iterator
 from typing import Any
@@ -19,7 +20,15 @@ from aura.client.events import (
     ToolCallStart,
     Usage,
 )
+from aura.client.reasoning import (
+    EFFORT_EXPLICIT,
+    EFFORT_OMITTED_DISABLED,
+    EFFORT_OMITTED_PROVIDER_AUTO,
+    EFFORT_OMITTED_PROVIDER_DEFAULT,
+)
 from aura.config import ThinkingMode
+
+_log = logging.getLogger(__name__)
 
 
 def _to_anthropic_messages(
@@ -141,21 +150,52 @@ def _to_anthropic_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return converted
 
 
+#: Models whose API exposes the native adaptive thinking mode, where Claude
+#: selects its own effort unless ``output_config.effort`` overrides it.
+_ADAPTIVE_THINKING_MODELS: frozenset[str] = frozenset({
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+})
+
+
+def _anthropic_effort_policy(model: str, thinking: ThinkingMode) -> str:
+    """Return why the effort parameter was sent or omitted, for the log line."""
+    if thinking == "off":
+        return EFFORT_OMITTED_DISABLED
+    if thinking != "auto":
+        return EFFORT_EXPLICIT
+    if model in _ADAPTIVE_THINKING_MODELS:
+        return EFFORT_OMITTED_PROVIDER_AUTO
+    return EFFORT_OMITTED_PROVIDER_DEFAULT
+
+
 def _anthropic_max_tokens(model: str, thinking: ThinkingMode) -> int:
     if thinking == "off":
         return 8192
     if model in {"claude-opus-4-7", "claude-opus-4-6"}:
         return 32768
-    return 20000 if thinking == "high" else 36000
+    # "auto" shares the high output ceiling: this is a local output cap, not a
+    # reasoning instruction, and must not quietly buy a max-sized budget.
+    return 20000 if thinking in {"high", "auto"} else 36000
 
 
 def _anthropic_thinking_config(model: str, thinking: ThinkingMode) -> dict[str, Any]:
-    if model in {"claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6"}:
-        return {
+    if model in _ADAPTIVE_THINKING_MODELS:
+        config: dict[str, Any] = {
             "thinking": {"type": "adaptive", "display": "summarized"},
-            "output_config": {"effort": "high" if thinking == "high" else "max"},
         }
-    budget = 10000 if thinking == "high" else 32000
+        if thinking != "auto":
+            # Explicit user selections are always stated explicitly.
+            config["output_config"] = {
+                "effort": "high" if thinking == "high" else "max"
+            }
+        # "auto" omits output_config so adaptive thinking picks the effort.
+        return config
+    # Older budget-only models have no native automatic mode; "auto" therefore
+    # keeps this provider's existing deterministic default rather than Aura
+    # guessing at task difficulty.
+    budget = 10000 if thinking in {"high", "auto"} else 32000
     return {
         "thinking": {
             "type": "enabled",
@@ -231,6 +271,16 @@ def _stream_anthropic(
         body["temperature"] = temperature
     else:
         body.update(_anthropic_thinking_config(model, thinking))
+
+    _log.info(
+        "provider_stream_start provider=anthropic model=%s thinking=%s "
+        "reasoning_effort=%s effort_sent=%s effort_policy=%s",
+        model,
+        thinking,
+        body.get("output_config", {}).get("effort", "<omitted>"),
+        "output_config" in body,
+        _anthropic_effort_policy(model, thinking),
+    )
 
     headers = {
         "anthropic-version": "2023-06-01",

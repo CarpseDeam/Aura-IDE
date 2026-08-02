@@ -1,6 +1,6 @@
 """Deterministic pre-edit loop guard for the SINGLE production runtime.
 
-Two mechanical signals, both derived from state the send loop already keeps:
+Three mechanical signals, all derived from state the send loop already keeps:
 
 1. **Exact read fingerprints.** Before the first applied write, the same
    read-only tool call with the same arguments is rejected the second time it
@@ -12,6 +12,22 @@ Two mechanical signals, both derived from state the send loop already keeps:
    no applied write, and no terminal command — one concise internal steering
    message is injected, once per turn, telling the agent to use the evidence
    it has and implement.
+3. **Cumulative discovery budget.** Signal 2 only fires when discovery *stops*
+   producing evidence.  A turn can also burn an entire context window while
+   every single call returns something genuinely new — a wide codebase always
+   has one more file to open.  So the accepted discovery calls made before the
+   first applied write are simply counted.  Past
+   :data:`MAX_DISCOVERY_CALLS_BEFORE_FOCUS` one focus instruction is injected;
+   past a further :data:`MAX_DISCOVERY_CALLS_AFTER_FOCUS` targeted calls,
+   continued *broad* discovery is rejected with a structured recoverable
+   payload.
+
+   These two numbers are mechanical safety budgets on spend, not a judgement
+   about the task.  Nothing here classifies task complexity, scores difficulty,
+   or decides that a task "should" need fewer files — it only says that a turn
+   which has opened this much and still written nothing must now narrow down.
+   Narrow reads (ranges and outlines) of files already discovered stay
+   available afterwards, so narrowing down is always possible.
 
 Evidence is judged by the *result*, never by the call arguments.  Each
 successful read-only result is folded into a normalized fingerprint: a
@@ -46,6 +62,7 @@ READ_ONLY_TOOLS: frozenset[str] = frozenset({
     "read_files",
     "read_file_range",
     "read_file_outline",
+    "read_task_context",
     "list_directory",
     "glob",
     "grep_search",
@@ -56,11 +73,50 @@ READ_ONLY_TOOLS: frozenset[str] = frozenset({
     "code_intel_dependents",
 })
 
+#: Reads that pull a bounded slice of one already-identified file.  These are
+#: how a turn *narrows down*, so they stay available after the discovery budget
+#: is spent — provided the file is already a known candidate.
+NARROW_READ_TOOLS: frozenset[str] = frozenset({
+    "read_file_range",
+    "read_file_outline",
+})
+
+#: Read-only tools that open new ground.  Everything the registry already
+#: exposes for finding source, plus ``read_task_context``, which is a compound
+#: discovery call and belongs in the same budget.  No registry redesign: this
+#: is just the read-only set minus the narrow reads.
+DISCOVERY_TOOLS: frozenset[str] = frozenset(READ_ONLY_TOOLS - NARROW_READ_TOOLS)
+
 #: Tools that count as forward progress and reset the stall counter.
 PROGRESS_TOOLS: frozenset[str] = frozenset(WRITE_TOOLS | TERMINAL_TOOLS)
 
 #: Rounds of tools-without-new-evidence tolerated before one steering message.
 MAX_STAGNANT_ROUNDS_BEFORE_STEER: int = 2
+
+#: Accepted discovery calls tolerated before the first applied write, after
+#: which one focus instruction is injected.  A mechanical spend budget — not a
+#: statement about how many files the task "should" need.
+MAX_DISCOVERY_CALLS_BEFORE_FOCUS: int = 12
+
+#: Further discovery calls allowed after the focus instruction, so the agent
+#: can confirm the one or two files it named before committing to an edit.
+MAX_DISCOVERY_CALLS_AFTER_FOCUS: int = 4
+
+#: Argument and result keys that name a file.  Used only to remember which
+#: files are already known candidates, so narrow reads of them stay allowed.
+_PATH_KEYS: frozenset[str] = frozenset({
+    "path",
+    "file",
+    "file_path",
+    "rel_path",
+    "relative_path",
+    "paths",
+    "files",
+})
+
+#: Ceiling on remembered candidate paths — bookkeeping must not itself grow
+#: without bound on a repository-wide glob.
+_MAX_CANDIDATE_FILES: int = 2_000
 
 #: Result-payload keys that describe call mechanics, not evidence content.
 #: Stripped from evidence fingerprints so that two calls returning effectively
@@ -82,6 +138,16 @@ _NON_EVIDENCE_KEYS: frozenset[str] = frozenset({
 })
 
 DUPLICATE_READ_REASON = "duplicate_read_before_first_edit"
+DISCOVERY_EXHAUSTED_REASON = "discovery_budget_exhausted_before_first_edit"
+
+#: Named in the rejection payload so the recovery path is explicit rather than
+#: something the model has to guess at.
+_STILL_AVAILABLE_TOOLS: tuple[str, ...] = (
+    "read_file_range",
+    "read_file_outline",
+    "write_file",
+    "patch_file",
+)
 
 _DUPLICATE_READ_MESSAGE = (
     "You already ran this exact call earlier in this turn and its result is "
@@ -97,6 +163,28 @@ _STEERING_MESSAGE = (
     "the plan, or re-derive the decision — make the change now with "
     "write_file or patch_file, then validate it. If something genuinely "
     "blocks the edit, name that blocker in one sentence and stop."
+)
+
+_FOCUS_MESSAGE = (
+    "Loop guard: {calls} discovery calls have run in this turn and nothing has "
+    "been written yet. Stop surveying and commit to a target. Name the "
+    "specific file(s) you are about to change, then confirm only what you "
+    "still need with read_file_range or read_file_outline on those files and "
+    "make the edit. You have about {remaining} more broad discovery calls "
+    "before they are refused; narrow reads of files you have already found "
+    "stay available either way. If you genuinely cannot identify a target, say "
+    "so in one sentence and stop."
+)
+
+_DISCOVERY_EXHAUSTED_MESSAGE = (
+    "This turn has spent its broad-discovery budget ({calls} discovery calls) "
+    "without applying a single edit, so further exploration is refused. This "
+    "is not a failure of the tool and not a reason to try a different search: "
+    "read_file_range and read_file_outline on the files you have already found "
+    "still work, and so do write_file and patch_file. Narrow to a target file, "
+    "confirm the lines you need, and make the change. Once any edit applies, "
+    "this limit is lifted for the rest of the turn. If you truly cannot "
+    "proceed, name the blocker in one sentence and stop."
 )
 
 
@@ -145,7 +233,7 @@ def evidence_fingerprint(name: str, payload: Any) -> str | None:
 
 @dataclass
 class PreEditLoopGuard:
-    """Track read repetition and stagnant discovery before the first write."""
+    """Track read repetition, stagnant rounds, and discovery spend pre-write."""
 
     seen_reads: dict[str, int] = field(default_factory=dict)
     seen_evidence: set[str] = field(default_factory=set)
@@ -154,11 +242,55 @@ class PreEditLoopGuard:
     steered: bool = False
     blocked_calls: int = 0
 
+    #: Accepted discovery calls made before the first applied write.
+    discovery_calls: int = 0
+    #: Whether the one focus instruction has been handed to the send loop.
+    focused: bool = False
+    #: Files already surfaced by this turn's discovery, from call arguments and
+    #: from result payloads. Narrow reads of these stay allowed after the
+    #: budget is spent.
+    candidate_files: set[str] = field(default_factory=set)
+
     # Grace budget in rounds; >0 means a reread is currently justified.
     _grace_rounds: int = 0
     _round_had_tools: bool = False
     _round_made_progress: bool = False
     _round_new_evidence: bool = False
+
+    # ---- discovery budget ------------------------------------------------
+
+    @property
+    def discovery_limit(self) -> int:
+        """Total discovery calls allowed right now, focus allowance included."""
+        limit = MAX_DISCOVERY_CALLS_BEFORE_FOCUS
+        if self.focused:
+            limit += MAX_DISCOVERY_CALLS_AFTER_FOCUS
+        return limit
+
+    @property
+    def discovery_exhausted(self) -> bool:
+        """Whether broad discovery is spent (focus issued and allowance used)."""
+        return self.focused and self.discovery_calls >= self.discovery_limit
+
+    def is_known_candidate(self, path: Any) -> bool:
+        """Return whether *path* names a file this turn has already surfaced."""
+        normalized = _normalize_path(path)
+        if not normalized:
+            return False
+        if normalized in self.candidate_files:
+            return True
+        # Accept an unambiguous suffix match so "aura/x.py" matches a candidate
+        # recorded as "C:/repo/aura/x.py" and vice versa.
+        return any(
+            known.endswith("/" + normalized) or normalized.endswith("/" + known)
+            for known in self.candidate_files
+        )
+
+    def _note_candidates(self, values: Any) -> None:
+        for path in _iter_paths(values):
+            if len(self.candidate_files) >= _MAX_CANDIDATE_FILES:
+                return
+            self.candidate_files.add(path)
 
     # ---- round lifecycle -------------------------------------------------
 
@@ -184,29 +316,57 @@ class PreEditLoopGuard:
         *,
         recovery_pending: bool = False,
     ) -> dict[str, Any] | None:
-        """Return a rejection payload for an unjustified exact repeat read.
+        """Return a rejection payload for a call this turn should not make.
 
-        ``None`` means the call may run.  The guard is dormant once any write
-        has applied: rereading to verify your own edit is normal work.
+        ``None`` means the call may run.  Two rejections are possible, both
+        recoverable and both dormant once any write has applied — rereading to
+        verify your own edit is normal work:
+
+        * an unjustified exact repeat read, and
+        * broad discovery after the cumulative budget is spent.
         """
         if self.write_applied or name not in READ_ONLY_TOOLS:
             return None
         if self._grace_rounds > 0 or recovery_pending:
+            # A failure, a stale-file notice, or a pending edit-recovery step
+            # already told the model to read again. Neither boundary applies.
             return None
+
         fingerprint = read_fingerprint(name, args)
         previous = self.seen_reads.get(fingerprint, 0)
-        if previous < 1:
-            return None
-        self.blocked_calls += 1
-        return {
-            "ok": False,
-            "loop_guard": True,
-            "recoverable": True,
-            "reason": DUPLICATE_READ_REASON,
-            "tool": name,
-            "previous_calls": previous,
-            "message": _DUPLICATE_READ_MESSAGE,
-        }
+        if previous >= 1:
+            self.blocked_calls += 1
+            return {
+                "ok": False,
+                "loop_guard": True,
+                "recoverable": True,
+                "reason": DUPLICATE_READ_REASON,
+                "tool": name,
+                "previous_calls": previous,
+                "message": _DUPLICATE_READ_MESSAGE,
+            }
+
+        # Narrow reads are not in DISCOVERY_TOOLS, so ranges and outlines of
+        # files already found stay available past this point — that is how the
+        # turn narrows down to an edit. They remain subject to the duplicate
+        # check above, since an exact repeat still returns the same bytes.
+        if name in DISCOVERY_TOOLS and self.discovery_exhausted:
+            self.blocked_calls += 1
+            return {
+                "ok": False,
+                "loop_guard": True,
+                "recoverable": True,
+                "reason": DISCOVERY_EXHAUSTED_REASON,
+                "tool": name,
+                "discovery_calls": self.discovery_calls,
+                "discovery_limit": self.discovery_limit,
+                "still_available": _STILL_AVAILABLE_TOOLS,
+                "known_candidate_files": sorted(self.candidate_files)[:20],
+                "message": _DISCOVERY_EXHAUSTED_MESSAGE.format(
+                    calls=self.discovery_calls
+                ),
+            }
+        return None
 
     def record(self, name: str, args: Any) -> None:
         """Record one accepted tool call for this round."""
@@ -214,6 +374,11 @@ class PreEditLoopGuard:
         if name in READ_ONLY_TOOLS:
             fingerprint = read_fingerprint(name, args)
             self.seen_reads[fingerprint] = self.seen_reads.get(fingerprint, 0) + 1
+            self._note_candidates(args)
+        if name in DISCOVERY_TOOLS and not self.write_applied:
+            # Counted per accepted call, regardless of whether the result was
+            # new: a turn can survey forever while every call returns something.
+            self.discovery_calls += 1
         if name in PROGRESS_TOOLS:
             self._round_made_progress = True
 
@@ -233,6 +398,7 @@ class PreEditLoopGuard:
             self._round_made_progress = True
             return
         if name in READ_ONLY_TOOLS:
+            self._note_candidates(_decode_payload(payload))
             fingerprint = evidence_fingerprint(name, payload)
             if fingerprint is not None and fingerprint not in self.seen_evidence:
                 self.seen_evidence.add(fingerprint)
@@ -267,6 +433,78 @@ class PreEditLoopGuard:
         self.steered = True
         return _STEERING_MESSAGE.format(rounds=self.stagnant_rounds)
 
+    def take_focus_message(self) -> str:
+        """Return the one discovery-focus instruction when due, else ``\"\"``.
+
+        Fires at most once per turn, and never after a write has applied.
+        Issuing it opens the small post-focus allowance.
+        """
+        if self.write_applied or self.focused:
+            return ""
+        if self.discovery_calls < MAX_DISCOVERY_CALLS_BEFORE_FOCUS:
+            return ""
+        self.focused = True
+        return _FOCUS_MESSAGE.format(
+            calls=self.discovery_calls,
+            remaining=MAX_DISCOVERY_CALLS_AFTER_FOCUS,
+        )
+
+    def take_internal_messages(self) -> list[str]:
+        """Return every internal instruction due after this round, in order.
+
+        The send loop appends these as ``aura_internal`` user messages. They
+        are Aura's own steering, not the user's turn, and must never be treated
+        as a new user turn boundary.
+        """
+        messages = [self.take_focus_message(), self.take_steering_message()]
+        return [message for message in messages if message]
+
+
+def _normalize_path(value: Any) -> str:
+    """Return a comparable path string, or ``\"\"`` when *value* is not one."""
+    if not isinstance(value, str):
+        return ""
+    return value.replace("\\", "/").strip().strip("/")
+
+
+def _decode_payload(payload: Any) -> Any:
+    """Return *payload* as structured data when it is JSON, else as-is."""
+    if isinstance(payload, str):
+        try:
+            return json.loads(payload)
+        except (TypeError, ValueError):
+            return None
+    return payload
+
+
+def _iter_paths(value: Any, _depth: int = 0):
+    """Yield normalized file paths named anywhere inside *value*.
+
+    Walks nested dicts and lists looking for the handful of keys tools use to
+    name files. Purely bookkeeping for "which files does this turn already know
+    about" — it never decides whether a call is allowed on its own.
+    """
+    if _depth > 6:
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in _PATH_KEYS:
+                if isinstance(item, str):
+                    normalized = _normalize_path(item)
+                    if normalized:
+                        yield normalized
+                elif isinstance(item, list):
+                    for entry in item:
+                        normalized = _normalize_path(entry)
+                        if normalized:
+                            yield normalized
+            if isinstance(item, (dict, list)):
+                yield from _iter_paths(item, _depth + 1)
+    elif isinstance(value, list):
+        for item in value:
+            if isinstance(item, (dict, list)):
+                yield from _iter_paths(item, _depth + 1)
+
 
 def _payload_applied(payload: Any) -> bool:
     """Return whether a write tool's result claims the change actually landed."""
@@ -284,8 +522,13 @@ def _payload_applied(payload: Any) -> bool:
 
 
 __all__ = [
+    "DISCOVERY_EXHAUSTED_REASON",
+    "DISCOVERY_TOOLS",
     "DUPLICATE_READ_REASON",
+    "MAX_DISCOVERY_CALLS_AFTER_FOCUS",
+    "MAX_DISCOVERY_CALLS_BEFORE_FOCUS",
     "MAX_STAGNANT_ROUNDS_BEFORE_STEER",
+    "NARROW_READ_TOOLS",
     "PROGRESS_TOOLS",
     "PreEditLoopGuard",
     "READ_ONLY_TOOLS",

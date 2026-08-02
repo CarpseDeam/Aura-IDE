@@ -24,6 +24,7 @@ from aura.models import (
     ThinkingMode,
 )
 from aura.paths import config_dir
+from aura.providers.base import THINKING_MODES
 from aura.providers.registry import provider_registry
 
 # Default-ish old localhost variants that should migrate to hosted
@@ -163,7 +164,7 @@ class AppSettings:
             s.worker_backend = data["worker_backend"]
         # Models
         s.default_model = _model_from_data(data, "default_model", s.provider)
-        if isinstance(data.get("default_thinking"), str) and data["default_thinking"] in ("off", "high", "max"):
+        if isinstance(data.get("default_thinking"), str) and data["default_thinking"] in _THINKING_VALUES:
             s.default_thinking = data["default_thinking"]  # type: ignore[assignment]
         if isinstance(data.get("restore_last_conversation"), bool):
             s.restore_last_conversation = data["restore_last_conversation"]
@@ -175,9 +176,9 @@ class AppSettings:
         s.default_worker_model = _model_from_data(
             data, "default_worker_model", s.worker_provider
         )
-        if isinstance(data.get("default_planner_thinking"), str) and data["default_planner_thinking"] in ("off", "high", "max"):
+        if isinstance(data.get("default_planner_thinking"), str) and data["default_planner_thinking"] in _THINKING_VALUES:
             s.default_planner_thinking = data["default_planner_thinking"]  # type: ignore[assignment]
-        if isinstance(data.get("default_worker_thinking"), str) and data["default_worker_thinking"] in ("off", "high", "max"):
+        if isinstance(data.get("default_worker_thinking"), str) and data["default_worker_thinking"] in _THINKING_VALUES:
             s.default_worker_thinking = data["default_worker_thinking"]  # type: ignore[assignment]
         # Temperature
         if "temperature" in data:
@@ -242,7 +243,9 @@ class AppSettings:
         return s
 
 
-_THINKING_VALUES = ("off", "high", "max")
+#: Accepted reasoning selections. Adding "auto" here is purely additive: an
+#: existing saved "off"/"high"/"max" still validates and is loaded verbatim.
+_THINKING_VALUES = THINKING_MODES
 
 
 def _valid_provider(raw: Any) -> ProviderId | None:

@@ -1,9 +1,17 @@
 """Streaming DeepSeek (and generic OpenAI-compatible) client.
 
-Yields events; never raises. Honors thinking mode rules:
-- DeepSeek:    extra_body={"thinking":...} for thinking control
-- Anthropic:   extra_body={"thinking":{"type":"enabled","budget_tokens":N}} for thinking
-- OpenAI:      reasoning_effort at top level; no extra_body when thinking is off
+Yields events; never raises. The reasoning parameters for one request come from
+:func:`aura.client.reasoning.resolve_reasoning_request`, which maps the user's
+``off · auto · high · max`` selection onto:
+
+- DeepSeek:   extra_body={"thinking":...}, plus reasoning_effort only when the
+              user explicitly chose high/max — ``auto`` enables thinking and
+              omits reasoning_effort so DeepSeek makes its own native choice.
+- OpenAI etc: reasoning_effort at top level for explicit high/max; omitted for
+              ``auto`` so the provider applies its documented default.
+
+Anthropic requests are handled by ``aura.client.anthropic_stream``, which uses
+the native adaptive thinking mode.
 """
 from __future__ import annotations
 
@@ -33,6 +41,7 @@ from aura.client.events import (
     ToolCallStart,
     Usage,
 )
+from aura.client.reasoning import resolve_reasoning_request
 from aura.client.responses_stream import (
     ResponsesStreamParser,
     build_native_web_search_request,
@@ -154,31 +163,22 @@ class DeepSeekClient:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
-        if self._provider == "deepseek":
-            if thinking == "off":
-                kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-                kwargs["temperature"] = temperature
-            else:
-                kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
-                kwargs["reasoning_effort"] = "high" if thinking == "high" else "max"
-                # Per docs: temperature/top_p/penalties silently ignored. Skip them.
-        elif self._provider == "anthropic":
-            if thinking == "off":
-                kwargs["temperature"] = temperature
-            else:
-                budget = 16000 if thinking == "high" else 32000
-                kwargs["extra_body"] = {"thinking": {"type": "enabled", "budget_tokens": budget}}
-        else:
-            # OpenAI: no extra_body thinking param.
-            if thinking == "off":
-                kwargs["temperature"] = temperature
-            else:
-                kwargs["reasoning_effort"] = "high" if thinking == "high" else "max"
+        reasoning = resolve_reasoning_request(self._provider, thinking)
+        if reasoning.extra_body is not None:
+            kwargs["extra_body"] = reasoning.extra_body
+        if reasoning.reasoning_effort is not None:
+            kwargs["reasoning_effort"] = reasoning.reasoning_effort
+        if reasoning.send_temperature:
+            kwargs["temperature"] = temperature
 
         _log.info(
             "provider_stream_start provider=%s model=%s thinking=%s "
+            "reasoning_effort=%s effort_sent=%s effort_policy=%s "
             "base_url_host=%s timeout_connect=%s timeout_read=%s",
             self._provider, model, thinking,
+            reasoning.reasoning_effort or "<omitted>",
+            reasoning.effort_sent,
+            reasoning.effort_policy,
             urlparse(self._base_url).hostname,
             self._timeout.connect, self._timeout.read,
         )
