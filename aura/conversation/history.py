@@ -32,7 +32,9 @@ from aura.conversation.api_view import (
     compact_result_content,
     estimate_message_tokens,
     estimate_tokens,
+    is_real_user_message,
     repair_tool_call_blocks,
+    user_message_text,
 )
 
 __all__ = ["History", "SOURCE_READ_TOOLS"]
@@ -103,20 +105,39 @@ class History:
         """
         return repair_tool_call_blocks(self.messages)
 
+    def latest_real_user_index(self) -> int | None:
+        """Index of the newest genuine user request, or None if there is none.
+
+        Aura's own steering messages are ``role="user"`` but carry
+        ``aura_internal``; they never define the turn being retried or rewound.
+        """
+        for i in range(len(self.messages) - 1, -1, -1):
+            if is_real_user_message(self.messages[i]):
+                return i
+        return None
+
+    def latest_real_user_text(self) -> str | None:
+        """Text of the newest genuine user request, multimodal parts flattened."""
+        index = self.latest_real_user_index()
+        if index is None:
+            return None
+        return user_message_text(self.messages[index])
+
     def rewind_to_last_user_turn(self) -> bool:
         """Keep history through the last user message and drop its response.
 
         Used by retry/rerun actions. If the latest turn ended in an error,
         cancellation, partial assistant output, or a normal assistant answer,
         the next send should replay the same user request against the context
-        that existed at that point.
+        that existed at that point. Internal steering appended after that
+        request is part of the discarded response, not a turn to stop at.
         """
         self.repair_incomplete_tool_calls()
-        for i in range(len(self.messages) - 1, -1, -1):
-            if self.messages[i].get("role") == "user":
-                self.truncate_after(i + 1)
-                return True
-        return False
+        index = self.latest_real_user_index()
+        if index is None:
+            return False
+        self.truncate_after(index + 1)
+        return True
 
     # ---- token estimation ---------------------------------------------------
 

@@ -114,6 +114,7 @@ class SendHandler(QObject):
     def clear_queue(self) -> None:
         """Clear any queued messages (called on new/open conversation)."""
         self._message_queue.clear()
+        self._last_sent_route = None
 
     def process_message_queue(self, model: str, thinking: ThinkingMode) -> None:
         """Send the next queued message, if any."""
@@ -249,6 +250,11 @@ class SendHandler(QObject):
             self._chat.add_error("Retry", "No user message to retry.")
             return False
 
+        # Derive the route from the retained user text so a stale
+        # _last_sent_route from another conversation cannot leak.
+        route = self._route_for_retained_turn()
+        self._last_sent_route = route
+
         self._message_queue.clear()
         self._input.set_queued_messages(0)
         self._chat.reset()
@@ -259,9 +265,22 @@ class SendHandler(QObject):
             model=model,
             thinking=thinking,
             max_tool_rounds=self._settings.max_tool_rounds,
-            route=self._last_sent_route,
+            route=route,
         )
         return True
+
+    def _route_for_retained_turn(self) -> TaskRoute | None:
+        """Reclassify the retained user turn to get its route.
+
+        ``classify_user_request`` is deterministic, so reclassifying the
+        unchanged text always reproduces the same route. The history helper
+        skips Aura's own ``aura_internal`` steering messages, so retry
+        replays the real request rather than a nudge.
+        """
+        text = self._bridge.history.latest_real_user_text()
+        if text is None:
+            return None
+        return classify_user_request(text)
 
     # ---- drone construction --------------------------------------------------
 

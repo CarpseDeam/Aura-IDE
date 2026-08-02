@@ -122,6 +122,12 @@ _CODING_TASK_KINDS = {
     "gui polish",
     "cleanup",
     "refactor",
+    "implementation",
+}
+
+_VALIDATION_ONLY_CONTRACTS = {
+    "validation_selection_contract",
+    "receipt_contract",
 }
 
 # Sized for the current DeepSeek V4 models (1M-token context), not for the
@@ -648,7 +654,9 @@ def _load_quality_contract(
     text = _CONTRACT_TEXT.get(source.source_id, "")
     if not text:
         return "", "unknown quality contract"
-    if role == RuntimeRole.SINGLE and not _single_contract_applies(task_kind, target_files):
+    if role == RuntimeRole.SINGLE and not _single_contract_applies(
+        source.source_id, task_kind, target_files,
+    ):
         return "", "single-mode request has no coding task shape"
     return text, source.reason
 
@@ -712,9 +720,14 @@ def _load_skill_pack(
 
 
 def _single_contract_applies(
+    source_id: str,
     task_kind: str | None,
     target_files: tuple[str, ...] | None,
 ) -> bool:
+    # Validation is authoritative: a validation turn loads exactly the
+    # validation contracts, even when it names target files.
+    if _is_validation_task_kind(task_kind):
+        return source_id in _VALIDATION_ONLY_CONTRACTS
     if _is_coding_task_kind(task_kind):
         return True
     return bool(target_files)
@@ -724,6 +737,10 @@ def _single_scoped_pack_applies(
     task_kind: str | None,
     normalized_targets: tuple[str, ...],
 ) -> bool:
+    # Validating a GUI/provider/build/drone file must not pull in that
+    # subsystem's implementation guidance.
+    if _is_validation_task_kind(task_kind):
+        return False
     if normalized_targets:
         return True
     if _is_coding_task_kind(task_kind):
@@ -825,6 +842,10 @@ def _task_kind_has_any_hint(task_kind: str | None, hints: tuple[str, ...]) -> bo
 
 def _is_coding_task_kind(task_kind: str | None) -> bool:
     return _normalize_task_kind(task_kind) in _CODING_TASK_KINDS
+
+
+def _is_validation_task_kind(task_kind: str | None) -> bool:
+    return _normalize_task_kind(task_kind) == "validation"
 
 
 def _task_kind_is_research_shaped(task_kind: str | None) -> bool:

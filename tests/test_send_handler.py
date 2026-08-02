@@ -2,24 +2,27 @@ from types import SimpleNamespace
 
 from PySide6.QtCore import QCoreApplication
 
+from aura.conversation.history import History
 from aura.conversation.task_router import TaskLane
 from aura.gui.input_panel import Attachment, SendPayload
 from aura.gui.send_handler import SendHandler
 
 
-class _FakeHistory:
+class _FakeHistory(History):
+    """Real history behaviour plus per-call recording for assertions."""
+
     def __init__(self) -> None:
-        self.user_texts = []
-        self.user_multimodal = []
+        super().__init__()
+        self.user_texts: list[str] = []
+        self.user_multimodal: list[list[dict]] = []
 
     def append_user_text(self, text: str) -> None:
         self.user_texts.append(text)
+        super().append_user_text(text)
 
     def append_user_multimodal(self, parts: list[dict]) -> None:
         self.user_multimodal.append(parts)
-
-    def rewind_to_last_user_turn(self) -> bool:
-        return True
+        super().append_user_multimodal(parts)
 
 
 class _FakeBridge:
@@ -230,8 +233,11 @@ def test_retry_reuses_last_sent_route(monkeypatch, tmp_path):
     assert handler.handle_retry_last(model="test-model", thinking="off") is True
 
     retry_call = handler._bridge.send_calls[-1]
-    assert retry_call["route"] is original_route
+    # Route is reclassified from the retained turn text, not the stale
+    # handler-global _last_sent_route — but the deterministic classifier
+    # reproduces the same lane and action for unchanged text.
     assert retry_call["route"].lane == TaskLane.implementation
+    assert retry_call["route"].action == "implementation"
 
 
 def test_selected_provider_without_credentials_is_rejected(monkeypatch, tmp_path):

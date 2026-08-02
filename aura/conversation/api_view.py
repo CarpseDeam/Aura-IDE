@@ -285,7 +285,7 @@ def _source_result_chars(messages: list[dict[str, Any]], names: dict[str, str]) 
     return total
 
 
-def _is_turn_boundary(msg: dict[str, Any]) -> bool:
+def is_real_user_message(msg: dict[str, Any]) -> bool:
     """True only for a user message that actually starts a new request.
 
     Aura injects its own ``role="user"`` messages (steering nudges, recovery
@@ -294,12 +294,29 @@ def _is_turn_boundary(msg: dict[str, Any]) -> bool:
     them as turns splits one long tool loop into artificial turns, which makes the
     current request's own fresh evidence look like an old turn and hands it to
     old-turn compaction and block dropping.
+
+    This is the single definition of "the real user turn" — turn-boundary
+    detection here, and rewind/retry in ``History``, share it.
     """
     return msg.get("role") == "user" and not msg.get("aura_internal")
 
 
+def user_message_text(msg: dict[str, Any]) -> str:
+    """Plain text of a user message, flattening multimodal text parts."""
+    content = msg.get("content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            part.get("text", "")
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    return ""
+
+
 def _turn_starts(messages: list[dict[str, Any]]) -> list[int]:
-    return [i for i, m in enumerate(messages) if _is_turn_boundary(m)]
+    return [i for i, m in enumerate(messages) if is_real_user_message(m)]
 
 
 def _compact_range(
