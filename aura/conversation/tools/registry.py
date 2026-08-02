@@ -29,6 +29,7 @@ from aura.conversation.tools._write_mixin import WriteHandlersMixin
 from aura.conversation.tools.backup import backup_existing  # noqa: F401
 from aura.conversation.tools.catalog import ToolCatalog
 from aura.conversation.tools.dynamic_registry import DynamicToolRegistry
+from aura.conversation.tools.effects import BUILTIN_TOOL_EFFECTS, ToolEffect
 from aura.conversation.tools.executor import ToolExecutor
 from aura.conversation.tools.find_usages import find_usages  # noqa: F401
 from aura.conversation.tools.fs_handler import FsReadHandler
@@ -153,6 +154,28 @@ class ToolRegistry(
         action surface and nothing else.
         """
         return self._catalog.build_focused_action_tool_defs()
+
+    def tool_effect(self, name: str) -> ToolEffect:
+        """Authoritative runtime effect lookup for any exposed tool.
+
+        Built-in tools carry an explicit classification in the model; the
+        catalog enumeration test proves every exposed built-in is classified.
+        Dynamic and MCP tools may declare metadata; without it they default
+        to observation.  Unknown names default to observation as well.
+        """
+        if name in BUILTIN_TOOL_EFFECTS:
+            return BUILTIN_TOOL_EFFECTS[name]
+        mcp_effect = self._mcp_tools.effect(name)
+        if mcp_effect is not None:
+            return mcp_effect
+        dynamic_effect = self._dynamic_tools.effect(name)
+        if dynamic_effect is not None:
+            return dynamic_effect
+        if self._mcp_tools.can_execute(name):
+            return ToolEffect.OBSERVATION
+        if self._dynamic_tools.get(name) is not None:
+            return ToolEffect.OBSERVATION
+        return ToolEffect.OBSERVATION
 
     def connect_mcp_server(self, server_command: str) -> int:
         return self._mcp_tools.connect_server(server_command)

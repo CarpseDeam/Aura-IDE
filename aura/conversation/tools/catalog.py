@@ -28,6 +28,7 @@ from aura.conversation.tools._schemas import (
 )
 from aura.conversation.tools._types import RegistryMode
 from aura.conversation.tools.capability_groups import BULK_READ, CODE_INTEL, tool_names_for
+from aura.conversation.tools.effects import BUILTIN_TOOL_EFFECTS, ToolEffect
 
 # Read and search tools the production single-agent catalog no longer offers.
 #
@@ -193,6 +194,21 @@ class ToolCatalog:
             tools.extend(mcp_schemas)
 
         return tools
+
+    def effect_for(self, name: str) -> ToolEffect:
+        """Explicit effect classification for a built-in tool name.
+
+        Built-ins must be classified: an unclassified built-in is a catalog
+        bug and raises instead of silently defaulting to a guess.
+        """
+        try:
+            return BUILTIN_TOOL_EFFECTS[name]
+        except KeyError:
+            raise KeyError(
+                f"built-in tool '{name}' has no explicit effect classification; "
+                "add it to BUILTIN_TOOL_EFFECTS in "
+                "aura/conversation/tools/effects.py"
+            ) from None
 
     def build_focused_action_tool_defs(self) -> list[dict[str, Any]]:
         """Build the tool set for one focused action request.

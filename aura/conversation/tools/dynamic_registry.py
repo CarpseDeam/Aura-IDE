@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from aura.conversation.tools.dynamic import parse_tool_schema
+from aura.conversation.tools.effects import ToolEffect, parse_dynamic_effect_metadata
 
 
 class DynamicToolRegistry:
@@ -87,3 +88,14 @@ class DynamicToolRegistry:
         """Return the file path for a dynamic tool by name, or None."""
         self.scan()  # ensure cache is fresh
         return self._cache.get(name)
+
+    def effect(self, name: str) -> ToolEffect | None:
+        """Effect a dynamic tool declares via ``AURA_TOOL_EFFECT``, or None.
+
+        None means the script declared no metadata; the caller applies the
+        observation default.
+        """
+        path = self.get(name)
+        if path is None:
+            return None
+        return parse_dynamic_effect_metadata(path)

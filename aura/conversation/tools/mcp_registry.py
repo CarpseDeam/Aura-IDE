@@ -8,6 +8,12 @@ from typing import Any
 
 from aura.conversation.tools._types import ApprovalRequest, ToolExecResult
 from aura.conversation.tools.consequential import is_consequential
+from aura.conversation.tools.effects import (
+    SCHEMA_EFFECT_KEY,
+    ToolEffect,
+    effect_from_metadata,
+)
+
 try:
     from aura.mcp_client import MCPClient, _convert_tool_to_openai_schema
 except ModuleNotFoundError as exc:
@@ -70,6 +76,7 @@ class MCPToolRegistry:
     def __init__(self) -> None:
         self._clients: dict[str, MCPClient] = {}   # tool_name -> MCPClient
         self._schemas: list[dict[str, Any]] = []
+        self._effects: dict[str, ToolEffect] = {}  # tool_name -> declared effect
 
     def connect_server(self, server_command: str) -> int:
         """Launch an MCP server, fetch its tools, and register them.
@@ -84,17 +91,36 @@ class MCPToolRegistry:
 
         count = 0
         for tool_def in tool_defs:
-            schema = _convert_tool_to_openai_schema(tool_def)
-            tool_name = tool_def["name"]
-            self._schemas.append(schema)
-            self._clients[tool_name] = client
-            # Backward compatibility: also register in global TOOL_HANDLERS
-            from aura.conversation.tools.registry import TOOL_HANDLERS
-
-            TOOL_HANDLERS[tool_name] = _make_mcp_handler(client, tool_name)
+            self.register_tool_def(tool_def, client)
             count += 1
 
         return count
+
+    def register_tool_def(
+        self, tool_def: dict[str, Any], client: MCPClient
+    ) -> dict[str, Any]:
+        """Register one MCP tool definition; returns its OpenAI schema.
+
+        Effect metadata may come from ``x-aura-effect`` or the standard MCP
+        ``annotations.readOnlyHint``; absence means the caller's observation
+        default applies at lookup time.
+        """
+        schema = _convert_tool_to_openai_schema(tool_def)
+        tool_name = tool_def["name"]
+        self._schemas.append(schema)
+        self._clients[tool_name] = client
+        effect = effect_from_metadata(tool_def.get(SCHEMA_EFFECT_KEY))
+        if effect is None:
+            annotations = tool_def.get("annotations") or {}
+            if annotations.get("readOnlyHint") is True:
+                effect = ToolEffect.OBSERVATION
+        if effect is not None:
+            self._effects[tool_name] = effect
+        # Backward compatibility: also register in global TOOL_HANDLERS
+        from aura.conversation.tools.registry import TOOL_HANDLERS
+
+        TOOL_HANDLERS[tool_name] = _make_mcp_handler(client, tool_name)
+        return schema
 
     @property
     def schemas(self) -> list[dict[str, Any]]:
@@ -104,6 +130,14 @@ class MCPToolRegistry:
     def can_execute(self, tool_name: str) -> bool:
         """Return True if this tool_name is an MCP-registered tool."""
         return tool_name in self._clients
+
+    def effect(self, tool_name: str) -> ToolEffect | None:
+        """Effect an MCP tool declared via metadata, or None.
+
+        None means the server supplied no metadata; the caller applies the
+        observation default.
+        """
+        return self._effects.get(tool_name)
 
     def execute(self, tool_name: str, args: dict[str, Any]) -> ToolExecResult:
         """Execute an MCP tool by name, forwarding args to the MCP client."""
