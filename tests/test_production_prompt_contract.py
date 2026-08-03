@@ -255,7 +255,8 @@ def test_single_still_loads_per_turn_skills_and_project_rules(tmp_path: Path) ->
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
         "---\ntask_kinds: [bugfix]\npath_globs: [\"aura/gui/\"]\n---\n"
-        "Marshal cross-thread widget updates through signals.\n",
+        "Marshal cross-thread widget updates through signals.\n"
+        "Never touch the widget from a non-GUI thread.\n",
         encoding="utf-8",
     )
 
@@ -269,7 +270,11 @@ def test_single_still_loads_per_turn_skills_and_project_rules(tmp_path: Path) ->
     )
 
     assert "Never touch the vendor tree." in composed.system_prompt
+    # The authored skill is represented as a compact index entry: its one-line
+    # description (first paragraph) is present, but its second paragraph lives
+    # only in the body, which is not preloaded into the initial prompt.
     assert "Marshal cross-thread widget updates through signals." in composed.system_prompt
+    assert "Never touch the widget from a non-GUI thread." not in composed.system_prompt
     loaded = {entry.source_id for entry in composed.ledger if entry.included}
     assert {"core_kernel", "project_rules", "skill_pack"} <= loaded
 

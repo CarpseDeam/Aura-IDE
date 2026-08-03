@@ -171,6 +171,8 @@ class TestProductionToolCatalog:
             "run_diagnostic_command", "get_workspace_snapshot",
             # web, drones
             "web_search", "run_read_only_drone", "register_drone_folder",
+            # progressive-disclosure skill activation (read-only)
+            "load_skills",
         }
 
     def test_every_catalog_name_has_a_registered_handler(self, tmp_path: Path) -> None:

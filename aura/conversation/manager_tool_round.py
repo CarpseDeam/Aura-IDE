@@ -908,6 +908,7 @@ class ToolRoundRunner:
                 approval_cb=approval_cb,
                 reject_all=False,
                 cancel_event=cancel_event,
+                skill_turn_state=getattr(state, "skill_turn", None),
             )
         except Exception as exc:
             # A handler bug must never escape the tool round or crash the

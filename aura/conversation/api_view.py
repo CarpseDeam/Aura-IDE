@@ -50,6 +50,19 @@ SOURCE_READ_TOOLS: frozenset[str] = frozenset({
     "search_codebase",
 })
 
+# Tools whose completed blocks are *pinned instructional context* for the rest
+# of the current real user turn. An activated-skill block (``load_skills``)
+# carries the exact bodies the model was told to work from; it must replay
+# byte-identically on every round — never duplicated, never folded into a
+# retired-evidence receipt, never shredded into fragments — so the provider
+# prefix cache sees a stable block and the model keeps its full procedure.
+# Pinning is scoped to the current real user turn: a previous turn's activated
+# bodies are not this turn's instructional context, and the ordinary ladder
+# owns them like any other older evidence.
+PINNED_INSTRUCTION_TOOLS: frozenset[str] = frozenset({
+    "load_skills",
+})
+
 # Per-phase character allowances for tool results.
 OLD_TURN_RESULT_CHARS: int = 1_200
 PRESERVED_TURN_RESULT_CHARS: int = 3_000
@@ -364,6 +377,32 @@ def _tool_name_map(messages: list[dict[str, Any]]) -> dict[str, str]:
     return names
 
 
+def _pinned_call_ids(names: dict[str, str]) -> frozenset[str]:
+    """Tool-call ids that belong to pinned instructional blocks."""
+    return frozenset(
+        call_id
+        for call_id, name in names.items()
+        if name in PINNED_INSTRUCTION_TOOLS
+    )
+
+
+def _block_is_pinned(working: list[dict[str, Any]], start: int) -> bool:
+    """Whether a completed block's assistant message calls a pinned tool.
+
+    A block that mixes a pinned tool with ordinary calls is pinned as a whole:
+    the activated bodies must stay with their call, so the pair is preserved
+    together rather than split.
+    """
+    for tc in (working[start].get("tool_calls") or []):
+        if not isinstance(tc, dict):
+            continue
+        fn = tc.get("function")
+        name = str(fn.get("name")) if isinstance(fn, dict) and fn.get("name") else ""
+        if name in PINNED_INSTRUCTION_TOOLS:
+            return True
+    return False
+
+
 def _is_source_result(msg: dict[str, Any], names: dict[str, str]) -> bool:
     return names.get(msg.get("tool_call_id", "")) in SOURCE_READ_TOOLS
 
@@ -430,11 +469,18 @@ def _compact_range(
     names: dict[str, str],
     source_min_chars: int = 0,
     stats: CompactionStats | None = None,
+    pinned_call_ids: frozenset[str] = frozenset(),
 ) -> None:
-    """Compact tool results in messages[start:end] in place (on the copy)."""
+    """Compact tool results in messages[start:end] in place (on the copy).
+
+    Results belonging to pinned instructional blocks are skipped: an activated
+    skill body must stay byte-identical, never shredded into fragments.
+    """
     for i in range(start, min(end, len(messages))):
         msg = messages[i]
         if msg.get("role") != "tool":
+            continue
+        if msg.get("tool_call_id") in pinned_call_ids:
             continue
         content = msg.get("content")
         if not isinstance(content, str):
@@ -1306,6 +1352,11 @@ def _retire_completed_observations(
     entries: list[dict[str, Any]] = []
 
     for start, end in reversed(blocks):
+        if _block_is_pinned(working, start):
+            # Pinned instructional context (activated skill bodies): preserved
+            # verbatim, never retired, never replay-bounded. The block must
+            # stay byte-identical for provider prefix caching.
+            continue
         effects, known = _known_block_effects(working, start, end, effect_for)
         if not known:
             # A call with unknown or missing effect metadata: fail safe —
@@ -1489,6 +1540,11 @@ def _compact_to_budget(
         keep.update(range(max(0, n - keep_last_n_turns), n))
         return keep
 
+    # Tool-call ids of pinned instructional blocks. Scoped to the current real
+    # user turn: only the current turn's activated-skill blocks are protected
+    # from compaction and dropping; older turns keep the ordinary ladder.
+    pinned = _pinned_call_ids(names)
+
     # --- 1. Compact tool results in old, non-preserved turns ---
     preserved = preserved_turns(starts)
     for t in range(len(starts)):
@@ -1542,16 +1598,21 @@ def _compact_to_budget(
             CURRENT_TURN_RESULT_CHARS, names,
             source_min_chars=floor,
             stats=stats,
+            pinned_call_ids=pinned,
         )
         if fits():
             return
 
     # --- 5. Last resort: drop completed blocks inside the current turn too ---
     while not fits():
-        blocks = _completed_blocks(working)
+        blocks = [
+            b for b in _completed_blocks(working)
+            if not _block_is_pinned(working, b[0])
+        ]
         if len(blocks) <= 1:
             # Never drop the only remaining block — the model would lose the
-            # evidence for the step it is in the middle of.
+            # evidence for the step it is in the middle of (and a pinned
+            # activated-skill block is never dropped at all).
             break
         start, end = blocks[0]
         _drop_block(working, start, end)

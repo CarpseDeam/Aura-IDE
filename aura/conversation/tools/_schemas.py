@@ -1623,6 +1623,51 @@ PROJECT_MEMORY_TOOL_DEFS: list[dict[str, Any]] = [
     },
 ]
 
+#: The dedicated, read-only skill-activation tool.
+#:
+#: One batchable call resolves one or more stable skill ids against the *frozen*
+#: candidate index of the current real user turn (the same deterministic
+#: selection the initial skill index exposed).  Full bodies never sit in the
+#: initial system prompt; they become available only through this tool.  It is
+#: deliberately not ``read_file``: bundled, graduated, and refined skills are
+#: not necessarily workspace files, and activation needs turn-scoped
+#: authorization, provenance, idempotence, telemetry, and protection against
+#: arbitrary skill-library reads.
+LOAD_SKILLS_TOOL_DEF: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "load_skills",
+        "description": (
+            "Load the full body of a candidate skill already listed in this "
+            "turn's initial skill index. Only skills in that index are loadable; "
+            "the index is frozen for this request, so unrelated global skills "
+            "are never available. Load only the skills whose detailed procedure "
+            "the requested work materially needs, and batch related activations "
+            "into one call. This is read-only and never changes any file. "
+            "Returned bodies are the exact bodies the index described (each with "
+            "a body hash), and re-loading an already-active skill is inert."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "skill_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                    "description": (
+                        "Stable skill ids from the current turn's skill index. "
+                        "Each must be one of the ids listed in the initial "
+                        "### Skills block."
+                    ),
+                },
+            },
+            "required": ["skill_ids"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
 WORKER_TODO_TOOL_DEF: dict[str, Any] = {
     "type": "function",
     "function": {

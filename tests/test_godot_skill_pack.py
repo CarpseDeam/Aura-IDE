@@ -174,6 +174,9 @@ def test_live_composition_context_uses_single_agent_workflow(tmp_path: Path) -> 
         ),
     )
 
-    assert "### Godot Visual Iteration" in context
-    assert "critique_godot_preview_local" in context
+    # The initial context is a compact index: the workflow's descriptive title
+    # survives as the skill description, but the full procedure body is not
+    # preloaded (its distinctive contract fragment stays out of the prompt).
+    assert "Godot Visual Iteration" in context
+    assert "critique_godot_preview_local" not in context
     assert "Planner and Worker" not in context

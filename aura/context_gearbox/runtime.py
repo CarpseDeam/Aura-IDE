@@ -67,6 +67,8 @@ def serialize_context_ledger(
         }
         if entry.error:
             item["error"] = entry.error
+        if entry.detail:
+            item["detail"] = entry.detail
         serialized.append(item)
     return serialized
 

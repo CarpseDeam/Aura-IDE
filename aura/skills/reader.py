@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from aura.skills.description import derive_skill_description
 from aura.skills.models import Skill, SkillProvenance
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,10 @@ def _read_bundled_skills() -> list[Skill]:
                     origin=(("skill_id", entry.stem),),
                     triggers=tuple(data.get("triggers", []) or []),
                     workspace_markers=tuple(data.get("workspace_markers", []) or []),
+                    description=derive_skill_description(
+                        text,
+                        explicit=_metadata_description(data),
+                    ),
                 )
             )
     except Exception:
@@ -108,6 +113,11 @@ def _read_markdown_skill_dir(
         origin=(("skill_id", directory.name),),
         triggers=_metadata_list(metadata, "triggers"),
         workspace_markers=_metadata_list(metadata, "workspace_markers"),
+        description=derive_skill_description(
+            text,
+            explicit=_metadata_description(metadata),
+        ),
+        has_resources=_skill_dir_has_supporting_files(directory),
     )
 
 
@@ -165,6 +175,7 @@ def _read_graduated_skills(
                     model=model,
                     provenance=SkillProvenance.FAILURE_GRADUATED,
                     origin=origin,
+                    description=derive_skill_description(text),
                 )
             )
         except Exception:
@@ -211,6 +222,10 @@ def _read_refined_skills(workspace_root: str | Path) -> list[Skill]:
                     model=model,
                     provenance=SkillProvenance.REFLECTION_REFINED,
                     origin=origin,
+                    description=derive_skill_description(
+                        text,
+                        explicit=_metadata_description(data),
+                    ),
                 )
             )
         return skills
@@ -224,6 +239,33 @@ def _metadata_list(data: dict[str, Any], key: str) -> tuple[str, ...]:
     if not isinstance(raw, list):
         return ()
     return tuple(item.strip() for item in raw if isinstance(item, str) and item.strip())
+
+
+def _metadata_description(data: dict[str, Any]) -> str | None:
+    """Authoritative ``description`` metadata value, or None when malformed.
+
+    Only a non-empty string counts; any other declared shape (list, number,
+    object, empty string) fails closed to None so the deterministic body
+    fallback is used instead.  A malformed value must never crash composition.
+    """
+    raw = data.get("description", None)
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    return text or None
+
+
+def _skill_dir_has_supporting_files(directory: Path) -> bool:
+    """True when a markdown skill directory carries files besides SKILL.md."""
+    try:
+        return any(
+            entry.is_file() and entry.name != "SKILL.md"
+            for entry in directory.iterdir()
+        )
+    except OSError:
+        return False
 
 
 def _metadata_model(data: dict[str, Any]) -> str | None:
@@ -278,6 +320,7 @@ def _parse_skill_markdown(raw: str, skill_path: Path) -> tuple[str, dict[str, An
                 "model",
                 "triggers",
                 "workspace_markers",
+                "description",
             }:
                 continue
             metadata[key] = _parse_front_matter_value(value)
@@ -346,6 +389,10 @@ def _read_user_authored_skills(workspace_root: str | Path) -> list[Skill]:
                         provenance=SkillProvenance.USER_AUTHORED,
                         origin=origin,
                         triggers=triggers,
+                        description=derive_skill_description(
+                            text,
+                            explicit=_metadata_description(item),
+                        ),
                     )
                 )
         return skills

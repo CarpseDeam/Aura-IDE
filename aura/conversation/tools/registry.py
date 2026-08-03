@@ -104,6 +104,11 @@ class ToolRegistry(
         # The turn's cancel event, supplied per execute() call by the tool
         # round. The registry never creates one — it only relays the caller's.
         self._cancel_event: threading.Event | None = None
+        # The frozen per-turn skill candidates, supplied per execute() call by
+        # the tool round. Only ``load_skills`` reads it; ``None`` means this
+        # turn exposed no candidates and every activation request fails
+        # truthfully.
+        self._skill_turn_state: Any = None
         self._executor = ToolExecutor(
             owner=self,
             dynamic_tools=self._dynamic_tools,
@@ -312,14 +317,52 @@ class ToolRegistry(
         approval_cb: ApprovalCallback,
         reject_all: bool = False,
         cancel_event: threading.Event | None = None,
+        skill_turn_state: Any | None = None,
     ) -> ToolExecResult:
         self._cancel_event = cancel_event
+        self._skill_turn_state = skill_turn_state
         try:
             return self._executor.execute(name, args, approval_cb, reject_all)
         finally:
             self._cancel_event = None
+            self._skill_turn_state = None
+
+    def _handle_load_skills(
+        self, args: dict[str, Any], approval_cb: ApprovalCallback, reject_all: bool
+    ) -> ToolExecResult:
+        """Serve full bodies of frozen candidate skills for the current turn.
+
+        Read-only and turn-scoped: ids resolve only against the frozen
+        candidate index the send loop composed when the real user turn began.
+        With no frozen index (``None``) every id is rejected truthfully.  This
+        never touches the workspace and never grants filesystem access.
+        """
+        from aura.skills.turn_state import SkillTurnState, load_skills_result
+
+        state: SkillTurnState | None = self._skill_turn_state
+        raw_ids = args.get("skill_ids") or []
+        skill_ids = list(raw_ids) if isinstance(raw_ids, list) else []
+        if state is None or state.is_empty:
+            payload = {
+                "ok": True,
+                "tool": "load_skills",
+                "activated_count": 0,
+                "rejected_count": len(skill_ids),
+                "skills": [],
+                "rejected": [
+                    {
+                        "skill_id": str(skill_id),
+                        "status": "not_exposed_for_turn",
+                        "reason": "no skills were selected for this turn",
+                    }
+                    for skill_id in skill_ids
+                ],
+            }
+            return ToolExecResult(ok=True, payload=payload)
+        return ToolExecResult(ok=True, payload=load_skills_result(state, skill_ids))
 
 
+TOOL_HANDLERS["load_skills"] = ToolRegistry._handle_load_skills
 TOOL_HANDLERS["read_file"] = ToolRegistry._handle_read_file
 TOOL_HANDLERS["read_files"] = ToolRegistry._handle_read_files
 TOOL_HANDLERS["read_file_range"] = ToolRegistry._handle_read_file_range

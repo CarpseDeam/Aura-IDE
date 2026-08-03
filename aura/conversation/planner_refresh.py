@@ -98,6 +98,26 @@ class PlannerRefreshState:
     def role(self) -> RuntimeRole:
         return self._role
 
+    @property
+    def workspace_root(self) -> Path | None:
+        return self._workspace_root
+
+    @property
+    def model(self) -> str | None:
+        return self._model
+
+    @property
+    def task_kind(self) -> str | None:
+        return self._task_kind
+
+    @property
+    def content(self) -> str | None:
+        return self._content
+
+    @property
+    def target_files(self) -> tuple[str, ...]:
+        return self._target_files
+
     def _active_capabilities(self) -> frozenset[str]:
         if self._capabilities_provider is None:
             return frozenset()

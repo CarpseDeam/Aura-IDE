@@ -26,6 +26,7 @@ from aura.conversation.tools.effects import ToolEffect
 from aura.conversation.validation_ledger import WorkerValidationLedger
 from aura.conversation.worker_flow import WorkerFlowHarness
 from aura.conversation.worker_stream_buffer import WorkerStreamBuffer
+from aura.skills.turn_state import SkillTurnState
 
 
 def implementation_action_pending(
@@ -127,6 +128,14 @@ class _SendState:
         default_factory=WorkerValidationLedger
     )
 
+    # --- frozen per-turn skill candidates ---
+    skill_turn: SkillTurnState | None = None
+    """The frozen candidate index + activation ledger for this real user turn.
+
+    Composed once when the turn begins (never recomputed per model/tool round)
+    from the same deterministic terrain that produced the initial skill index,
+    so ``load_skills`` resolves against that snapshot and nothing else. ``None``
+    means this turn exposed no candidates."""
 
     # --- dispatch ---
     planner_dispatch_attempts: int = 0

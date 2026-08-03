@@ -38,6 +38,10 @@ class ContextLedgerEntry:
     included: bool
     char_count: int
     error: str | None = None
+    #: Optional per-entry classification detail, e.g. a skill's lifecycle state
+    #: (``candidate_indexed`` / ``eager_guard`` / ``skipped``) or the
+    #: aggregate skill-pack split (``index_chars=…; guard_chars=…``).
+    detail: str | None = None
 
 
 @dataclass(frozen=True)

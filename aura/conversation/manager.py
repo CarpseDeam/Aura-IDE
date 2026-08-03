@@ -95,6 +95,7 @@ from aura.events import EventBus
 from aura.lifecycle import LifecycleHooks
 from aura.model_streams import PRODUCTION_STREAM_HOOK, model_streams
 from aura.research.policy import decide_research_policy
+from aura.skills.turn_state import SkillTurnState
 from aura.work_artifact.model import ValidationCommandSpec
 
 EventCallback = Callable[[Event], None]
@@ -330,6 +331,10 @@ class ConversationManager:
         #: Read once from the turn's authoritative route at the start of send;
         #: completion receipts hold such turns to the truthful-outcome contract.
         self._last_turn_bears_production_action: bool = False
+        #: The most recent send's frozen skill turn state (or None when the
+        #: send exposed no candidates). Kept so the bridge can surface the
+        #: activation ledger after the turn completes.
+        self._last_skill_turn: SkillTurnState | None = None
 
     @property
     def history(self) -> History:
@@ -354,6 +359,42 @@ class ConversationManager:
     def last_turn_bears_production_action(self) -> bool:
         """Whether the last turn was routed for a production action."""
         return self._last_turn_bears_production_action
+
+    def skill_activation_log(self) -> list[dict]:
+        """Structured skill activation ledger of the last completed send.
+
+        Empty when the last send exposed no candidates. Inspection-only — never
+        injected into the provider prompt.
+        """
+        if self._last_skill_turn is None:
+            return []
+        return self._last_skill_turn.activation_log()
+
+    def _build_skill_turn_state(self) -> SkillTurnState | None:
+        """Compose and freeze this real user turn's skill candidates.
+
+        Runs once at the start of ``send()`` — never after each model/tool
+        round — from the same deterministic terrain that produced the initial
+        skill index (configured via ``configure_runtime_context``).  Because
+        selection is deterministic, a retried request reconstructs the same
+        frozen index from the same terrain and repository state.  ``None`` when
+        no workspace/terrain is configured (the send exposed no candidates).
+        """
+        root = self._planner_refresh.workspace_root
+        if root is None:
+            return None
+        from aura.skills.text import build_skill_pack
+
+        pack = build_skill_pack(
+            root,
+            model=self._planner_refresh.model,
+            task_kind=self._planner_refresh.task_kind,
+            target_files=self._planner_refresh.target_files,
+            content=self._planner_refresh.content,
+        )
+        if not pack.candidates:
+            return None
+        return SkillTurnState(pack)
 
     @property
     def tools(self) -> ToolRegistry:
@@ -458,6 +499,11 @@ class ConversationManager:
             read_only=bool(getattr(self._tools, "read_only", False)),
         )
         state.focused_action.selected_thinking = str(thinking)
+        # Freeze this real user turn's skill candidates once, so load_skills
+        # resolves against the same deterministic selection that produced the
+        # initial skill index — never a recomputation per round.
+        state.skill_turn = self._build_skill_turn_state()
+        self._last_skill_turn = state.skill_turn
         self._last_turn_blocked_reason = ""
         self._last_turn_provider_contract_failure = False
         self._last_turn_already_satisfied = False

@@ -907,6 +907,18 @@ class ConversationBridge(QObject):
         except Exception:
             _log.exception("Failed to build production completion receipt")
 
+        # Surface the turn's skill activation ledger on the same metadata the
+        # Context Gearbox exposes, so activations that happened *during* the
+        # turn join the composition-time candidate/guard/skipped records.
+        try:
+            activations = self._manager.skill_activation_log()
+            if activations:
+                metadata = dict(self._context_gearbox_metadata or {})
+                metadata["skill_activations"] = list(activations)
+                self._context_gearbox_metadata = metadata
+        except Exception:
+            _log.exception("Failed to surface skill activation ledger")
+
         if worker is not None:
             worker.deleteLater()
         if thread is not None:

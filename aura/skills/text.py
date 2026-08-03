@@ -9,7 +9,13 @@ from aura.skills.eviction import (
     apply_eviction_mode,
     compute_eviction_verdicts,
 )
-from aura.skills.models import Skill, SkillProvenance, compute_skill_id, skill_label
+from aura.skills.models import (
+    Skill,
+    SkillProvenance,
+    compute_skill_id,
+    skill_body_hash,
+    skill_label,
+)
 from aura.skills.reader import read_skills
 from aura.skills.selection import (
     DEFAULT_SKILL_LIMIT,
@@ -34,25 +40,100 @@ class SkillRecord:
 
 
 @dataclass(frozen=True)
+class SkillCandidate:
+    """One selected skill of the frozen per-turn candidate index.
+
+    Carries everything the dedicated ``load_skills`` tool needs to resolve an
+    activation against the *frozen* snapshot: the stable id, a one-line
+    description, the deterministic selection reason, body metrics, and the full
+    ``Skill`` (so a body is served from the snapshot, never a re-scan).
+    """
+
+    skill_id: str
+    label: str
+    provenance: str
+    description: str
+    reason: str
+    index_chars: int
+    body_chars: int
+    body_hash: str
+    has_resources: bool
+    eager_guard: bool
+    skill: Skill
+
+
+@dataclass(frozen=True)
 class SkillPack:
-    """The skills selected for one turn plus why each was loaded or skipped."""
+    """This turn's frozen skill selection plus why each was indexed or skipped.
+
+    ``text`` is the *initial* skill context block: a compact deterministic
+    index for authored/bundled candidates plus eagerly injected guard text for
+    graduated/refined candidates.  Full authored/bundled bodies are deliberately
+    absent here — they become available only through ``load_skills``.
+    """
 
     text: str = ""
-    selected: tuple[SkillRecord, ...] = field(default_factory=tuple)
+    index_chars: int = 0
+    guard_chars: int = 0
+    candidates: tuple[SkillCandidate, ...] = field(default_factory=tuple)
     skipped: tuple[SkillRecord, ...] = field(default_factory=tuple)
 
     @property
     def skill_ids(self) -> list[str]:
-        return [record.skill_id for record in self.selected]
+        return [candidate.skill_id for candidate in self.candidates]
+
+    @property
+    def selected(self) -> tuple[SkillRecord, ...]:
+        """Compatibility projection of candidates onto the old record shape.
+
+        Kept so older inspection callers that only need ids/labels/reasons keep
+        working; production ledger rendering uses ``candidates`` directly.
+        """
+        return tuple(
+            SkillRecord(
+                skill_id=candidate.skill_id,
+                label=candidate.label,
+                provenance=candidate.provenance,
+                reason=candidate.reason,
+                char_count=(
+                    candidate.body_chars
+                    if candidate.eager_guard
+                    else candidate.index_chars
+                ),
+            )
+            for candidate in self.candidates
+        )
+
+
+# Provenance precedence order for the frozen candidate snapshot, so the index
+# and ``load_skills`` echo workspace-authored, then bundled, then graduated,
+# then refined — deterministic and score-stable within each group.
+_CANDIDATE_PRECEDENCE: dict[SkillProvenance, int] = {
+    SkillProvenance.USER_AUTHORED: 0,
+    SkillProvenance.BUNDLED: 1,
+    SkillProvenance.FAILURE_GRADUATED: 2,
+    SkillProvenance.REFLECTION_REFINED: 3,
+}
+
+
+_SKILL_LOADING_GUIDANCE = (
+    "Selected specialty skills for this request. Their full bodies are not "
+    "preloaded. Load the body of a skill only when the requested work "
+    "materially needs its detailed procedure, and batch related activations "
+    "into one load_skills call."
+)
+
+_SKILL_INDEX_HEADER = "### Skills"
 
 
 def format_skills(skills: list[Skill], limit: int = DEFAULT_SKILL_LIMIT) -> str:
-    """Format skills into a context text block.
+    """Compatibility formatter: full skill bodies, sections by precedence.
 
-    Sections follow scoping priority: workspace-authored standards, packaged
-    skills, then learned hazard guards and refined guards.  Identical skill
-    text is emitted at most once.
-    Returns empty string when no skills are provided.
+    The production prompt no longer uses this — ``build_skill_pack`` emits a
+    compact index instead (see :func:`format_skill_index`).  This wrapper keeps
+    the historical full-body semantics for any remaining caller that genuinely
+    wants selected bodies inline, and is explicitly *not* the initial-context
+    representation.
     """
     if not skills:
         return ""
@@ -92,6 +173,65 @@ def _dedupe_skills(skills: list[Skill]) -> list[Skill]:
     return unique
 
 
+def _format_index_entry(skill: Skill, reason: str) -> str:
+    """One compact, deterministic index line for an authored/bundled skill.
+
+    Carries exactly the required surface: stable id, human label, one-line
+    description, provenance, deterministic selection reason, and whether the
+    skill directory has supporting resources.  No trigger, path-glob, or
+    workspace-marker lists and no raw origin metadata ever reach this line.
+    """
+    resources = "present" if skill.has_resources else "none"
+    description = skill.description or "no description"
+    return (
+        f"- {skill_label(skill)} ({compute_skill_id(skill)}) — "
+        f"{description} [{skill.provenance.value}] "
+        f"reason: {reason}; resources: {resources}"
+    )
+
+
+def format_skill_index(
+    chosen: list[Skill],
+    reasons_by_id: dict[str, str],
+) -> tuple[str, int, int]:
+    """Format the initial skill context: index + eager guards.
+
+    Returns ``(text, index_chars, guard_chars)``.  ``index_chars`` counts the
+    compact metadata lines for authored/bundled candidates; ``guard_chars``
+    counts eagerly injected graduated/refined guard text.  Precedence is
+    preserved: workspace-authored, then bundled, then graduated, then refined.
+    """
+    if not chosen:
+        return "", 0, 0
+
+    authored = [s for s in chosen if s.provenance == SkillProvenance.USER_AUTHORED]
+    bundled = [s for s in chosen if s.provenance == SkillProvenance.BUNDLED]
+    graduated = [s for s in chosen if s.provenance == SkillProvenance.FAILURE_GRADUATED]
+    refined = [s for s in chosen if s.provenance == SkillProvenance.REFLECTION_REFINED]
+
+    index_lines: list[str] = [_SKILL_INDEX_HEADER, _SKILL_LOADING_GUIDANCE]
+    index_skills = authored + bundled
+    for skill in index_skills:
+        index_lines.append(
+            _format_index_entry(skill, reasons_by_id.get(compute_skill_id(skill), "terrain match"))
+        )
+    index_text = "\n".join(index_lines)
+    index_chars = len(index_text)
+
+    guard_lines: list[str] = []
+    if graduated:
+        guard_lines.append("### Learned Hazard Guards")
+        guard_lines.extend(s.text for s in graduated)
+    if refined:
+        guard_lines.append("### Refined Skill Guards")
+        guard_lines.extend(s.text for s in refined)
+    guard_text = "\n".join(guard_lines)
+    guard_chars = len(guard_text)
+
+    parts = [index_text, guard_text]
+    return "\n\n".join(part for part in parts if part), index_chars, guard_chars
+
+
 def build_skill_pack(
     workspace_root: str | Path,
     *,
@@ -102,11 +242,14 @@ def build_skill_pack(
     limit: int = DEFAULT_SKILL_LIMIT,
     eviction_mode: EvictionMode | str = EvictionMode.OFF,
 ) -> SkillPack:
-    """Select this turn's skills and report why each was loaded or skipped.
+    """Select this turn's skills and report why each was indexed or skipped.
 
     Selection is terrain-driven: with no terrain signal at all nothing is
     loaded, so a workspace-startup composition never dumps an unrelated pack
-    into the prompt.  Never propagates exceptions — returns an empty pack.
+    into the prompt.  The returned pack's ``text`` is the *initial* context —
+    a compact index for authored/bundled candidates plus eager graduated/
+    refined guard text — not the full selected bodies.  Never propagates
+    exceptions — returns an empty pack.
     """
     try:
         skills = read_skills(workspace_root)
@@ -133,6 +276,10 @@ def build_skill_pack(
             content=content,
         )
         relevant = [item for item in ranked if item.is_relevant]
+        reasons_by_id = {
+            compute_skill_id(item.skill): (", ".join(item.reasons) or "terrain match")
+            for item in relevant
+        }
         chosen = _dedupe_skills([item.skill for item in relevant])[:limit]
 
         mode = EvictionMode.from_value(eviction_mode)
@@ -143,21 +290,39 @@ def build_skill_pack(
             )
             chosen = apply_eviction_mode(chosen, verdicts, mode=mode)
 
-        text = format_skills(chosen, limit=limit)
+        text, index_chars, guard_chars = format_skill_index(chosen, reasons_by_id)
         chosen_ids = {compute_skill_id(skill) for skill in chosen}
 
-        selected: list[SkillRecord] = []
+        candidates: list[SkillCandidate] = []
         skipped: list[SkillRecord] = []
         for item in ranked:
-            skill_id = compute_skill_id(item.skill)
+            skill = item.skill
+            skill_id = compute_skill_id(skill)
             if skill_id in chosen_ids and not any(
-                record.skill_id == skill_id for record in selected
+                candidate.skill_id == skill_id for candidate in candidates
             ):
-                selected.append(
-                    _record(
-                        item.skill,
-                        "selected: " + (", ".join(item.reasons) or "terrain match"),
-                        len(item.skill.text),
+                eager_guard = skill.provenance in (
+                    SkillProvenance.FAILURE_GRADUATED,
+                    SkillProvenance.REFLECTION_REFINED,
+                )
+                reason = reasons_by_id.get(skill_id, "terrain match")
+                candidates.append(
+                    SkillCandidate(
+                        skill_id=skill_id,
+                        label=skill_label(skill),
+                        provenance=skill.provenance.value,
+                        description=skill.description or "",
+                        reason=reason,
+                        index_chars=(
+                            _index_entry_chars(skill, skill_id, reason)
+                            if not eager_guard
+                            else 0
+                        ),
+                        body_chars=len(skill.text),
+                        body_hash=skill_body_hash(skill),
+                        has_resources=skill.has_resources,
+                        eager_guard=eager_guard,
+                        skill=skill,
                     )
                 )
                 continue
@@ -170,16 +335,25 @@ def build_skill_pack(
                     f"ranked below the {limit}-skill limit "
                     f"(score {item.score})"
                 )
-            skipped.append(_record(item.skill, reason, 0))
+            skipped.append(_record(skill, reason, 0))
 
+        candidates.sort(
+            key=lambda c: _CANDIDATE_PRECEDENCE.get(SkillProvenance(c.provenance), 4)
+        )
         return SkillPack(
             text=text,
-            selected=tuple(selected),
+            index_chars=index_chars,
+            guard_chars=guard_chars,
+            candidates=tuple(candidates),
             skipped=tuple(skipped[:_MAX_REPORTED_SKIPPED]),
         )
     except Exception:
         logger.debug("build_skill_pack failed", exc_info=True)
         return SkillPack()
+
+
+def _index_entry_chars(skill: Skill, skill_id: str, reason: str) -> int:
+    return len(_format_index_entry(skill, reason))
 
 
 def _record(skill: Skill, reason: str, char_count: int) -> SkillRecord:
@@ -230,7 +404,12 @@ def build_skill_context(
     limit: int = DEFAULT_SKILL_LIMIT,
     eviction_mode: EvictionMode | str = EvictionMode.OFF,
 ) -> str:
-    """Read, select, and format skills for the given terrain.
+    """Read, select, and index skills for the given terrain.
+
+    Returns the initial skill context: a compact deterministic index of the
+    selected authored/bundled candidates plus eagerly injected graduated/
+    refined guard text.  Full authored/bundled bodies are intentionally absent
+    here and load through the dedicated ``load_skills`` tool.
 
     Always returns a string (possibly empty). Never propagates exceptions —
     returns "" on any failure.

@@ -16,6 +16,7 @@ from aura.conversation.tools._schemas import (
     DIAGNOSTIC_TOOL_DEF,
     DISPATCH_TOOL_DEF,
     GIT_TOOL_DEFS,
+    LOAD_SKILLS_TOOL_DEF,
     READ_TOOL_DEFS,
     REPORT_ALREADY_SATISFIED_TOOL_DEF,
     REPORT_BLOCKER_TOOL_DEF,
@@ -125,7 +126,11 @@ class ToolCatalog:
     ) -> list[dict[str, Any]]:
         """Build tool definitions for the given mode and state."""
         if read_only:
-            tools: list[dict[str, Any]] = list(READ_TOOL_DEFS) + list(GIT_TOOL_DEFS)
+            tools: list[dict[str, Any]] = (
+                list(READ_TOOL_DEFS)
+                + [dict(LOAD_SKILLS_TOOL_DEF)]
+                + list(GIT_TOOL_DEFS)
+            )
         elif mode == "planner":
             planner_read_tools = [
                 _planner_safe_tool_def(tool)
@@ -149,6 +154,7 @@ class ToolCatalog:
                 + [dict(DIAGNOSTIC_TOOL_DEF)]
                 + [dict(WORKSPACE_SNAPSHOT_TOOL_DEF)]
                 + [dict(WEB_SEARCH_TOOL_DEF)]
+                + [dict(LOAD_SKILLS_TOOL_DEF)]
             )
         elif mode == "worker":
             worker_write_tools = [
@@ -166,6 +172,7 @@ class ToolCatalog:
                 + [dict(RUN_READ_ONLY_DRONE_TOOL_DEF)]
                 + [dict(CHECK_DRONE_RUN_TOOL_DEF)]
                 + [dict(REGISTER_DRONE_FOLDER_TOOL_DEF)]
+                + [dict(LOAD_SKILLS_TOOL_DEF)]
             )
         else:
             # Production single-agent mode: one continuous model owns
@@ -186,6 +193,7 @@ class ToolCatalog:
                 + [dict(WEB_SEARCH_TOOL_DEF)]
                 + [dict(RUN_READ_ONLY_DRONE_TOOL_DEF)]
                 + [dict(REGISTER_DRONE_FOLDER_TOOL_DEF)]
+                + [dict(LOAD_SKILLS_TOOL_DEF)]
             )
 
         if not read_only and mode != "planner" and dynamic_schemas:

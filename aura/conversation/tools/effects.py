@@ -100,6 +100,7 @@ BUILTIN_TOOL_EFFECTS: dict[str, ToolEffect] = {
     "web_search": ToolEffect.OBSERVATION,
     "get_workspace_snapshot": ToolEffect.OBSERVATION,
     "search_project_memory": ToolEffect.OBSERVATION,
+    "load_skills": ToolEffect.OBSERVATION,
     "launch_read_only_drone": ToolEffect.OBSERVATION,
     "run_read_only_drone": ToolEffect.OBSERVATION,
     "check_drone_run": ToolEffect.OBSERVATION,

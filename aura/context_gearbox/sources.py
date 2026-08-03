@@ -434,21 +434,54 @@ def collect_source_text(
             included=included,
             char_count=len(text),
         )
+        if source.kind == "skill_pack" and pack is not None:
+            # The aggregate skill-pack entry separately reports the compact
+            # candidate-index characters and the eagerly injected guard
+            # characters, so the Gearbox can see exactly what each contributes.
+            entry = ContextLedgerEntry(
+                source_id=source.source_id,
+                kind=source.kind,
+                role=role,
+                reason=reason or source.reason,
+                included=included,
+                char_count=len(text),
+                detail=f"index_chars={pack.index_chars}; guard_chars={pack.guard_chars}",
+            )
 
         # For skill_pack, include per-skill ledger entries so the Context
-        # Gearbox shows the actual skill IDs, why each was loaded or skipped,
-        # and how many characters it contributed.
+        # Gearbox shows the actual skill IDs, the deterministic selection
+        # reason, the character contribution, and the lifecycle class of each
+        # candidate — indexed, eagerly injected guard, or skipped.
         extra: list[ContextLedgerEntry] = []
         if pack is not None:
-            for record in pack.selected:
+            for candidate in pack.candidates:
+                if candidate.eager_guard:
+                    detail = (
+                        "eager_guard "
+                        f"guard_chars={candidate.body_chars} "
+                        f"body_hash={candidate.body_hash}"
+                    )
+                    char_count = candidate.body_chars
+                else:
+                    detail = (
+                        "candidate_indexed "
+                        f"index_chars={candidate.index_chars} "
+                        f"body_chars={candidate.body_chars} "
+                        f"body_hash={candidate.body_hash}"
+                    )
+                    char_count = candidate.index_chars
                 extra.append(
                     ContextLedgerEntry(
-                        source_id=record.skill_id,
+                        source_id=candidate.skill_id,
                         kind="individual_skill",
                         role=role,
-                        reason=f"{record.label} [{record.provenance}] {record.reason}",
+                        reason=(
+                            f"{candidate.label} [{candidate.provenance}] "
+                            f"{candidate.reason}"
+                        ),
                         included=True,
-                        char_count=record.char_count,
+                        char_count=char_count,
+                        detail=detail,
                     )
                 )
             for record in pack.skipped:
@@ -460,6 +493,7 @@ def collect_source_text(
                         reason=f"{record.label} [{record.provenance}] {record.reason}",
                         included=False,
                         char_count=0,
+                        detail="skipped",
                     )
                 )
 
