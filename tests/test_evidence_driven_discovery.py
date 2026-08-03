@@ -802,6 +802,11 @@ class TestSurvivingInvariants:
         the correction pending for the next request, the structural violation
         fingerprints already corrected, and the latest violation kind. Whether a
         violation is terminal is set membership, never arithmetic.
+
+        The committed-decision fields are the same shape: a flag saying a
+        decision was committed and the content identity of that decision. They
+        are the positive route into focused action, and neither is a count —
+        nothing tracks how many decisions a turn committed.
         """
         fields = set(FocusedActionState.__dataclass_fields__)
         assert fields == {
@@ -817,6 +822,8 @@ class TestSurvivingInvariants:
             "pending_correction",
             "violation_fingerprints",
             "last_violation",
+            "decision_committed",
+            "decision_id",
         }
         assert not any(
             "recovery" in name or "attempt" in name or "count" in name

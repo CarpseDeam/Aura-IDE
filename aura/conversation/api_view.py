@@ -50,17 +50,30 @@ SOURCE_READ_TOOLS: frozenset[str] = frozenset({
     "search_codebase",
 })
 
-# Tools whose completed blocks are *pinned instructional context* for the rest
-# of the current real user turn. An activated-skill block (``load_skills``)
-# carries the exact bodies the model was told to work from; it must replay
-# byte-identically on every round — never duplicated, never folded into a
-# retired-evidence receipt, never shredded into fragments — so the provider
-# prefix cache sees a stable block and the model keeps its full procedure.
+# Tools whose completed blocks are *pinned turn context* for the rest of the
+# current real user turn: they must replay byte-identically on every round —
+# never duplicated, never folded into a retired-evidence receipt, never
+# shredded into fragments — so the provider prefix cache sees a stable block
+# and the model keeps what it was told to work from.
+#
+# Two kinds of block qualify, and they are the same mechanism:
+#
+# * ``load_skills`` — the exact activated skill bodies, the procedure the model
+#   is following;
+# * ``commit_implementation_decision`` — the decision capsule: the objective,
+#   authoritative owners and seams, target files, and intended change the turn
+#   has already established. Pinning it is what lets the detailed source reads
+#   that *supported* the decision retire into the evidence ledger without the
+#   model having to rediscover the decision itself. It is compact by
+#   construction, so the cost of keeping it is a fraction of the evidence it
+#   makes safe to retire.
+#
 # Pinning is scoped to the current real user turn: a previous turn's activated
-# bodies are not this turn's instructional context, and the ordinary ladder
+# bodies and decisions are not this turn's context, and the ordinary ladder
 # owns them like any other older evidence.
 PINNED_INSTRUCTION_TOOLS: frozenset[str] = frozenset({
     "load_skills",
+    "commit_implementation_decision",
 })
 
 # Per-phase character allowances for tool results.
@@ -1353,9 +1366,10 @@ def _retire_completed_observations(
 
     for start, end in reversed(blocks):
         if _block_is_pinned(working, start):
-            # Pinned instructional context (activated skill bodies): preserved
-            # verbatim, never retired, never replay-bounded. The block must
-            # stay byte-identical for provider prefix caching.
+            # Pinned turn context (activated skill bodies, the committed
+            # implementation decision): preserved verbatim, never retired,
+            # never replay-bounded. The block must stay byte-identical for
+            # provider prefix caching.
             continue
         effects, known = _known_block_effects(working, start, end, effect_for)
         if not known:

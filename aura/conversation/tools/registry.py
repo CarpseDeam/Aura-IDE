@@ -9,6 +9,7 @@ from aura.codebase_index.indexer import CodebaseIndex  # noqa: F401
 from aura.codebase_index.tool import search_codebase as _search_codebase  # noqa: F401
 from aura.conversation.tools._blocker_mixin import BlockerHandlersMixin
 from aura.conversation.tools._code_intel_mixin import CodeIntelHandlersMixin
+from aura.conversation.tools._decision_mixin import ImplementationDecisionHandlersMixin
 from aura.conversation.tools._diagnostic_mixin import DiagnosticHandlersMixin
 from aura.conversation.tools._git_mixin import GitHandlersMixin
 from aura.conversation.tools._godot_asset_preview_mixin import GodotAssetPreviewHandlersMixin
@@ -61,6 +62,7 @@ TOOL_HANDLERS: dict[str, Any] = {}
 
 class ToolRegistry(
     BlockerHandlersMixin,
+    ImplementationDecisionHandlersMixin,
     CodeIntelHandlersMixin,
     TaskContextHandlersMixin,
     ReadHandlersMixin,
@@ -396,6 +398,9 @@ TOOL_HANDLERS["install_godot_editor_bridge"] = ToolRegistry._handle_install_godo
 TOOL_HANDLERS["update_worker_todo"] = ToolRegistry._handle_update_worker_todo
 TOOL_HANDLERS["report_blocker"] = ToolRegistry._handle_report_blocker
 TOOL_HANDLERS["report_already_satisfied"] = ToolRegistry._handle_report_already_satisfied
+TOOL_HANDLERS["commit_implementation_decision"] = (
+    ToolRegistry._handle_commit_implementation_decision
+)
 
 TOOL_HANDLERS["search_project_memory"] = ToolRegistry._handle_search_project_memory
 TOOL_HANDLERS["save_to_project_memory"] = ToolRegistry._handle_save_to_project_memory

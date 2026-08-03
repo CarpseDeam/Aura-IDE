@@ -2039,6 +2039,85 @@ REPORT_BLOCKER_TOOL_DEF: dict[str, Any] = {
 }
 
 
+#: The production single agent's explicit transition from repository discovery
+#: to implementation.
+#:
+#: It is not a planner, a second agent, or a workflow framework: it records, in
+#: one compact structured packet, the decision the turn has *already* reached —
+#: what it is doing, who owns the surface, which files it will edit, what the
+#: change is, and how it will check it.  Recording it is what lets the send loop
+#: stop opening ordinary discovery requests, and what lets detailed source
+#: evidence retire later without the model having to rediscover the decision.
+#:
+#: Exposed only on the ordinary production SINGLE tool surface — never in
+#: read-only mode, never in Planner compatibility mode, and never in the focused
+#: action catalog, where the decision it records has already been made.
+COMMIT_IMPLEMENTATION_DECISION_TOOL_DEF: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "commit_implementation_decision",
+        "description": (
+            "Record the implementation decision you have reached and begin "
+            "implementing. Call this as soon as you can name the authoritative "
+            "owner, the concrete seams, the target files, and the intended "
+            "change. Once those facts are known, do not continue surveying "
+            "adjacent implementations merely to increase confidence. "
+            "Validation-tool discovery — test runners, executables, optional "
+            "validation infrastructure — normally belongs after the first "
+            "applied mutation, unless the requested change itself concerns "
+            "tooling or cannot be implemented without generated/API "
+            "information. The next request after this call is the focused "
+            "action request, which exposes only the editing tools, so commit "
+            "the decision you actually intend to carry out. Performs no "
+            "mutation."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "objective": {
+                    "type": "string",
+                    "description": (
+                        "One sentence naming the change the user asked for."
+                    ),
+                },
+                "owners": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "The authoritative owners and seams you established — "
+                        "the class, script, node, or field that actually owns "
+                        "the behaviour, and the seam you will edit through."
+                    ),
+                },
+                "target_files": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "The concrete files you expect to edit or create."
+                    ),
+                },
+                "change": {
+                    "type": "string",
+                    "description": (
+                        "The intended implementation, concretely: what you will "
+                        "add, alter, or remove in those files."
+                    ),
+                },
+                "validation": {
+                    "type": "string",
+                    "description": (
+                        "Optional: the focused check you will run after the "
+                        "edit lands. Do not go hunting for a test runner or an "
+                        "executable to fill this in before editing."
+                    ),
+                },
+            },
+            "required": ["objective", "owners", "target_files", "change"],
+        },
+    },
+}
+
+
 #: The focused action turn's second exit hatch: the requested state already
 #: exists in the repository, so no change is required.
 #:

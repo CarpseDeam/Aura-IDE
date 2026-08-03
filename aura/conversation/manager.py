@@ -576,10 +576,13 @@ class ConversationManager:
                 )
                 _log.info(
                     "focused_action_start route_lane=%s route_action=%s "
+                    "entered_via=%s decision_id=%s "
                     "selected_thinking=%s focused_action_thinking=%s "
                     "action_tools=%s",
                     getattr(getattr(state.task_route, "lane", None), "value", ""),
                     getattr(state.task_route, "action", ""),
+                    "committed_decision" if focused.decision_committed else "stall",
+                    focused.decision_id or "<none>",
                     focused.selected_thinking,
                     FOCUSED_ACTION_THINKING,
                     ",".join(focused.exposed_tools),
@@ -801,6 +804,13 @@ class ConversationManager:
                 # top of the next round recomputes it and finds ``spent``.
                 focused.spent = True
                 focused.clear_protocol_recovery()
+                # A committed implementation decision authorizes exactly the one
+                # act that serializes it — the write, the blocker, the
+                # already-satisfied report, or an act that failed to apply. It
+                # is spent here so it can never authorize an unrelated later
+                # mutation; acting again means committing a corrected decision,
+                # or the guard's stall fallback taking over.
+                focused.consume_decision()
                 selected = tool_call_names(full_message)
                 focused.selected_action = selected[0] if selected else ""
                 if REPORT_ALREADY_SATISFIED in selected:

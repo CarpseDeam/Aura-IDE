@@ -123,6 +123,10 @@ BUILTIN_TOOL_EFFECTS: dict[str, ToolEffect] = {
     "update_worker_todo": ToolEffect.BOOKKEEPING,
     "report_blocker": ToolEffect.BOOKKEEPING,
     "report_already_satisfied": ToolEffect.BOOKKEEPING,
+    # Records the implementation decision the turn has already reached. It
+    # changes no workspace state; what it changes is which request the send
+    # loop issues next.
+    "commit_implementation_decision": ToolEffect.BOOKKEEPING,
     "dispatch_to_worker": ToolEffect.BOOKKEEPING,
     "summon_drone": ToolEffect.BOOKKEEPING,
     "register_drone_folder": ToolEffect.BOOKKEEPING,

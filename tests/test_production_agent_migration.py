@@ -156,6 +156,8 @@ class TestProductionToolCatalog:
             "inspect_godot_assets", "inspect_godot_asset_preview",
             "capture_godot_asset_preview", "inspect_godot_api",
             "inspect_godot_editor",
+            # the explicit discovery → implementation handoff
+            "commit_implementation_decision",
             # the live TODO tool
             "update_worker_todo",
             # writes / patches / deletes

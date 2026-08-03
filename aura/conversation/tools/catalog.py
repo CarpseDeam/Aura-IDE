@@ -13,6 +13,7 @@ from aura.conversation.tools._drone_schemas import (
     RUN_READ_ONLY_DRONE_TOOL_DEF,
 )
 from aura.conversation.tools._schemas import (
+    COMMIT_IMPLEMENTATION_DECISION_TOOL_DEF,
     DIAGNOSTIC_TOOL_DEF,
     DISPATCH_TOOL_DEF,
     GIT_TOOL_DEFS,
@@ -181,8 +182,12 @@ class ToolCatalog:
                 tool for tool in READ_TOOL_DEFS
                 if _tool_name(tool) not in SINGLE_SUPERSEDED_READ_TOOL_NAMES
             ]
+            # ``commit_implementation_decision`` belongs to this surface alone:
+            # read-only turns owe no implementation, Planner never implements,
+            # and the focused action catalog is what the decision *leads to*.
             tools = (
                 single_read_tools
+                + [dict(COMMIT_IMPLEMENTATION_DECISION_TOOL_DEF)]
                 + [dict(WORKER_TODO_TOOL_DEF)]
                 + list(WRITE_TOOL_DEFS)
                 + [dict(TERMINAL_TOOL_DEF)]

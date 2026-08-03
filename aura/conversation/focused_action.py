@@ -16,10 +16,15 @@ Every input is state the loop already keeps:
   :func:`~aura.conversation.task_router.route_bears_production_action`, which is
   the ``implementation`` lane *or* a hybrid ``research`` /
   ``research_then_worker`` route, the same predicate the discovery stage uses;
-* discovery is over — :attr:`PreEditLoopGuard.focused` is true, because the
-  guard saw a round gather nothing or saw the turn circling in an ``A, B, A, B``
-  cycle.  There is no request, file, token, or time budget: a turn returning
-  genuinely new evidence keeps surveying;
+* discovery is over, by one of two facts.  Either the agent committed an
+  implementation decision — ``commit_implementation_decision`` succeeded, so it
+  can name the authoritative owner, the seams, the target files, and the change
+  (:attr:`FocusedActionState.decision_committed`) — or
+  :attr:`PreEditLoopGuard.focused` is true because the guard saw a round gather
+  nothing or saw the turn circling in an ``A, B, A, B`` cycle.  The first is a
+  positive readiness signal and the second an anti-loop fallback; there is no
+  request, file, token, or time budget in either, and a turn that commits no
+  decision and keeps returning genuinely new evidence keeps surveying;
 * no distinct failure is currently open (:attr:`PreEditLoopGuard.recovery_open`);
 * no write has applied;
 * no completion response is pending;
@@ -105,6 +110,10 @@ from aura.conversation.task_router import TaskRoute, route_bears_production_acti
 #: already exists in the repository and no change is required.
 REPORT_BLOCKER: str = "report_blocker"
 REPORT_ALREADY_SATISFIED: str = "report_already_satisfied"
+
+#: The ordinary-catalog bookkeeping tool that ends discovery positively.  Not
+#: part of the focused action surface: it is what *leads* to it.
+COMMIT_IMPLEMENTATION_DECISION: str = "commit_implementation_decision"
 
 #: Thinking mode used for the action-serialization request, always.
 FOCUSED_ACTION_THINKING: str = "off"
@@ -267,6 +276,49 @@ class FocusedActionState:
     last_violation: str = ""
     """Kind of the most recent structural violation, for logs and telemetry."""
 
+    # ── committed implementation decision (positive readiness) ──────────
+
+    decision_committed: bool = False
+    """Whether a ``commit_implementation_decision`` call succeeded and has not
+    yet been spent.
+
+    The *positive* route into focused action, and deliberately a different
+    concept from the guard's stall: a stalled round is evidence the turn has
+    stopped moving, while this is the agent stating that it knows the owner,
+    the seams, the target files, and the change. Both hand the next request to
+    the same protocol, and neither is a count of anything."""
+
+    decision_id: str = ""
+    """Content identity of the committed decision, for logs and telemetry.
+
+    A hash of the normalized packet, never an ordinal: a corrected decision has
+    a different identity, and nothing branches on how many a turn produced."""
+
+    def commit_decision(self, decision_id: str) -> None:
+        """Record that this turn has committed an implementation decision.
+
+        Called only from a *successful* structured tool result — never from the
+        tool name alone and never from assistant prose. Re-committing simply
+        replaces the identity: the newest decision is the one the next focused
+        request will serialize.
+        """
+        self.decision_committed = True
+        self.decision_id = str(decision_id or "")
+
+    def consume_decision(self) -> None:
+        """Spend the committed decision.
+
+        A decision authorizes exactly the one focused act that serializes it.
+        Once a valid focused response has arrived — a write, a blocker, an
+        already-satisfied report, or an act that failed to apply — the decision
+        is spent, so an old decision can never authorize an unrelated later
+        mutation. A turn that wants to act again after a failed act commits a
+        corrected decision, or the guard's stall fallback takes over; neither
+        path counts attempts.
+        """
+        self.decision_committed = False
+        self.decision_id = ""
+
     def clear_protocol_recovery(self) -> None:
         """Forget this decision's protocol-recovery state.
 
@@ -294,10 +346,24 @@ def should_enter_focused_action(
     Pure over state the send loop already owns.  Every condition is a fact,
     not an estimate — there is nothing here to tune, and nothing here counts.
 
-    ``guard.focused`` is the single authority on "discovery is over", and it is
-    set only by evidence: a round that ran tools and gathered nothing, or a
-    detected ``A, B, A, B`` cycle.  A turn whose rounds keep returning genuinely
-    new evidence never reaches this gate, however many rounds that takes.
+    Discovery ends by one of exactly two routes, and this function is where
+    they meet:
+
+    * ``state.decision_committed`` — the *positive* route.  The agent called
+      ``commit_implementation_decision`` and the structured result succeeded, so
+      it has named the authoritative owner, the seams, the target files, and the
+      change.  Nothing further can be learned that would change the next act, so
+      the next request serializes it.  This is why a turn that never stalls, and
+      never cycles, no longer gets to keep surveying adjacent systems forever.
+    * ``guard.focused`` — the *negative* route, unchanged and still the
+      fallback for an agent that commits no decision and actually begins
+      circling.  It is set only by evidence: a round that ran tools and gathered
+      nothing, or a detected ``A, B, A, B`` cycle.
+
+    They are kept separate on purpose.  A committed decision is a readiness
+    signal; a stalled round is an anti-loop signal.  Neither is a budget, and a
+    turn whose rounds keep returning genuinely new evidence still reaches this
+    gate only by one of those two facts.
 
     ``guard.recovery_open`` holds the transition back while a failure the turn
     has not seen before is unresolved — the same ledger that grants the ordinary
@@ -315,12 +381,15 @@ def should_enter_focused_action(
         return False
     if guard is None or guard.write_applied:
         return False
-    if not guard.focused:
+    if not (state.decision_committed or guard.focused):
         return False
     if guard.recovery_open:
         # A failure the turn has not seen before just landed. Forcing a mutation
         # now would push the model straight back into the act the failure
-        # already explained; the ordinary loop reads it first.
+        # already explained; the ordinary loop reads it first. This holds for a
+        # committed decision too — the decision is not discarded, only deferred
+        # by the one round recovery is open, because a decision made before a
+        # brand-new failure has not yet accounted for it.
         return False
     if task_completion_context:
         # A pending completion response outranks the focused request: the turn
@@ -540,6 +609,7 @@ def provider_contract_failure_message() -> tuple[str, dict[str, Any]]:
 
 __all__ = [
     "ACTION_FAILED_MESSAGE",
+    "COMMIT_IMPLEMENTATION_DECISION",
     "FOCUSED_ACTION_THINKING",
     "FocusedActionState",
     "FocusedContractDiagnosis",
