@@ -119,7 +119,7 @@ def test_stream_builds_kwargs_the_same_way_as_this_test() -> None:
     source = inspect.getsource(
         __import__("aura.client.deepseek", fromlist=["DeepSeekClient"]).DeepSeekClient.stream
     )
-    assert "resolve_reasoning_request(self._provider, thinking)" in source
+    assert "resolve_reasoning_request(self._provider, effective_thinking)" in source
     assert "if reasoning.reasoning_effort is not None:" in source
     assert 'kwargs["reasoning_effort"] = reasoning.reasoning_effort' in source
 

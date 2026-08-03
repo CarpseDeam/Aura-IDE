@@ -175,6 +175,15 @@ FOCUSED_CONTROL_TOOLS: frozenset[str] = frozenset({
 #: Thinking mode used for the action-serialization request, always.
 FOCUSED_ACTION_THINKING: str = "off"
 
+#: Thinking mode used for the decision checkpoint request, always.  Both
+#: narrowed protocol requests pin ``tool_choice="required"``, and DeepSeek
+#: rejects that combination outright while thinking is enabled
+#: (``400: Thinking mode does not support this tool_choice``).  The requirement
+#: is the load-bearing half — the checkpoint is answered with a control call or
+#: it is reissued — so thinking is what gives way.  Request-local only: the
+#: user's saved selection is untouched and the next ordinary round uses it.
+DECISION_CHECKPOINT_THINKING: str = "off"
+
 #: Outcomes one focused action request can reach.
 OUTCOME_WRITE: str = "write"
 OUTCOME_BLOCKER: str = "blocker"
@@ -550,6 +559,7 @@ __all__ = [
     "COMMIT_IMPLEMENTATION_DECISION",
     "CONTINUE_IMPLEMENTATION_DISCOVERY",
     "DECISION_CHECKPOINT_CONTROL_TOOLS",
+    "DECISION_CHECKPOINT_THINKING",
     "FOCUSED_ACTION_THINKING",
     "FOCUSED_CONTROL_TOOLS",
     "FocusedActionState",

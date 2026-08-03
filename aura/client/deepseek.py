@@ -181,7 +181,26 @@ class DeepSeekClient:
             else:
                 kwargs["tool_choice"] = "auto"
 
-        reasoning = resolve_reasoning_request(self._provider, thinking)
+        # DeepSeek rejects ``tool_choice="required"`` outright while thinking is
+        # enabled ("400: Thinking mode does not support this tool_choice"), and
+        # the requirement is the load-bearing half of a protocol request: the
+        # checkpoint is answered with a control call or it is reissued. So the
+        # transport, not just the caller, guarantees the two never leave here
+        # together — a future caller passing high/max/auto gets a request that
+        # works rather than a 400. Request-local: nothing saved is touched, and
+        # the resolved off-mode payload is the same one an ``off`` selection
+        # builds.
+        effective_thinking: ThinkingMode = thinking
+        if require_tool_call and self._provider == "deepseek" and thinking != "off":
+            effective_thinking = "off"
+            _log.warning(
+                "deepseek_thinking_coerced_for_required_tool_call model=%s "
+                "requested_thinking=%s effective_thinking=%s reason=%s",
+                model, thinking, effective_thinking,
+                "tool_choice_required_incompatible_with_thinking",
+            )
+
+        reasoning = resolve_reasoning_request(self._provider, effective_thinking)
         if reasoning.extra_body is not None:
             kwargs["extra_body"] = reasoning.extra_body
         if reasoning.reasoning_effort is not None:
@@ -191,10 +210,12 @@ class DeepSeekClient:
 
         _log.info(
             "provider_stream_start provider=%s model=%s thinking=%s "
+            "requested_thinking=%s effective_thinking=%s "
             "tool_choice=%s parallel_tool_calls=%s "
             "reasoning_effort=%s effort_sent=%s effort_policy=%s "
             "base_url_host=%s timeout_connect=%s timeout_read=%s",
-            self._provider, model, thinking,
+            self._provider, model, effective_thinking,
+            thinking, effective_thinking,
             kwargs.get("tool_choice", "<none>"),
             kwargs.get("parallel_tool_calls", "<default>"),
             reasoning.reasoning_effort or "<omitted>",

@@ -56,6 +56,7 @@ from aura.conversation.checkpoint_protocol import (
 )
 from aura.conversation.focused_action import (
     DECISION_CHECKPOINT_CONTROL_TOOLS,
+    DECISION_CHECKPOINT_THINKING,
     FOCUSED_ACTION_THINKING,
     FOCUSED_CONTROL_TOOLS,
     OUTCOME_ACTION_FAILED,
@@ -638,9 +639,14 @@ class ConversationManager:
                 # failed. A checkpoint reached after clean observation has no
                 # blocker escape, which is the point: with nothing broken, the
                 # honest answers are "commit" and "here is what I still do not
-                # know". The user's thinking selection is kept — deciding
-                # whether the decision is made is a judgement, unlike the
-                # focused act, which only serializes one already made.
+                # know".
+                #
+                # Thinking is off for this one request. The checkpoint pins
+                # ``tool_choice="required"``, and DeepSeek rejects that
+                # combination with thinking enabled; the requirement is the
+                # load-bearing half, so thinking gives way rather than the
+                # contract. Request-local only — the user's selection is
+                # unchanged and the round after this one uses it again.
                 guard_for_blocker = state.pre_edit_guard
                 include_blocker = bool(
                     guard_for_blocker is not None
@@ -649,7 +655,7 @@ class ConversationManager:
                 tool_defs = self._tools.decision_checkpoint_tool_defs(
                     include_blocker=include_blocker
                 )
-                round_thinking = thinking
+                round_thinking = DECISION_CHECKPOINT_THINKING
                 control_tools = DECISION_CHECKPOINT_CONTROL_TOOLS
                 focused.exposed_tools = tuple(
                     str(t.get("function", {}).get("name", "")) for t in tool_defs
@@ -657,10 +663,13 @@ class ConversationManager:
                 _log.info(
                     "decision_checkpoint_start route_lane=%s route_action=%s "
                     "unresolved_question=%s "
+                    "selected_thinking=%s decision_checkpoint_thinking=%s "
                     "blocker_offered=%s checkpoint_tools=%s",
                     getattr(getattr(state.task_route, "lane", None), "value", ""),
                     getattr(state.task_route, "action", ""),
                     focused.unresolved_question or "<none>",
+                    thinking,
+                    DECISION_CHECKPOINT_THINKING,
                     include_blocker,
                     ",".join(focused.exposed_tools),
                 )
