@@ -5,10 +5,15 @@ These tests use the real ``build_context_text`` path (not a stubbed
 in ``sources.py`` correctly recognize the lane vocabulary produced by
 ``_task_kind_from_route`` in the bridge:
 
-* ``implementation`` → code-quality, validation-selection, receipt contracts
-* ``validation``     → validation-selection + receipt, NOT code-quality / scoped packs
+* ``implementation`` → scoped coding packs when the target files match
+* ``validation``     → no scoped coding packs
 * ``web_research`` / ``research_then_worker`` → research-shaped
-* ``None`` (chat)    → no coding contracts
+* ``None`` (chat)    → nothing coding-shaped
+
+The three generic coding contracts (code-quality, validation-selection,
+receipt) are no longer part of this routing question for SINGLE: the compact
+production capsule owns those rules outright, so they are Worker-only sources
+and never vary by lane.  What remains lane-sensitive is the scoped packs.
 """
 
 from pathlib import Path
@@ -25,43 +30,41 @@ def _ledger_ids(context, *, included: bool = True) -> set[str]:
     }
 
 
-def test_single_implementation_includes_coding_contracts(tmp_path: Path) -> None:
-    """SINGLE implementation must receive code-quality, validation-selection, receipt."""
+_GENERIC_CONTRACTS = (
+    "code_quality_contract",
+    "validation_selection_contract",
+    "receipt_contract",
+)
+
+
+def test_no_lane_reopens_the_generic_contracts_for_single(tmp_path: Path) -> None:
+    """The capsule owns code shape, validation, and receipts on every lane.
+
+    A lane that reintroduces one of these blocks gives that rule a second
+    owner in the prompt, which is what the consolidation removed.
+    """
+    for task_kind in ("implementation", "validation", "bugfix", "refactor", None):
+        ctx = build_context_text(
+            RuntimeRole.SINGLE,
+            tmp_path,
+            task_kind=task_kind,
+        )
+        included = _ledger_ids(ctx)
+        for contract in _GENERIC_CONTRACTS:
+            assert contract not in included, f"{contract} came back on lane {task_kind!r}"
+
+
+def test_worker_still_receives_the_generic_contracts(tmp_path: Path) -> None:
+    """The legacy Worker path keeps the separately injected contracts."""
     ctx = build_context_text(
-        RuntimeRole.SINGLE,
+        RuntimeRole.WORKER,
         tmp_path,
         task_kind="implementation",
     )
 
-    ids = _ledger_ids(ctx)
-    assert "code_quality_contract" in ids
-    assert "validation_selection_contract" in ids
-    assert "receipt_contract" in ids
-
-
-def test_single_validation_includes_validation_and_receipt(tmp_path: Path) -> None:
-    """SINGLE validation must receive validation-selection and receipt."""
-    ctx = build_context_text(
-        RuntimeRole.SINGLE,
-        tmp_path,
-        task_kind="validation",
-    )
-
-    ids = _ledger_ids(ctx)
-    assert "validation_selection_contract" in ids
-    assert "receipt_contract" in ids
-
-
-def test_single_validation_excludes_code_quality(tmp_path: Path) -> None:
-    """Validation-only turns must NOT load the code-quality contract."""
-    ctx = build_context_text(
-        RuntimeRole.SINGLE,
-        tmp_path,
-        task_kind="validation",
-    )
-
     included = _ledger_ids(ctx)
-    assert "code_quality_contract" not in included
+    for contract in _GENERIC_CONTRACTS:
+        assert contract in included
 
 
 def test_validation_does_not_activate_scoped_coding_packs(tmp_path: Path) -> None:
@@ -78,12 +81,8 @@ def test_validation_does_not_activate_scoped_coding_packs(tmp_path: Path) -> Non
         assert pack_id not in included, f"{pack_id} should not be loaded for validation"
 
 
-def test_validation_with_target_files_excludes_code_quality(tmp_path: Path) -> None:
-    """Naming target files must not reopen the coding contract on a validation turn.
-
-    ``bool(target_files)`` is the fallback for un-routed turns; validation is
-    routed, so it stays authoritative.
-    """
+def test_validation_with_target_files_stays_validation_shaped(tmp_path: Path) -> None:
+    """Naming target files must not reopen coding context on a validation turn."""
     gui_file = tmp_path / "aura" / "gui" / "main_window.py"
     gui_file.parent.mkdir(parents=True, exist_ok=True)
     gui_file.write_text("x = 1\n", encoding="utf-8")
@@ -96,9 +95,9 @@ def test_validation_with_target_files_excludes_code_quality(tmp_path: Path) -> N
     )
 
     included = _ledger_ids(ctx)
-    assert "code_quality_contract" not in included
-    assert "validation_selection_contract" in included
-    assert "receipt_contract" in included
+    assert "gui_rules" not in included
+    # The manifest is a fact about the turn, not coaching, so it survives.
+    assert "target_file_contents" in included
 
 
 def test_validation_with_matching_target_files_excludes_scoped_packs(
@@ -126,9 +125,6 @@ def test_validation_with_matching_target_files_excludes_scoped_packs(
     included = _ledger_ids(ctx)
     for pack_id in ("gui_rules", "drone_rules", "provider_rules", "build_pipeline_rules"):
         assert pack_id not in included, f"{pack_id} should not be loaded for validation"
-    assert "code_quality_contract" not in included
-    assert "validation_selection_contract" in included
-    assert "receipt_contract" in included
 
 
 def test_implementation_with_target_files_still_loads_scoped_packs(
@@ -148,46 +144,16 @@ def test_implementation_with_target_files_still_loads_scoped_packs(
 
     included = _ledger_ids(ctx)
     assert "gui_rules" in included
-    assert "code_quality_contract" in included
 
 
-def test_web_research_remains_research_shaped(tmp_path: Path) -> None:
-    """web_research must stay research-shaped (no coding contracts in SINGLE)."""
-    ctx = build_context_text(
-        RuntimeRole.SINGLE,
-        tmp_path,
-        task_kind="web_research",
-    )
-
-    included = _ledger_ids(ctx)
-    assert "code_quality_contract" not in included
-    assert "validation_selection_contract" not in included
-    assert "receipt_contract" not in included
-
-
-def test_research_then_worker_remains_research_shaped(tmp_path: Path) -> None:
-    """research_then_worker must stay research-shaped."""
-    ctx = build_context_text(
-        RuntimeRole.SINGLE,
-        tmp_path,
-        task_kind="research_then_worker",
-    )
-
-    included = _ledger_ids(ctx)
-    assert "code_quality_contract" not in included
-    assert "validation_selection_contract" not in included
-    assert "receipt_contract" not in included
-
-
-def test_chat_excludes_coding_contracts(tmp_path: Path) -> None:
-    """Chat (task_kind=None) must not load any coding contracts."""
-    ctx = build_context_text(
-        RuntimeRole.SINGLE,
-        tmp_path,
-        task_kind=None,
-    )
-
-    included = _ledger_ids(ctx)
-    assert "code_quality_contract" not in included
-    assert "validation_selection_contract" not in included
-    assert "receipt_contract" not in included
+def test_research_and_chat_lanes_load_no_scoped_coding_packs(tmp_path: Path) -> None:
+    """Research and chat stay free of subsystem implementation guidance."""
+    for task_kind in ("web_research", "research_then_worker", None):
+        ctx = build_context_text(
+            RuntimeRole.SINGLE,
+            tmp_path,
+            task_kind=task_kind,
+        )
+        included = _ledger_ids(ctx)
+        for pack_id in ("gui_rules", "drone_rules", "provider_rules", "build_pipeline_rules"):
+            assert pack_id not in included, f"{pack_id} loaded on lane {task_kind!r}"

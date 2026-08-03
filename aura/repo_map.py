@@ -22,8 +22,17 @@ logger = logging.getLogger(__name__)
 
 # Cache: workspace_root_str -> (max_mtime, cached_text)
 _repo_map_cache: dict[str, tuple[float, str]] = {}
+_repo_summary_cache: dict[str, tuple[float, str]] = {}
 
 MAX_LINES = 300
+
+# The production agent gets the directory index instead of the full outline.
+# The full map is a 300-line prefix of an alphabetical walk, so on any real
+# repository it is both large and arbitrary — it spends most of the prompt on
+# whichever files sort first and truncates before reaching the rest. A
+# directory index is what orientation actually needs: where things live, so
+# search and read land on the right subtree the first time.
+SUMMARY_MAX_DIRS = 40
 
 _PY_FUNC_TYPES = (ast.FunctionDef, ast.AsyncFunctionDef)
 
@@ -201,4 +210,67 @@ def generate_repo_map(workspace_root: Path, force: bool = False) -> str:
 
     result = header + "\n".join(tree_lines)
     _repo_map_cache[root_str] = (current_mtime, result)
+    return result
+
+
+def generate_repo_summary(workspace_root: Path, force: bool = False) -> str:
+    """Return a compact directory index of the indexed source tree.
+
+    One line per directory that holds indexed files, with its file count, so
+    the agent can aim its searches and reads without the full per-file outline
+    being injected on every turn.  Returns an empty string when the workspace
+    has nothing to index or the scan fails.
+    """
+    root_str = str(workspace_root.resolve())
+
+    if not force and root_str in _repo_summary_cache:
+        _, cached_text = _repo_summary_cache[root_str]
+        if cached_text:
+            return cached_text
+
+    current_mtime = get_max_mtime(workspace_root)
+    cached_mtime, cached_text = _repo_summary_cache.get(root_str, (0.0, ""))
+    if current_mtime == cached_mtime and cached_text:
+        return cached_text
+
+    try:
+        from aura.code_intel.index import CodeIntelIndex
+
+        index = CodeIntelIndex(workspace_root)
+        index.refresh()
+        file_count = index.file_count()
+        rel_paths = list(index.file_paths())
+    except Exception:
+        logger.debug("generate_repo_summary failed", exc_info=True)
+        return ""
+
+    if file_count == 0:
+        _repo_summary_cache[root_str] = (current_mtime, "")
+        return ""
+
+    counts: dict[str, int] = {}
+    for rel_path in rel_paths:
+        parent = Path(rel_path).parent.as_posix()
+        directory = "." if parent in ("", ".") else parent
+        counts[directory] = counts.get(directory, 0) + 1
+
+    # Largest directories first decides *what* survives the cap; path order
+    # decides how it reads.
+    kept = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    omitted = len(kept) - SUMMARY_MAX_DIRS
+    kept = kept[:SUMMARY_MAX_DIRS]
+
+    lines = [
+        f"### Repository layout ({file_count} indexed source files)",
+        "Directory index only. Use search and read tools for file and symbol detail.",
+    ]
+    lines.extend(
+        f"- {directory}/ ({count})" if directory != "." else f"- ./ ({count})"
+        for directory, count in sorted(kept, key=lambda item: item[0])
+    )
+    if omitted > 0:
+        lines.append(f"- ... {omitted} smaller directories not listed")
+
+    result = "\n".join(lines)
+    _repo_summary_cache[root_str] = (current_mtime, result)
     return result

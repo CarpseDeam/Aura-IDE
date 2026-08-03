@@ -19,6 +19,7 @@ from aura.context_gearbox.runtime import (
     compose_system_prompt,
     default_role_prompt,
     format_context_gearbox_display,
+    format_prompt_composition,
     serialize_context_ledger,
     summarize_context_ledger,
 )
@@ -41,4 +42,5 @@ __all__ = [
     "summarize_context_ledger",
     "context_gearbox_metadata",
     "format_context_gearbox_display",
+    "format_prompt_composition",
 ]

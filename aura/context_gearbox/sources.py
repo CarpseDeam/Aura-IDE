@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from aura.context_gearbox.models import ContextLedgerEntry, ContextSource, RuntimeRole
-from aura.repo_map import generate_repo_map
+from aura.repo_map import generate_repo_map, generate_repo_summary
 from aura.skills.text import SkillPack, build_skill_pack
 
 CORE_KERNEL_TEXT = """Core kernel:
@@ -44,17 +44,12 @@ WORKER_EXECUTION_CONTRACT = """### worker_execution_contract
 - Do not fabricate files, APIs, validation results, or receipts.
 - If required context or files are missing, stop and return a clear blocker with the next useful action."""
 
-# The code-quality contract's target-files line differs by role because the
-# legacy Worker harness preloads bodies into context (its edit gates treat
-# preloaded targets as read evidence), while production SINGLE mode sends a
-# compact manifest and loads bodies through the read tools.
+# The legacy Worker harness preloads target-file bodies into context and its
+# edit gates treat them as read evidence. Production SINGLE sends a compact
+# manifest instead, and states the read rule in the manifest block itself.
 _TARGET_FILES_PRELOADED_LINE = (
     "The current contents of your target files are already in context; "
     "do not re-read them without a named reason."
-)
-_TARGET_FILES_MANIFEST_LINE = (
-    "Target files are listed as a manifest; their contents are not preloaded. "
-    "Read each target file with the read tools before editing it."
 )
 
 CODE_QUALITY_CONTRACT = f"""### code_quality_contract
@@ -150,11 +145,6 @@ _CODING_TASK_KINDS = {
     "cleanup",
     "refactor",
     "implementation",
-}
-
-_VALIDATION_ONLY_CONTRACTS = {
-    "validation_selection_contract",
-    "receipt_contract",
 }
 
 # Sized for the current DeepSeek V4 models (1M-token context), not for the
@@ -324,23 +314,27 @@ CONTEXT_SOURCES: tuple[ContextSource, ...] = (
         roles=(RuntimeRole.WORKER,),
         reason="worker coding-harness execution quality contract",
     ),
+    # The three generic coding contracts are Worker-only. Production SINGLE's
+    # capsule states code shape, focused validation, and receipt honesty once,
+    # as part of the one authoritative contract; injecting these alongside it
+    # restated the same rules under a second owner.
     ContextSource(
         source_id="code_quality_contract",
         kind="quality_contract",
-        roles=(RuntimeRole.WORKER, RuntimeRole.SINGLE),
+        roles=(RuntimeRole.WORKER,),
         reason="coding quality contract for implementation work",
         origin_paths=("aura/context_gearbox/sources.py",),
     ),
     ContextSource(
         source_id="validation_selection_contract",
         kind="quality_contract",
-        roles=(RuntimeRole.WORKER, RuntimeRole.SINGLE),
+        roles=(RuntimeRole.WORKER,),
         reason="focused validation selection contract",
     ),
     ContextSource(
         source_id="receipt_contract",
         kind="quality_contract",
-        roles=(RuntimeRole.WORKER, RuntimeRole.SINGLE),
+        roles=(RuntimeRole.WORKER,),
         reason="compact final receipt contract",
     ),
     ContextSource(
@@ -458,10 +452,11 @@ def collect_source_text(
                 if candidate.eager_guard:
                     detail = (
                         "eager_guard "
-                        f"guard_chars={candidate.body_chars} "
+                        f"guard_chars={candidate.guard_chars} "
+                        f"body_chars={candidate.body_chars} "
                         f"body_hash={candidate.body_hash}"
                     )
-                    char_count = candidate.body_chars
+                    char_count = candidate.guard_chars
                 else:
                     detail = (
                         "candidate_indexed "
@@ -527,7 +522,7 @@ def _load_source_text(
     if source.kind == "capability_pack":
         return _load_capability_pack(source, active_capabilities)
     if source.kind == "quality_contract":
-        return _load_quality_contract(source, role, task_kind, target_files)
+        return _load_quality_contract(source)
     if source.kind == "planner_research_pack":
         return _load_planner_research_pack(source, role, task_kind)
     if source.kind == "scoped_coding_pack":
@@ -563,6 +558,15 @@ def _load_source_text(
             return "", "project_rules.md is empty"
         return "### Project Rules\n" + rules, source.reason
     if source.source_id == "repo_map":
+        if role == RuntimeRole.SINGLE:
+            # Production SINGLE gets the bounded directory index. The full
+            # per-file outline was the single largest block in every turn and
+            # truncated arbitrarily; structure detail loads through the search
+            # and read tools instead.
+            summary = generate_repo_summary(workspace_root, force=force)
+            if not summary:
+                return "", "no indexed source files"
+            return summary, "bounded repository directory index"
         repo_map = generate_repo_map(workspace_root, force=force)
         if not repo_map:
             return "", "repo map unavailable"
@@ -753,26 +757,10 @@ def _remaining_target_file_labels(
     return labels
 
 
-def _load_quality_contract(
-    source: ContextSource,
-    role: RuntimeRole,
-    task_kind: str | None,
-    target_files: tuple[str, ...] | None,
-) -> tuple[str, str]:
+def _load_quality_contract(source: ContextSource) -> tuple[str, str]:
     text = _CONTRACT_TEXT.get(source.source_id, "")
     if not text:
         return "", "unknown quality contract"
-    if role == RuntimeRole.SINGLE and source.source_id == "code_quality_contract":
-        # SINGLE does not preload bodies, so the preloaded-targets claim is a
-        # lie there. Swap it for the manifest phrasing; Worker keeps the claim.
-        text = text.replace(
-            f"- {_TARGET_FILES_PRELOADED_LINE}",
-            f"- {_TARGET_FILES_MANIFEST_LINE}",
-        )
-    if role == RuntimeRole.SINGLE and not _single_contract_applies(
-        source.source_id, task_kind, target_files,
-    ):
-        return "", "single-mode request has no coding task shape"
     return text, source.reason
 
 
@@ -845,20 +833,6 @@ def _load_skill_pack(
     if pack.text:
         return pack.text, "terrain-selected skills for this context", pack
     return "", "no skills matched for this terrain", pack
-
-
-def _single_contract_applies(
-    source_id: str,
-    task_kind: str | None,
-    target_files: tuple[str, ...] | None,
-) -> bool:
-    # Validation is authoritative: a validation turn loads exactly the
-    # validation contracts, even when it names target files.
-    if _is_validation_task_kind(task_kind):
-        return source_id in _VALIDATION_ONLY_CONTRACTS
-    if _is_coding_task_kind(task_kind):
-        return True
-    return bool(target_files)
 
 
 def _single_scoped_pack_applies(

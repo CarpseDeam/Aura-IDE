@@ -73,6 +73,7 @@ from aura.context_gearbox.runtime import (
     context_gearbox_metadata,
     diagnose_custom_prompt,
     format_custom_prompt_diagnostics,
+    format_prompt_composition,
 )
 from aura.conversation import (
     ConversationManager,
@@ -619,6 +620,7 @@ class ConversationBridge(QObject):
                 effective_prompt_chars=len(composed.system_prompt),
             ),
         )
+        _log.info("%s", format_prompt_composition(composed))
         self._tier1_context = composed.context_text
         self._dispatch_proxy.set_tier1_context(self._tier1_context)
         return composed

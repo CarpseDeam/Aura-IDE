@@ -117,8 +117,9 @@ def test_custom_prompt_extends_canonical_context_instead_of_replacing_it(
 
     assert "Always answer in British English." in composed.system_prompt
     assert "Core kernel:" in composed.system_prompt
-    assert "Response discipline:" in composed.system_prompt
     assert "GDScript Practice" in composed.system_prompt
+    # SINGLE's contract is the capsule alone — no second style block beside it.
+    assert "Response discipline:" not in composed.system_prompt
 
 
 def test_edited_default_prompt_is_not_injected_twice(tmp_path: Path) -> None:
@@ -129,7 +130,7 @@ def test_edited_default_prompt_is_not_injected_twice(tmp_path: Path) -> None:
     )
 
     assert composed.system_prompt.count("Core kernel:") == 1
-    assert composed.system_prompt.count("Response discipline:") == 1
+    assert composed.system_prompt.count("You are Aura's production coding agent.") == 1
     # The initial skill context is a compact index; the selected skill appears
     # exactly once as an index line (label), never as a second full body.
     assert composed.system_prompt.count("godot_gdscript") == 1

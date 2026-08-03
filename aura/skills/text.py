@@ -60,6 +60,10 @@ class SkillCandidate:
     has_resources: bool
     eager_guard: bool
     skill: Skill
+    #: Characters this candidate actually contributes to the initial prompt as
+    #: an eager guard — the bounded excerpt, not the whole body. Zero for
+    #: authored/bundled candidates, which contribute an index line instead.
+    guard_chars: int = 0
 
 
 @dataclass(frozen=True)
@@ -96,7 +100,7 @@ class SkillPack:
                 provenance=candidate.provenance,
                 reason=candidate.reason,
                 char_count=(
-                    candidate.body_chars
+                    candidate.guard_chars
                     if candidate.eager_guard
                     else candidate.index_chars
                 ),
@@ -124,6 +128,32 @@ _SKILL_LOADING_GUIDANCE = (
 )
 
 _SKILL_INDEX_HEADER = "### Skills"
+
+# Graduated and refined guards stay eager because they encode a hazard the
+# runtime has actually hit, and a hazard warning that arrives only on request
+# arrives too late. That earns a short warning, not a procedure: past this cap
+# a guard is coaching, and coaching belongs behind ``load_skills`` like every
+# other body.
+_EAGER_GUARD_CHAR_CAP = 500
+
+
+def eager_guard_text(skill: Skill) -> str:
+    """Return the bounded guard text injected eagerly for *skill*.
+
+    Bodies within the cap are injected whole. Longer ones are cut at a line
+    boundary and point at ``load_skills`` for the rest, so nothing is lost.
+    """
+    text = skill.text.strip()
+    if len(text) <= _EAGER_GUARD_CHAR_CAP:
+        return text
+    head = text[:_EAGER_GUARD_CHAR_CAP]
+    cut = head.rfind("\n")
+    if cut > 0:
+        head = head[:cut]
+    return (
+        head.rstrip()
+        + f"\n[guard truncated — load_skills {compute_skill_id(skill)} for the full body]"
+    )
 
 
 def format_skills(skills: list[Skill], limit: int = DEFAULT_SKILL_LIMIT) -> str:
@@ -221,10 +251,10 @@ def format_skill_index(
     guard_lines: list[str] = []
     if graduated:
         guard_lines.append("### Learned Hazard Guards")
-        guard_lines.extend(s.text for s in graduated)
+        guard_lines.extend(eager_guard_text(s) for s in graduated)
     if refined:
         guard_lines.append("### Refined Skill Guards")
-        guard_lines.extend(s.text for s in refined)
+        guard_lines.extend(eager_guard_text(s) for s in refined)
     guard_text = "\n".join(guard_lines)
     guard_chars = len(guard_text)
 
@@ -314,9 +344,12 @@ def build_skill_pack(
                         description=skill.description or "",
                         reason=reason,
                         index_chars=(
-                            _index_entry_chars(skill, skill_id, reason)
-                            if not eager_guard
-                            else 0
+                            0
+                            if eager_guard
+                            else _index_entry_chars(skill, skill_id, reason)
+                        ),
+                        guard_chars=(
+                            len(eager_guard_text(skill)) if eager_guard else 0
                         ),
                         body_chars=len(skill.text),
                         body_hash=skill_body_hash(skill),
