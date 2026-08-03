@@ -75,10 +75,53 @@ def test_single_capsule_forbids_reopening_settled_decisions() -> None:
     assert "do not narrate internal deliberation" in text
     assert "full proposed patch before editing" in text
     assert "current action, genuinely new evidence, and the immediate next action" in text
-    assert "edit within one or two tool calls" in text
+    assert "edit as soon as the evidence supports the choice" in text
     assert "must answer a named unresolved question" in text
-    assert "batch independent reads" in text
-    assert "stop searching once the owner and the edit surface are known" in text
+    assert "batch independent repository observations in one tool response" in text
+    assert "implement it rather than continuing broad survey" in text
+
+
+def test_the_capsule_states_no_budget_for_getting_the_edit_right() -> None:
+    """The prompt must not reimpose the ceiling the runtime no longer has.
+
+    The runtime ends a pre-write turn on evidence — a round that neither
+    advanced it nor produced a failure it had not already seen — and nowhere on
+    a count of requests, files, tokens, or attempts. A capsule that tells the
+    model to "edit within one or two tool calls" contradicts that, and the
+    contradiction is invisible: the model simply stops early and reports work it
+    did not do.
+    """
+    text = _capsule_text().lower()
+
+    assert "there is no call budget" in text
+    for budget in (
+        "one or two tool calls",
+        "two tool calls",
+        "at most",
+        "no more than",
+        "stop after",
+    ):
+        assert budget not in text, f"a call budget is back in the capsule: {budget!r}"
+
+
+def test_the_capsule_says_a_failed_act_is_not_a_finished_turn() -> None:
+    """The completion-oriented half of the contract the runtime now enforces."""
+    text = _capsule_text().lower()
+
+    assert "a failed act is evidence, not a finished turn" in text
+    assert "the turn ends when the requested change is complete" in text
+    assert "a failed tool call is none of those" in text
+    # Correct and act again, without an attempt allowance.
+    assert "act again in this same turn" in text
+    assert "nothing limits how many corrected attempts you may make" in text
+    # Repetition, not failure, is what is worthless.
+    assert "repeating an attempt that already failed, unchanged" in text
+    # A rejection is a decision about the proposal, not the end of the task.
+    assert "never re-send the rejected proposal unchanged" in text
+    assert "materially different approach" in text
+    # The honest external exit is named, so it can actually be called.
+    assert "report_blocker" in text
+    assert "do not report a blocker to avoid a hard edit" in text
 
 
 def test_anti_circling_rules_reach_the_composed_production_prompt(tmp_path: Path) -> None:
