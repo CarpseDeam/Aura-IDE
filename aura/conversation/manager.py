@@ -59,8 +59,11 @@ from aura.conversation.focused_action import (
     OUTCOME_WRITE,
     REPORT_ALREADY_SATISFIED,
     REPORT_BLOCKER,
+    FocusedActionState,
+    FocusedContractDiagnosis,
     action_failed_message,
-    focused_contract_ok,
+    diagnose_focused_contract,
+    focused_correction_instruction,
     provider_contract_failure_message,
     should_enter_focused_action,
     tool_call_names,
@@ -655,6 +658,25 @@ class ConversationManager:
 
             request_messages = api_view.messages
 
+            # ── Focused protocol correction ──────────────────────────────
+            # A discarded focused response leaves exactly one compact
+            # instruction naming what was structurally wrong with it. It is
+            # attached to *this outbound copy only*: canonical history is
+            # untouched, the frozen system prompt is untouched (its fingerprint
+            # is logged above and does not move), and it is consumed by the one
+            # request it corrects. A turn with no violation never builds one, so
+            # ordinary turns pay nothing — not a request, not a token.
+            if focused.active and focused.pending_correction:
+                request_messages = [
+                    *request_messages,
+                    {"role": "user", "content": focused.pending_correction},
+                ]
+                focused.pending_correction = ""
+                _log.info(
+                    "focused_action_correction_issued violation=%s",
+                    focused.last_violation or "<none>",
+                )
+
             # ``require_tool_call`` is only passed when it is actually
             # required, so every other request reaches the backend with the
             # exact call signature it has always had.
@@ -722,6 +744,22 @@ class ConversationManager:
                     self._cleanup_cancelled(on_event)
                 return
 
+            if full_message is None and focused.active:
+                # A focused stream that completed with nothing to validate is
+                # still a contract violation, not a silent exit: returning here
+                # dead-stopped a turn whose evidence was entirely intact.
+                if self._repair_focused_contract(
+                    focused=focused,
+                    diagnosis=diagnose_focused_contract(
+                        None, focused.exposed_tools
+                    ),
+                    router=router,
+                    state=state,
+                    on_event=on_event,
+                ):
+                    continue
+                return
+
             if full_message is None:
                 # Should not happen in normal stream completion. There is no
                 # message to validate, so nothing can be held back on its
@@ -732,50 +770,39 @@ class ConversationManager:
             tool_calls = full_message.get("tool_calls") or []
 
             if focused.active:
-                # The request is spent either way — nothing below re-enters
-                # focused action, and nothing retries it. ``active`` stays set
-                # until this round's tool results have been folded in; the top
-                # of the next round recomputes it and finds ``spent``.
-                focused.spent = True
-                selected = tool_call_names(full_message)
-                focused.selected_action = selected[0] if selected else ""
-
                 # The focused provider contract, checked against the raw
                 # ``tool_calls`` collection: exactly one entry, well-formed,
                 # naming a tool in this round's exposed action set. Zero calls,
                 # multiple calls, a malformed entry alongside a valid one, or an
-                # unknown/unexposed name are all contract failures — none of
+                # unknown/unexposed name are all contract violations — none of
                 # them execute anything.
-                contract_ok = focused_contract_ok(
+                diagnosis = diagnose_focused_contract(
                     full_message, focused.exposed_tools
                 )
-                if not contract_ok:
-                    focused.contract_violated = True
-                    focused.outcome = OUTCOME_PROVIDER_CONTRACT_FAILURE
-                    self._last_turn_provider_contract_failure = True
-                    _log.info(
-                        "focused_action_outcome outcome=%s selected_action=%s "
-                        "selected_thinking=%s focused_action_thinking=%s",
-                        focused.outcome,
-                        focused.selected_action or "<none>",
-                        focused.selected_thinking,
-                        FOCUSED_ACTION_THINKING,
-                    )
-                    # Discard the provider's prose buffer, its reasoning, and
-                    # its held terminal event; do not store the violating
-                    # assistant message. The turn owes exactly one factual
-                    # failure response — with exactly one Done, the one emitted
-                    # below — and it is never retried.
-                    router.discard_deferred_done()
-                    if state.content_gate is not None:
-                        state.content_gate.discard_buffer()
-                    content, failure_message = provider_contract_failure_message()
-                    self._history.append_assistant(failure_message)
-                    on_event(ContentDelta(text=content))
-                    on_event(
-                        Done(finish_reason="stop", full_message=failure_message)
-                    )
+                if not diagnosis.ok:
+                    # A malformed response never spent the decision, so the
+                    # request is deliberately *not* marked spent here: the
+                    # repair reissues the identical focused request rather than
+                    # sending the model back through repository discovery to fix
+                    # its own formatting.
+                    if self._repair_focused_contract(
+                        focused=focused,
+                        diagnosis=diagnosis,
+                        router=router,
+                        state=state,
+                        on_event=on_event,
+                    ):
+                        continue
                     return
+
+                # Valid: the decision is now genuinely spent, and whatever
+                # protocol repair this decision needed is over. ``active`` stays
+                # set until this round's tool results have been folded in; the
+                # top of the next round recomputes it and finds ``spent``.
+                focused.spent = True
+                focused.clear_protocol_recovery()
+                selected = tool_call_names(full_message)
+                focused.selected_action = selected[0] if selected else ""
                 if REPORT_ALREADY_SATISFIED in selected:
                     focused.outcome = OUTCOME_ALREADY_SATISFIED
                 else:
@@ -934,6 +961,11 @@ class ConversationManager:
             ):
                 if guard.last_round_advanced:
                     focused.spent = False
+                    # A corrected decision is a new focused decision: whatever
+                    # protocol repair the previous one needed does not carry
+                    # into it, so a violation corrected earlier in the turn can
+                    # never be mistaken for a repeat here.
+                    focused.clear_protocol_recovery()
                     _log.info(
                         "focused_action_rearmed reason=round_advanced "
                         "selected_action=%s",
@@ -959,6 +991,78 @@ class ConversationManager:
                 return
             if tool_round.action == "continue":
                 continue
+
+    def _repair_focused_contract(
+        self,
+        *,
+        focused: FocusedActionState,
+        diagnosis: FocusedContractDiagnosis,
+        router: StreamEventRouter,
+        state: _SendState,
+        on_event: EventCallback,
+    ) -> bool:
+        """Discard a contract-violating focused response and decide what follows.
+
+        Returns ``True`` when the send loop should reissue the focused request
+        with an explicit correction, ``False`` when the turn ends as a
+        provider-contract failure (this method has already emitted it).
+
+        The discard is identical either way, and it is total: the buffered
+        prose, the reasoning, every tool call, and the provider's own deferred
+        ``Done`` are dropped, nothing is executed, nothing is salvaged from a
+        mixed batch, and the violating assistant message never enters canonical
+        history.  Only *terminality* differs — validation is exactly as strict
+        as it was.
+
+        Which one it is comes from evidence, not arithmetic.  A structural
+        violation this decision has not seen before is a recoverable
+        formatting lapse: it earns one explicit correction naming precisely what
+        was wrong, and the same focused request goes out again over the same
+        gathered evidence.  The identical structural violation *after* that
+        correction is proof the provider cannot honour the protocol, and only
+        then does the turn end.  There is no attempt count anywhere in here.
+        """
+        router.discard_deferred_done()
+        if state.content_gate is not None:
+            state.content_gate.discard_buffer()
+        focused.selected_action = ""
+        focused.last_violation = diagnosis.kind
+
+        fingerprint = diagnosis.fingerprint
+        if fingerprint not in focused.violation_fingerprints:
+            focused.violation_fingerprints.add(fingerprint)
+            focused.pending_correction = focused_correction_instruction(
+                diagnosis, focused.exposed_tools
+            )
+            _log.info(
+                "focused_action_contract_repair violation=%s calls=%d names=%s "
+                "action=reissue_focused_request",
+                diagnosis.kind,
+                diagnosis.call_count,
+                ",".join(diagnosis.names) or "<none>",
+            )
+            return True
+
+        focused.contract_violated = True
+        focused.outcome = OUTCOME_PROVIDER_CONTRACT_FAILURE
+        self._last_turn_provider_contract_failure = True
+        _log.info(
+            "focused_action_outcome outcome=%s violation=%s calls=%d "
+            "corrected=True repeated=True selected_thinking=%s "
+            "focused_action_thinking=%s",
+            focused.outcome,
+            diagnosis.kind,
+            diagnosis.call_count,
+            focused.selected_thinking,
+            FOCUSED_ACTION_THINKING,
+        )
+        # The turn owes exactly one factual failure response, with exactly one
+        # Done — the one emitted here.
+        content, failure_message = provider_contract_failure_message()
+        self._history.append_assistant(failure_message)
+        on_event(ContentDelta(text=content))
+        on_event(Done(finish_reason="stop", full_message=failure_message))
+        return False
 
     def _finish_worker_unrecoverable(
         self,

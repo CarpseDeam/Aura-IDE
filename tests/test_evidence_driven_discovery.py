@@ -796,7 +796,13 @@ class TestSurvivingInvariants:
             assert "awaiting_recovery" not in source
 
     def test_the_focused_state_owns_no_lifetime_allowance(self) -> None:
-        """``FocusedActionState`` tracks the current request, and nothing else."""
+        """``FocusedActionState`` tracks the current focused decision only.
+
+        The protocol-recovery fields are part of that decision, not a budget:
+        the correction pending for the next request, the structural violation
+        fingerprints already corrected, and the latest violation kind. Whether a
+        violation is terminal is set membership, never arithmetic.
+        """
         fields = set(FocusedActionState.__dataclass_fields__)
         assert fields == {
             "spent",
@@ -808,8 +814,20 @@ class TestSurvivingInvariants:
             "selected_action",
             "outcome",
             "contract_violated",
+            "pending_correction",
+            "violation_fingerprints",
+            "last_violation",
         }
         assert not any(
             "recovery" in name or "attempt" in name or "count" in name
+            or "max" in name or "budget" in name or "limit" in name
+            for name in fields
+        )
+        # Nothing here counts. No field is numeric, so none of them can be an
+        # allowance being spent down.
+        state = FocusedActionState()
+        assert not any(
+            isinstance(getattr(state, name), (int, float))
+            and not isinstance(getattr(state, name), bool)
             for name in fields
         )

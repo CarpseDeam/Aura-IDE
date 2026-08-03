@@ -19,8 +19,11 @@ stalling the loop, not by poking state. What is asserted:
   each leave focused action by their own path, none of them through a retry
   allowance or an attempt count;
 * that zero, multiple, unknown, and mixed tool-call responses execute nothing
-  and end in exactly one terminal failure response, with the violating prose and
-  reasoning discarded rather than preserved;
+  and are discarded whole — prose, reasoning, calls, and the provider's own
+  ``Done`` — while the *decision* survives: the same focused request goes out
+  again with one request-local correction, over byte-identical evidence;
+* that only a repeat of the identical structural violation, after that explicit
+  correction, ends the turn as a provider-contract failure;
 * that a read-only registry never enters focused mutation mode;
 * that a successful blocker finalizes against a request with no tool catalog;
 * that the blocked reason reaches the completion-receipt path.
@@ -40,8 +43,18 @@ from aura.client.events import ApiError, ContentDelta, Done, ToolResult
 from aura.conversation.focused_action import (
     ACTION_FAILED_MESSAGE,
     PROVIDER_CONTRACT_FAILURE_MESSAGE,
+    VIOLATION_INVALID_TOOL_NAME,
+    VIOLATION_MALFORMED_CALL,
+    VIOLATION_MALFORMED_FUNCTION,
+    VIOLATION_MISSING_MESSAGE,
+    VIOLATION_MULTIPLE_TOOL_CALLS,
+    VIOLATION_NO_TOOL_CALLS,
+    VIOLATION_TOOL_CALLS_NOT_A_LIST,
+    VIOLATION_UNEXPOSED_TOOL,
     FocusedActionState,
+    diagnose_focused_contract,
     focused_contract_ok,
+    focused_correction_instruction,
     should_enter_focused_action,
     tool_call_names,
 )
@@ -564,50 +577,109 @@ def test_blocked_reason_reaches_the_completion_receipt_path(tmp_path):
 # ── 14: the focused provider contract — exactly one exposed action call ─────
 
 
-class TestFocusedProviderContract:
-    """Zero, multiple, unknown, and mixed responses execute nothing and end in
-    exactly one terminal failure, with the violating prose and reasoning
-    discarded."""
+VIOLATING_PROSE = "Here is what I would do: first I would open..."
 
-    def _run(self, tmp_path: Path, round_: dict[str, Any]) -> Harness:
-        harness = make_harness(tmp_path, [*discovery_round(), round_])
+
+def prose_only_round() -> dict[str, Any]:
+    return assistant(
+        content=VIOLATING_PROSE, reasoning="weighing the options\n"
+    )
+
+
+def zero_call_round() -> dict[str, Any]:
+    message = assistant(content=VIOLATING_PROSE)
+    message["tool_calls"] = []
+    return message
+
+
+def multiple_call_round() -> dict[str, Any]:
+    return assistant(
+        tool_call("x1", "write_file", {"path": "alpha.py", "content": "a = 2\n"}),
+        tool_call("x2", "write_file", {"path": "alpha.py", "content": "a = 3\n"}),
+    )
+
+
+def unknown_call_round() -> dict[str, Any]:
+    return assistant(tool_call("x1", "mystery_tool", {"path": "alpha.py"}))
+
+
+def mixed_call_round() -> dict[str, Any]:
+    return assistant(
+        tool_call("x1", "write_file", {"path": "alpha.py", "content": "a = 2\n"}),
+        tool_call("x2", "mystery_tool", {"path": "alpha.py"}),
+    )
+
+
+def no_message_round() -> None:
+    """Sentinel for a normally completed stream carrying no ``full_message``."""
+    return None
+
+
+#: Every structural shape the focused contract rejects, as a factory so each
+#: run gets a fresh message (the content gate normalises tool-call messages in
+#: place).
+VIOLATION_FACTORIES = {
+    "prose_only": prose_only_round,
+    "zero_calls": zero_call_round,
+    "multiple_calls": multiple_call_round,
+    "unknown_tool": unknown_call_round,
+    "mixed_batch": mixed_call_round,
+    "no_full_message": no_message_round,
+}
+
+
+class TestFocusedContractViolationsAreRepaired:
+    """A malformed focused response executes nothing and is discarded whole —
+    and the decision it was meant to serialize survives.
+
+    The send loop reissues the *same* focused request with one request-local
+    correction instead of dead-stopping a turn whose repository evidence is
+    entirely intact. Nothing here is a retry allowance: see
+    :class:`TestRepeatedIdenticalViolationIsTerminal` for the one evidence-based
+    condition that still ends the turn.
+    """
+
+    def _run(self, tmp_path: Path, round_: dict[str, Any] | None) -> Harness:
+        """Violation, then a corrected single write, then the final answer."""
+        harness = make_harness(
+            tmp_path, [*discovery_round(), round_, WRITE_ROUND, FINAL_ROUND]
+        )
         harness.run()
         return harness
 
-    def _assert_nothing_executed(self, harness: Harness) -> None:
-        assert (harness.root / "alpha.py").read_text(encoding="utf-8") == "alpha = 1\n"
-        assert harness.approvals == []
-        # Exactly one request for each round: evidence, stall, focused. No retry.
-        assert len(harness.stream.requests) == 3
-        contents = [e.text for e in harness.events if isinstance(e, ContentDelta)]
-        assert PROVIDER_CONTRACT_FAILURE_MESSAGE in contents
-        dones = [e for e in harness.events if isinstance(e, Done)]
-        failure_dones = [
-            e for e in dones
-            if e.full_message.get("content") == PROVIDER_CONTRACT_FAILURE_MESSAGE
-        ]
-        assert len(failure_dones) == 1, (
-            "the failure ends in exactly one terminal Done, not a retry"
+    def _assert_recovered_and_wrote(self, harness: Harness) -> None:
+        # 1-7: nothing executed from the violating response, and the corrected
+        # focused request applied the write.
+        assert (harness.root / "alpha.py").read_text(encoding="utf-8") == "alpha = 2\n"
+        assert harness.approvals == ["alpha.py"], (
+            "exactly one act ran: the corrected one"
         )
-        assert dones[-1].full_message["content"] == PROVIDER_CONTRACT_FAILURE_MESSAGE
-        # The violating response never projected a Done of its own. Only the
-        # two discovery rounds and the single factual failure are terminal in
-        # this turn: a response that is discarded whole must not first hand the
-        # UI a terminal event claiming it finished.
-        assert len(dones) == 3, (
+
+        requests = harness.stream.requests
+        assert [r.require_tool_call for r in requests] == [
+            False, False, True, True, False,
+        ], "the violation was corrected inside focused mode, not by resending"
+
+        # 3, 14: no terminal failure text, no failure flag, no receipt status.
+        contents = [e.text for e in harness.events if isinstance(e, ContentDelta)]
+        assert PROVIDER_CONTRACT_FAILURE_MESSAGE not in contents
+        assert harness.manager.last_turn_provider_contract_failure is False
+        assert harness.manager.last_turn_blocked_reason == ""
+
+        # 9, 10: the violating Done is never projected; the corrected one is,
+        # exactly once. Four rounds reach the UI, not five.
+        dones = [e for e in harness.events if isinstance(e, Done)]
+        assert len(dones) == 4, (
             "the provider's Done for the violating focused round was forwarded"
         )
-        projected_call_ids = {
+        projected_call_ids = [
             call["id"]
             for done in dones
             for call in (done.full_message.get("tool_calls") or [])
-        }
-        assert projected_call_ids == {"d0", "d1"}, (
-            "the violating round's tool calls reached the UI through its Done"
-        )
-        # The violating response never reached history — not its prose, not its
-        # reasoning, not its tool calls. The only stored tool-call messages are
-        # the two discovery rounds that led the guard into the focused request.
+        ]
+        assert projected_call_ids == ["d0", "d1", "w1"]
+
+        # 8: no violating prose, reasoning, or tool call reached history.
         assistants = [
             m for m in harness.manager.history.messages if m.get("role") == "assistant"
         ]
@@ -616,61 +688,54 @@ class TestFocusedProviderContract:
             for m in assistants
             for call in (m.get("tool_calls") or [])
         }
-        assert stored_tool_call_ids == {"d0", "d1"}, (
-            "the violating round's tool calls were stored"
-        )
-        assert not any("Here is what I would do" in m.get("content", "") for m in assistants), (
-            "violating prose was preserved"
-        )
-        assert not any(m.get("reasoning_content") for m in assistants), (
-            "violating reasoning was preserved"
-        )
-        # The failure propagates truthfully to the completion-receipt path.
-        assert harness.manager.last_turn_provider_contract_failure is True
-        assert harness.manager.last_turn_blocked_reason == ""
+        assert stored_tool_call_ids == {"d0", "d1", "w1"}
+        assert not any(VIOLATING_PROSE in (m.get("content") or "") for m in assistants)
+        assert not any(m.get("reasoning_content") for m in assistants)
 
-    def test_prose_without_a_required_tool_call_discards_the_violating_prose(
-        self, tmp_path,
+        # 12: the corrective request is still the focused request.
+        violating, corrected = requests[2], requests[3]
+        assert corrected.thinking == "off" == violating.thinking
+        assert corrected.tool_names == violating.tool_names
+        assert corrected.require_tool_call is True
+
+        # 11: the evidence gathered before the violation is byte-identical, and
+        # the correction is the only thing added to the outbound copy.
+        assert corrected.messages[:-1] == violating.messages, (
+            "the corrective request re-derived or dropped gathered evidence"
+        )
+        correction = corrected.messages[-1]
+        assert correction["role"] == "user"
+        assert "exactly one tool call" in correction["content"]
+        assert "discarded" in correction["content"]
+
+        # 13: the frozen system prompt did not move.
+        systems = {
+            r.messages[0]["content"]
+            for r in requests
+            if r.messages and r.messages[0].get("role") == "system"
+        }
+        assert len(systems) == 1
+
+        # The correction is request-local: it is in no other request and in no
+        # stored message.
+        assert not any(
+            "discarded and no action was executed" in str(m.get("content"))
+            for m in harness.manager.history.messages
+        )
+        assert not any(
+            "discarded and no action was executed" in str(m.get("content"))
+            for r in requests
+            if r is not corrected
+            for m in r.messages
+        )
+
+    @pytest.mark.parametrize("shape", sorted(VIOLATION_FACTORIES))
+    def test_a_violation_is_discarded_corrected_and_then_writes(
+        self, tmp_path, shape,
     ) -> None:
-        harness = self._run(
-            tmp_path,
-            assistant(
-                content="Here is what I would do: first I would open...",
-                reasoning="weighing the options\n",
-            ),
-        )
-        self._assert_nothing_executed(harness)
-
-    def test_multiple_tool_calls_execute_nothing(self, tmp_path) -> None:
-        harness = self._run(
-            tmp_path,
-            assistant(
-                tool_call("x1", "write_file", {"path": "alpha.py", "content": "a = 2\n"}),
-                tool_call("x2", "write_file", {"path": "alpha.py", "content": "a = 3\n"}),
-            ),
-        )
-        self._assert_nothing_executed(harness)
-
-    def test_an_unknown_tool_call_executes_nothing(self, tmp_path) -> None:
-        harness = self._run(
-            tmp_path,
-            assistant(tool_call("x1", "mystery_tool", {"path": "alpha.py"})),
-        )
-        self._assert_nothing_executed(harness)
-
-    def test_a_mixed_batch_of_valid_and_unknown_calls_executes_nothing(
-        self, tmp_path,
-    ) -> None:
-        """One valid mutation alongside one unknown call is still not exactly
-        one exposed action — nothing in the batch may execute."""
-        harness = self._run(
-            tmp_path,
-            assistant(
-                tool_call("x1", "write_file", {"path": "alpha.py", "content": "a = 2\n"}),
-                tool_call("x2", "mystery_tool", {"path": "alpha.py"}),
-            ),
-        )
-        self._assert_nothing_executed(harness)
+        """Cases 1-7: every structural shape recovers identically."""
+        harness = self._run(tmp_path, VIOLATION_FACTORIES[shape]())
+        self._assert_recovered_and_wrote(harness)
 
     @pytest.mark.parametrize(
         "malformed",
@@ -689,31 +754,372 @@ class TestFocusedProviderContract:
     def test_one_valid_call_plus_a_malformed_raw_entry_executes_nothing(
         self, tmp_path, malformed,
     ) -> None:
-        """The raw ``tool_calls`` collection is what the contract validates.
+        """Case 5: the raw ``tool_calls`` collection is what is validated.
 
         Filtering the names first would silently drop the unreadable entry and
         present this response as a single clean call — executing a mutation
         while the provider in fact asked for two acts, one of them unreadable.
+        Recovery changed terminality, not this.
         """
         message = assistant(
             tool_call("x1", "write_file", {"path": "alpha.py", "content": "a = 2\n"}),
         )
         message["tool_calls"].append(malformed)
         harness = self._run(tmp_path, message)
-        self._assert_nothing_executed(harness)
+        self._assert_recovered_and_wrote(harness)
 
     @pytest.mark.parametrize(
         "tool_calls",
         ["write_file", {"function": {"name": "write_file"}}, 7],
         ids=["string", "dict", "int"],
     )
-    def test_a_non_list_tool_calls_field_executes_nothing(
+    def test_a_non_list_tool_calls_field_recovers_safely(
         self, tmp_path, tool_calls,
     ) -> None:
-        message = assistant(content="")
+        """Case 6: a raw ``tool_calls`` field that is not a list."""
+        message = assistant(content=VIOLATING_PROSE)
         message["tool_calls"] = tool_calls
         harness = self._run(tmp_path, message)
-        self._assert_nothing_executed(harness)
+        self._assert_recovered_and_wrote(harness)
+
+    def test_a_recovered_violation_may_end_through_a_blocker(self, tmp_path) -> None:
+        """Case 15: correction does not force a write — a truthful structured
+        blocker is still a legitimate ending."""
+        harness = make_harness(
+            tmp_path,
+            [
+                *discovery_round(),
+                prose_only_round(),
+                assistant(
+                    tool_call(
+                        "b1", "report_blocker", {"blocker": "generated at build time"}
+                    )
+                ),
+                assistant(content="I could not edit alpha.py: it is generated."),
+            ],
+        )
+        harness.run()
+
+        assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 1\n"
+        assert harness.manager.last_turn_blocked_reason == "generated at build time"
+        assert harness.manager.last_turn_provider_contract_failure is False
+        assert harness.stream.requests[-1].tool_names == ()
+
+    def test_a_recovered_violation_may_end_through_already_satisfied(
+        self, tmp_path,
+    ) -> None:
+        """Case 16: structured already-satisfied evidence, after a correction."""
+        harness = make_harness(
+            tmp_path,
+            [
+                *discovery_round(),
+                prose_only_round(),
+                assistant(
+                    tool_call(
+                        "s1",
+                        "report_already_satisfied",
+                        {"evidence": "alpha.py already sets alpha = 1"},
+                    )
+                ),
+                assistant(content="Already present; nothing to change."),
+            ],
+        )
+        harness.run()
+
+        assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 1\n"
+        assert harness.manager.last_turn_already_satisfied is True
+        assert harness.manager.last_turn_provider_contract_failure is False
+
+    def test_two_different_violation_shapes_are_distinct_evidence(
+        self, tmp_path,
+    ) -> None:
+        """Case 17: a *different* violation is new evidence, not a second
+        attempt — there is no numeric allowance being spent here."""
+        harness = make_harness(
+            tmp_path,
+            [
+                *discovery_round(),
+                prose_only_round(),
+                multiple_call_round(),
+                unknown_call_round(),
+                WRITE_ROUND,
+                FINAL_ROUND,
+            ],
+        )
+        harness.run()
+
+        assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 2\n"
+        assert [r.require_tool_call for r in harness.stream.requests] == [
+            False, False, True, True, True, True, False,
+        ]
+        assert harness.manager.last_turn_provider_contract_failure is False
+        # Each correction named its own violation.
+        corrections = [
+            r.messages[-1]["content"]
+            for r in harness.stream.requests[3:6]
+        ]
+        assert "no tool call at all" in corrections[0]
+        assert "more than one tool call" in corrections[1]
+        assert "does not expose" in corrections[2]
+
+    def test_the_real_failure_shape_no_longer_requires_a_resend(
+        self, tmp_path,
+    ) -> None:
+        """Case 22: the observed defect, end to end.
+
+        Extensive discovery, one prose-only focused response, then — with no
+        user action at all — a corrective focused request, the applied write,
+        and the ordinary validation/final response.
+        """
+        harness = make_harness(
+            tmp_path,
+            [
+                assistant(tool_call("d0", "glob", {"pattern": "**/alpha*.py"})),
+                assistant(tool_call("d1", "read_file", {"path": "alpha.py"})),
+                assistant(tool_call("d2", "glob", {"pattern": "**/*.py"})),
+                prose_only_round(),
+                WRITE_ROUND,
+                FINAL_ROUND,
+            ],
+        )
+        harness.run()
+
+        assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 2\n"
+        assert [r.require_tool_call for r in harness.stream.requests] == [
+            False, False, False, True, True, False,
+        ]
+        # One send call did the whole thing: the user never resent the task.
+        assert harness.manager.last_turn_provider_contract_failure is False
+        assert PROVIDER_CONTRACT_FAILURE_MESSAGE not in [
+            e.text for e in harness.events if isinstance(e, ContentDelta)
+        ]
+        finals = [
+            m for m in harness.manager.history.messages if m.get("role") == "assistant"
+        ]
+        assert finals[-1]["content"] == FINAL_ROUND["content"]
+
+
+class TestRepeatedIdenticalViolationIsTerminal:
+    """The one evidence-based condition that still ends a turn on the provider
+    contract: the identical structural violation, after Aura issued an explicit
+    correction naming it."""
+
+    def _run_repeated(self, tmp_path: Path, factory) -> Harness:
+        harness = make_harness(
+            tmp_path, [*discovery_round(), factory(), factory()]
+        )
+        harness.run()
+        return harness
+
+    @pytest.mark.parametrize("shape", sorted(VIOLATION_FACTORIES))
+    def test_the_same_violation_twice_ends_in_exactly_one_terminal_failure(
+        self, tmp_path, shape,
+    ) -> None:
+        """Case 18."""
+        harness = self._run_repeated(tmp_path, VIOLATION_FACTORIES[shape])
+
+        # Nothing executed, and exactly one corrective request was issued.
+        assert (harness.root / "alpha.py").read_text(encoding="utf-8") == "alpha = 1\n"
+        assert harness.approvals == []
+        assert [r.require_tool_call for r in harness.stream.requests] == [
+            False, False, True, True,
+        ]
+
+        contents = [e.text for e in harness.events if isinstance(e, ContentDelta)]
+        assert PROVIDER_CONTRACT_FAILURE_MESSAGE in contents
+        dones = [e for e in harness.events if isinstance(e, Done)]
+        failure_dones = [
+            e for e in dones
+            if e.full_message.get("content") == PROVIDER_CONTRACT_FAILURE_MESSAGE
+        ]
+        assert len(failure_dones) == 1
+        assert dones[-1] is failure_dones[0]
+        # Two discovery rounds plus the one factual failure. Neither violating
+        # response projected a Done of its own.
+        assert len(dones) == 3
+        projected_call_ids = {
+            call["id"]
+            for done in dones
+            for call in (done.full_message.get("tool_calls") or [])
+        }
+        assert projected_call_ids == {"d0", "d1"}
+
+        assistants = [
+            m for m in harness.manager.history.messages if m.get("role") == "assistant"
+        ]
+        stored_tool_call_ids = {
+            call["id"]
+            for m in assistants
+            for call in (m.get("tool_calls") or [])
+        }
+        assert stored_tool_call_ids == {"d0", "d1"}
+        assert not any(VIOLATING_PROSE in (m.get("content") or "") for m in assistants)
+        assert not any(m.get("reasoning_content") for m in assistants)
+
+        assert harness.manager.last_turn_provider_contract_failure is True
+        assert harness.manager.last_turn_blocked_reason == ""
+
+    def test_the_terminal_message_reports_the_correction_truthfully(
+        self, tmp_path,
+    ) -> None:
+        """It says a correction was issued and repeated — not that nothing was
+        retried, which was false the moment recovery existed."""
+        self._run_repeated(tmp_path, prose_only_round)
+        assert "nothing was retried" not in PROVIDER_CONTRACT_FAILURE_MESSAGE
+        assert "reissued the same focused request" in PROVIDER_CONTRACT_FAILURE_MESSAGE
+        assert "same structural violation again" in PROVIDER_CONTRACT_FAILURE_MESSAGE
+        assert "No edit was made" in PROVIDER_CONTRACT_FAILURE_MESSAGE
+        assert "evidence are intact" in PROVIDER_CONTRACT_FAILURE_MESSAGE
+
+
+def test_cancellation_during_the_corrective_request_is_unchanged(tmp_path):
+    """Case 19: cancellation keeps its existing semantics inside recovery."""
+    harness = make_harness(
+        tmp_path, [*discovery_round(), prose_only_round(), WRITE_ROUND]
+    )
+    harness.stream.cancel_on_request = 3  # the corrective focused request
+    harness.run()
+
+    errors = [e for e in harness.events if isinstance(e, ApiError)]
+    assert errors and errors[-1].message == "Cancelled."
+    assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 1\n"
+    assert len(harness.stream.requests) == 4
+    assert harness.manager.last_turn_provider_contract_failure is False
+
+
+def test_an_ordinary_turn_issues_exactly_the_same_requests_as_before(tmp_path):
+    """Case 20: no violation, no extra request, no extra context.
+
+    The correction exists only in the outbound copy of the request that
+    corrects something, so a clean turn's requests are byte-identical to what
+    they always were.
+    """
+    harness = make_harness(tmp_path, [*discovery_round(), WRITE_ROUND, FINAL_ROUND])
+    harness.run()
+
+    assert len(harness.stream.requests) == 4
+    assert [r.require_tool_call for r in harness.stream.requests] == [
+        False, False, True, False,
+    ]
+    for request in harness.stream.requests:
+        assert not any(
+            "discarded and no action was executed" in str(m.get("content"))
+            for m in request.messages
+        )
+    # The last message of every request is what the history produced — the
+    # focused request added nothing of its own.
+    assert harness.stream.requests[2].messages[-1]["role"] == "tool"
+
+
+# ── the structural diagnosis itself ─────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "message, kind",
+    [
+        (None, VIOLATION_MISSING_MESSAGE),
+        ("not a message", VIOLATION_MISSING_MESSAGE),
+        ({}, VIOLATION_NO_TOOL_CALLS),
+        ({"tool_calls": None}, VIOLATION_NO_TOOL_CALLS),
+        ({"tool_calls": []}, VIOLATION_NO_TOOL_CALLS),
+        ({"tool_calls": "write_file"}, VIOLATION_TOOL_CALLS_NOT_A_LIST),
+        ({"tool_calls": 7}, VIOLATION_TOOL_CALLS_NOT_A_LIST),
+        (
+            {"tool_calls": [
+                tool_call("a", "write_file", {}),
+                tool_call("b", "patch_file", {}),
+            ]},
+            VIOLATION_MULTIPLE_TOOL_CALLS,
+        ),
+        ({"tool_calls": [None]}, VIOLATION_MALFORMED_CALL),
+        ({"tool_calls": [{"id": "a"}]}, VIOLATION_MALFORMED_FUNCTION),
+        ({"tool_calls": [{"function": ["write_file"]}]}, VIOLATION_MALFORMED_FUNCTION),
+        ({"tool_calls": [{"function": {}}]}, VIOLATION_INVALID_TOOL_NAME),
+        ({"tool_calls": [{"function": {"name": ""}}]}, VIOLATION_INVALID_TOOL_NAME),
+        ({"tool_calls": [{"function": {"name": None}}]}, VIOLATION_INVALID_TOOL_NAME),
+        ({"tool_calls": [tool_call("a", "read_file", {})]}, VIOLATION_UNEXPOSED_TOOL),
+        ({"tool_calls": [tool_call("a", "Write_File", {})]}, VIOLATION_UNEXPOSED_TOOL),
+    ],
+)
+def test_diagnose_focused_contract_classifies_every_shape(message, kind) -> None:
+    diagnosis = diagnose_focused_contract(message, EXPOSED)
+    assert diagnosis.ok is False
+    assert diagnosis.kind == kind
+    assert diagnosis.fingerprint.startswith(kind)
+
+
+def test_a_valid_response_has_an_empty_diagnosis() -> None:
+    diagnosis = diagnose_focused_contract(
+        {"tool_calls": [tool_call("a", "write_file", {})]}, EXPOSED
+    )
+    assert diagnosis.ok is True
+    assert diagnosis.kind == ""
+    assert diagnosis.fingerprint == ""
+    assert diagnosis.names == ("write_file",)
+
+
+def test_the_fingerprint_is_structural_and_ignores_noisy_output() -> None:
+    """Two responses that differ only in prose, reasoning, and call ids are the
+    same structural violation — otherwise every repeat would look novel."""
+    first = diagnose_focused_contract(
+        {
+            "content": "let me think about this",
+            "reasoning_content": "step one...",
+            "tool_calls": [
+                tool_call("call_aaa", "write_file", {}),
+                tool_call("call_bbb", "patch_file", {}),
+            ],
+        },
+        EXPOSED,
+    )
+    second = diagnose_focused_contract(
+        {
+            "content": "actually, a different plan entirely",
+            "reasoning_content": "step two...",
+            "tool_calls": [
+                tool_call("call_zzz", "write_file", {}),
+                tool_call("call_yyy", "patch_file", {}),
+            ],
+        },
+        EXPOSED,
+    )
+    assert first.fingerprint == second.fingerprint
+
+    # A different *shape* is a different fingerprint.
+    other = diagnose_focused_contract({"tool_calls": []}, EXPOSED)
+    assert other.fingerprint != first.fingerprint
+    # So is the same kind naming a different tool.
+    assert (
+        diagnose_focused_contract(
+            {"tool_calls": [tool_call("a", "read_file", {})]}, EXPOSED
+        ).fingerprint
+        != diagnose_focused_contract(
+            {"tool_calls": [tool_call("a", "glob", {})]}, EXPOSED
+        ).fingerprint
+    )
+
+
+def test_the_correction_names_the_reason_the_tools_and_the_one_call_rule() -> None:
+    diagnosis = diagnose_focused_contract({"tool_calls": []}, EXPOSED)
+    text = focused_correction_instruction(diagnosis, EXPOSED)
+    assert "discarded" in text
+    assert "no action was executed" in text
+    assert diagnosis.reason in text
+    for name in EXPOSED:
+        assert name in text
+    assert "exactly one tool call" in text
+    assert "prose" in text
+
+
+def test_protocol_recovery_state_clears_for_a_new_decision() -> None:
+    state = FocusedActionState()
+    state.pending_correction = "fix your formatting"
+    state.violation_fingerprints.add("no_tool_calls|0|")
+    state.last_violation = "no_tool_calls"
+    state.clear_protocol_recovery()
+    assert state.pending_correction == ""
+    assert state.violation_fingerprints == set()
+    assert state.last_violation == ""
 
 
 EXPOSED = ("write_file", "patch_file", "report_blocker")
@@ -939,7 +1345,7 @@ def test_activation_predicate(kwargs, expected):
 
 @pytest.mark.parametrize(
     "script_name",
-    ["write", "blocker", "contract_failure"],
+    ["write", "blocker", "contract_failure", "recovered_contract_violation"],
 )
 def test_history_tool_pairing_is_preserved(tmp_path, script_name):
     scripts = {
@@ -949,7 +1355,19 @@ def test_history_tool_pairing_is_preserved(tmp_path, script_name):
             assistant(tool_call("b1", "report_blocker", {"blocker": "generated"})),
             assistant(content="Blocked."),
         ],
-        "contract_failure": [*discovery_round(), assistant(content="prose only")],
+        # The corrected request repeats the identical violation, which is the
+        # one shape that still ends the turn on the provider contract.
+        "contract_failure": [
+            *discovery_round(),
+            assistant(content="prose only"),
+            assistant(content="prose only"),
+        ],
+        "recovered_contract_violation": [
+            *discovery_round(),
+            assistant(content="prose only"),
+            WRITE_ROUND,
+            FINAL_ROUND,
+        ],
     }
     harness = make_harness(tmp_path, scripts[script_name])
     harness.run()
