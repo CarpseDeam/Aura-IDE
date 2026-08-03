@@ -49,13 +49,52 @@ def assistant_message_text(message: dict[str, Any]) -> str:
 
 
 
-def terminal_result_completed(info: dict[str, Any] | None) -> bool:
+def terminal_result_completed(
+    info: dict[str, Any] | None, *, probes_complete_action: bool = True
+) -> bool:
+    """Whether a terminal round finished the turn's action.
+
+    A terminal command is a probe, so ``probes_complete_action=False`` answers
+    ``False`` however cleanly it exited.  See
+    :func:`tool_result_completes_action` for why that distinction exists.
+    """
+    if not probes_complete_action:
+        return False
     payload = info.get("_terminal_payload") if isinstance(info, dict) else None
     return isinstance(payload, dict) and payload.get("exit_code") == 0
 
 
-def tool_result_completes_action(name: str, ok: bool) -> bool:
-    return ok and name in ACTION_COMPLETION_TOOL_NAMES
+def tool_result_completes_action(
+    name: str, ok: bool, *, probes_complete_action: bool = True
+) -> bool:
+    """Whether this tool result means the turn completed its action.
+
+    Two different things live in :data:`ACTION_COMPLETION_TOOL_NAMES`:
+
+    * a **write** — the action itself.  A successful one always completes it.
+    * a **probe** — ``git_status``, ``git_diff``, ``run_diagnostic_command``,
+      the terminal tools.  These inspect; they do not act.
+
+    Treating a successful probe as the completed action is right on a turn whose
+    point *is* the probe ("show me the git status", "run the tests").  It is
+    false on an implementation turn that has not yet written anything: the action
+    is the edit, and no edit has happened.
+
+    That distinction is load-bearing rather than pedantic.
+    ``task_completion_context`` vetoes the focused action transition, so before
+    this parameter existed a single successful ``git_status`` early in an
+    implementation turn convinced the loop the turn had already acted — and the
+    model could then keep making novel reads indefinitely, with the transition
+    that would have ended the turn permanently suppressed.
+
+    Callers that own the answer pass ``probes_complete_action=False``; the
+    default preserves the historical behaviour for every other caller.
+    """
+    if not ok:
+        return False
+    if name in WRITE_TOOLS:
+        return True
+    return probes_complete_action and name in TASK_COMPLETION_TOOL_NAMES
 
 
 def completion_phrase_hits(text: str) -> set[str]:

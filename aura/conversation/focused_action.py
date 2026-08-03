@@ -152,20 +152,18 @@ def should_enter_focused_action(
         # A pending completion response normally outranks the focused request:
         # the turn already acted and owes prose, not another mutation.
         #
-        # But ``task_completion_context`` is set by any *successful* call in
-        # ``ACTION_COMPLETION_TOOL_NAMES`` — which includes ``git_status``,
-        # ``run_diagnostic_command`` and the terminal tools. Before the first
-        # applied write, one such probe therefore claims the turn "completed an
-        # action" when nothing was completed at all, and that claim used to
-        # suppress the focused transition for the rest of the turn. A model
-        # could run one successful probe and then read new files indefinitely:
-        # a second unbounded pre-write loop, distinct from the novelty one, and
-        # reachable by a single ``git_status``.
+        # The exhausted-stage override is the backstop for a completion context
+        # no applied write earned. Probes no longer set one —
+        # :func:`~aura.conversation.completion_guard.tool_result_completes_action`
+        # refuses to call a ``git_status`` the completed action of a turn that
+        # has not written anything — so what remains here is the narrower case:
+        # a write tool that returned ``ok`` while its payload never said
+        # ``applied: True``. The turn believes it acted and nothing landed, and
+        # forcing the action request is the right answer.
         #
-        # An exhausted stage overrides it, and can only do so honestly:
-        # ``stage_exhausted`` requires ``implementation_staging_applies``, which
-        # is false once any write has applied. So this can never pre-empt a
-        # completion that a real write earned — only one a probe invented.
+        # It can only override honestly: ``stage_exhausted`` requires
+        # ``implementation_staging_applies``, which is false once any write has
+        # applied. So this can never pre-empt a real completion.
         return False
     return not (state.spent or state.blocked)
 

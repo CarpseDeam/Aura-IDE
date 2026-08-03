@@ -339,7 +339,12 @@ class TestProbesDoNotExtendDiscovery:
         novel reads therefore ran forever. An exhausted stage now outranks a
         completion context no applied write ever earned.
         """
-        rounds = [tool_round([("p0", "git_status", {})])]
+        # Must be a probe that genuinely *succeeds*: a failing one completes
+        # nothing under any rule, and would make this test pass vacuously.
+        # ``git_status`` fails outside a repository, so it is the wrong choice.
+        rounds = [tool_round([
+            ("p0", "run_diagnostic_command", {"command": "python --version"}),
+        ])]
         rounds += [read_round(f"r{i}", i) for i in range(1, 20)]
         backend = ScriptedBackend(rounds)
         isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
@@ -652,13 +657,19 @@ class TestInstructionIsEphemeral:
 class TestStageUnit:
     """The stage is a small enum on per-turn state, not an engine."""
 
-    def _state(self, *, lane: TaskLane = TaskLane.implementation) -> _SendState:
+    def _state(
+        self,
+        *,
+        lane: TaskLane = TaskLane.implementation,
+        read_only: bool = False,
+    ) -> _SendState:
         state = _SendState(
             mode="single",
             research_policy=None,
             task_route=TaskRoute(
                 lane=lane, action="x", confidence=0.9, reason="unit"
             ),
+            read_only=read_only,
         )
         return state
 
@@ -667,36 +678,54 @@ class TestStageUnit:
 
     def test_two_executed_rounds_exhaust_it(self) -> None:
         state = self._state()
-        assert state.consume_implementation_stage(executed=True, read_only=False)
+        assert state.consume_implementation_stage(executed=True)
         assert state.implementation_stage is ImplementationStage.FINAL_EVIDENCE
-        assert state.consume_implementation_stage(executed=True, read_only=False)
+        assert state.consume_implementation_stage(executed=True)
         assert state.implementation_stage is ImplementationStage.EXHAUSTED
-        assert state.implementation_stage_exhausted(read_only=False)
+        assert state.implementation_stage_exhausted()
 
     def test_a_round_that_executed_nothing_consumes_nothing(self) -> None:
         state = self._state()
         for _ in range(10):
-            state.consume_implementation_stage(executed=False, read_only=False)
+            state.consume_implementation_stage(executed=False)
         assert state.implementation_stage is ImplementationStage.SURVEY
 
     def test_exhaustion_is_not_reported_under_read_only(self) -> None:
-        state = self._state()
-        state.consume_implementation_stage(executed=True, read_only=False)
-        state.consume_implementation_stage(executed=True, read_only=False)
-        assert not state.implementation_stage_exhausted(read_only=True)
+        state = self._state(read_only=True)
+        state.consume_implementation_stage(executed=True)
+        state.consume_implementation_stage(executed=True)
+        assert not state.implementation_stage_exhausted()
 
     def test_an_applied_write_ends_the_protocol(self) -> None:
         state = self._state()
-        state.consume_implementation_stage(executed=True, read_only=False)
-        state.consume_implementation_stage(executed=True, read_only=False)
-        assert state.implementation_stage_exhausted(read_only=False)
+        state.consume_implementation_stage(executed=True)
+        state.consume_implementation_stage(executed=True)
+        assert state.implementation_stage_exhausted()
 
         state.pre_edit_guard.observe_result(
             "write_file", True, json.dumps({"applied": True})
         )
-        assert not state.implementation_stage_exhausted(read_only=False), (
+        assert not state.implementation_stage_exhausted(), (
             "once a write applies the stage stops being consulted"
         )
+
+    def test_probes_complete_nothing_until_a_write_lands(self) -> None:
+        """A probe is not this turn's action while the edit has not happened."""
+        state = self._state()
+        assert not state.probes_complete_action()
+
+        state.pre_edit_guard.observe_result(
+            "write_file", True, json.dumps({"applied": True})
+        )
+        assert state.probes_complete_action(), (
+            "after a real write, a validating command completes the action again"
+        )
+
+    def test_probes_still_complete_action_off_the_implementation_lane(self) -> None:
+        """"Run the tests for me" is a turn whose whole point is the probe."""
+        assert self._state(lane=TaskLane.research).probes_complete_action()
+        assert self._state(lane=TaskLane.chat).probes_complete_action()
+        assert self._state(read_only=True).probes_complete_action()
 
     def test_staging_predicate_is_pure_over_the_four_facts(self) -> None:
         guard = PreEditLoopGuard()

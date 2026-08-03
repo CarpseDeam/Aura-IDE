@@ -133,6 +133,12 @@ class _SendState:
     name. ``None`` falls back to the built-in table plus the registry's
     observation default."""
 
+    read_only: bool = False
+    """Whether this turn's registry exposes no mutation tools, read once from
+    the registry by the send loop. Carried here so the deep call sites that need
+    it — the terminal round handlers among them — read one fact off the state
+    rather than each re-reaching for the registry."""
+
     # --- per-round state ---
     reject_all_for_turn: bool = False
     rounds_used: int = 0
@@ -221,16 +227,23 @@ class _SendState:
 
     # ── Implementation discovery stage ──────────────────────────────────
 
-    def implementation_staging_active(self, *, read_only: bool) -> bool:
-        """Whether the discovery stage governs this turn right now."""
+    def implementation_staging_active(self) -> bool:
+        """Whether the discovery stage governs this turn right now.
+
+        Also the answer to "is this an implementation turn that has not yet
+        acted" — which is why
+        :func:`~aura.conversation.completion_guard.tool_result_completes_action`
+        consults it to decide whether a probe can claim the turn completed
+        anything.
+        """
         return implementation_staging_applies(
             mode=self.mode,
             route=self.task_route,
             guard=self.pre_edit_guard,
-            read_only=read_only,
+            read_only=self.read_only,
         )
 
-    def implementation_stage_exhausted(self, *, read_only: bool) -> bool:
+    def implementation_stage_exhausted(self) -> bool:
         """Whether ordinary discovery is spent and the next request must act.
 
         One half of the focused transition authority:
@@ -240,17 +253,33 @@ class _SendState:
         """
         return (
             self.implementation_stage is ImplementationStage.EXHAUSTED
-            and self.implementation_staging_active(read_only=read_only)
+            and self.implementation_staging_active()
         )
 
-    def awaiting_final_evidence_request(self, *, read_only: bool) -> bool:
+    def awaiting_final_evidence_request(self) -> bool:
         """Whether the next ordinary request is the last one, and must say so."""
         return (
             self.implementation_stage is ImplementationStage.FINAL_EVIDENCE
-            and self.implementation_staging_active(read_only=read_only)
+            and self.implementation_staging_active()
         )
 
-    def consume_implementation_stage(self, *, executed: bool, read_only: bool) -> bool:
+    def probes_complete_action(self) -> bool:
+        """Whether a successful probe may mark this turn's action complete.
+
+        A ``git_status``, ``run_diagnostic_command``, or terminal call is a
+        *probe*: it inspects, it does not act.  On most turns treating a
+        successful probe as the completed action is right — "show me the git
+        status" is a turn whose whole point is the probe.  On an implementation
+        turn before its first applied write it is simply false: the action is the
+        edit, the edit has not happened, and nothing was completed.
+
+        Believing it there had a concrete cost.  ``task_completion_context``
+        vetoes the focused action transition, so one successful ``git_status``
+        before the first write bought an unbounded pre-write discovery loop.
+        """
+        return not self.implementation_staging_active()
+
+    def consume_implementation_stage(self, *, executed: bool) -> bool:
         """Spend one ordinary discovery hop; return whether the stage moved.
 
         Called once per tool round, after that round's results have been folded
@@ -273,7 +302,7 @@ class _SendState:
         """
         if not executed:
             return False
-        if not self.implementation_staging_active(read_only=read_only):
+        if not self.implementation_staging_active():
             return False
         if self.implementation_stage is ImplementationStage.SURVEY:
             self.implementation_stage = ImplementationStage.FINAL_EVIDENCE

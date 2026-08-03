@@ -730,10 +730,7 @@ class ToolRoundRunner:
         # deliberately not "at least one tool succeeded", because a hop that ran
         # and failed still spent the model's opportunity to look. The guard's
         # own failure recovery keeps working inside whatever stages remain.
-        state.consume_implementation_stage(
-            executed=bool(results_by_id),
-            read_only=bool(getattr(self._tools, "read_only", False)),
-        )
+        state.consume_implementation_stage(executed=bool(results_by_id))
 
         if worker_phase_boundary_info is not None:
             if worker_phase_boundary_info.get("message"):
@@ -968,7 +965,11 @@ class ToolRoundRunner:
             ),
             "completed_tool_result_for_final": (
                 state.mode in {"planner", "single"}
-                and tool_result_completes_action(name, exec_result.ok)
+                and tool_result_completes_action(
+                    name,
+                    exec_result.ok,
+                    probes_complete_action=state.probes_complete_action(),
+                )
             ),
             "flow_result": {
                 "name": name,

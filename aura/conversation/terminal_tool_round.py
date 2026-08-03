@@ -55,7 +55,9 @@ def handle_run_and_watch_round(
     return {
         "id": tool_call_id,
         "skip": True,
-        "completed_tool_result_for_final": terminal_result_completed(loop_info),
+        "completed_tool_result_for_final": terminal_result_completed(
+            loop_info, probes_complete_action=state.probes_complete_action()
+        ),
         "flow_result": {
             "name": "run_and_watch",
             "args": args,
@@ -107,7 +109,9 @@ def handle_run_terminal_command_round(
     result = {
         "id": tool_call_id,
         "skip": True,
-        "completed_tool_result_for_final": terminal_result_completed(loop_info),
+        "completed_tool_result_for_final": terminal_result_completed(
+            loop_info, probes_complete_action=state.probes_complete_action()
+        ),
         "flow_result": {
             "name": "run_terminal_command",
             "args": args,

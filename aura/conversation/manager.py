@@ -315,6 +315,7 @@ class ConversationManager:
             research_policy=decide_research_policy(_latest_user_text(self._history)),
             task_route=task_route,
             tool_effect=self._tools.tool_effect,
+            read_only=bool(getattr(self._tools, "read_only", False)),
         )
         state.focused_action.selected_thinking = str(thinking)
         self._last_turn_blocked_reason = ""
@@ -353,18 +354,15 @@ class ConversationManager:
             # user's thinking selection is untouched — it is simply not the
             # mode for this request, and the next round runs on it again.
             focused = state.focused_action
-            read_only = bool(getattr(self._tools, "read_only", False))
             focused.active = should_enter_focused_action(
                 mode=state.mode,
                 route=state.task_route,
                 guard=state.pre_edit_guard,
                 task_completion_context=state.task_completion_context,
                 state=focused,
-                stage_exhausted=state.implementation_stage_exhausted(
-                    read_only=read_only
-                ),
+                stage_exhausted=state.implementation_stage_exhausted(),
             )
-            if focused.active and read_only:
+            if focused.active and state.read_only:
                 # A read-only registry exposes no mutation tools, so there is
                 # nothing for a focused action request to act on. Do not enter
                 # focused mutation mode under a read-only registry.
@@ -378,7 +376,7 @@ class ConversationManager:
                 not focused.active
                 and not focused.blocked
                 and not state.task_completion_context
-                and state.awaiting_final_evidence_request(read_only=read_only)
+                and state.awaiting_final_evidence_request()
             )
             if focused.active:
                 tool_defs = self._tools.focused_action_tool_defs()
