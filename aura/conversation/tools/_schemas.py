@@ -2118,6 +2118,64 @@ COMMIT_IMPLEMENTATION_DECISION_TOOL_DEF: dict[str, Any] = {
 }
 
 
+#: The decision checkpoint's other answer: discovery is genuinely unfinished.
+#:
+#: Bookkeeping only — it reads nothing, writes nothing, and touches no workspace
+#: state.  What it does is make "keep looking" cost a *named* implementation
+#: question and the specific evidence that would answer it, so an additional
+#: observation round can never be an unexamined continuation of the last one.
+#: Deliberately absent from every ordinary catalog: it is only meaningful at the
+#: checkpoint, which is the one request that asks the question it answers.
+CONTINUE_IMPLEMENTATION_DISCOVERY_TOOL_DEF: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "continue_implementation_discovery",
+        "description": (
+            "Record that one specific implementation question is still "
+            "unanswered, and take exactly one more observation round to answer "
+            "it. Name the question and the repository evidence that would "
+            "settle it — not a general wish for more confidence. Do not use "
+            "this to survey adjacent subsystems, neighbouring examples, test "
+            "runners, executable locations, or optional validation "
+            "infrastructure: those belong after the first applied mutation "
+            "unless one of them *is* the unresolved implementation question. "
+            "If you can already name the owner, the seams, the target files, "
+            "and the change, call commit_implementation_decision instead. "
+            "Performs no mutation."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "unresolved_question": {
+                    "type": "string",
+                    "description": (
+                        "The exact implementation question that remains "
+                        "unanswered, in one sentence."
+                    ),
+                },
+                "needed_evidence": {
+                    "type": "string",
+                    "description": (
+                        "The specific repository evidence that would answer "
+                        "it — the symbol, definition, call site, or result you "
+                        "need to see."
+                    ),
+                },
+                "likely_files": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Optional: the concrete files or paths you expect to "
+                        "contain that evidence."
+                    ),
+                },
+            },
+            "required": ["unresolved_question", "needed_evidence"],
+        },
+    },
+}
+
+
 #: The focused action turn's second exit hatch: the requested state already
 #: exists in the repository, so no change is required.
 #:

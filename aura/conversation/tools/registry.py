@@ -193,6 +193,19 @@ class ToolRegistry(
         """
         return self._catalog.build_focused_action_tool_defs()
 
+    def decision_checkpoint_tool_defs(
+        self, *, include_blocker: bool = True
+    ) -> list[dict[str, Any]]:
+        """Tool defs for one decision checkpoint request.
+
+        Deliberately independent of ``read_only`` mode plumbing and of the
+        dynamic/MCP schemas — the checkpoint exposes the fixed control surface
+        and nothing else.
+        """
+        return self._catalog.build_decision_checkpoint_tool_defs(
+            include_blocker=include_blocker
+        )
+
     def tool_effect(self, name: str) -> ToolEffect:
         """Authoritative runtime effect lookup for any exposed tool.
 
@@ -400,6 +413,9 @@ TOOL_HANDLERS["report_blocker"] = ToolRegistry._handle_report_blocker
 TOOL_HANDLERS["report_already_satisfied"] = ToolRegistry._handle_report_already_satisfied
 TOOL_HANDLERS["commit_implementation_decision"] = (
     ToolRegistry._handle_commit_implementation_decision
+)
+TOOL_HANDLERS["continue_implementation_discovery"] = (
+    ToolRegistry._handle_continue_implementation_discovery
 )
 
 TOOL_HANDLERS["search_project_memory"] = ToolRegistry._handle_search_project_memory

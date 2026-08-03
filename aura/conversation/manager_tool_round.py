@@ -19,6 +19,7 @@ from aura.conversation.dispatch_tool_round import (
 )
 from aura.conversation.focused_action import (
     COMMIT_IMPLEMENTATION_DECISION,
+    CONTINUE_IMPLEMENTATION_DISCOVERY,
     REPORT_ALREADY_SATISFIED,
 )
 from aura.conversation.history import History
@@ -525,7 +526,11 @@ class ToolRoundRunner:
         for task in tasks:
             state.limits.record(task["name"])
             if guard is not None:
-                guard.record(task["name"], task["args"])
+                # The call id is what the outbound API view keys result
+                # residency on, so the guard can tell a duplicate read whose
+                # result is still in front of the model from one whose result
+                # compaction has already retired.
+                guard.record(task["name"], task["args"], task["id"])
             if state.worker_flow is not None:
                 state.worker_flow.observe_tool_call(task["name"], task["args"])
 
@@ -679,6 +684,33 @@ class ToolRoundRunner:
             ):
                 state.focused_action.commit_decision(
                     str(payload.get("decision_id", ""))
+                )
+            break
+
+        # Whether a ``continue_implementation_discovery`` call in this round
+        # actually succeeded with the structured packet. It is the *only* way an
+        # additional observation round is granted, and it turns on this fact
+        # alone — never on the tool name, never on assistant prose. An invalid
+        # call is an ordinary failed tool result: the checkpoint returns and
+        # asks again.
+        for task in tasks:
+            if task["name"] != CONTINUE_IMPLEMENTATION_DISCOVERY:
+                continue
+            res = results_by_id.get(task["id"])
+            if not res:
+                continue
+            payload = parse_tool_payload(str(res.get("result_payload", "")))
+            if (
+                bool(payload.get("ok"))
+                and bool(payload.get("implementation_discovery_continued"))
+                and payload.get("mutation") is False
+                and payload.get("applied") is False
+            ):
+                unresolved = payload.get("unresolved")
+                state.focused_action.continue_discovery(
+                    str(unresolved.get("unresolved_question", ""))
+                    if isinstance(unresolved, dict)
+                    else ""
                 )
             break
 

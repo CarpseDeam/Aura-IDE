@@ -41,6 +41,7 @@ from aura.client.events import Done
 from aura.conversation.api_view import RECEIPT_MARKER, build_api_view
 from aura.conversation.focused_action import (
     COMMIT_IMPLEMENTATION_DECISION,
+    CONTINUE_IMPLEMENTATION_DISCOVERY,
     FocusedActionState,
     should_enter_focused_action,
 )
@@ -201,16 +202,49 @@ def _clean_hook():
     model_streams.unregister(HOOK)
 
 
+def continue_call(call_id: str, question: str) -> dict[str, Any]:
+    return assistant(
+        tool_call(
+            call_id,
+            CONTINUE_IMPLEMENTATION_DISCOVERY,
+            {
+                "unresolved_question": question,
+                "needed_evidence": "the definition of the owning symbol",
+            },
+        )
+    )
+
+
+def request_kind(request: RecordedRequest) -> str:
+    """Classify a recorded request by the catalog it exposed."""
+    names = set(request.tool_names)
+    if not names:
+        return "completion"
+    if COMMIT_IMPLEMENTATION_DECISION in names and "write_file" not in names:
+        return "checkpoint"
+    if request.require_tool_call:
+        return "focused"
+    return "ordinary"
+
+
+def kinds(harness: Harness) -> list[str]:
+    return [request_kind(r) for r in harness.stream.requests]
+
+
 def advancing_discovery() -> list[dict[str, Any]]:
-    """Three rounds that each return genuinely new evidence.
+    """Three observation rounds that each return genuinely new evidence.
 
     Deliberately *not* a stall and not a cycle: every round opens ground the
     turn did not have, so ``PreEditLoopGuard`` never concludes discovery is
-    over. This is the exact sequence that used to run forever.
+    over. This is the exact sequence that used to run forever — and the reason
+    it no longer can is the checkpoint between each pair of rounds, which is
+    where the model has to say what it is still trying to find out.
     """
     return [
         assistant(tool_call("d0", "glob", {"pattern": "**/alpha*.py"})),
+        continue_call("k0", "which module defines the beta seam?"),
         assistant(tool_call("d1", "glob", {"pattern": "**/beta*.py"})),
+        continue_call("k1", "what does alpha.py currently do at that seam?"),
         assistant(tool_call("d2", "read_file", {"path": "alpha.py"})),
     ]
 
@@ -239,31 +273,45 @@ def committed(tmp_path):
 
 
 def test_the_request_after_a_committed_decision_is_focused(committed):
-    assert [r.require_tool_call for r in committed.stream.requests] == [
-        False,  # discovery
-        False,  # discovery
-        False,  # discovery
-        False,  # the commit round itself is an ordinary request
-        True,   # ← the very next request is focused
-        False,  # post-write validation
-        False,  # final
+    assert kinds(committed) == [
+        "ordinary",    # observation round
+        "checkpoint",  # ← the harness asks, unprompted
+        "ordinary",    # the round the named question bought
+        "checkpoint",
+        "ordinary",
+        "checkpoint",  # the commit happens here, at the checkpoint
+        "focused",     # ← the very next request is the mutation surface
+        "ordinary",    # post-write validation
+        "ordinary",    # final
     ]
 
 
+def test_the_checkpoint_exposes_only_the_decision_controls(committed):
+    exposed = set(committed.stream.requests[1].tool_names)
+    assert exposed == {
+        COMMIT_IMPLEMENTATION_DECISION,
+        CONTINUE_IMPLEMENTATION_DISCOVERY,
+    }, "no read, search, terminal, editing, or blocker tool at a clean checkpoint"
+
+
 def test_the_focused_request_exposes_only_the_action_surface(committed):
-    exposed = set(committed.stream.requests[4].tool_names)
-    assert exposed == set(MUTATION_TOOL_NAMES) | {
+    action = next(
+        r for r in committed.stream.requests if request_kind(r) == "focused"
+    )
+    assert set(action.tool_names) == set(MUTATION_TOOL_NAMES) | {
         "report_blocker",
         "report_already_satisfied",
     }
-    assert committed.stream.requests[4].thinking == "off"
+    assert action.thinking == "off"
 
 
 def test_no_discovery_happens_between_the_decision_and_the_write(committed):
     called = committed.called_tools()
     assert called == [
         "glob",
+        CONTINUE_IMPLEMENTATION_DISCOVERY,
         "glob",
+        CONTINUE_IMPLEMENTATION_DISCOVERY,
         "read_file",
         COMMIT_IMPLEMENTATION_DECISION,
         "write_file",
@@ -278,32 +326,45 @@ def test_no_discovery_happens_between_the_decision_and_the_write(committed):
 def test_the_write_applies_and_focused_validation_follows(committed, tmp_path):
     assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 2\n"
     assert committed.approvals == ["alpha.py"]
-    # Exactly one focused request in the whole turn.
-    assert sum(r.require_tool_call for r in committed.stream.requests) == 1
+    # Exactly one focused mutation request in the whole turn.
+    assert kinds(committed).count("focused") == 1
     # Validation ran after the mutation, not before it.
     assert committed.called_tools()[-1] == "read_file"
 
 
-def test_without_the_commit_the_same_discovery_never_goes_focused(tmp_path):
-    """The control: this is why the transition is the decision, not a stall.
+def test_discovery_cannot_chain_without_naming_a_question(tmp_path):
+    """The structural fix: the checkpoint arrives whether the model wants it or not.
 
-    Identical advancing rounds, no commit — the guard never concludes anything,
-    exactly as before. That is the bug the tool fixes, reproduced.
+    Identical advancing rounds, no commit. Before this protocol the guard alone
+    never concluded anything and the turn surveyed forever; now the request after
+    every observation round is the checkpoint, so the only way to keep looking is
+    to name what is still unknown.
     """
     harness = make_harness(
         tmp_path,
         [
-            *advancing_discovery(),
+            assistant(tool_call("d0", "glob", {"pattern": "**/alpha*.py"})),
+            continue_call("k0", "which module owns beta?"),
             assistant(tool_call("d3", "read_file", {"path": "beta.py"})),
+            continue_call("k1", "which module owns gamma?"),
             assistant(tool_call("d4", "read_file", {"path": "gamma.py"})),
+            COMMIT_ROUND,
+            WRITE_ROUND,
             FINAL_ROUND,
         ],
     )
     harness.run()
-    assert not any(r.require_tool_call for r in harness.stream.requests), (
-        "no round stalled and no cycle formed, so the guard alone never "
-        "reaches focused action"
-    )
+    assert kinds(harness) == [
+        "ordinary",
+        "checkpoint",
+        "ordinary",
+        "checkpoint",
+        "ordinary",
+        "checkpoint",
+        "focused",
+        "ordinary",
+    ]
+    assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 2\n"
 
 
 # ── 9: the decision capsule survives compaction byte-identically ────────────
@@ -391,7 +452,10 @@ def test_the_decision_is_spent_by_the_act_it_authorizes(tmp_path):
         ],
     )
     harness.run()
-    assert sum(r.require_tool_call for r in harness.stream.requests) == 1
+    assert kinds(harness).count("focused") == 1
+    assert "checkpoint" not in kinds(harness)[6:], (
+        "the pre-write protocol is over once the write applied"
+    )
 
 
 def test_an_invalid_packet_is_an_ordinary_failed_tool_result(tmp_path):
@@ -413,6 +477,8 @@ def test_an_invalid_packet_is_an_ordinary_failed_tool_result(tmp_path):
                 )
             ),
             assistant(tool_call("d7", "read_file", {"path": "beta.py"})),
+            COMMIT_ROUND,
+            WRITE_ROUND,
             FINAL_ROUND,
         ],
     )
@@ -427,10 +493,19 @@ def test_an_invalid_packet_is_an_ordinary_failed_tool_result(tmp_path):
     )
     assert payload["ok"] is False
     assert payload["failure_class"] == "invalid_arguments"
-    assert not any(r.require_tool_call for r in harness.stream.requests), (
-        "a rejected packet is not a committed decision"
-    )
-    assert len(harness.stream.requests) == 6, "the turn continued normally"
+    assert kinds(harness) == [
+        "ordinary",
+        "checkpoint",
+        "ordinary",
+        "checkpoint",
+        "ordinary",
+        "checkpoint",  # the invalid packet: a failed tool result, no transition
+        "ordinary",    # the failure buys an ordinary recovery round
+        "checkpoint",  # and the checkpoint returns
+        "focused",     # only the *valid* packet transitions
+        "ordinary",
+    ]
+    assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 2\n"
 
 
 # ── exposure: only the ordinary production SINGLE surface ───────────────────
@@ -512,7 +587,7 @@ def test_malformed_focused_response_is_repaired_after_a_committed_decision(tmp_p
         [
             *advancing_discovery(),
             COMMIT_ROUND,
-            # Focused request 1: prose only — a protocol violation.
+            # Focused request 1: prose only — nothing usable in it.
             assistant(content="I will now edit alpha.py."),
             # Focused request 2 (reissued with one correction): the act.
             WRITE_ROUND,
@@ -521,19 +596,22 @@ def test_malformed_focused_response_is_repaired_after_a_committed_decision(tmp_p
     )
     harness.run()
 
-    assert [r.require_tool_call for r in harness.stream.requests] == [
-        False,
-        False,
-        False,
-        False,
-        True,
-        True,
-        False,
+    assert kinds(harness) == [
+        "ordinary",
+        "checkpoint",
+        "ordinary",
+        "checkpoint",
+        "ordinary",
+        "checkpoint",
+        "focused",
+        "focused",
+        "ordinary",
     ], "the identical focused request was reissued, not a discovery round"
     assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 2\n"
-    correction = harness.stream.requests[5].messages[-1]
+    assert harness.manager.last_turn_provider_contract_failure is False
+    correction = harness.stream.requests[7].messages[-1]
     assert correction["role"] == "user"
-    assert "discarded" in correction["content"]
+    assert "Nothing in your previous response was executed" in correction["content"]
     assert all(
         m.get("content") != correction["content"]
         for m in harness.manager.history.messages

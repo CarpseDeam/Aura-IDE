@@ -40,21 +40,21 @@ from typing import Any
 import pytest
 
 from aura.client.events import ApiError, ContentDelta, Done, ToolResult
+from aura.conversation.checkpoint_protocol import (
+    ACTION_EXECUTE,
+    ACTION_REISSUE,
+    KIND_CONFLICTING_CONTROL,
+    KIND_INVALID_CALL_IN_BATCH,
+    KIND_NO_USABLE_CALL,
+    checkpoint_correction,
+    normalize_checkpoint_response,
+)
 from aura.conversation.focused_action import (
     ACTION_FAILED_MESSAGE,
-    PROVIDER_CONTRACT_FAILURE_MESSAGE,
-    VIOLATION_INVALID_TOOL_NAME,
-    VIOLATION_MALFORMED_CALL,
-    VIOLATION_MALFORMED_FUNCTION,
-    VIOLATION_MISSING_MESSAGE,
-    VIOLATION_MULTIPLE_TOOL_CALLS,
-    VIOLATION_NO_TOOL_CALLS,
-    VIOLATION_TOOL_CALLS_NOT_A_LIST,
-    VIOLATION_UNEXPOSED_TOOL,
+    COMMIT_IMPLEMENTATION_DECISION,
+    CONTINUE_IMPLEMENTATION_DISCOVERY,
+    FOCUSED_CONTROL_TOOLS,
     FocusedActionState,
-    diagnose_focused_contract,
-    focused_contract_ok,
-    focused_correction_instruction,
     should_enter_focused_action,
     tool_call_names,
 )
@@ -149,16 +149,52 @@ def assistant(*calls: dict[str, Any], content: str = "", reasoning: str = "") ->
 
 
 def discovery_round() -> list[dict[str, Any]]:
-    """Two rounds that hand the send loop the focused action protocol.
+    """The rounds that hand the send loop the focused action protocol.
 
     The first glob surfaces the harness workspace's only file as new evidence;
-    the second glob returns the same file list, so the round produced no new
-    evidence and the guard concludes discovery is over.
+    the checkpoint between them names an unresolved question and buys one more
+    observation round; the second glob returns the same file list, so that round
+    produced no new evidence and the guard concludes discovery is over.
     """
     return [
         assistant(tool_call("d0", "glob", {"pattern": "**/alpha*.py"})),
+        assistant(
+            tool_call(
+                "k0",
+                CONTINUE_IMPLEMENTATION_DISCOVERY,
+                {
+                    "unresolved_question": "does anything else define alpha?",
+                    "needed_evidence": "the full python file list",
+                },
+            )
+        ),
         assistant(tool_call("d1", "glob", {"pattern": "**/*.py"})),
     ]
+
+
+#: Index of the first focused action request in a script built on
+#: ``discovery_round()``: three discovery/checkpoint rounds precede it.
+FOCUSED_AT = 3
+
+
+def request_kind(request: RecordedRequest) -> str:
+    """Classify a recorded request by the catalog it exposed."""
+    names = set(request.tool_names)
+    if not names:
+        return "completion"
+    if COMMIT_IMPLEMENTATION_DECISION in names and "write_file" not in names:
+        return "checkpoint"
+    if request.require_tool_call:
+        return "focused"
+    return "ordinary"
+
+
+def kinds(harness: "Harness") -> list[str]:
+    return [request_kind(r) for r in harness.stream.requests]
+
+
+#: The request shapes ``discovery_round()`` produces.
+DISCOVERY_KINDS = ["ordinary", "checkpoint", "ordinary"]
 
 
 @dataclass
@@ -235,8 +271,7 @@ def focused_write(tmp_path):
 
 
 def test_focused_implementation_enters_exactly_one_action_request(focused_write):
-    required = [r.require_tool_call for r in focused_write.stream.requests]
-    assert required == [False, False, True, False]
+    assert kinds(focused_write) == [*DISCOVERY_KINDS, "focused", "ordinary"]
 
 
 def test_discovery_uses_the_user_selected_thinking_mode(focused_write):
@@ -244,15 +279,15 @@ def test_discovery_uses_the_user_selected_thinking_mode(focused_write):
 
 
 def test_focused_action_request_uses_thinking_off(focused_write):
-    assert focused_write.stream.requests[2].thinking == "off"
+    assert focused_write.stream.requests[FOCUSED_AT].thinking == "off"
 
 
 def test_selected_thinking_mode_is_restored_after_the_action(focused_write):
-    assert focused_write.stream.requests[3].thinking == "high"
+    assert focused_write.stream.requests[FOCUSED_AT + 1].thinking == "high"
 
 
 def test_only_mutation_tools_and_the_control_exits_are_exposed(focused_write):
-    exposed = set(focused_write.stream.requests[2].tool_names)
+    exposed = set(focused_write.stream.requests[FOCUSED_AT].tool_names)
     assert exposed == set(MUTATION_TOOL_NAMES) | {
         "report_blocker",
         "report_already_satisfied",
@@ -280,7 +315,7 @@ def test_only_mutation_tools_and_the_control_exits_are_exposed(focused_write):
 
 
 def test_report_blocker_is_not_exposed_on_ordinary_requests(focused_write):
-    for index in (0, 1, 3):
+    for index in (0, 2, 4):
         assert "report_blocker" not in focused_write.stream.requests[index].tool_names
 
 
@@ -292,8 +327,8 @@ def test_ordinary_requests_keep_the_full_production_catalog(focused_write):
 def test_a_successful_write_exits_focused_action_state(focused_write, tmp_path):
     assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 2\n"
     # Only one focused request, and the round after it is an ordinary one.
-    assert sum(r.require_tool_call for r in focused_write.stream.requests) == 1
-    assert focused_write.stream.requests[3].require_tool_call is False
+    assert kinds(focused_write).count("focused") == 1
+    assert request_kind(focused_write.stream.requests[FOCUSED_AT + 1]) == "ordinary"
 
 
 # ── 10: no local cap on action arguments ────────────────────────────────────
@@ -352,12 +387,9 @@ def test_a_rejected_write_returns_to_the_ordinary_loop(tmp_path):
     _send_rejecting(harness)
 
     assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 1\n"
-    assert [r.require_tool_call for r in harness.stream.requests] == [
-        False,
-        False,
-        True,
-        False,
-    ], "the act returned to an ordinary round, which learned nothing"
+    assert kinds(harness) == [*DISCOVERY_KINDS, "focused", "ordinary"], (
+        "the act returned to an ordinary round, which learned nothing"
+    )
     assert harness.approvals == ["alpha.py"]
     assert ACTION_FAILED_MESSAGE in "".join(
         e.text for e in harness.events if isinstance(e, ContentDelta)
@@ -383,12 +415,8 @@ def test_a_repeated_identical_rejection_ends_truthfully(tmp_path):
     _send_rejecting(harness)
 
     assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 1\n"
-    assert [r.require_tool_call for r in harness.stream.requests] == [
-        False,
-        False,
-        True,
-        False,
-        True,
+    assert kinds(harness) == [
+        *DISCOVERY_KINDS, "focused", "ordinary", "focused",
     ], "new evidence re-armed the act; the repeat of a known failure ended it"
     assert harness.approvals == ["alpha.py", "alpha.py"], (
         "non-vacuous: the write tool really ran twice and was really rejected"
@@ -433,8 +461,8 @@ def test_report_blocker_performs_no_mutation_and_ends_with_one_final(tmp_path):
     assert sorted(p.name for p in tmp_path.iterdir()) == before
     assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 1\n"
     assert harness.approvals == []
-    # Exactly four requests: evidence, stall, the action, and one factual final.
-    assert len(harness.stream.requests) == 4
+    # Evidence, checkpoint, stall, the action, and one factual final.
+    assert kinds(harness) == [*DISCOVERY_KINDS, "focused", "completion"]
     blocker_results = [
         json.loads(m["content"])
         for m in harness.manager.history.messages
@@ -499,10 +527,12 @@ def test_already_satisfied_ends_the_turn_without_a_write(tmp_path):
     assert sorted(p.name for p in tmp_path.iterdir()) == before
     assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 1\n"
     assert harness.approvals == []
-    # Exactly four requests: evidence, stall, the action, and one factual final.
-    assert len(harness.stream.requests) == 4
+    # Evidence, checkpoint, stall, the action, and one factual final.
+    assert kinds(harness) == [*DISCOVERY_KINDS, "focused", "completion"]
     # The focused request offered the already-satisfied control tool.
-    assert "report_already_satisfied" in harness.stream.requests[2].tool_names
+    assert "report_already_satisfied" in (
+        harness.stream.requests[FOCUSED_AT].tool_names
+    )
 
     assert harness.manager.last_turn_already_satisfied is True
     assert harness.manager.last_turn_bears_production_action is True
@@ -549,12 +579,7 @@ def test_schema_invalid_already_satisfied_report_does_not_complete(tmp_path):
     )
     harness.run()
     assert harness.manager.last_turn_already_satisfied is False
-    assert [r.require_tool_call for r in harness.stream.requests] == [
-        False,
-        False,
-        True,
-        False,
-    ]
+    assert kinds(harness) == [*DISCOVERY_KINDS, "focused", "ordinary"]
 
 
 def test_blocked_reason_reaches_the_completion_receipt_path(tmp_path):
@@ -592,10 +617,19 @@ def zero_call_round() -> dict[str, Any]:
     return message
 
 
-def multiple_call_round() -> dict[str, Any]:
+def batched_write_round() -> dict[str, Any]:
+    """Two valid, ordinary mutation calls: a batch, not a violation."""
     return assistant(
         tool_call("x1", "write_file", {"path": "alpha.py", "content": "a = 2\n"}),
-        tool_call("x2", "write_file", {"path": "alpha.py", "content": "a = 3\n"}),
+        tool_call("x2", "write_file", {"path": "beta.py", "content": "b = 3\n"}),
+    )
+
+
+def conflicting_control_round() -> dict[str, Any]:
+    """Two control calls that cannot both be true."""
+    return assistant(
+        tool_call("x1", "report_blocker", {"blocker": "generated"}),
+        tool_call("x2", "report_already_satisfied", {"evidence": "already set"}),
     )
 
 
@@ -615,28 +649,34 @@ def no_message_round() -> None:
     return None
 
 
-#: Every structural shape the focused contract rejects, as a factory so each
-#: run gets a fresh message (the content gate normalises tool-call messages in
-#: place).
+#: Every response shape the focused request cannot use, as a factory so each run
+#: gets a fresh message (the content gate normalises tool-call messages in
+#: place). Several valid mutation calls are deliberately *not* here: those are an
+#: ordinary batch and execute — see ``TestSeveralValidCallsAreABatch``.
 VIOLATION_FACTORIES = {
     "prose_only": prose_only_round,
     "zero_calls": zero_call_round,
-    "multiple_calls": multiple_call_round,
+    "conflicting_control": conflicting_control_round,
     "unknown_tool": unknown_call_round,
     "mixed_batch": mixed_call_round,
     "no_full_message": no_message_round,
 }
 
 
+#: Response shapes whose calls can each receive a paired rejection result. Those
+#: are appended so the model can read exactly why nothing ran; the shapes that
+#: carry no pairable call are discarded whole, because a synthetic result with
+#: no call to pair to would corrupt the transcript.
+PAIRABLE_SHAPES = {"conflicting_control", "unknown_tool", "mixed_batch"}
+
+
 class TestFocusedContractViolationsAreRepaired:
-    """A malformed focused response executes nothing and is discarded whole —
-    and the decision it was meant to serialize survives.
+    """An unusable focused response executes nothing, and the decision survives.
 
     The send loop reissues the *same* focused request with one request-local
     correction instead of dead-stopping a turn whose repository evidence is
-    entirely intact. Nothing here is a retry allowance: see
-    :class:`TestRepeatedIdenticalViolationIsTerminal` for the one evidence-based
-    condition that still ends the turn.
+    entirely intact. Nothing here is a retry allowance, and nothing here is
+    terminal: see :class:`TestRepeatedShapeFallsBackToTheOrdinaryRequest`.
     """
 
     def _run(self, tmp_path: Path, round_: dict[str, Any] | None) -> Harness:
@@ -647,7 +687,9 @@ class TestFocusedContractViolationsAreRepaired:
         harness.run()
         return harness
 
-    def _assert_recovered_and_wrote(self, harness: Harness) -> None:
+    def _assert_recovered_and_wrote(
+        self, harness: Harness, *, pairable: bool = False
+    ) -> None:
         # 1-7: nothing executed from the violating response, and the corrected
         # focused request applied the write.
         assert (harness.root / "alpha.py").read_text(encoding="utf-8") == "alpha = 2\n"
@@ -656,20 +698,20 @@ class TestFocusedContractViolationsAreRepaired:
         )
 
         requests = harness.stream.requests
-        assert [r.require_tool_call for r in requests] == [
-            False, False, True, True, False,
+        assert kinds(harness) == [
+            *DISCOVERY_KINDS, "focused", "focused", "ordinary",
         ], "the violation was corrected inside focused mode, not by resending"
 
         # 3, 14: no terminal failure text, no failure flag, no receipt status.
         contents = [e.text for e in harness.events if isinstance(e, ContentDelta)]
-        assert PROVIDER_CONTRACT_FAILURE_MESSAGE not in contents
+        assert not any("Provider contract failure" in c for c in contents)
         assert harness.manager.last_turn_provider_contract_failure is False
         assert harness.manager.last_turn_blocked_reason == ""
 
         # 9, 10: the violating Done is never projected; the corrected one is,
         # exactly once. Four rounds reach the UI, not five.
         dones = [e for e in harness.events if isinstance(e, Done)]
-        assert len(dones) == 4, (
+        assert len(dones) == 5, (
             "the provider's Done for the violating focused round was forwarded"
         )
         projected_call_ids = [
@@ -677,9 +719,11 @@ class TestFocusedContractViolationsAreRepaired:
             for done in dones
             for call in (done.full_message.get("tool_calls") or [])
         ]
-        assert projected_call_ids == ["d0", "d1", "w1"]
+        assert projected_call_ids == ["d0", "k0", "d1", "w1"]
 
-        # 8: no violating prose, reasoning, or tool call reached history.
+        # 8: no violating prose or reasoning reached history. The calls
+        # themselves are kept only when each of them could be paired to a
+        # truthful rejection result — never executed, and never left unpaired.
         assistants = [
             m for m in harness.manager.history.messages if m.get("role") == "assistant"
         ]
@@ -688,25 +732,44 @@ class TestFocusedContractViolationsAreRepaired:
             for m in assistants
             for call in (m.get("tool_calls") or [])
         }
-        assert stored_tool_call_ids == {"d0", "d1", "w1"}
+        if pairable:
+            assert stored_tool_call_ids == {"d0", "k0", "d1", "w1", "x1", "x2"} or (
+                stored_tool_call_ids == {"d0", "k0", "d1", "w1", "x1"}
+            ), stored_tool_call_ids
+            rejected = [
+                json.loads(m["content"])
+                for m in harness.manager.history.messages
+                if m.get("role") == "tool"
+                and m.get("tool_call_id", "").startswith("x")
+            ]
+            assert rejected, "the rejected calls received paired results"
+            assert all(r["ok"] is False for r in rejected)
+            assert all(r["applied"] is False for r in rejected)
+        else:
+            assert stored_tool_call_ids == {"d0", "k0", "d1", "w1"}
         assert not any(VIOLATING_PROSE in (m.get("content") or "") for m in assistants)
         assert not any(m.get("reasoning_content") for m in assistants)
 
         # 12: the corrective request is still the focused request.
-        violating, corrected = requests[2], requests[3]
+        violating, corrected = requests[FOCUSED_AT], requests[FOCUSED_AT + 1]
         assert corrected.thinking == "off" == violating.thinking
         assert corrected.tool_names == violating.tool_names
         assert corrected.require_tool_call is True
 
-        # 11: the evidence gathered before the violation is byte-identical, and
-        # the correction is the only thing added to the outbound copy.
-        assert corrected.messages[:-1] == violating.messages, (
+        # 11: the evidence gathered before the violation is byte-identical. The
+        # correction is the only thing added to the outbound copy, beyond the
+        # rejection block when the calls could be paired.
+        prefix = len(violating.messages)
+        assert corrected.messages[:prefix] == violating.messages, (
             "the corrective request re-derived or dropped gathered evidence"
         )
         correction = corrected.messages[-1]
         assert correction["role"] == "user"
-        assert "exactly one tool call" in correction["content"]
-        assert "discarded" in correction["content"]
+        assert "editing tools" in correction["content"]
+        assert (
+            "Nothing in your previous response was executed"
+            in correction["content"]
+        )
 
         # 13: the frozen system prompt did not move.
         systems = {
@@ -719,11 +782,13 @@ class TestFocusedContractViolationsAreRepaired:
         # The correction is request-local: it is in no other request and in no
         # stored message.
         assert not any(
-            "discarded and no action was executed" in str(m.get("content"))
+            "Nothing in your previous response was executed"
+            in str(m.get("content"))
             for m in harness.manager.history.messages
         )
         assert not any(
-            "discarded and no action was executed" in str(m.get("content"))
+            "Nothing in your previous response was executed"
+            in str(m.get("content"))
             for r in requests
             if r is not corrected
             for m in r.messages
@@ -733,9 +798,11 @@ class TestFocusedContractViolationsAreRepaired:
     def test_a_violation_is_discarded_corrected_and_then_writes(
         self, tmp_path, shape,
     ) -> None:
-        """Cases 1-7: every structural shape recovers identically."""
+        """Cases 1-7: every unusable shape recovers into the same edit."""
         harness = self._run(tmp_path, VIOLATION_FACTORIES[shape]())
-        self._assert_recovered_and_wrote(harness)
+        self._assert_recovered_and_wrote(
+            harness, pairable=shape in PAIRABLE_SHAPES
+        )
 
     @pytest.mark.parametrize(
         "malformed",
@@ -840,7 +907,7 @@ class TestFocusedContractViolationsAreRepaired:
             [
                 *discovery_round(),
                 prose_only_round(),
-                multiple_call_round(),
+                conflicting_control_round(),
                 unknown_call_round(),
                 WRITE_ROUND,
                 FINAL_ROUND,
@@ -849,17 +916,17 @@ class TestFocusedContractViolationsAreRepaired:
         harness.run()
 
         assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 2\n"
-        assert [r.require_tool_call for r in harness.stream.requests] == [
-            False, False, True, True, True, True, False,
+        assert kinds(harness) == [
+            *DISCOVERY_KINDS, "focused", "focused", "focused", "focused", "ordinary",
         ]
         assert harness.manager.last_turn_provider_contract_failure is False
-        # Each correction named its own violation.
+        # Each correction named its own shape.
         corrections = [
             r.messages[-1]["content"]
-            for r in harness.stream.requests[3:6]
+            for r in harness.stream.requests[FOCUSED_AT + 1:FOCUSED_AT + 4]
         ]
-        assert "no tool call at all" in corrections[0]
-        assert "more than one tool call" in corrections[1]
+        assert "no usable tool call" in corrections[0]
+        assert "contradict each other" in corrections[1]
         assert "does not expose" in corrections[2]
 
     def test_the_real_failure_shape_no_longer_requires_a_resend(
@@ -875,8 +942,25 @@ class TestFocusedContractViolationsAreRepaired:
             tmp_path,
             [
                 assistant(tool_call("d0", "glob", {"pattern": "**/alpha*.py"})),
+                assistant(
+                    tool_call(
+                        "k0",
+                        CONTINUE_IMPLEMENTATION_DISCOVERY,
+                        {
+                            "unresolved_question": "what does alpha.py set?",
+                            "needed_evidence": "the body of alpha.py",
+                        },
+                    )
+                ),
                 assistant(tool_call("d1", "read_file", {"path": "alpha.py"})),
-                assistant(tool_call("d2", "glob", {"pattern": "**/*.py"})),
+                assistant(
+                    tool_call("c1", COMMIT_IMPLEMENTATION_DECISION, {
+                        "objective": "Set alpha to 2.",
+                        "owners": ["alpha.py owns the value"],
+                        "target_files": ["alpha.py"],
+                        "change": "alpha = 2",
+                    })
+                ),
                 prose_only_round(),
                 WRITE_ROUND,
                 FINAL_ROUND,
@@ -885,91 +969,109 @@ class TestFocusedContractViolationsAreRepaired:
         harness.run()
 
         assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 2\n"
-        assert [r.require_tool_call for r in harness.stream.requests] == [
-            False, False, False, True, True, False,
+        assert kinds(harness) == [
+            "ordinary", "checkpoint", "ordinary", "checkpoint",
+            "focused", "focused", "ordinary",
         ]
         # One send call did the whole thing: the user never resent the task.
         assert harness.manager.last_turn_provider_contract_failure is False
-        assert PROVIDER_CONTRACT_FAILURE_MESSAGE not in [
-            e.text for e in harness.events if isinstance(e, ContentDelta)
-        ]
+        assert not any(
+            "Provider contract failure" in e.text
+            for e in harness.events if isinstance(e, ContentDelta)
+        )
         finals = [
             m for m in harness.manager.history.messages if m.get("role") == "assistant"
         ]
         assert finals[-1]["content"] == FINAL_ROUND["content"]
 
 
-class TestRepeatedIdenticalViolationIsTerminal:
-    """The one evidence-based condition that still ends a turn on the provider
-    contract: the identical structural violation, after Aura issued an explicit
-    correction naming it."""
+class TestRepeatedShapeFallsBackToTheOrdinaryRequest:
+    """The identical unusable shape twice is not a failed coding task.
+
+    It is evidence that *this request shape* is not working with this provider.
+    So the send loop stops asking for it and asks the ordinary production
+    request instead — the shape the provider has already answered many times in
+    the same turn — with every byte of gathered evidence, the decision state,
+    and the unresolved question intact. No status, no terminal message, and no
+    discarded work.
+    """
 
     def _run_repeated(self, tmp_path: Path, factory) -> Harness:
         harness = make_harness(
-            tmp_path, [*discovery_round(), factory(), factory()]
+            tmp_path,
+            [*discovery_round(), factory(), factory(), WRITE_ROUND, FINAL_ROUND],
         )
         harness.run()
         return harness
 
     @pytest.mark.parametrize("shape", sorted(VIOLATION_FACTORIES))
-    def test_the_same_violation_twice_ends_in_exactly_one_terminal_failure(
+    def test_the_same_shape_twice_falls_back_and_still_edits(
         self, tmp_path, shape,
     ) -> None:
-        """Case 18."""
         harness = self._run_repeated(tmp_path, VIOLATION_FACTORIES[shape])
 
-        # Nothing executed, and exactly one corrective request was issued.
-        assert (harness.root / "alpha.py").read_text(encoding="utf-8") == "alpha = 1\n"
-        assert harness.approvals == []
-        assert [r.require_tool_call for r in harness.stream.requests] == [
-            False, False, True, True,
-        ]
+        # The corrective focused request went out once; the repeat of the same
+        # shape handed the next request back to the ordinary catalog, where the
+        # write landed.
+        assert kinds(harness) == [
+            *DISCOVERY_KINDS, "focused", "focused", "ordinary", "ordinary",
+        ], kinds(harness)
+        assert (harness.root / "alpha.py").read_text(encoding="utf-8") == "alpha = 2\n"
+        assert harness.approvals == ["alpha.py"]
 
+        # 12: never a provider-contract failure, in any of its forms.
         contents = [e.text for e in harness.events if isinstance(e, ContentDelta)]
-        assert PROVIDER_CONTRACT_FAILURE_MESSAGE in contents
-        dones = [e for e in harness.events if isinstance(e, Done)]
-        failure_dones = [
-            e for e in dones
-            if e.full_message.get("content") == PROVIDER_CONTRACT_FAILURE_MESSAGE
-        ]
-        assert len(failure_dones) == 1
-        assert dones[-1] is failure_dones[0]
-        # Two discovery rounds plus the one factual failure. Neither violating
-        # response projected a Done of its own.
-        assert len(dones) == 3
-        projected_call_ids = {
-            call["id"]
-            for done in dones
-            for call in (done.full_message.get("tool_calls") or [])
-        }
-        assert projected_call_ids == {"d0", "d1"}
+        assert not any("Provider contract failure" in c for c in contents)
+        assert harness.manager.last_turn_provider_contract_failure is False
+        assert harness.manager.last_turn_blocked_reason == ""
 
+        # The fallback request is the full production catalog, so the model can
+        # answer in the shape it has been answering in all turn.
+        fallback = harness.stream.requests[FOCUSED_AT + 2]
+        assert {"read_file", "glob", "write_file"} <= set(fallback.tool_names)
+        assert fallback.require_tool_call is False
+
+        # 11: the evidence gathered before the first unusable response is still
+        # there, byte-identical.
+        violating = harness.stream.requests[FOCUSED_AT]
+        evidence = [
+            m for m in violating.messages
+            if m.get("role") == "tool" and m.get("tool_call_id") in {"d0", "k0", "d1"}
+        ]
+        assert evidence, "non-vacuous: the turn really had gathered evidence"
+        for message in evidence:
+            assert message in fallback.messages, (
+                "the fallback re-derived or dropped gathered evidence"
+            )
+
+        # No violating prose or reasoning reached history either way.
         assistants = [
             m for m in harness.manager.history.messages if m.get("role") == "assistant"
         ]
-        stored_tool_call_ids = {
-            call["id"]
-            for m in assistants
-            for call in (m.get("tool_calls") or [])
-        }
-        assert stored_tool_call_ids == {"d0", "d1"}
         assert not any(VIOLATING_PROSE in (m.get("content") or "") for m in assistants)
         assert not any(m.get("reasoning_content") for m in assistants)
 
-        assert harness.manager.last_turn_provider_contract_failure is True
-        assert harness.manager.last_turn_blocked_reason == ""
+    def test_the_fallback_still_reaches_a_truthful_blocker(self, tmp_path) -> None:
+        """Falling back does not force an edit: the honest endings still work."""
+        harness = make_harness(
+            tmp_path,
+            [
+                *discovery_round(),
+                prose_only_round(),
+                prose_only_round(),
+                assistant(
+                    tool_call(
+                        "b1", "report_blocker", {"blocker": "generated at build time"}
+                    )
+                ),
+                assistant(content="I could not edit alpha.py: it is generated."),
+            ],
+        )
+        harness.run()
 
-    def test_the_terminal_message_reports_the_correction_truthfully(
-        self, tmp_path,
-    ) -> None:
-        """It says a correction was issued and repeated — not that nothing was
-        retried, which was false the moment recovery existed."""
-        self._run_repeated(tmp_path, prose_only_round)
-        assert "nothing was retried" not in PROVIDER_CONTRACT_FAILURE_MESSAGE
-        assert "reissued the same focused request" in PROVIDER_CONTRACT_FAILURE_MESSAGE
-        assert "same structural violation again" in PROVIDER_CONTRACT_FAILURE_MESSAGE
-        assert "No edit was made" in PROVIDER_CONTRACT_FAILURE_MESSAGE
-        assert "evidence are intact" in PROVIDER_CONTRACT_FAILURE_MESSAGE
+        assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 1\n"
+        assert harness.manager.last_turn_provider_contract_failure is False
+
 
 
 def test_cancellation_during_the_corrective_request_is_unchanged(tmp_path):
@@ -977,13 +1079,13 @@ def test_cancellation_during_the_corrective_request_is_unchanged(tmp_path):
     harness = make_harness(
         tmp_path, [*discovery_round(), prose_only_round(), WRITE_ROUND]
     )
-    harness.stream.cancel_on_request = 3  # the corrective focused request
+    harness.stream.cancel_on_request = FOCUSED_AT + 1  # the corrective request
     harness.run()
 
     errors = [e for e in harness.events if isinstance(e, ApiError)]
     assert errors and errors[-1].message == "Cancelled."
     assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 1\n"
-    assert len(harness.stream.requests) == 4
+    assert len(harness.stream.requests) == FOCUSED_AT + 2
     assert harness.manager.last_turn_provider_contract_failure is False
 
 
@@ -997,166 +1099,208 @@ def test_an_ordinary_turn_issues_exactly_the_same_requests_as_before(tmp_path):
     harness = make_harness(tmp_path, [*discovery_round(), WRITE_ROUND, FINAL_ROUND])
     harness.run()
 
-    assert len(harness.stream.requests) == 4
-    assert [r.require_tool_call for r in harness.stream.requests] == [
-        False, False, True, False,
-    ]
+    assert kinds(harness) == [*DISCOVERY_KINDS, "focused", "ordinary"]
     for request in harness.stream.requests:
         assert not any(
-            "discarded and no action was executed" in str(m.get("content"))
+            "Nothing in your previous response was executed" in str(m.get("content"))
             for m in request.messages
         )
     # The last message of every request is what the history produced — the
     # focused request added nothing of its own.
-    assert harness.stream.requests[2].messages[-1]["role"] == "tool"
+    assert harness.stream.requests[FOCUSED_AT].messages[-1]["role"] == "tool"
 
 
-# ── the structural diagnosis itself ─────────────────────────────────────────
+# ── the normalization itself ────────────────────────────────────────────────
+
+
+EXPOSED = ("write_file", "patch_file", "report_blocker")
+
+
+def normalize(message, exposed=None, control=None):
+    return normalize_checkpoint_response(
+        message,
+        exposed_tools=exposed if exposed is not None else EXPOSED,
+        control_tools=control if control is not None else ("report_blocker",),
+    )
 
 
 @pytest.mark.parametrize(
     "message, kind",
     [
-        (None, VIOLATION_MISSING_MESSAGE),
-        ("not a message", VIOLATION_MISSING_MESSAGE),
-        ({}, VIOLATION_NO_TOOL_CALLS),
-        ({"tool_calls": None}, VIOLATION_NO_TOOL_CALLS),
-        ({"tool_calls": []}, VIOLATION_NO_TOOL_CALLS),
-        ({"tool_calls": "write_file"}, VIOLATION_TOOL_CALLS_NOT_A_LIST),
-        ({"tool_calls": 7}, VIOLATION_TOOL_CALLS_NOT_A_LIST),
+        (None, KIND_NO_USABLE_CALL),
+        ("not a message", KIND_NO_USABLE_CALL),
+        ({}, KIND_NO_USABLE_CALL),
+        ({"tool_calls": None}, KIND_NO_USABLE_CALL),
+        ({"tool_calls": []}, KIND_NO_USABLE_CALL),
+        ({"tool_calls": "write_file"}, KIND_NO_USABLE_CALL),
+        ({"tool_calls": 7}, KIND_NO_USABLE_CALL),
+        ({"tool_calls": [None]}, KIND_INVALID_CALL_IN_BATCH),
+        ({"tool_calls": [{"id": "a"}]}, KIND_INVALID_CALL_IN_BATCH),
+        ({"tool_calls": [{"id": "a", "function": ["write_file"]}]},
+         KIND_INVALID_CALL_IN_BATCH),
+        ({"tool_calls": [{"id": "a", "function": {}}]}, KIND_INVALID_CALL_IN_BATCH),
+        ({"tool_calls": [{"id": "a", "function": {"name": ""}}]},
+         KIND_INVALID_CALL_IN_BATCH),
+        ({"tool_calls": [tool_call("a", "read_file", {})]},
+         KIND_INVALID_CALL_IN_BATCH),
+        ({"tool_calls": [tool_call("a", "Write_File", {})]},
+         KIND_INVALID_CALL_IN_BATCH),
         (
+            {"tool_calls": [
+                tool_call("a", "report_blocker", {}),
+                tool_call("b", "write_file", {}),
+            ]},
+            KIND_CONFLICTING_CONTROL,
+        ),
+    ],
+)
+def test_normalization_classifies_every_unusable_shape(message, kind) -> None:
+    result = normalize(message)
+    assert result.action == ACTION_REISSUE
+    assert result.ok is False
+    assert result.kind == kind
+    assert result.fingerprint.startswith(kind)
+
+
+@pytest.mark.parametrize(
+    "message, expected_names",
+    [
+        ({"tool_calls": [tool_call("a", "write_file", {})]}, ["write_file"]),
+        ({"tool_calls": [tool_call("a", "report_blocker", {})]}, ["report_blocker"]),
+        (
+            # Prose alongside one valid call: the prose is the caller's to drop,
+            # the call runs.
+            {
+                "content": "I will now edit alpha.py.",
+                "reasoning_content": "thinking...",
+                "tool_calls": [tool_call("a", "write_file", {})],
+            },
+            ["write_file"],
+        ),
+        (
+            # Several ordinary mutation calls: a normal batch, not a violation.
             {"tool_calls": [
                 tool_call("a", "write_file", {}),
                 tool_call("b", "patch_file", {}),
             ]},
-            VIOLATION_MULTIPLE_TOOL_CALLS,
+            ["write_file", "patch_file"],
         ),
-        ({"tool_calls": [None]}, VIOLATION_MALFORMED_CALL),
-        ({"tool_calls": [{"id": "a"}]}, VIOLATION_MALFORMED_FUNCTION),
-        ({"tool_calls": [{"function": ["write_file"]}]}, VIOLATION_MALFORMED_FUNCTION),
-        ({"tool_calls": [{"function": {}}]}, VIOLATION_INVALID_TOOL_NAME),
-        ({"tool_calls": [{"function": {"name": ""}}]}, VIOLATION_INVALID_TOOL_NAME),
-        ({"tool_calls": [{"function": {"name": None}}]}, VIOLATION_INVALID_TOOL_NAME),
-        ({"tool_calls": [tool_call("a", "read_file", {})]}, VIOLATION_UNEXPOSED_TOOL),
-        ({"tool_calls": [tool_call("a", "Write_File", {})]}, VIOLATION_UNEXPOSED_TOOL),
     ],
 )
-def test_diagnose_focused_contract_classifies_every_shape(message, kind) -> None:
-    diagnosis = diagnose_focused_contract(message, EXPOSED)
-    assert diagnosis.ok is False
-    assert diagnosis.kind == kind
-    assert diagnosis.fingerprint.startswith(kind)
+def test_normalization_executes_what_is_usable(message, expected_names) -> None:
+    result = normalize(message)
+    assert result.action == ACTION_EXECUTE
+    assert result.ok is True
+    assert result.kind == ""
+    assert result.fingerprint == ""
+    assert [c["function"]["name"] for c in result.calls] == expected_names
+    assert result.rejections == ()
 
 
-def test_a_valid_response_has_an_empty_diagnosis() -> None:
-    diagnosis = diagnose_focused_contract(
-        {"tool_calls": [tool_call("a", "write_file", {})]}, EXPOSED
-    )
-    assert diagnosis.ok is True
-    assert diagnosis.kind == ""
-    assert diagnosis.fingerprint == ""
-    assert diagnosis.names == ("write_file",)
+def test_every_call_in_a_rejected_batch_receives_a_paired_result() -> None:
+    """Nothing executes, and nothing is left unpaired in the transcript."""
+    result = normalize({"tool_calls": [
+        tool_call("good", "write_file", {}),
+        tool_call("bad", "mystery_tool", {}),
+    ]})
+    assert result.action == ACTION_REISSUE
+    assert [r.tool_call_id for r in result.rejections] == ["good", "bad"]
+    assert all(r.payload["ok"] is False for r in result.rejections)
+    assert all(r.payload["applied"] is False for r in result.rejections)
+    # The valid sibling is told the truth: it was valid, and it still did not run.
+    assert result.rejections[0].payload["batch_rejected"] is True
+    assert result.rejections[1].payload["call_rejected"] is True
+
+
+def test_a_batch_that_cannot_be_paired_is_discarded_whole() -> None:
+    """An entry with no usable id could not receive a result, so none is faked."""
+    result = normalize({"tool_calls": [
+        tool_call("good", "write_file", {}),
+        {"function": {"name": "write_file"}},  # no id
+    ]})
+    assert result.action == ACTION_REISSUE
+    assert result.rejections == ()
 
 
 def test_the_fingerprint_is_structural_and_ignores_noisy_output() -> None:
-    """Two responses that differ only in prose, reasoning, and call ids are the
-    same structural violation — otherwise every repeat would look novel."""
-    first = diagnose_focused_contract(
-        {
-            "content": "let me think about this",
-            "reasoning_content": "step one...",
-            "tool_calls": [
-                tool_call("call_aaa", "write_file", {}),
-                tool_call("call_bbb", "patch_file", {}),
-            ],
-        },
-        EXPOSED,
-    )
-    second = diagnose_focused_contract(
-        {
-            "content": "actually, a different plan entirely",
-            "reasoning_content": "step two...",
-            "tool_calls": [
-                tool_call("call_zzz", "write_file", {}),
-                tool_call("call_yyy", "patch_file", {}),
-            ],
-        },
-        EXPOSED,
-    )
+    """Two responses differing only in prose, reasoning, and call ids are the
+    same shape — otherwise every repeat would look novel and no correction would
+    ever be recognised as one already tried."""
+    first = normalize({
+        "content": "let me think about this",
+        "reasoning_content": "step one...",
+        "tool_calls": [
+            tool_call("call_aaa", "report_blocker", {}),
+            tool_call("call_bbb", "write_file", {}),
+        ],
+    })
+    second = normalize({
+        "content": "actually, a different plan entirely",
+        "reasoning_content": "step two...",
+        "tool_calls": [
+            tool_call("call_zzz", "report_blocker", {}),
+            tool_call("call_yyy", "write_file", {}),
+        ],
+    })
     assert first.fingerprint == second.fingerprint
 
     # A different *shape* is a different fingerprint.
-    other = diagnose_focused_contract({"tool_calls": []}, EXPOSED)
-    assert other.fingerprint != first.fingerprint
+    assert normalize({"tool_calls": []}).fingerprint != first.fingerprint
     # So is the same kind naming a different tool.
     assert (
-        diagnose_focused_contract(
-            {"tool_calls": [tool_call("a", "read_file", {})]}, EXPOSED
-        ).fingerprint
-        != diagnose_focused_contract(
-            {"tool_calls": [tool_call("a", "glob", {})]}, EXPOSED
-        ).fingerprint
+        normalize({"tool_calls": [tool_call("a", "read_file", {})]}).fingerprint
+        != normalize({"tool_calls": [tool_call("a", "glob", {})]}).fingerprint
     )
 
 
-def test_the_correction_names_the_reason_the_tools_and_the_one_call_rule() -> None:
-    diagnosis = diagnose_focused_contract({"tool_calls": []}, EXPOSED)
-    text = focused_correction_instruction(diagnosis, EXPOSED)
-    assert "discarded" in text
-    assert "no action was executed" in text
-    assert diagnosis.reason in text
+def test_the_correction_names_the_reason_the_tools_and_the_shape() -> None:
+    result = normalize({"tool_calls": []})
+    text = checkpoint_correction(result, EXPOSED, allow_batch=False)
+    assert "Nothing in your previous response was executed" in text
+    assert result.reason in text
     for name in EXPOSED:
         assert name in text
     assert "exactly one tool call" in text
-    assert "prose" in text
+    assert "Prose cannot accompany the call" in text
+    assert "unchanged and still applies" in text
+
+
+def test_the_focused_correction_allows_a_batch() -> None:
+    text = checkpoint_correction(
+        normalize({"tool_calls": []}), EXPOSED, allow_batch=True
+    )
+    assert "several calls of the same editing tools" in text
+
+
+def test_an_edit_attempted_at_the_checkpoint_is_pointed_at_the_commit() -> None:
+    """Reaching for an editing tool at the checkpoint means the decision is
+    made; the correction says so instead of repeating the rule."""
+    text = checkpoint_correction(
+        normalize(
+            {"tool_calls": [tool_call("a", "write_file", {})]},
+            exposed=(COMMIT_IMPLEMENTATION_DECISION,),
+        ),
+        (COMMIT_IMPLEMENTATION_DECISION, CONTINUE_IMPLEMENTATION_DISCOVERY),
+        allow_batch=False,
+        edit_attempted=True,
+    )
+    assert "you already know what to change" in text
+    assert COMMIT_IMPLEMENTATION_DECISION in text
 
 
 def test_protocol_recovery_state_clears_for_a_new_decision() -> None:
     state = FocusedActionState()
     state.pending_correction = "fix your formatting"
-    state.violation_fingerprints.add("no_tool_calls|0|")
-    state.last_violation = "no_tool_calls"
+    state.violation_fingerprints.add("no_usable_call|0|")
+    state.last_violation = "no_usable_call"
     state.clear_protocol_recovery()
     assert state.pending_correction == ""
     assert state.violation_fingerprints == set()
     assert state.last_violation == ""
 
 
-EXPOSED = ("write_file", "patch_file", "report_blocker")
-
-
-@pytest.mark.parametrize(
-    "message, expected",
-    [
-        (None, False),
-        ("not a message", False),
-        ({}, False),
-        ({"tool_calls": None}, False),
-        ({"tool_calls": []}, False),
-        ({"tool_calls": "write_file"}, False),
-        ({"tool_calls": [tool_call("a", "write_file", {})]}, True),
-        ({"tool_calls": [tool_call("a", "report_blocker", {})]}, True),
-        ({"tool_calls": [tool_call("a", "read_file", {})]}, False),
-        ({"tool_calls": [tool_call("a", "Write_File", {})]}, False),
-        (
-            {"tool_calls": [
-                tool_call("a", "write_file", {}),
-                tool_call("b", "patch_file", {}),
-            ]},
-            False,
-        ),
-        ({"tool_calls": [tool_call("a", "write_file", {}), None]}, False),
-        ({"tool_calls": [{"function": {"name": "write_file"}}]}, True),
-        ({"tool_calls": [{"function": ["write_file"]}]}, False),
-        ({"tool_calls": [{"function": {"name": " "}}]}, False),
-    ],
-)
-def test_focused_contract_ok_reads_the_raw_collection(message, expected) -> None:
-    assert focused_contract_ok(message, EXPOSED) is expected
-
-
 def test_tool_call_names_never_raises_on_a_malformed_collection() -> None:
-    """Reporting must survive what validation rejects."""
+    """Reporting must survive what normalization rejects."""
     assert tool_call_names({"tool_calls": 7}) == []
     assert tool_call_names({"tool_calls": ["x", None, 3]}) == []
     assert tool_call_names({"tool_calls": [tool_call("a", "write_file", {}), 3]}) == [
@@ -1184,9 +1328,9 @@ class TestFocusedDoneIsDeferredUntilValidated:
             "a valid focused response forwards the provider's own Done exactly "
             "once — deferring it must not drop or duplicate it"
         )
-        # One Done per round, still: two discovery rounds, the focused write,
-        # and the final answer.
-        assert len(dones) == 4
+        # One Done per round, still: the discovery rounds and the checkpoint
+        # between them, the focused write, and the final answer.
+        assert len(dones) == 5
         assert (focused_write.root / "alpha.py").read_text(encoding="utf-8") == (
             "alpha = 2\n"
         )
@@ -1226,13 +1370,10 @@ def test_read_only_mode_exposes_no_focused_mutation_request(tmp_path):
     )
     harness.run()
 
-    # No request required a tool call: the focused mutation surface was never
-    # entered under a read-only registry.
-    assert [r.require_tool_call for r in harness.stream.requests] == [
-        False,
-        False,
-        False,
-    ]
+    # No narrowed request at all: a read-only registry owes no implementation,
+    # so neither the checkpoint nor the focused mutation surface is entered.
+    assert not any(r.require_tool_call for r in harness.stream.requests)
+    assert set(kinds(harness)) == {"ordinary"}
     assert {r.thinking for r in harness.stream.requests} == {"high"}
 
 
@@ -1258,32 +1399,24 @@ def test_non_implementation_turns_never_enter_focused_action(tmp_path, route):
         [*discovery_round(), WRITE_ROUND, FINAL_ROUND],
     )
     harness.run(route=route)
-    assert [r.require_tool_call for r in harness.stream.requests] == [
-        False,
-        False,
-        False,
-        False,
-    ]
+    assert not any(r.require_tool_call for r in harness.stream.requests)
+    assert set(kinds(harness)) == {"ordinary"}
     assert {r.thinking for r in harness.stream.requests} == {"high"}
     assert "report_blocker" not in harness.stream.requests[2].tool_names
 
 
-def test_implementation_turn_without_a_spent_budget_is_untouched(tmp_path):
-    """Focus never fired, so nothing about this turn changes."""
-    harness = make_harness(
-        tmp_path,
-        [
-            assistant(tool_call("d0", "glob", {"pattern": "**/*.py"})),
-            WRITE_ROUND,
-            FINAL_ROUND,
-        ],
-    )
+def test_a_direct_mutation_is_never_forced_through_discovery(tmp_path):
+    """A turn that can already edit does so on its first request.
+
+    The checkpoint sits between observation rounds; it is not a toll on turns
+    that never needed to look. The very first production request carries the
+    full catalog, mutation tools included.
+    """
+    harness = make_harness(tmp_path, [WRITE_ROUND, FINAL_ROUND])
     harness.run()
-    assert [r.require_tool_call for r in harness.stream.requests] == [
-        False,
-        False,
-        False,
-    ]
+    assert kinds(harness) == ["ordinary", "ordinary"]
+    assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 2\n"
+    assert "write_file" in harness.stream.requests[0].tool_names
 
 
 # ── 16: cancellation is unchanged ───────────────────────────────────────────
@@ -1291,7 +1424,7 @@ def test_implementation_turn_without_a_spent_budget_is_untouched(tmp_path):
 
 def test_user_cancellation_during_the_focused_request_is_unchanged(tmp_path):
     harness = make_harness(tmp_path, [*discovery_round(), WRITE_ROUND])
-    harness.stream.cancel_on_request = 2
+    harness.stream.cancel_on_request = FOCUSED_AT
     harness.run()
 
     errors = [e for e in harness.events if isinstance(e, ApiError)]
@@ -1299,7 +1432,7 @@ def test_user_cancellation_during_the_focused_request_is_unchanged(tmp_path):
     assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 1\n"
     # No further request was made and the cancel event was never set by Aura's
     # own machinery — the test set it, standing in for the user.
-    assert len(harness.stream.requests) == 3
+    assert len(harness.stream.requests) == FOCUSED_AT + 1
 
 
 # ── the activation predicate itself ─────────────────────────────────────────
@@ -1345,7 +1478,7 @@ def test_activation_predicate(kwargs, expected):
 
 @pytest.mark.parametrize(
     "script_name",
-    ["write", "blocker", "contract_failure", "recovered_contract_violation"],
+    ["write", "blocker", "protocol_fallback", "recovered_contract_violation"],
 )
 def test_history_tool_pairing_is_preserved(tmp_path, script_name):
     scripts = {
@@ -1355,12 +1488,14 @@ def test_history_tool_pairing_is_preserved(tmp_path, script_name):
             assistant(tool_call("b1", "report_blocker", {"blocker": "generated"})),
             assistant(content="Blocked."),
         ],
-        # The corrected request repeats the identical violation, which is the
-        # one shape that still ends the turn on the provider contract.
-        "contract_failure": [
+        # The corrected request repeats the identical shape, which hands the
+        # next request back to the ordinary catalog rather than ending the turn.
+        "protocol_fallback": [
             *discovery_round(),
             assistant(content="prose only"),
             assistant(content="prose only"),
+            WRITE_ROUND,
+            FINAL_ROUND,
         ],
         "recovered_contract_violation": [
             *discovery_round(),

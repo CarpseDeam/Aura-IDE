@@ -170,12 +170,38 @@ class CompactionStats:
     over_budget: bool = False
 
 
+@dataclass(frozen=True)
+class ResultResidency:
+    """Which canonical tool results are still *materially* in the outbound view.
+
+    The single authoritative answer to "can the model still read that result?",
+    and deliberately not a second compaction system: it is read off the view
+    this build actually produced, after every retirement, bound, receipt, and
+    budget pass has run.  Nothing here re-derives what compaction *would* do.
+
+    A result is resident only when it survived byte-identically.  Anything the
+    ladder did to it — retiring it into an evidence receipt, truncating it,
+    bounding its replay, folding it into a summary, or dropping it from the
+    working set entirely — leaves the model unable to answer from it at the
+    range and detail it originally had, so it is not resident.  ``PreEditLoopGuard``
+    reads exactly this to decide whether rejecting a reread as a duplicate is
+    still telling the truth.
+    """
+
+    resident_call_ids: frozenset[str] = frozenset()
+
+    def is_resident(self, call_id: str) -> bool:
+        """Whether that call's original result is still fully available."""
+        return bool(call_id) and call_id in self.resident_call_ids
+
+
 @dataclass
 class ApiView:
     """The outbound messages plus what it cost to get them there."""
 
     messages: list[dict[str, Any]] = field(default_factory=list)
     stats: CompactionStats = field(default_factory=CompactionStats)
+    residency: ResultResidency = field(default_factory=ResultResidency)
 
 
 # ---- estimation -------------------------------------------------------------
@@ -412,6 +438,214 @@ def _block_is_pinned(working: list[dict[str, Any]], start: int) -> bool:
         fn = tc.get("function")
         name = str(fn.get("name")) if isinstance(fn, dict) and fn.get("name") else ""
         if name in PINNED_INSTRUCTION_TOOLS:
+            return True
+    return False
+
+
+def _committed_decision_target_files(
+    working: list[dict[str, Any]], names: dict[str, str], start: int
+) -> frozenset[str]:
+    """Target files named by the newest committed decision of the current turn.
+
+    Read from the durable tool result itself — the same structured packet the
+    model was handed — never from a parallel copy of the decision kept
+    elsewhere.  A malformed or superseded payload simply yields nothing.
+    """
+    targets: frozenset[str] = frozenset()
+    for i in range(start, len(working)):
+        msg = working[i]
+        if msg.get("role") != "tool":
+            continue
+        call_id = msg.get("tool_call_id")
+        if names.get(str(call_id)) != "commit_implementation_decision":
+            continue
+        content = msg.get("content")
+        if not isinstance(content, str):
+            continue
+        try:
+            payload = json.loads(content)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(payload, dict) or not payload.get("ok"):
+            continue
+        decision = payload.get("decision")
+        if not isinstance(decision, dict):
+            continue
+        files = decision.get("target_files")
+        if not isinstance(files, list):
+            continue
+        # Newest committed decision wins: a corrected decision replaces the
+        # files the previous one pinned rather than accumulating both.
+        targets = frozenset(
+            normalized
+            for normalized in (_normalize_receipt_path(f) for f in files if f)
+            if normalized
+        )
+    return targets
+
+
+def _mutation_applied_since(
+    working: list[dict[str, Any]],
+    start: int,
+    effect_for: Callable[[str], ToolEffect | None],
+) -> bool:
+    """Whether any mutation in this turn has actually landed.
+
+    Fail-closed and read from the result, exactly like every other
+    applied-mutation judgement in the runtime: only a payload that explicitly
+    carries ``applied: true`` counts.  An ambiguous or failed write leaves the
+    turn still owing its edit, so the source it is about to modify stays pinned.
+    """
+    for i in range(start, len(working)):
+        msg = working[i]
+        if msg.get("role") != "tool":
+            continue
+        call_id = msg.get("tool_call_id")
+        name = _tool_name_map(working).get(str(call_id), "")
+        if effect_for(name) is not ToolEffect.MUTATION:
+            continue
+        content = msg.get("content")
+        if not isinstance(content, str):
+            continue
+        try:
+            payload = json.loads(content)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(payload, dict) and payload.get("applied") is True:
+            return True
+    return False
+
+
+def _pinned_target_file_blocks(
+    working: list[dict[str, Any]],
+    blocks: list[tuple[int, int]],
+    names: dict[str, str],
+    current_start: int,
+    effect_for: Callable[[str], ToolEffect | None],
+) -> frozenset[int]:
+    """Block starts holding the source the committed decision intends to edit.
+
+    A committed decision pins its own capsule, which is what lets the detailed
+    reads that *supported* it retire.  On its own that went one step too far: the
+    focused request then arrived carrying the decision and a set of receipts, but
+    not the actual file it was supposed to modify — and a model handed receipts
+    where source belongs rediscovers, which is the wandering this whole protocol
+    exists to end.
+
+    So the newest completed source read of each concrete ``target_files`` entry
+    is pinned alongside the capsule.  The pin is narrow (only the decision's own
+    target files), it is scoped to the current turn, and it lasts only until the
+    first applied mutation — after which the edit has landed, the source is
+    stale anyway, and the blocks rejoin the ordinary compaction ladder.  A file
+    another tool changed in the meantime is handled by ordinary stale-read
+    recovery, which stays authoritative.
+    """
+    targets = _committed_decision_target_files(working, names, current_start)
+    if not targets:
+        return frozenset()
+    if _mutation_applied_since(working, current_start, effect_for):
+        return frozenset()
+
+    pinned: set[int] = set()
+    covered: set[str] = set()
+    for start, end in reversed(blocks):
+        remaining = targets - covered
+        if not remaining:
+            break
+        if not _result_reads_target_file(working, start, end, names, remaining):
+            continue
+        pinned.add(start)
+        for target in list(remaining):
+            if _result_reads_target_file(
+                working, start, end, names, frozenset({target})
+            ):
+                covered.add(target)
+    return frozenset(pinned)
+
+
+def _pinned_target_call_ids(
+    working: list[dict[str, Any]],
+    names: dict[str, str],
+    effect_for: Callable[[str], ToolEffect | None],
+) -> frozenset[str]:
+    """Tool-call ids of the decision's pinned target-file source reads.
+
+    The same rule as :func:`_pinned_target_file_blocks`, expressed as call ids so
+    the budget ladder can protect the identical blocks it protects for activated
+    skill bodies and the decision capsule.  Recomputed from the working copy
+    rather than carried across passes, because retirement moves indices and a
+    stale index would protect the wrong block.
+    """
+    current_start = 0
+    for i, msg in enumerate(working):
+        if is_real_user_message(msg):
+            current_start = i + 1
+    blocks = [(s, e) for (s, e) in _completed_blocks(working) if s >= current_start]
+    if not blocks:
+        return frozenset()
+    starts = _pinned_target_file_blocks(
+        working, blocks, names, current_start, effect_for
+    )
+    if not starts:
+        return frozenset()
+    ids: set[str] = set()
+    for start, _end in blocks:
+        if start not in starts:
+            continue
+        for tc in (working[start].get("tool_calls") or []):
+            if isinstance(tc, dict) and isinstance(tc.get("id"), str):
+                ids.add(tc["id"])
+    return frozenset(ids)
+
+
+def _result_reads_target_file(
+    working: list[dict[str, Any]],
+    start: int,
+    end: int,
+    names: dict[str, str],
+    targets: frozenset[str],
+) -> bool:
+    """Whether a completed block is a source read of one of *targets*.
+
+    Matched on the call arguments, with an unambiguous suffix match so a read of
+    ``aura/x.py`` still pins for a decision that named ``./aura/x.py``.
+    """
+    if not targets:
+        return False
+    for tc in (working[start].get("tool_calls") or []):
+        if not isinstance(tc, dict):
+            continue
+        fn = tc.get("function")
+        if not isinstance(fn, dict):
+            continue
+        name = str(fn.get("name") or "")
+        if name not in SOURCE_READ_TOOLS:
+            continue
+        try:
+            args = json.loads(fn.get("arguments") or "{}")
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(args, dict):
+            continue
+        for path in _args_paths(args):
+            for target in targets:
+                if (
+                    path == target
+                    or path.endswith("/" + target)
+                    or target.endswith("/" + path)
+                ):
+                    return True
+    return False
+
+
+def _block_holds_call_ids(
+    working: list[dict[str, Any]], start: int, call_ids: frozenset[str]
+) -> bool:
+    """Whether a completed block issues any of *call_ids*."""
+    if not call_ids:
+        return False
+    for tc in (working[start].get("tool_calls") or []):
+        if isinstance(tc, dict) and tc.get("id") in call_ids:
             return True
     return False
 
@@ -1364,12 +1598,18 @@ def _retire_completed_observations(
     retired_spans: list[tuple[int, int]] = []
     entries: list[dict[str, Any]] = []
 
+    # The source a committed decision is about to edit is pinned with the
+    # capsule, until the first applied mutation releases it.
+    pinned_targets = _pinned_target_file_blocks(
+        working, blocks, names, current_start, effect_for
+    )
+
     for start, end in reversed(blocks):
-        if _block_is_pinned(working, start):
+        if _block_is_pinned(working, start) or start in pinned_targets:
             # Pinned turn context (activated skill bodies, the committed
-            # implementation decision): preserved verbatim, never retired,
-            # never replay-bounded. The block must stay byte-identical for
-            # provider prefix caching.
+            # implementation decision, the source that decision names):
+            # preserved verbatim, never retired, never replay-bounded. The
+            # block must stay byte-identical for provider prefix caching.
             continue
         effects, known = _known_block_effects(working, start, end, effect_for)
         if not known:
@@ -1454,6 +1694,41 @@ def _active_chain_chars(working: list[dict[str, Any]]) -> int:
     return total
 
 
+def _compute_residency(
+    canonical: list[dict[str, Any]], outbound: list[dict[str, Any]]
+) -> ResultResidency:
+    """Which canonical tool results survived into *outbound* byte-identically.
+
+    Derived from the two message lists and nothing else, which is what makes it
+    authoritative: whatever the ladder did this round — retire, bound, receipt,
+    summarise, drop — shows up here as a content mismatch or an absence, without
+    this function knowing anything about how compaction works.
+
+    Equality is exact on purpose.  A result the model can only see the first
+    1,200 characters of cannot answer the request that produced it, so "present
+    but shortened" is not residency; it is precisely the state that used to make
+    the duplicate-read rejection a lie.
+    """
+    canonical_content: dict[str, Any] = {}
+    for msg in canonical:
+        if msg.get("role") != "tool":
+            continue
+        call_id = msg.get("tool_call_id")
+        if isinstance(call_id, str) and call_id:
+            canonical_content[call_id] = msg.get("content")
+
+    resident: set[str] = set()
+    for msg in outbound:
+        if msg.get("role") != "tool":
+            continue
+        call_id = msg.get("tool_call_id")
+        if not isinstance(call_id, str) or call_id not in canonical_content:
+            continue
+        if msg.get("content") == canonical_content[call_id]:
+            resident.add(call_id)
+    return ResultResidency(resident_call_ids=frozenset(resident))
+
+
 def default_effect_lookup(name: str) -> ToolEffect | None:
     """Known built-in effect classification, or None for any other name.
 
@@ -1511,7 +1786,10 @@ def build_api_view(
     _retire_completed_observations(working, budget_tokens, names, effect_for, stats)
     stats.active_chain_chars_retained = _active_chain_chars(working)
 
-    _compact_to_budget(working, system_prompt, budget_tokens, names, stats, keep_last_n_turns)
+    _compact_to_budget(
+        working, system_prompt, budget_tokens, names, stats, keep_last_n_turns,
+        effect_for=effect_for,
+    )
 
     stats.tokens_after = estimate_tokens(working, system_prompt)
     stats.source_result_chars_retained = _source_result_chars(working, names)
@@ -1519,7 +1797,11 @@ def build_api_view(
 
     out = _render(system_prompt, working, stats)
     stats.messages_after = len(out)
-    return ApiView(messages=out, stats=stats)
+    return ApiView(
+        messages=out,
+        stats=stats,
+        residency=_compute_residency(messages, out),
+    )
 
 
 def _compact_to_budget(
@@ -1529,8 +1811,11 @@ def _compact_to_budget(
     names: dict[str, str],
     stats: CompactionStats,
     keep_last_n_turns: int,
+    effect_for: Callable[[str], ToolEffect | None] | None = None,
 ) -> None:
     """Run the compaction ladder until the copy fits, cheapest loss first."""
+    if effect_for is None:
+        effect_for = default_effect_lookup
 
     def fits() -> bool:
         return estimate_tokens(working, system_prompt) <= budget_tokens
@@ -1554,10 +1839,14 @@ def _compact_to_budget(
         keep.update(range(max(0, n - keep_last_n_turns), n))
         return keep
 
-    # Tool-call ids of pinned instructional blocks. Scoped to the current real
-    # user turn: only the current turn's activated-skill blocks are protected
-    # from compaction and dropping; older turns keep the ordinary ladder.
-    pinned = _pinned_call_ids(names)
+    # Tool-call ids of pinned instructional blocks, plus the source reads of a
+    # committed decision's target files. Scoped to the current real user turn:
+    # only the current turn's activated-skill blocks, decision capsule, and
+    # decision target source are protected from compaction and dropping; older
+    # turns keep the ordinary ladder, and the target source is released once the
+    # first mutation has applied.
+    target_pinned = _pinned_target_call_ids(working, names, effect_for)
+    pinned = _pinned_call_ids(names) | target_pinned
 
     # --- 1. Compact tool results in old, non-preserved turns ---
     preserved = preserved_turns(starts)
@@ -1622,6 +1911,7 @@ def _compact_to_budget(
         blocks = [
             b for b in _completed_blocks(working)
             if not _block_is_pinned(working, b[0])
+            and not _block_holds_call_ids(working, b[0], target_pinned)
         ]
         if len(blocks) <= 1:
             # Never drop the only remaining block — the model would lose the

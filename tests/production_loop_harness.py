@@ -98,6 +98,68 @@ def read_round(call_id: str, index: int) -> list[Event]:
     return tool_round([(call_id, "read_file", {"path": f"mod_{index:02d}.py"})])
 
 
+def continue_round(call_id: str, *, question: str = "", evidence: str = "") -> list[Event]:
+    """A decision-checkpoint answer electing one more observation round."""
+    return tool_round([(call_id, "continue_implementation_discovery", {
+        "unresolved_question": question or f"What owns the value read by {call_id}?",
+        "needed_evidence": evidence or "the definition of the owning symbol",
+    })])
+
+
+def commit_round(
+    call_id: str = "c1", *, target_files: list[str] | None = None
+) -> list[Event]:
+    """A decision-checkpoint answer committing the implementation decision."""
+    return tool_round([(call_id, "commit_implementation_decision", {
+        "objective": "Update the notes file.",
+        "owners": ["notes.md is the authoritative note surface"],
+        "target_files": target_files or ["notes.md"],
+        "change": "Replace the body with the requested text.",
+    })])
+
+
+def discovery_then_commit(reads: int = 1, *, first: int = 0) -> list[list[Event]]:
+    """``reads`` observation rounds, each cleared at the checkpoint, then a commit.
+
+    The alternation the production loop actually enforces:
+    ``observation -> checkpoint -> observation -> ... -> checkpoint(commit)``.
+    """
+    rounds: list[list[Event]] = []
+    for i in range(reads):
+        rounds.append(read_round(f"r{first + i}", first + i))
+        if i < reads - 1:
+            rounds.append(continue_round(f"k{first + i}"))
+    rounds.append(commit_round())
+    return rounds
+
+
+#: Request shapes, as the send loop issues them.
+KIND_ORDINARY = "ordinary"
+KIND_CHECKPOINT = "checkpoint"
+KIND_FOCUSED = "focused"
+KIND_COMPLETION = "completion"
+
+
+def request_kind(call: dict) -> str:
+    """Classify one recorded provider request by the catalog it exposed.
+
+    Both narrowed requests set ``require_tool_call``; what tells them apart is
+    the surface. The checkpoint offers the decision controls and no editing
+    tool; the focused request offers editing tools and no decision control.
+    """
+    names = {
+        str(t.get("function", {}).get("name", ""))
+        for t in (call.get("tools") or [])
+    }
+    if not names:
+        return KIND_COMPLETION
+    if "commit_implementation_decision" in names and "write_file" not in names:
+        return KIND_CHECKPOINT
+    if call.get("require_tool_call"):
+        return KIND_FOCUSED
+    return KIND_ORDINARY
+
+
 def write_round(call_id: str = "w1", *, body: str = "acted") -> list[Event]:
     return tool_round([(call_id, "write_file", {
         "path": "notes.md", "content": f"# Notes\n\n{body}\n",
@@ -124,11 +186,23 @@ class ScriptedBackend:
         return [c for c in self.calls if not c.get("require_tool_call")]
 
     def focused_calls(self) -> list[dict]:
-        return [c for c in self.calls if c.get("require_tool_call")]
+        """The focused *action* requests — the mutation surface, not checkpoints."""
+        return [c for c in self.calls if request_kind(c) == KIND_FOCUSED]
 
     def request_shapes(self) -> list[bool]:
-        """``True`` for each focused action request, ``False`` for ordinary."""
+        """``True`` for each narrowed protocol request, ``False`` for ordinary."""
         return [bool(c.get("require_tool_call")) for c in self.calls]
+
+    def request_kinds(self) -> list[str]:
+        """The shape of every request the loop issued, in order."""
+        return [request_kind(c) for c in self.calls]
+
+    def checkpoint_calls(self) -> list[dict]:
+        return [c for c in self.calls if request_kind(c) == KIND_CHECKPOINT]
+
+    def action_calls(self) -> list[dict]:
+        """Only the focused *mutation* requests, not the decision checkpoints."""
+        return [c for c in self.calls if request_kind(c) == KIND_FOCUSED]
 
 
 class Recorder:

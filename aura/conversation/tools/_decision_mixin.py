@@ -1,7 +1,24 @@
-"""Handler for ``commit_implementation_decision``.
+"""Handlers for the production SINGLE decision checkpoint.
 
-The production single agent's explicit transition from repository discovery to
-implementation.  It is bookkeeping in the strictest sense: it reads nothing,
+Two tools, one protocol.  After every completed ordinary pre-write observation
+round the send loop stops offering the discovery catalog and asks exactly one
+question: *is the implementation decision made?*  These are the only two answers
+(``report_blocker`` is the third, and only when the task is externally blocked):
+
+* ``commit_implementation_decision`` — yes.  Discovery is over; the next request
+  is the focused mutation surface.
+* ``continue_implementation_discovery`` — no, and here is precisely why: the
+  named unresolved implementation question, and the repository evidence needed
+  to answer it.  That reopens the ordinary discovery catalog for *one* more
+  observation round, after which the checkpoint asks again.
+
+Neither is a budget.  A turn may alternate observation round and checkpoint as
+many times as the work genuinely needs; what it cannot do is chain unrelated
+reads without ever naming what it is still trying to find out.
+
+``commit_implementation_decision`` is the production single agent's explicit
+transition from repository discovery to implementation.  It is bookkeeping in
+the strictest sense: it reads nothing,
 writes nothing, touches no workspace state, and needs no approval.  All it does
 is normalize the decision the turn has already reached into one compact
 structured packet — objective, authoritative owners and seams, target files,
@@ -42,6 +59,17 @@ DECISION_COMMITTED_NEXT = (
     "validate and repair after the edit lands."
 )
 
+#: What the model is told, in the durable result itself, when it elects another
+#: observation round.  States the exact shape of what follows so the extra round
+#: is spent on the named question rather than on a fresh general survey.
+DISCOVERY_CONTINUED_NEXT = (
+    "One more observation round is open: the next request restores the "
+    "ordinary discovery tools. Spend it answering the question above and "
+    "nothing else. When that round ends, the decision checkpoint returns and "
+    "you must either commit the implementation decision or name a different "
+    "unresolved implementation question."
+)
+
 
 def _clean_text(raw: Any) -> str:
     return str(raw or "").strip()
@@ -80,8 +108,78 @@ def decision_identity(packet: dict[str, Any]) -> str:
     return hashlib.sha1(material.encode("utf-8")).hexdigest()[:12]
 
 
+def discovery_identity(packet: dict[str, Any]) -> str:
+    """Stable identity of one normalized unresolved-question packet.
+
+    A content hash, like :func:`decision_identity`: the same question asked
+    twice has the same identity.  Reporting only — nothing branches on it, and
+    nothing counts how many identities a turn produced.
+    """
+    material = json.dumps(packet, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha1(material.encode("utf-8")).hexdigest()[:12]
+
+
 class ImplementationDecisionHandlersMixin:
-    """Provides ``commit_implementation_decision``."""
+    """Provides the two decision-checkpoint bookkeeping tools."""
+
+    def _handle_continue_implementation_discovery(
+        self,
+        args: dict[str, Any],
+        approval_cb: ApprovalCallback,
+        reject_all: bool = False,
+    ) -> ToolExecResult:
+        question = _clean_text(args.get("unresolved_question"))
+        evidence = _clean_text(args.get("needed_evidence"))
+        likely_files = _clean_paths(args.get("likely_files"))
+
+        missing = [
+            field
+            for field, value in (
+                ("unresolved_question", question),
+                ("needed_evidence", evidence),
+            )
+            if not value
+        ]
+        if missing:
+            return ToolExecResult(
+                ok=False,
+                payload={
+                    "ok": False,
+                    "error": (
+                        "continue_implementation_discovery requires non-empty "
+                        + ", ".join(missing)
+                        + ". Another observation round costs a named "
+                        "implementation question and the specific repository "
+                        "evidence that would answer it. If you cannot name "
+                        "one, you already know enough — call "
+                        "commit_implementation_decision instead."
+                    ),
+                    "failure_class": "invalid_arguments",
+                },
+            )
+
+        packet: dict[str, Any] = {
+            "unresolved_question": question,
+            "needed_evidence": evidence,
+        }
+        if likely_files:
+            packet["likely_files"] = likely_files
+
+        payload: dict[str, Any] = {
+            "ok": True,
+            "tool": "continue_implementation_discovery",
+            "implementation_discovery_continued": True,
+            "mutation": False,
+            "applied": False,
+            "question_id": discovery_identity(packet),
+            "unresolved": packet,
+            "next": DISCOVERY_CONTINUED_NEXT,
+        }
+        return ToolExecResult(
+            ok=True,
+            payload=payload,
+            extras={"implementation_discovery_continued": True},
+        )
 
     def _handle_commit_implementation_decision(
         self,
@@ -149,6 +247,8 @@ class ImplementationDecisionHandlersMixin:
 
 __all__ = [
     "DECISION_COMMITTED_NEXT",
+    "DISCOVERY_CONTINUED_NEXT",
     "ImplementationDecisionHandlersMixin",
     "decision_identity",
+    "discovery_identity",
 ]

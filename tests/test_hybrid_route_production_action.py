@@ -51,9 +51,14 @@ from aura.conversation.task_router import (
 )
 from aura.model_streams import PRODUCTION_STREAM_HOOK, ModelStreamRegistry
 from tests.production_loop_harness import (
+    KIND_CHECKPOINT,
+    KIND_FOCUSED,
+    KIND_ORDINARY,
     Recorder,
     ScriptedBackend,
     build_manager,
+    commit_round,
+    continue_round,
     final_round,
     make_workspace,
     read_round,
@@ -61,6 +66,10 @@ from tests.production_loop_harness import (
     tool_round,
     write_round,
 )
+
+ORD = KIND_ORDINARY
+CHK = KIND_CHECKPOINT
+ACT = KIND_FOCUSED
 
 
 def _same_listing(call_id: str, *, path: str = "."):
@@ -108,9 +117,13 @@ def test_hybrid_research_then_worker_route_surveys_freely_then_acts(
 
     backend = ScriptedBackend([
         read_round("r0", 0),
+        continue_round("k0"),
         read_round("r1", 1),
+        continue_round("k1"),
         read_round("r2", 2),
+        continue_round("k2"),
         read_round("r3", 3),
+        commit_round(),
         write_round(),
         final_round("Applied."),
     ])
@@ -124,9 +137,11 @@ def test_hybrid_research_then_worker_route_surveys_freely_then_acts(
         "non-vacuous: four sequential discovery rounds really ran, successfully — "
         f"got {[(r.name, r.ok) for r in recorder.tool_results()]}"
     )
-    assert backend.request_shapes() == [False] * 6, (
-        "no ceiling: every round returned new evidence, so the turn reached its "
-        f"edit on an ordinary request — got {backend.request_shapes()}"
+    assert backend.request_kinds() == [
+        ORD, CHK, ORD, CHK, ORD, CHK, ORD, CHK, ACT, ORD,
+    ], (
+        "no ceiling: four sequential observation rounds, each bought by a named "
+        f"unresolved question — got {backend.request_kinds()}"
     )
     writes = recorder.results_named("write_file")
     assert writes and writes[0].ok, "the edit really applied"
@@ -232,8 +247,11 @@ def test_a_missing_route_is_resolved_from_the_user_message(
     """
     backend = ScriptedBackend([
         read_round("r0", 0),
+        continue_round("k0"),
         read_round("r1", 1),
+        continue_round("k1"),
         read_round("r2", 2),
+        commit_round(),
         write_round(),
         final_round("Applied."),
     ])
@@ -246,8 +264,10 @@ def test_a_missing_route_is_resolved_from_the_user_message(
     assert len(reads) == 3 and all(r.ok for r in reads), (
         "non-vacuous: three sequential discovery rounds really ran"
     )
-    assert backend.request_shapes() == [False] * 5, (
-        f"no ceiling on a resolved route either — got {backend.request_shapes()}"
+    assert backend.request_kinds() == [
+        ORD, CHK, ORD, CHK, ORD, CHK, ACT, ORD,
+    ], (
+        f"no ceiling on a resolved route either — got {backend.request_kinds()}"
     )
     writes = recorder.results_named("write_file")
     assert writes and writes[0].ok, "the edit really executed"
@@ -262,6 +282,7 @@ def test_a_resolved_route_still_reaches_focused_action_when_discovery_stalls(
     """Resolution is not cosmetic: the resolved route really governs the turn."""
     backend = ScriptedBackend([
         _same_listing("s1"),
+        continue_round("k0"),
         _same_listing("s2", path="./"),
         write_round(),
         final_round("Applied."),
@@ -271,9 +292,9 @@ def test_a_resolved_route_still_reaches_focused_action_when_discovery_stalls(
 
     run(build_manager(workspace, CODING_REQUEST), recorder, route=None)
 
-    assert backend.request_shapes() == [False, False, True, False], (
+    assert backend.request_kinds() == [ORD, CHK, ORD, ACT, ORD], (
         "the stalled round forces the focused act on a resolved route too — "
-        f"got {backend.request_shapes()}"
+        f"got {backend.request_kinds()}"
     )
     writes = recorder.results_named("write_file")
     assert writes and writes[0].ok

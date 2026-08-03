@@ -132,6 +132,53 @@ def final_round(text: str) -> list[Event]:
     ]
 
 
+def continue_round(call_id: str = "k0") -> list[Event]:
+    """A decision-checkpoint answer electing one more observation round.
+
+    Production SINGLE puts the checkpoint after every pre-write observation
+    round, so a script with two consecutive observation rounds needs this
+    between them — it is the model saying what it is still trying to find out.
+    """
+    return tool_round([(call_id, "continue_implementation_discovery", {
+        "unresolved_question": f"what else bears on the change ({call_id})?",
+        "needed_evidence": "the contents of the next candidate file",
+    })])
+
+
+def commit_round(call_id: str = "c1", target_files: list[str] | None = None) -> list[Event]:
+    """A decision-checkpoint answer committing the implementation decision."""
+    return tool_round([(call_id, "commit_implementation_decision", {
+        "objective": "Apply the requested change.",
+        "owners": ["the file under test owns the behaviour"],
+        "target_files": target_files or ["notes.md"],
+        "change": "Rewrite the body.",
+    })])
+
+
+def request_kinds(backend: "ScriptedBackend") -> list[str]:
+    """Classify each recorded request by the catalog it exposed."""
+    out: list[str] = []
+    for call in backend.calls:
+        names = {
+            str(t.get("function", {}).get("name", ""))
+            for t in (call.get("tools") or [])
+        }
+        if not names:
+            out.append("completion")
+        elif "commit_implementation_decision" in names and "write_file" not in names:
+            out.append("checkpoint")
+        elif call.get("require_tool_call"):
+            out.append("focused")
+        else:
+            out.append("ordinary")
+    return out
+
+
+def action_requests(backend: "ScriptedBackend") -> list[str]:
+    """The focused *mutation* requests only — checkpoints are not actions."""
+    return [k for k in request_kinds(backend) if k == "focused"]
+
+
 class ScriptedBackend:
     def __init__(self, rounds: list[list[Event]]) -> None:
         self._rounds = rounds
@@ -458,6 +505,7 @@ class TestRepeatedReadsAreBlocked:
         read_call = ("r1", "read_file", {"path": "notes.md"})
         backend = ScriptedBackend([
             tool_round([read_call]),
+            continue_round(),
             tool_round([("r2", "read_file", {"path": "notes.md"})]),
             final_round("Stopped re-reading."),
         ])
@@ -484,6 +532,7 @@ class TestRepeatedReadsAreBlocked:
     ) -> None:
         backend = ScriptedBackend([
             tool_round([("r1", "read_file", {"path": "notes.md"})]),
+            continue_round(),
             tool_round([("r2", "read_file", {"path": "other.md"})]),
             final_round("Read both."),
         ])
@@ -501,6 +550,7 @@ class TestRepeatedReadsAreBlocked:
         """Re-reading to verify your own edit is normal work, not a loop."""
         backend = ScriptedBackend([
             tool_round([("r1", "read_file", {"path": "notes.md"})]),
+            commit_round("c1", ["notes.md"]),
             tool_round([("w1", "write_file", {
                 "path": "notes.md", "content": "# Notes\n\nnew\n",
             })]),
@@ -527,6 +577,7 @@ class TestLegitimateRereadsSurvive:
         """A failing edit is exactly when the model *should* look again."""
         backend = ScriptedBackend([
             tool_round([("r1", "read_file", {"path": "notes.md"})]),
+            commit_round("c1", ["notes.md"]),
             # A patch that cannot match — the tool fails.
             tool_round([("p1", "patch_file", {
                 "path": "notes.md",
@@ -611,12 +662,13 @@ class TestStalledDiscoveryFiresTheFocusedRequest:
             (workspace / name).write_text(
                 f"# {name}\n\ncontent unique to {name}\n", encoding="utf-8"
             )
-        rounds: list[list[Event]] = [
-            tool_round([(f"r{i}", "read_file", {"path": target})])
-            for i, target in enumerate(
-                ("notes.md", "other.md", "alpha.py", "beta.py", "gamma.py")
-            )
-        ]
+        rounds: list[list[Event]] = []
+        for i, target in enumerate(
+            ("notes.md", "other.md", "alpha.py", "beta.py", "gamma.py")
+        ):
+            if i:
+                rounds.append(continue_round(f"k{i}"))
+            rounds.append(tool_round([(f"r{i}", "read_file", {"path": target})]))
         rounds.append(final_round("Enough evidence; implementing."))
         backend = ScriptedBackend(rounds)
         isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
@@ -631,9 +683,10 @@ class TestStalledDiscoveryFiresTheFocusedRequest:
         assert len(reads) == 5 and all(r.ok for r in reads), (
             "non-vacuous: all five sequential reads really executed"
         )
-        assert not any(c.get("require_tool_call") for c in backend.calls), (
-            "no request is action-only: every round returned new evidence — got "
-            f"{[bool(c.get('require_tool_call')) for c in backend.calls]}"
+        assert not action_requests(backend), (
+            "no request is action-only: every round returned new evidence, and "
+            "each extra observation round was bought by a named unresolved "
+            f"question — got {request_kinds(backend)}"
         )
 
     def test_equivalent_evidence_rounds_fire_the_focused_action_request(
@@ -643,6 +696,7 @@ class TestStalledDiscoveryFiresTheFocusedRequest:
         so the round after the stall is the action-serialization request."""
         rounds: list[list[Event]] = [
             tool_round([("r0", "read_file", {"path": "notes.md"})]),
+            continue_round(),
             tool_round([("r1", "read_file", {"path": "notes.md", "_n": 1})]),
             tool_round([("w1", "write_file", {
                 "path": "notes.md", "content": "# Notes\n\nnew\n",
@@ -655,7 +709,7 @@ class TestStalledDiscoveryFiresTheFocusedRequest:
 
         run(manager, Recorder())
 
-        focused = backend.calls[2]
+        focused = backend.calls[3]
         assert focused.get("require_tool_call") is True, (
             "the request after the stalled round must require exactly one tool call"
         )
@@ -683,9 +737,11 @@ class TestStalledDiscoveryFiresTheFocusedRequest:
         (workspace / "big.md").write_text("\n".join(lines), encoding="utf-8")
         rounds: list[list[Event]] = [
             tool_round([("t0", "read_file", {"path": "big.md"})]),
+            continue_round("k1"),
             tool_round([("t1", "read_file_range", {
                 "path": "big.md", "start_line": 2100, "end_line": 2200,
             })]),
+            continue_round("k2"),
             tool_round([("t2", "read_file_range", {
                 "path": "big.md", "start_line": 2201, "end_line": 2250,
             })]),
@@ -706,9 +762,9 @@ class TestStalledDiscoveryFiresTheFocusedRequest:
             if DUPLICATE_READ_REASON in str(r.result)
         ]
         assert not rejected, "a truncated read's continuation is never a repeat"
-        assert not any(c.get("require_tool_call") for c in backend.calls), (
+        assert not action_requests(backend), (
             "each continuation returns genuinely new bytes, so the turn is still "
-            f"discovering — got {[bool(c.get('require_tool_call')) for c in backend.calls]}"
+            f"discovering — got {request_kinds(backend)}"
         )
 
     def test_identical_results_under_changed_arguments_stall(self) -> None:
@@ -800,6 +856,7 @@ class TestStalledDiscoveryFiresTheFocusedRequest:
         guard stays dormant for reads after the write."""
         rounds: list[list[Event]] = [
             tool_round([("r0", "read_file", {"path": "notes.md"})]),
+            commit_round("c1", ["notes.md"]),
             tool_round([("w0", "write_file", {
                 "path": "notes.md", "content": "# Notes\n\nnew\n",
             })]),
@@ -814,10 +871,13 @@ class TestStalledDiscoveryFiresTheFocusedRequest:
 
         run(manager, Recorder())
 
-        assert not [
-            c.get("require_tool_call") for c in backend.calls
-            if c.get("require_tool_call")
-        ], "a turn that edited must never open a focused request"
+        # The write applied on the request the committed decision handed to the
+        # mutation surface. Every request after it is ordinary: the pre-write
+        # protocol — checkpoint and focused action alike — is over.
+        assert request_kinds(backend) == [
+            "ordinary", "checkpoint", "focused",
+            "ordinary", "ordinary", "ordinary", "ordinary",
+        ], request_kinds(backend)
 
     def test_successful_terminal_commands_count_as_progress(self) -> None:
         """Progress is the command's *result*, not the decision to run one."""

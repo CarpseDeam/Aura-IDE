@@ -49,22 +49,25 @@ from aura.conversation.dispatch import (
     WorkerDispatchRequest,
     WorkerDispatchResult,
 )
+from aura.conversation.checkpoint_protocol import (
+    CheckpointNormalization,
+    checkpoint_correction,
+    normalize_checkpoint_response,
+)
 from aura.conversation.focused_action import (
+    DECISION_CHECKPOINT_CONTROL_TOOLS,
     FOCUSED_ACTION_THINKING,
+    FOCUSED_CONTROL_TOOLS,
     OUTCOME_ACTION_FAILED,
     OUTCOME_ALREADY_SATISFIED,
     OUTCOME_BLOCKER,
     OUTCOME_NOT_APPLIED,
-    OUTCOME_PROVIDER_CONTRACT_FAILURE,
     OUTCOME_WRITE,
     REPORT_ALREADY_SATISFIED,
     REPORT_BLOCKER,
     FocusedActionState,
-    FocusedContractDiagnosis,
     action_failed_message,
-    diagnose_focused_contract,
-    focused_correction_instruction,
-    provider_contract_failure_message,
+    should_enter_decision_checkpoint,
     should_enter_focused_action,
     tool_call_names,
 )
@@ -86,6 +89,7 @@ from aura.conversation.tools._types import (
     ApprovalDecision,
     ApprovalRequest,
 )
+from aura.conversation.tools.effects import ToolEffect
 from aura.conversation.tools.registry import ToolRegistry
 from aura.conversation.worker_finalization_gate import (
     handle_worker_candidate_finalization,
@@ -321,9 +325,11 @@ class ConversationManager:
         #: that ended in a successful ``report_blocker``, for completion
         #: receipts. Reset at the start of every send.
         self._last_turn_blocked_reason: str = ""
-        #: Whether the most recent turn ended in a focused provider-contract
-        #: failure (the required-tool call was not honoured). Completion
-        #: receipts report it as its own terminal status. Reset per send.
+        #: Whether the most recent turn ended in an unusable-provider failure.
+        #: Reserved for a provider that genuinely cannot be used; the shape of a
+        #: tool call is never one, because a formatting disagreement leaves the
+        #: evidence intact and the edit unmade — a repaired or reissued
+        #: checkpoint is not a failed coding task. Reset per send.
         self._last_turn_provider_contract_failure: bool = False
         #: Whether the most recent turn ended in a successful structured
         #: ``report_already_satisfied`` outcome — the requested state already
@@ -350,7 +356,13 @@ class ConversationManager:
 
     @property
     def last_turn_provider_contract_failure(self) -> bool:
-        """Whether the last turn ended in a focused provider-contract failure."""
+        """Whether the last turn ended because the provider was unusable.
+
+        Never true for the *shape* of a tool call. A response Aura could not use
+        is repaired, reissued, and — if the narrowed request keeps failing —
+        replaced by the ordinary production request, with every byte of gathered
+        evidence intact.
+        """
         return self._last_turn_provider_contract_failure
 
     @property
@@ -549,12 +561,16 @@ class ConversationManager:
 
             full_message: dict[str, Any] | None = None
 
-            # ── Focused action turn ──────────────────────────────────────
-            # Discovery is already over by the loop's own deterministic
-            # reckoning, so this one request serializes the decision into a
-            # single act instead of opening another reasoning stream. The
-            # user's thinking selection is untouched — it is simply not the
-            # mode for this request, and the next round runs on it again.
+            # ── Which shape is this request? ─────────────────────────────
+            # The production SINGLE protocol alternates, and the alternation is
+            # owned here and nowhere else:
+            #
+            #   observation round -> decision checkpoint
+            #                     -> observation round or committed decision
+            #                     -> focused action
+            #
+            # A committed decision (or the guard's anti-loop stall) outranks the
+            # checkpoint: both already answer the question the checkpoint asks.
             focused = state.focused_action
             focused.active = should_enter_focused_action(
                 mode=state.mode,
@@ -568,9 +584,38 @@ class ConversationManager:
                 # nothing for a focused action request to act on. Do not enter
                 # focused mutation mode under a read-only registry.
                 focused.active = False
+            focused.checkpoint_active = not focused.active and (
+                should_enter_decision_checkpoint(
+                    mode=state.mode,
+                    route=state.task_route,
+                    guard=state.pre_edit_guard,
+                    task_completion_context=state.task_completion_context,
+                    read_only=state.read_only,
+                    state=focused,
+                )
+            )
+            if (
+                focused.protocol_fallback
+                and not focused.active
+                and not focused.checkpoint_active
+            ):
+                # The one ordinary request the fallback redirects to is this
+                # one. Nothing was discarded to get here: the decision capsule,
+                # the gathered evidence, and the unresolved state are all still
+                # in the conversation, and the protocol re-arms after this round.
+                focused.protocol_fallback = False
+                focused.clear_protocol_recovery()
+                _log.info(
+                    "checkpoint_protocol_fallback_request decision_committed=%s "
+                    "discovery_round_open=%s",
+                    focused.decision_committed,
+                    focused.discovery_round_open,
+                )
+            control_tools: frozenset[str] = frozenset()
             if focused.active:
                 tool_defs = self._tools.focused_action_tool_defs()
                 round_thinking: ThinkingMode = FOCUSED_ACTION_THINKING
+                control_tools = FOCUSED_CONTROL_TOOLS
                 focused.exposed_tools = tuple(
                     str(t.get("function", {}).get("name", "")) for t in tool_defs
                 )
@@ -585,6 +630,38 @@ class ConversationManager:
                     focused.decision_id or "<none>",
                     focused.selected_thinking,
                     FOCUSED_ACTION_THINKING,
+                    ",".join(focused.exposed_tools),
+                )
+            elif focused.checkpoint_active:
+                # ``report_blocker`` is offered only on evidence that something
+                # external actually went wrong this turn — a tool this turn ran
+                # failed. A checkpoint reached after clean observation has no
+                # blocker escape, which is the point: with nothing broken, the
+                # honest answers are "commit" and "here is what I still do not
+                # know". The user's thinking selection is kept — deciding
+                # whether the decision is made is a judgement, unlike the
+                # focused act, which only serializes one already made.
+                guard_for_blocker = state.pre_edit_guard
+                include_blocker = bool(
+                    guard_for_blocker is not None
+                    and guard_for_blocker.seen_failures
+                )
+                tool_defs = self._tools.decision_checkpoint_tool_defs(
+                    include_blocker=include_blocker
+                )
+                round_thinking = thinking
+                control_tools = DECISION_CHECKPOINT_CONTROL_TOOLS
+                focused.exposed_tools = tuple(
+                    str(t.get("function", {}).get("name", "")) for t in tool_defs
+                )
+                _log.info(
+                    "decision_checkpoint_start route_lane=%s route_action=%s "
+                    "unresolved_question=%s "
+                    "blocker_offered=%s checkpoint_tools=%s",
+                    getattr(getattr(state.task_route, "lane", None), "value", ""),
+                    getattr(state.task_route, "action", ""),
+                    focused.unresolved_question or "<none>",
+                    include_blocker,
                     ",".join(focused.exposed_tools),
                 )
             elif focused.blocked or focused.already_satisfied:
@@ -604,10 +681,17 @@ class ConversationManager:
             if state.content_gate is not None:
                 state.content_gate.begin_round()
 
+            # Both narrowed requests are *protocol* requests: they exist to move
+            # the turn from one state to the next, they accept tool calls only,
+            # and their responses are normalized rather than adjudicated.
+            protocol_request = focused.active or focused.checkpoint_active
+
             label = _stream_log_label(hook_name)
             _log.info(
-                "%s_start model=%s thinking=%s hook_name=%s focused_action=%s",
+                "%s_start model=%s thinking=%s hook_name=%s focused_action=%s "
+                "decision_checkpoint=%s",
                 label, model, round_thinking, hook_name, focused.active,
+                focused.checkpoint_active,
             )
             _first_event = True
             planner_hygiene = (
@@ -622,16 +706,16 @@ class ConversationManager:
                 mode=state.mode,
                 stream_buffer=state.stream_buffer,
                 content_gate=state.content_gate,
-                # A focused action request must answer with exactly one tool
-                # call. Prose is a provider-contract violation: hold it so it is
-                # discarded, never streamed to chat.
-                discard_prose_final=focused.active,
-                # Whether the response honours that contract is only knowable
-                # once the full message has been inspected below, so the
-                # provider's Done is held until then: a violating response must
-                # not project a Done of its own and then receive the factual
-                # contract-failure Done as well.
-                defer_done=focused.active,
+                # A protocol request is answered with tool calls. Prose that
+                # accompanies them is discarded rather than streamed to chat —
+                # it is commentary on a control decision, not an answer to the
+                # user — so hold it here.
+                discard_prose_final=protocol_request,
+                # What is usable in the response is only knowable once the full
+                # message has been normalized below, so the provider's Done is
+                # held until then: a response that is going to be reissued must
+                # not project a Done of its own.
+                defer_done=protocol_request,
             )
 
             # The outbound view is compacted against *this* model's budget;
@@ -641,6 +725,16 @@ class ConversationManager:
                 budget.working_set_tokens,
                 effect_for=self._tools.declared_effect,
             )
+            if state.pre_edit_guard is not None:
+                # The one authoritative answer to "can the model still read that
+                # result?", taken from the view actually being sent. The guard
+                # rejects a duplicate observation only while the original result
+                # is still materially in front of the model; once compaction has
+                # retired, truncated, bounded, or dropped it, rereading is
+                # recovering lost context, not circling.
+                state.pre_edit_guard.note_api_view_residency(
+                    api_view.residency.resident_call_ids
+                )
             try:
                 schema_chars = len(json.dumps(tool_defs, ensure_ascii=False)) if tool_defs else 0
             except (TypeError, ValueError):
@@ -661,30 +755,32 @@ class ConversationManager:
 
             request_messages = api_view.messages
 
-            # ── Focused protocol correction ──────────────────────────────
-            # A discarded focused response leaves exactly one compact
-            # instruction naming what was structurally wrong with it. It is
+            # ── Protocol correction ──────────────────────────────────────
+            # A reissued checkpoint carries exactly one compact instruction
+            # naming what was unusable about the previous response. It is
             # attached to *this outbound copy only*: canonical history is
             # untouched, the frozen system prompt is untouched (its fingerprint
             # is logged above and does not move), and it is consumed by the one
             # request it corrects. A turn with no violation never builds one, so
             # ordinary turns pay nothing — not a request, not a token.
-            if focused.active and focused.pending_correction:
+            if protocol_request and focused.pending_correction:
                 request_messages = [
                     *request_messages,
                     {"role": "user", "content": focused.pending_correction},
                 ]
                 focused.pending_correction = ""
                 _log.info(
-                    "focused_action_correction_issued violation=%s",
+                    "checkpoint_correction_issued violation=%s checkpoint=%s",
                     focused.last_violation or "<none>",
+                    "focused_action" if focused.active else "decision",
                 )
 
             # ``require_tool_call`` is only passed when it is actually
             # required, so every other request reaches the backend with the
-            # exact call signature it has always had.
+            # exact call signature it has always had. It is a request to the
+            # provider, never a guarantee — normalization below is authoritative.
             stream_kwargs: dict[str, Any] = {}
-            if focused.active:
+            if protocol_request:
                 stream_kwargs["require_tool_call"] = True
 
             for ev in model_streams.trigger(
@@ -747,21 +843,22 @@ class ConversationManager:
                     self._cleanup_cancelled(on_event)
                 return
 
-            if full_message is None and focused.active:
-                # A focused stream that completed with nothing to validate is
-                # still a contract violation, not a silent exit: returning here
+            if full_message is None and protocol_request:
+                # A protocol stream that completed with nothing to normalize is
+                # a response shape to correct, not a silent exit: returning here
                 # dead-stopped a turn whose evidence was entirely intact.
-                if self._repair_focused_contract(
+                self._repair_checkpoint(
                     focused=focused,
-                    diagnosis=diagnose_focused_contract(
-                        None, focused.exposed_tools
+                    normalization=normalize_checkpoint_response(
+                        None,
+                        exposed_tools=focused.exposed_tools,
+                        control_tools=control_tools,
                     ),
                     router=router,
                     state=state,
                     on_event=on_event,
-                ):
-                    continue
-                return
+                )
+                continue
 
             if full_message is None:
                 # Should not happen in normal stream completion. There is no
@@ -772,38 +869,48 @@ class ConversationManager:
 
             tool_calls = full_message.get("tool_calls") or []
 
-            if focused.active:
-                # The focused provider contract, checked against the raw
-                # ``tool_calls`` collection: exactly one entry, well-formed,
-                # naming a tool in this round's exposed action set. Zero calls,
-                # multiple calls, a malformed entry alongside a valid one, or an
-                # unknown/unexposed name are all contract violations — none of
-                # them execute anything.
-                diagnosis = diagnose_focused_contract(
-                    full_message, focused.exposed_tools
+            if protocol_request:
+                # Normalize, do not adjudicate. Prose beside a valid call loses
+                # the prose; one valid call runs; several valid mutation calls
+                # are an ordinary batch and go to the existing whole-batch
+                # preflight; contradictory control calls and malformed or
+                # unexposed calls execute nothing and the same request is asked
+                # again. No shape of response ends the coding task.
+                normalization = normalize_checkpoint_response(
+                    full_message,
+                    exposed_tools=focused.exposed_tools,
+                    control_tools=control_tools,
                 )
-                if not diagnosis.ok:
-                    # A malformed response never spent the decision, so the
-                    # request is deliberately *not* marked spent here: the
-                    # repair reissues the identical focused request rather than
-                    # sending the model back through repository discovery to fix
-                    # its own formatting.
-                    if self._repair_focused_contract(
+                if not normalization.ok:
+                    # Nothing was spent: not the decision, not the evidence, not
+                    # the authorized discovery round. The repair reissues the
+                    # same request rather than sending the model back through
+                    # repository discovery to fix its own formatting.
+                    self._repair_checkpoint(
                         focused=focused,
-                        diagnosis=diagnosis,
+                        normalization=normalization,
                         router=router,
                         state=state,
                         on_event=on_event,
-                    ):
-                        continue
-                    return
+                    )
+                    continue
 
+                # Usable. Keep exactly the calls normalization approved and drop
+                # whatever prose rode along — the buffered text was already held
+                # back from chat, and letting it into history would replay a
+                # commentary the protocol did not ask for.
+                full_message = dict(full_message)
+                full_message["content"] = ""
+                full_message["tool_calls"] = list(normalization.calls)
+                tool_calls = full_message["tool_calls"]
+                focused.clear_protocol_recovery()
+
+            if focused.active:
                 # Valid: the decision is now genuinely spent, and whatever
                 # protocol repair this decision needed is over. ``active`` stays
                 # set until this round's tool results have been folded in; the
                 # top of the next round recomputes it and finds ``spent``.
                 focused.spent = True
-                focused.clear_protocol_recovery()
                 # A committed implementation decision authorizes exactly the one
                 # act that serializes it — the write, the blocker, the
                 # already-satisfied report, or an act that failed to apply. It
@@ -821,8 +928,15 @@ class ConversationManager:
                         if REPORT_BLOCKER in selected
                         else OUTCOME_WRITE
                     )
-                # The response is valid: the provider's own Done is forwarded
-                # now, exactly once, before the single tool runs.
+                # The response is usable: the provider's own Done is forwarded
+                # now, exactly once, before the tools run.
+                router.release_deferred_done()
+            elif focused.checkpoint_active:
+                selected = tool_call_names(full_message)
+                _log.info(
+                    "decision_checkpoint_answer selected=%s",
+                    ",".join(selected) or "<none>",
+                )
                 router.release_deferred_done()
 
             if state.worker_flow is not None:
@@ -890,6 +1004,32 @@ class ConversationManager:
             )
             guard = state.pre_edit_guard
             write_applied = bool(guard is not None and guard.write_applied)
+
+            # ── Observation round -> decision checkpoint ─────────────────
+            # An ordinary pre-write round that actually observed something has
+            # spent the authorized discovery round, so the next request is the
+            # checkpoint. A round of pure bookkeeping has not — publishing a
+            # checklist is not an investigation — and neither has the checkpoint
+            # round itself, nor a round that applied the edit. Nothing here
+            # counts; it is one bit, and naming an unresolved implementation
+            # question is the only way to set it again.
+            if (
+                not protocol_request
+                and state.mode == "single"
+                and guard is not None
+                and not write_applied
+                and guard.last_round_observed_evidence
+                and state.implementation_action_pending()
+            ):
+                focused.close_discovery_round()
+                _log.info(
+                    "discovery_round_closed next_request=decision_checkpoint "
+                    "advanced=%s recovery_open=%s",
+                    guard.last_round_advanced,
+                    guard.recovery_open,
+                )
+
+            focused.checkpoint_active = False
             if focused.active:
                 focused.active = False
                 if focused.outcome == OUTCOME_BLOCKER:
@@ -1002,77 +1142,119 @@ class ConversationManager:
             if tool_round.action == "continue":
                 continue
 
-    def _repair_focused_contract(
+    def _repair_checkpoint(
         self,
         *,
         focused: FocusedActionState,
-        diagnosis: FocusedContractDiagnosis,
+        normalization: CheckpointNormalization,
         router: StreamEventRouter,
         state: _SendState,
         on_event: EventCallback,
-    ) -> bool:
-        """Discard a contract-violating focused response and decide what follows.
+    ) -> None:
+        """Repair an unusable checkpoint response. Never ends the turn.
 
-        Returns ``True`` when the send loop should reissue the focused request
-        with an explicit correction, ``False`` when the turn ends as a
-        provider-contract failure (this method has already emitted it).
+        Nothing from the response executed — that decision was made by
+        :func:`~aura.conversation.checkpoint_protocol.normalize_checkpoint_response`
+        — so this method's whole job is to leave the conversation in a state the
+        model can answer from, and hand the send loop back its next request.
 
-        The discard is identical either way, and it is total: the buffered
-        prose, the reasoning, every tool call, and the provider's own deferred
-        ``Done`` are dropped, nothing is executed, nothing is salvaged from a
-        mixed batch, and the violating assistant message never enters canonical
-        history.  Only *terminality* differs — validation is exactly as strict
-        as it was.
+        Two things happen.  First, the response is discarded as an *answer*: the
+        buffered prose, the provider's deferred ``Done``, and any selected action
+        are dropped.  Where the calls could each be paired, the assistant message
+        and one truthful rejection result per call are appended instead of being
+        thrown away, because a model that cannot see what happened to its call
+        has no way to correct it; where they could not be paired safely, the
+        response is dropped whole rather than leaving an unpaired call in the
+        transcript.
 
-        Which one it is comes from evidence, not arithmetic.  A structural
-        violation this decision has not seen before is a recoverable
-        formatting lapse: it earns one explicit correction naming precisely what
-        was wrong, and the same focused request goes out again over the same
-        gathered evidence.  The identical structural violation *after* that
-        correction is proof the provider cannot honour the protocol, and only
-        then does the turn end.  There is no attempt count anywhere in here.
+        Second, the same request is asked again with one compact correction —
+        unless this exact structural shape has already been corrected once, in
+        which case the shape itself is the problem and the send loop falls back
+        to the ordinary production request.  The decision capsule, the gathered
+        evidence, the authorized discovery round, and the unresolved question all
+        survive both paths intact.  There is no attempt count, no allowance, and
+        no terminal branch: a formatting disagreement cannot end a coding task.
         """
         router.discard_deferred_done()
         if state.content_gate is not None:
             state.content_gate.discard_buffer()
         focused.selected_action = ""
-        focused.last_violation = diagnosis.kind
+        focused.last_violation = normalization.kind
 
-        fingerprint = diagnosis.fingerprint
+        checkpoint = "focused_action" if focused.active else "decision"
+        if normalization.rejections:
+            # Pair a truthful result to every call so the transcript stays valid
+            # and the model can read exactly why nothing ran.
+            self._history.append_assistant({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": rejection.tool_call_id,
+                        "type": "function",
+                        "function": {
+                            "name": rejection.name,
+                            "arguments": "{}",
+                        },
+                    }
+                    for rejection in normalization.rejections
+                ],
+            })
+            for rejection in normalization.rejections:
+                payload = json.dumps(rejection.payload, ensure_ascii=False)
+                self._history.append_tool_result(rejection.tool_call_id, payload)
+                on_event(
+                    ToolResult(
+                        tool_call_id=rejection.tool_call_id,
+                        name=rejection.name,
+                        ok=False,
+                        result=payload,
+                        extras={
+                            "call_rejected": True,
+                            "reason": normalization.kind,
+                        },
+                    )
+                )
+
+        fingerprint = normalization.fingerprint
         if fingerprint not in focused.violation_fingerprints:
             focused.violation_fingerprints.add(fingerprint)
-            focused.pending_correction = focused_correction_instruction(
-                diagnosis, focused.exposed_tools
+            focused.pending_correction = checkpoint_correction(
+                normalization,
+                focused.exposed_tools,
+                allow_batch=focused.active,
+                edit_attempted=(
+                    focused.checkpoint_active
+                    and any(
+                        self._tools.tool_effect(name) is ToolEffect.MUTATION
+                        for name in normalization.names
+                    )
+                ),
             )
             _log.info(
-                "focused_action_contract_repair violation=%s calls=%d names=%s "
-                "action=reissue_focused_request",
-                diagnosis.kind,
-                diagnosis.call_count,
-                ",".join(diagnosis.names) or "<none>",
+                "checkpoint_repair checkpoint=%s violation=%s calls=%d names=%s "
+                "paired_rejections=%d action=reissue_same_request",
+                checkpoint,
+                normalization.kind,
+                normalization.call_count,
+                ",".join(normalization.names) or "<none>",
+                len(normalization.rejections),
             )
-            return True
+            return
 
-        focused.contract_violated = True
-        focused.outcome = OUTCOME_PROVIDER_CONTRACT_FAILURE
-        self._last_turn_provider_contract_failure = True
+        # The identical shape twice, after being told exactly what was wrong.
+        # The narrowed request is not working with this provider; the ordinary
+        # production request is one it has already answered many times this
+        # turn. Nothing about the turn's state is discarded to get there.
+        focused.protocol_fallback = True
+        focused.clear_protocol_recovery()
         _log.info(
-            "focused_action_outcome outcome=%s violation=%s calls=%d "
-            "corrected=True repeated=True selected_thinking=%s "
-            "focused_action_thinking=%s",
-            focused.outcome,
-            diagnosis.kind,
-            diagnosis.call_count,
-            focused.selected_thinking,
-            FOCUSED_ACTION_THINKING,
+            "checkpoint_protocol_fallback checkpoint=%s violation=%s calls=%d "
+            "action=ordinary_request evidence_preserved=True",
+            checkpoint,
+            normalization.kind,
+            normalization.call_count,
         )
-        # The turn owes exactly one factual failure response, with exactly one
-        # Done — the one emitted here.
-        content, failure_message = provider_contract_failure_message()
-        self._history.append_assistant(failure_message)
-        on_event(ContentDelta(text=content))
-        on_event(Done(finish_reason="stop", full_message=failure_message))
-        return False
 
     def _finish_worker_unrecoverable(
         self,

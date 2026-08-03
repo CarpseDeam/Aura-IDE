@@ -127,6 +127,10 @@ BUILTIN_TOOL_EFFECTS: dict[str, ToolEffect] = {
     # changes no workspace state; what it changes is which request the send
     # loop issues next.
     "commit_implementation_decision": ToolEffect.BOOKKEEPING,
+    # Records that one named implementation question is still unanswered. Like
+    # its sibling above it changes no workspace state; what it changes is which
+    # request the send loop issues next.
+    "continue_implementation_discovery": ToolEffect.BOOKKEEPING,
     "dispatch_to_worker": ToolEffect.BOOKKEEPING,
     "summon_drone": ToolEffect.BOOKKEEPING,
     "register_drone_folder": ToolEffect.BOOKKEEPING,

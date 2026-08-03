@@ -1,4 +1,39 @@
-"""The focused action turn: serializing an already-reached decision into one act.
+"""The production SINGLE request protocol: discovery, checkpoint, action.
+
+This module owns the whole alternation, and it is the *only* owner: there is no
+second readiness manager, no phase engine, and no competing state machine.  One
+:class:`FocusedActionState` per turn answers, before every model request, which
+of three shapes that request has:
+
+.. code-block:: text
+
+    observation round ─▶ decision checkpoint ─▶ observation round
+                                  │                    │
+                                  └──▶ committed decision ──▶ focused action
+
+**Ordinary observation round.**  The full discovery catalog.  The turn reads,
+searches, and inspects as deeply as the work genuinely needs.
+
+**Decision checkpoint.**  After every completed pre-write observation round, the
+next request is not another discovery request — it is the checkpoint, and it
+exposes only ``commit_implementation_decision``,
+``continue_implementation_discovery``, and (when the task is externally blocked)
+``report_blocker``.  No read, search, terminal, diagnostic, mutation, web, Git,
+Godot inspection, TODO, MCP, or drone tool appears in it.
+
+That is the structural fix for a model wandering forever.  Committing the
+decision was previously *voluntary*: the prompt asked for it, and a model that
+simply never called it kept chaining unrelated reads until something else ran
+out.  Now the harness asks the question, and the only way to earn another
+observation round is to name the exact unresolved implementation question and
+the repository evidence that would answer it.  Answering costs one call and the
+round is granted; there is still no request, file, token, or time budget
+anywhere in this, and a turn with genuinely open questions may alternate as many
+times as it needs.  What it cannot do is silently keep looking.
+
+**Focused action.**  A committed decision — or the guard's anti-loop stall
+fallback — hands the next request to the mutation surface, which is what the
+rest of this module has always described.
 
 ``PreEditLoopGuard`` can already conclude, deterministically, that a production
 turn has finished discovery — it has issued its one focus instruction and no
@@ -58,27 +93,29 @@ failure ledgers rather than through a retry manager:
   returns to the ordinary tool loop with the tool result in history, so the
   model can inspect, reread, correct, and act again.
 
-**A malformed response is a protocol lapse, not an impossible task.**  A focused
-response that answers with prose, no calls, several calls, an unexposed tool, or
-a malformed collection is discarded whole — nothing in it executes, nothing in
-it is stored — but the *decision* it was supposed to serialize was never spent.
-Killing the turn there forced the user to resend an entire task, complete with
-all its repository discovery, because one response was shaped wrong.  So the
-send loop instead classifies the violation
-(:func:`diagnose_focused_contract`), attaches one compact request-local
-correction naming exactly what was wrong, and reissues the *same* focused
-request: same model, thinking off, same action catalog, same required-tool
-flag, same frozen system prompt, same gathered evidence.  Nothing is appended to
-canonical history and normal turns pay nothing for this.
+**A malformed response is a formatting disagreement, not an impossible task.**
+Response shape is normalized, never adjudicated — see
+:mod:`aura.conversation.checkpoint_protocol`, which both checkpoints share.
+Prose alongside a valid call loses the prose and keeps the call; several valid
+mutation calls are an ordinary batch and go through the existing whole-batch
+preflight; contradictory control calls and malformed or unexposed calls execute
+nothing, receive truthful paired rejection results, and the *same* request is
+reissued with one compact correction.
 
-That is not a retry allowance.  There is no attempt count and no cap.  What
-makes a violation terminal is *evidence*: a structural fingerprint
-(:attr:`FocusedContractDiagnosis.fingerprint`, built only from the violation
-kind, the raw call count, and the readable tool names — never from prose,
-reasoning, ids, or timing) that Aura has already corrected once and that the
-provider produced again.  A repeat of the identical structural violation, after
-being told precisely what was wrong, is proof the provider cannot honour this
-protocol; a *different* violation is new evidence and gets its own correction.
+Reissuing costs the turn nothing it had: the decision was never spent, the
+gathered evidence is untouched, and normal turns build no correction at all.  If
+the provider keeps producing an unusable shape, the send loop falls back to the
+ordinary production request with the decision capsule and unresolved state
+preserved.  It never ends the coding task, and there is no
+``STATUS_PROVIDER_CONTRACT_FAILURE`` for tool-call shape — a turn that dead-stops
+on an envelope while holding intact evidence and an unmade edit is simply a bug.
+``tool_choice="required"`` is a request to the provider, never a guarantee;
+manager-side normalization stays authoritative.
+
+Terminal stops are reserved for user cancellation, a successful structured
+``report_blocker``, a successful ``report_already_satisfied``, an unrecoverable
+provider/API transport failure, the catastrophic 300-call brake, and a
+successfully completed task.
 
 Whether the turn is advancing or repeating is then decided by the guard alone,
 exactly as it is during discovery.  While the ordinary loop keeps producing new
@@ -92,9 +129,9 @@ The turn ends without a write only on evidence: a round that neither advanced
 nor produced a failure the turn had not already seen (see
 :func:`~aura.conversation.pre_edit_loop_guard.failure_fingerprint`) means
 nothing left in the turn can change what happens next, and that is the honest
-ending.  The ``A, B, A, B`` cycle detector, a truthful blocker, a provider
-contract violation, cancellation, and the catastrophic 300-call brake are the
-other terminal paths, and none of them counts attempts.
+ending.  The ``A, B, A, B`` cycle detector, a truthful blocker, cancellation,
+and the catastrophic 300-call brake are the other terminal paths, and none of
+them counts attempts.
 """
 from __future__ import annotations
 
@@ -111,9 +148,29 @@ from aura.conversation.task_router import TaskRoute, route_bears_production_acti
 REPORT_BLOCKER: str = "report_blocker"
 REPORT_ALREADY_SATISFIED: str = "report_already_satisfied"
 
-#: The ordinary-catalog bookkeeping tool that ends discovery positively.  Not
-#: part of the focused action surface: it is what *leads* to it.
+#: The checkpoint tool that ends discovery positively.  Not part of the focused
+#: action surface: it is what *leads* to it.
 COMMIT_IMPLEMENTATION_DECISION: str = "commit_implementation_decision"
+
+#: The checkpoint tool that buys exactly one more observation round, and only
+#: against a named unresolved implementation question.
+CONTINUE_IMPLEMENTATION_DISCOVERY: str = "continue_implementation_discovery"
+
+#: The control tools of the decision checkpoint — the ones that decide which
+#: request comes next rather than changing anything.  Mutually exclusive by
+#: nature: more than one of them in a response is a contradiction, not a batch.
+DECISION_CHECKPOINT_CONTROL_TOOLS: frozenset[str] = frozenset({
+    COMMIT_IMPLEMENTATION_DECISION,
+    CONTINUE_IMPLEMENTATION_DISCOVERY,
+    REPORT_BLOCKER,
+})
+
+#: The control tools of the focused action request.  The mutation tools around
+#: them are *not* control: several of those are an ordinary batch.
+FOCUSED_CONTROL_TOOLS: frozenset[str] = frozenset({
+    REPORT_BLOCKER,
+    REPORT_ALREADY_SATISFIED,
+})
 
 #: Thinking mode used for the action-serialization request, always.
 FOCUSED_ACTION_THINKING: str = "off"
@@ -122,7 +179,6 @@ FOCUSED_ACTION_THINKING: str = "off"
 OUTCOME_WRITE: str = "write"
 OUTCOME_BLOCKER: str = "blocker"
 OUTCOME_ALREADY_SATISFIED: str = "already_satisfied"
-OUTCOME_PROVIDER_CONTRACT_FAILURE: str = "provider_contract_failure"
 
 #: The focused act ran and left the workspace unchanged.  **Not terminal**: the
 #: tool result is in history, the request is spent for that one decision, and
@@ -141,66 +197,6 @@ ACTION_FAILED_MESSAGE = (
     "knowing nothing new. Nothing was written. The conversation and its "
     "gathered evidence are intact; send again to try another approach."
 )
-
-PROVIDER_CONTRACT_FAILURE_MESSAGE = (
-    "Provider contract failure: this request required exactly one tool call — "
-    "a write/edit tool, report_blocker, or report_already_satisfied. The model "
-    "broke that contract, so Aura discarded the response, executed nothing, "
-    "and reissued the same focused request with an explicit correction naming "
-    "the violation and the tools it was allowed to call. The model returned "
-    "the same structural violation again, so it cannot honour this protocol. "
-    "No edit was made. The conversation and its gathered evidence are intact; "
-    "send again, or select a different model or provider."
-)
-
-# ── structural contract violations ─────────────────────────────────────────
-#: The stream completed but carried no usable assistant message to validate.
-VIOLATION_MISSING_MESSAGE: str = "missing_completed_message"
-#: ``tool_calls`` was present but was not a list.
-VIOLATION_TOOL_CALLS_NOT_A_LIST: str = "tool_calls_not_a_list"
-#: ``tool_calls`` was absent, null, or empty — prose-only answers land here.
-VIOLATION_NO_TOOL_CALLS: str = "no_tool_calls"
-#: More than one call: the request authorized exactly one act.
-VIOLATION_MULTIPLE_TOOL_CALLS: str = "multiple_tool_calls"
-#: The sole entry was not a readable call object.
-VIOLATION_MALFORMED_CALL: str = "malformed_sole_call"
-#: The sole entry's ``function`` was missing or not an object.
-VIOLATION_MALFORMED_FUNCTION: str = "malformed_function_object"
-#: The tool name was absent, empty, or not a string.
-VIOLATION_INVALID_TOOL_NAME: str = "invalid_tool_name"
-#: A well-formed call naming a tool this request did not expose.
-VIOLATION_UNEXPOSED_TOOL: str = "unexposed_tool"
-
-#: Human-readable reason text, one per structural violation kind. Written for
-#: the model that produced the violation, so each says what the response *did*,
-#: not what an internal enum is called.
-_VIOLATION_REASONS: dict[str, str] = {
-    VIOLATION_MISSING_MESSAGE: (
-        "it completed without a usable assistant message"
-    ),
-    VIOLATION_TOOL_CALLS_NOT_A_LIST: (
-        "its tool_calls field was not a list of calls"
-    ),
-    VIOLATION_NO_TOOL_CALLS: (
-        "it contained prose but no tool call at all"
-    ),
-    VIOLATION_MULTIPLE_TOOL_CALLS: (
-        "it contained more than one tool call; this request authorizes exactly "
-        "one act"
-    ),
-    VIOLATION_MALFORMED_CALL: (
-        "its single tool call was not a readable call object"
-    ),
-    VIOLATION_MALFORMED_FUNCTION: (
-        "its single tool call carried no readable function object"
-    ),
-    VIOLATION_INVALID_TOOL_NAME: (
-        "its single tool call named no tool"
-    ),
-    VIOLATION_UNEXPOSED_TOOL: (
-        "it called a tool this request does not expose"
-    ),
-}
 
 
 @dataclass
@@ -225,6 +221,33 @@ class FocusedActionState:
     active: bool = False
     """Whether the request currently being built is the focused action request."""
 
+    checkpoint_active: bool = False
+    """Whether the request currently being built is the decision checkpoint."""
+
+    discovery_round_open: bool = True
+    """Whether an ordinary observation round is currently authorized.
+
+    True at the start of the turn — the first production request performs its
+    first observation round normally, exactly as it always did — and again after
+    every successful ``continue_implementation_discovery``.  It is closed by the
+    completion of an ordinary pre-write observation round, which is what hands
+    the next request to the checkpoint.
+
+    Not a budget and not a count: it holds one bit, and the only way to reopen
+    it is to name an unresolved implementation question."""
+
+    unresolved_question: str = ""
+    """The most recent named unresolved implementation question, for logs."""
+
+    protocol_fallback: bool = False
+    """Whether the next request must be the ordinary production request.
+
+    Set when a provider has produced an unusable checkpoint response shape
+    twice.  The turn is *not* over: the decision capsule, the gathered evidence,
+    and the unresolved state are all intact, and the ordinary request is simply
+    a shape the provider has already demonstrated it can answer.  Consumed by
+    the one request it redirects."""
+
     blocked: bool = False
     """Whether ``report_blocker`` ended the implementation attempt."""
 
@@ -248,14 +271,7 @@ class FocusedActionState:
     outcome: str = ""
     """Terminal outcome of the focused request, once known."""
 
-    contract_violated: bool = False
-    """Whether a violation ended the turn as a provider-contract failure.
-
-    Set only on the terminal path — a repeat of a structural violation Aura had
-    already corrected. A first violation that was repaired never sets it, so a
-    recovered lapse cannot pollute the production receipt."""
-
-    # ── focused protocol recovery (per focused decision, not a budget) ──
+    # ── protocol recovery (per checkpoint, not a budget) ────────────────
 
     pending_correction: str = ""
     """Request-local correction to attach to the *next* focused request.
@@ -265,13 +281,14 @@ class FocusedActionState:
     system prompt, canonical history, or any other context source."""
 
     violation_fingerprints: set[str] = field(default_factory=set)
-    """Structural violation fingerprints already corrected for this decision.
+    """Structural response shapes already corrected at this checkpoint.
 
     Not a counter and not an allowance: membership is the whole question. A
     fingerprint absent here is new evidence and earns one explicit correction; a
     fingerprint already present means the provider repeated the identical
-    structural violation *after* being told exactly what was wrong, which is the
-    only evidence that ends the turn as a provider-contract failure."""
+    unusable shape *after* being told exactly what was wrong, which is the
+    evidence that this request shape is not working — and the send loop's answer
+    to that is the ordinary production request, never the end of the task."""
 
     last_violation: str = ""
     """Kind of the most recent structural violation, for logs and telemetry."""
@@ -293,6 +310,25 @@ class FocusedActionState:
 
     A hash of the normalized packet, never an ordinal: a corrected decision has
     a different identity, and nothing branches on how many a turn produced."""
+
+    def continue_discovery(self, question: str) -> None:
+        """Grant exactly one more ordinary observation round.
+
+        Called only from a *successful* structured
+        ``continue_implementation_discovery`` result — never from the tool name
+        alone and never from assistant prose.  The round it grants is spent by
+        the observation round that follows, after which the checkpoint returns.
+        """
+        self.discovery_round_open = True
+        self.unresolved_question = str(question or "")
+
+    def close_discovery_round(self) -> None:
+        """Spend the authorized observation round.
+
+        Called when an ordinary pre-write round that actually observed
+        something has completed.  The next request is then the checkpoint.
+        """
+        self.discovery_round_open = False
 
     def commit_decision(self, decision_id: str) -> None:
         """Record that this turn has committed an implementation decision.
@@ -318,6 +354,11 @@ class FocusedActionState:
         """
         self.decision_committed = False
         self.decision_id = ""
+        # A spent decision returns the turn to the ordinary loop, and the round
+        # that follows is an ordinary one: an act that failed to apply must be
+        # readable and correctable, not answered by a checkpoint asking whether
+        # a decision already made is made.
+        self.discovery_round_open = True
 
     def clear_protocol_recovery(self) -> None:
         """Forget this decision's protocol-recovery state.
@@ -381,6 +422,12 @@ def should_enter_focused_action(
         return False
     if guard is None or guard.write_applied:
         return False
+    if state.protocol_fallback:
+        # The provider has twice produced an unusable response to a narrowed
+        # request. Nothing about the decision is discarded — it is simply asked
+        # for again in the request shape the provider has already demonstrated
+        # it can answer.
+        return False
     if not (state.decision_committed or guard.focused):
         return False
     if guard.recovery_open:
@@ -398,13 +445,66 @@ def should_enter_focused_action(
     return not (state.spent or state.blocked)
 
 
+def should_enter_decision_checkpoint(
+    *,
+    mode: str,
+    route: TaskRoute | None,
+    guard: PreEditLoopGuard | None,
+    task_completion_context: bool,
+    read_only: bool,
+    state: FocusedActionState,
+) -> bool:
+    """Return whether the next request must be the decision checkpoint.
+
+    Pure over state the send loop already owns, and evaluated *after*
+    :func:`should_enter_focused_action` — a committed decision or the guard's
+    stall fallback outranks the checkpoint, because both already answer the
+    question the checkpoint asks.
+
+    The one positive condition is that the authorized observation round has been
+    spent: an ordinary pre-write round ran, observed something, and ended.  Every
+    other condition is a reason *not* to ask:
+
+    * a read-only registry owes no implementation at all;
+    * a write has applied, so the pre-write protocol is over;
+    * ``guard.recovery_open`` — a failure the turn has not seen before just
+      landed, and the ordinary loop reads it first.  Asking a model to commit or
+      justify while a fresh failure is unexplained would force it to answer with
+      the wrong information;
+    * a completion response is pending;
+    * the attempt already ended in a blocker or an already-satisfied report;
+    * ``protocol_fallback`` — the provider has twice failed to produce a usable
+      checkpoint response, so the next request is the ordinary one instead.
+
+    Nothing here counts requests, files, tokens, or elapsed time.
+    """
+    if mode != "single" or read_only:
+        return False
+    if not route_bears_production_action(route):
+        return False
+    if guard is None or guard.write_applied:
+        return False
+    if state.protocol_fallback:
+        return False
+    if state.decision_committed or guard.focused:
+        return False
+    if state.blocked or state.already_satisfied:
+        return False
+    if guard.recovery_open:
+        return False
+    if task_completion_context:
+        return False
+    return not state.discovery_round_open
+
+
 def tool_call_names(full_message: dict[str, Any] | None) -> list[str]:
     """Return the tool names in an assistant message, in call order.
 
     Reporting only: unreadable entries are skipped and a ``tool_calls`` field
     that is not a list yields nothing, so a malformed response can be described
     without crashing.  It cannot be *validated* from this — that is
-    :func:`focused_contract_ok`, which reads the raw collection.
+    :func:`~aura.conversation.checkpoint_protocol.normalize_checkpoint_response`,
+    which reads the raw collection.
     """
     if not isinstance(full_message, dict):
         return []
@@ -421,154 +521,6 @@ def tool_call_names(full_message: dict[str, Any] | None) -> list[str]:
             if name:
                 names.append(name)
     return names
-
-
-@dataclass(frozen=True)
-class FocusedContractDiagnosis:
-    """What a focused response did, structurally — and nothing else.
-
-    Deliberately narrow.  It answers "did this honour the contract, and if not,
-    in exactly what way?" so the send loop can both refuse to execute the
-    response *and* tell the model precisely what to fix.  Everything it carries
-    is structural; none of it is provider prose.
-    """
-
-    ok: bool
-    """Whether the response may execute. False means execute nothing at all."""
-
-    kind: str
-    """The ``VIOLATION_*`` constant, or ``""`` when the contract held."""
-
-    call_count: int
-    """Raw ``tool_calls`` length before any filtering; ``-1`` when unreadable."""
-
-    names: tuple[str, ...]
-    """Readable tool names in call order — reporting only, never a verdict."""
-
-    @property
-    def fingerprint(self) -> str:
-        """Stable identity of *this shape* of violation.
-
-        Built from structural facts only: the violation kind, the raw call
-        count, and the readable tool names.  The exposed action surface is not
-        part of it because it is fixed for the focused decision the fingerprint
-        is scoped to — two violations compared here always faced the same
-        catalog.  Prose, reasoning, generated call ids, timestamps, and token
-        counts are deliberately excluded: they differ on every response, and
-        fingerprinting them would make every repeat look novel and every
-        violation infinitely recoverable.
-        """
-        if self.ok:
-            return ""
-        parts = [self.kind, str(self.call_count), ",".join(self.names)]
-        return "|".join(parts)
-
-    @property
-    def reason(self) -> str:
-        """One clause describing what the response did wrong."""
-        return _VIOLATION_REASONS.get(self.kind, "it broke the response contract")
-
-
-def diagnose_focused_contract(
-    full_message: dict[str, Any] | None,
-    exposed_tools: tuple[str, ...] | frozenset[str] | set[str] | list[str],
-) -> FocusedContractDiagnosis:
-    """Classify a focused response against the exactly-one-tool-call contract.
-
-    Validated against the *raw* ``tool_calls`` collection, not against the
-    filtered names :func:`tool_call_names` returns.  That filter silently skips
-    entries it cannot read, so a response carrying one valid call plus a
-    malformed extra entry would otherwise present itself as a single clean call
-    and execute — while the provider in fact asked for two acts, one of them
-    unreadable.  Every structural requirement is checked here instead:
-
-    * there is a completed assistant message at all;
-    * ``tool_calls`` is a list;
-    * its raw length is exactly one — before any filtering;
-    * the sole entry is a dictionary;
-    * its ``function`` is a dictionary;
-    * ``name`` is a non-empty string;
-    * that name is in this round's exact exposed action set.
-
-    Anything else is a contract violation and executes nothing.  Classification
-    is what changed here, not strictness: every response this rejects is exactly
-    the set the boolean check rejected.
-    """
-    def fail(kind: str, *, count: int = -1, names: tuple[str, ...] = ()):
-        return FocusedContractDiagnosis(
-            ok=False, kind=kind, call_count=count, names=names
-        )
-
-    if not isinstance(full_message, dict):
-        return fail(VIOLATION_MISSING_MESSAGE)
-
-    names = tuple(tool_call_names(full_message))
-    calls = full_message.get("tool_calls")
-    if calls is None:
-        return fail(VIOLATION_NO_TOOL_CALLS, count=0)
-    if not isinstance(calls, list):
-        return fail(VIOLATION_TOOL_CALLS_NOT_A_LIST)
-    if not calls:
-        return fail(VIOLATION_NO_TOOL_CALLS, count=0)
-    if len(calls) != 1:
-        return fail(
-            VIOLATION_MULTIPLE_TOOL_CALLS, count=len(calls), names=names
-        )
-
-    call = calls[0]
-    if not isinstance(call, dict):
-        return fail(VIOLATION_MALFORMED_CALL, count=1)
-    function = call.get("function")
-    if not isinstance(function, dict):
-        return fail(VIOLATION_MALFORMED_FUNCTION, count=1)
-    name = function.get("name")
-    if not isinstance(name, str) or not name:
-        return fail(VIOLATION_INVALID_TOOL_NAME, count=1)
-    if name not in set(exposed_tools):
-        return fail(VIOLATION_UNEXPOSED_TOOL, count=1, names=(name,))
-
-    return FocusedContractDiagnosis(ok=True, kind="", call_count=1, names=names)
-
-
-def focused_contract_ok(
-    full_message: dict[str, Any] | None,
-    exposed_tools: tuple[str, ...] | frozenset[str] | set[str] | list[str],
-) -> bool:
-    """Whether a focused response honours the exactly-one-tool-call contract.
-
-    The boolean face of :func:`diagnose_focused_contract`, kept for callers that
-    only need the verdict.  The send loop reads the diagnosis, because a bare
-    "no" cannot tell the model what to fix.
-    """
-    return diagnose_focused_contract(full_message, exposed_tools).ok
-
-
-def focused_correction_instruction(
-    diagnosis: FocusedContractDiagnosis,
-    exposed_tools: tuple[str, ...] | list[str],
-) -> str:
-    """Return the one request-local correction for a discarded focused response.
-
-    Request-local by construction: the caller appends it to a single outbound
-    message copy.  It never mutates the frozen system prompt, is never appended
-    to canonical history, and is not a new context source — so a turn with no
-    violation carries none of this and costs exactly what it did before.
-
-    It states only facts the send loop already knows: the previous response was
-    discarded, why it was structurally invalid, that nothing executed, and what
-    a valid response is.
-    """
-    tools = ", ".join(str(name) for name in exposed_tools if name)
-    return (
-        "Your previous response was discarded and no action was executed, "
-        f"because {diagnosis.reason}. The repository evidence gathered so far "
-        "is unchanged and still applies.\n"
-        "This request requires exactly one tool call and nothing else. "
-        f"Allowed tools: {tools}.\n"
-        "Do not answer with prose, a plan, or an explanation — prose cannot "
-        "accompany the call and cannot replace it. Respond with exactly one "
-        "call to one of the tools above."
-    )
 
 
 def action_failed_message() -> tuple[str, dict[str, Any]]:
@@ -593,48 +545,23 @@ def action_failed_message() -> tuple[str, dict[str, Any]]:
     return content, {"role": "assistant", "content": content}
 
 
-def provider_contract_failure_message() -> tuple[str, dict[str, Any]]:
-    """Return the honest ending for a provider that cannot honour the contract.
-
-    Reached only on evidence, never on a first lapse: Aura discarded the first
-    violating response, told the model exactly what was structurally wrong, and
-    reissued the identical focused request — and the model produced the same
-    structural violation again.  The wording says so, because a message
-    claiming nothing was retried when a correction *was* issued would misreport
-    what the turn did.
-    """
-    content = PROVIDER_CONTRACT_FAILURE_MESSAGE
-    return content, {"role": "assistant", "content": content}
-
-
 __all__ = [
     "ACTION_FAILED_MESSAGE",
     "COMMIT_IMPLEMENTATION_DECISION",
+    "CONTINUE_IMPLEMENTATION_DISCOVERY",
+    "DECISION_CHECKPOINT_CONTROL_TOOLS",
     "FOCUSED_ACTION_THINKING",
+    "FOCUSED_CONTROL_TOOLS",
     "FocusedActionState",
-    "FocusedContractDiagnosis",
     "OUTCOME_ACTION_FAILED",
     "OUTCOME_ALREADY_SATISFIED",
     "OUTCOME_BLOCKER",
     "OUTCOME_NOT_APPLIED",
-    "OUTCOME_PROVIDER_CONTRACT_FAILURE",
     "OUTCOME_WRITE",
-    "PROVIDER_CONTRACT_FAILURE_MESSAGE",
     "REPORT_ALREADY_SATISFIED",
     "REPORT_BLOCKER",
-    "VIOLATION_INVALID_TOOL_NAME",
-    "VIOLATION_MALFORMED_CALL",
-    "VIOLATION_MALFORMED_FUNCTION",
-    "VIOLATION_MISSING_MESSAGE",
-    "VIOLATION_MULTIPLE_TOOL_CALLS",
-    "VIOLATION_NO_TOOL_CALLS",
-    "VIOLATION_TOOL_CALLS_NOT_A_LIST",
-    "VIOLATION_UNEXPOSED_TOOL",
     "action_failed_message",
-    "diagnose_focused_contract",
-    "focused_contract_ok",
-    "focused_correction_instruction",
-    "provider_contract_failure_message",
+    "should_enter_decision_checkpoint",
     "should_enter_focused_action",
     "tool_call_names",
 ]

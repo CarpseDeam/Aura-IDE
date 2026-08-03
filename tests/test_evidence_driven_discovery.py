@@ -48,9 +48,14 @@ from aura.conversation.tools._types import ApprovalDecision
 from aura.model_streams import PRODUCTION_STREAM_HOOK, ModelStreamRegistry
 from tests.production_loop_harness import (
     IMPLEMENTATION_ROUTE,
+    KIND_CHECKPOINT,
+    KIND_FOCUSED,
+    KIND_ORDINARY,
     Recorder,
     ScriptedBackend,
     build_manager,
+    commit_round,
+    continue_round,
     final_round,
     make_workspace,
     read_round,
@@ -59,6 +64,11 @@ from tests.production_loop_harness import (
     tool_round,
     write_round,
 )
+
+#: Short aliases for the request-shape assertions below.
+ORD = KIND_ORDINARY
+CHK = KIND_CHECKPOINT
+ACT = KIND_FOCUSED
 
 
 @pytest.fixture
@@ -116,12 +126,21 @@ class TestNewEvidenceIsNeverBounded:
     def test_four_novel_rounds_through_the_real_loop_stay_ordinary(
         self, workspace, isolated_streams
     ) -> None:
-        """Proof 1, through the send loop: the removed two-hop ceiling is gone."""
+        """Proof 1, through the send loop: the removed two-hop ceiling is gone.
+
+        Four sequential observation rounds still run. What each of them costs is
+        a named unresolved question at the checkpoint — never a request, file,
+        token, or time budget, and nothing here caps how many there may be.
+        """
         backend = ScriptedBackend([
             read_round("r0", 0),
+            continue_round("k0"),
             read_round("r1", 1),
+            continue_round("k1"),
             read_round("r2", 2),
+            continue_round("k2"),
             read_round("r3", 3),
+            commit_round(),
             write_round(),
             final_round("Applied."),
         ])
@@ -135,9 +154,11 @@ class TestNewEvidenceIsNeverBounded:
             "non-vacuous: four sequential discovery rounds really executed — "
             f"got {[(r.name, r.ok) for r in recorder.tool_results()]}"
         )
-        assert backend.request_shapes() == [False] * 6, (
-            "no focused action request: every round returned new evidence, so "
-            f"discovery was never forced to end — got {backend.request_shapes()}"
+        assert backend.request_kinds() == [
+            ORD, CHK, ORD, CHK, ORD, CHK, ORD, CHK, ACT, ORD,
+        ], (
+            "every round returned new evidence, so nothing was ever *forced* — "
+            f"discovery ended because the model said so: {backend.request_kinds()}"
         )
         writes = recorder.results_named("write_file")
         assert writes and writes[0].ok
@@ -168,6 +189,7 @@ class TestAStalledRoundEndsDiscovery:
         """Proof 2, through the send loop."""
         backend = ScriptedBackend([
             tool_round([("d1", "list_directory", {"path": "."})]),
+            continue_round("k0"),
             # A cosmetically different call returning the identical listing.
             tool_round([("d2", "list_directory", {"path": "./"})]),
             write_round("w1"),
@@ -182,9 +204,9 @@ class TestAStalledRoundEndsDiscovery:
         assert len(listings) == 2 and all(r.ok for r in listings), (
             "non-vacuous: both listings really ran and really succeeded"
         )
-        assert backend.request_shapes() == [False, False, True, False], (
-            "the stalled second round forces the focused action request — "
-            f"got {backend.request_shapes()}"
+        assert backend.request_kinds() == [ORD, CHK, ORD, ACT, ORD], (
+            "the stalled round outranks the checkpoint: there is nothing left "
+            f"to ask — got {backend.request_kinds()}"
         )
         assert backend.focused_calls()[0]["thinking"] == FOCUSED_ACTION_THINKING
 
@@ -278,7 +300,9 @@ class TestBookkeepingIsNotAStall:
         backend = ScriptedBackend([
             todo_round(),                                    # the checklist
             read_round("r0", 0),                             # new evidence
+            continue_round("k0"),
             tool_round([("d1", "list_directory", {"path": "."})]),
+            continue_round("k1"),
             tool_round([("d2", "list_directory", {"path": "./"})]),   # stall
             write_round(),
             final_round("Applied."),
@@ -292,11 +316,12 @@ class TestBookkeepingIsNotAStall:
         assert len(todos) == 1 and todos[0].ok, (
             f"non-vacuous: the TODO really published — {recorder.tool_results()}"
         )
-        assert backend.request_shapes() == [
-            False, False, False, False, True, False,
+        assert backend.request_kinds() == [
+            ORD, ORD, CHK, ORD, CHK, ORD, ACT, ORD,
         ], (
-            "the checklist round stayed ordinary, and focus arrived only when a "
-            f"round that really looked learned nothing — {backend.request_shapes()}"
+            "the checklist round neither stalled nor spent the discovery round, "
+            "so no checkpoint follows it; focus arrived only when a round that "
+            f"really looked learned nothing — {backend.request_kinds()}"
         )
         assert recorder.results_named("read_file"), "the turn really read first"
         writes = recorder.results_named("write_file")
@@ -400,9 +425,14 @@ class TestCycleDetection:
 
 STALL = [
     tool_round([("d1", "list_directory", {"path": "."})]),
+    continue_round("ks"),
     tool_round([("d2", "list_directory", {"path": "./"})]),
 ]
-"""Two rounds returning the same listing: discovery stalls, focus opens."""
+"""Two observation rounds returning the same listing, with the checkpoint the
+protocol puts between them: discovery stalls, focus opens."""
+
+STALL_KINDS = [ORD, CHK, ORD]
+"""The request shapes ``STALL`` produces, for the assertions below."""
 
 
 def escaping_write(call_id: str = "bad") -> list[Event]:
@@ -521,11 +551,11 @@ class TestAFailedActIsEvidenceNotCompletion:
         assert not writes[0].ok, "the first focused write really failed"
         assert writes[1].ok, "the corrected write really applied"
 
-        assert backend.request_shapes() == [
-            False, False, True, False, True, False,
+        assert backend.request_kinds() == [
+            *STALL_KINDS, ACT, ORD, ACT, ORD,
         ], (
             "stall → focused act → ordinary round → corrected focused act — "
-            f"got {backend.request_shapes()}"
+            f"got {backend.request_kinds()}"
         )
         assert ACTION_FAILED_MESSAGE not in recorder.chat_text, (
             "a failed act is evidence, not a completed task"
@@ -557,11 +587,11 @@ class TestAFailedActIsEvidenceNotCompletion:
         assert len(deletes) == 1 and not deletes[0].ok, (
             "non-vacuous: the second, differently-shaped act really ran and failed"
         )
-        assert backend.request_shapes() == [
-            False, False, True, False, True, False, True, False,
+        assert backend.request_kinds() == [
+            *STALL_KINDS, ACT, ORD, ACT, ORD, ACT, ORD,
         ], (
             "two distinct failures, each read and corrected, still reach the "
-            f"edit — got {backend.request_shapes()}"
+            f"edit — got {backend.request_kinds()}"
         )
         assert ACTION_FAILED_MESSAGE not in recorder.chat_text
         assert (workspace / "notes.md").read_text(encoding="utf-8") == (
@@ -650,9 +680,9 @@ class TestAFailedActIsEvidenceNotCompletion:
         assert len(writes) == 2 and not any(w.ok for w in writes), (
             "non-vacuous: both writes really ran and really failed"
         )
-        assert len(backend.calls) == 4, (
+        assert backend.request_kinds() == [*STALL_KINDS, ACT, ORD], (
             "the repeat of a known failure ends the turn — "
-            f"got {backend.request_shapes()}"
+            f"got {backend.request_kinds()}"
         )
         assert ACTION_FAILED_MESSAGE in recorder.chat_text
         assert isinstance(recorder.events[-1], Done), "the turn is terminated"
@@ -675,9 +705,9 @@ class TestAFailedActIsEvidenceNotCompletion:
         run(build_manager(workspace), recorder)
 
         assert recorder.results_named("write_file"), "the act really ran"
-        assert len(backend.calls) == 4, (
+        assert backend.request_kinds() == [*STALL_KINDS, ACT, ORD], (
             f"no request after the round that learned nothing — "
-            f"{backend.request_shapes()}"
+            f"{backend.request_kinds()}"
         )
         assert ACTION_FAILED_MESSAGE in recorder.chat_text
         assert isinstance(recorder.events[-1], Done)
@@ -707,9 +737,9 @@ class TestAFailedActIsEvidenceNotCompletion:
         assert len(writes) == 2 and not any(w.ok for w in writes), (
             "non-vacuous: the write tool really ran twice and was really rejected"
         )
-        assert backend.request_shapes()[:5] == [False, False, True, False, True], (
+        assert backend.request_kinds()[:6] == [*STALL_KINDS, ACT, ORD, ACT], (
             "the first rejection returned to the loop and reached a second act — "
-            f"got {backend.request_shapes()}"
+            f"got {backend.request_kinds()}"
         )
         assert (workspace / "notes.md").read_text(encoding="utf-8") == (
             "# Notes\n\nold body\n"
@@ -745,8 +775,7 @@ class TestSurvivingInvariants:
         self, workspace, isolated_streams
     ) -> None:
         backend = ScriptedBackend([
-            tool_round([("d1", "list_directory", {"path": "."})]),
-            tool_round([("d2", "list_directory", {"path": "./"})]),
+            *STALL,
             write_round("w1"),
             final_round("Applied."),
         ])
@@ -799,14 +828,19 @@ class TestSurvivingInvariants:
         """``FocusedActionState`` tracks the current focused decision only.
 
         The protocol-recovery fields are part of that decision, not a budget:
-        the correction pending for the next request, the structural violation
-        fingerprints already corrected, and the latest violation kind. Whether a
-        violation is terminal is set membership, never arithmetic.
+        the correction pending for the next request, the structural response
+        shapes already corrected, and the latest violation kind. Whether a shape
+        has already been corrected is set membership, never arithmetic.
 
         The committed-decision fields are the same shape: a flag saying a
         decision was committed and the content identity of that decision. They
         are the positive route into focused action, and neither is a count —
         nothing tracks how many decisions a turn committed.
+
+        The checkpoint fields are one bit each: whether this request is the
+        checkpoint, whether an observation round is currently authorized, and
+        whether the next request falls back to the ordinary shape. The named
+        unresolved question is text, not a tally.
         """
         fields = set(FocusedActionState.__dataclass_fields__)
         assert fields == {
@@ -818,12 +852,15 @@ class TestSurvivingInvariants:
             "exposed_tools",
             "selected_action",
             "outcome",
-            "contract_violated",
             "pending_correction",
             "violation_fingerprints",
             "last_violation",
             "decision_committed",
             "decision_id",
+            "checkpoint_active",
+            "discovery_round_open",
+            "unresolved_question",
+            "protocol_fallback",
         }
         assert not any(
             "recovery" in name or "attempt" in name or "count" in name

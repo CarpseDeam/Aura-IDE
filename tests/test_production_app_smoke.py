@@ -324,23 +324,38 @@ def full_script() -> list[list]:
         ],
         # 2. repository read
         _tool_round([("read-1", "read_file", {"path": "test_calc.py"})]),
-        # 3. approved write producing a diff
+        # 3. the decision checkpoint the read earns: the owner, the seam, the
+        #    target file, and the change are all known, so discovery ends here.
+        _tool_round([(
+            "commit-1",
+            "commit_implementation_decision",
+            {
+                "objective": "Implement add() so the suite passes.",
+                "owners": ["calc.py owns the arithmetic used by test_calc"],
+                "target_files": ["calc.py"],
+                "change": "Create calc.add returning the sum of its arguments.",
+            },
+        )]),
+        # 4. the focused act: the write, and only the write
         [
             ReasoningDelta(text="test_calc imports calc.add; creating it.\n"),
             *_tool_round([
-                (
-                    "todo-2",
-                    UPDATE_WORKER_TODO_TOOL,
-                    {"items": [
-                        {"id": "inspect", "text": "Inspect the project", "status": "done"},
-                        {"id": "implement", "text": "Implement add()", "status": "active"},
-                        {"id": "validate", "text": "Run the test suite", "status": "pending"},
-                    ]},
-                ),
                 ("write-1", "write_file", {"path": "calc.py", "content": BROKEN_CALC}),
             ]),
         ],
-        # 4. terminal validation — fails
+        # 5. TODO advances now that the edit landed, then terminal validation —
+        #    which fails
+        [
+            *_tool_round([(
+                "todo-2",
+                UPDATE_WORKER_TODO_TOOL,
+                {"items": [
+                    {"id": "inspect", "text": "Inspect the project", "status": "done"},
+                    {"id": "implement", "text": "Implement add()", "status": "active"},
+                    {"id": "validate", "text": "Run the test suite", "status": "pending"},
+                ]},
+            )]),
+        ],
         _tool_round([("cmd-1", "run_terminal_command", {"command": VALIDATION_COMMAND})]),
         # 5. diagnosis + corrective edit
         [

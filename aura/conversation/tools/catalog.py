@@ -14,6 +14,7 @@ from aura.conversation.tools._drone_schemas import (
 )
 from aura.conversation.tools._schemas import (
     COMMIT_IMPLEMENTATION_DECISION_TOOL_DEF,
+    CONTINUE_IMPLEMENTATION_DISCOVERY_TOOL_DEF,
     DIAGNOSTIC_TOOL_DEF,
     DISPATCH_TOOL_DEF,
     GIT_TOOL_DEFS,
@@ -275,3 +276,29 @@ class ToolCatalog:
             copy.deepcopy(REPORT_BLOCKER_TOOL_DEF),
             copy.deepcopy(REPORT_ALREADY_SATISFIED_TOOL_DEF),
         ]
+
+    def build_decision_checkpoint_tool_defs(
+        self, *, include_blocker: bool = True
+    ) -> list[dict[str, Any]]:
+        """Build the tool set for one decision checkpoint request.
+
+        The checkpoint asks one question — is the implementation decision made?
+        — so it exposes only the tools that can answer it:
+        ``commit_implementation_decision`` (yes),
+        ``continue_implementation_discovery`` (no, and here is the named
+        unresolved question), and ``report_blocker`` when the task is genuinely
+        blocked from outside.
+
+        Everything else is withheld *by construction*, not by instruction: no
+        read, search, terminal, diagnostic, mutation, web, Git, Godot
+        inspection, TODO, MCP, or drone tool appears here.  That is what makes
+        another discovery round cost a named question instead of being the
+        default a prompt has to talk the model out of.
+        """
+        tools = [
+            copy.deepcopy(COMMIT_IMPLEMENTATION_DECISION_TOOL_DEF),
+            copy.deepcopy(CONTINUE_IMPLEMENTATION_DISCOVERY_TOOL_DEF),
+        ]
+        if include_blocker:
+            tools.append(copy.deepcopy(REPORT_BLOCKER_TOOL_DEF))
+        return tools

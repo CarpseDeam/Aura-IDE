@@ -511,14 +511,16 @@ class TestBoundedProgressionThroughTheRealLoop:
         action request fires instead of a third identical validation round.
 
         The scripted model then answers that focused request with prose. That is
-        a protocol lapse, not an impossible task, so the turn does not die on it:
-        the response is discarded, nothing executes, and the *same* focused
-        request goes out again carrying one explicit correction. Here the model
-        repeats the identical structural violation, which is the evidence that
-        it cannot honour the protocol — and only that ends the turn.
+        a formatting disagreement, not an impossible task, so the turn does not
+        die on it: nothing executes, and the *same* focused request goes out
+        again carrying one explicit correction. Here the model repeats the
+        identical shape, which is evidence that this request shape is not
+        working — so the send loop falls back to the ordinary production
+        request, evidence intact, rather than ending the coding task.
         """
         rounds = self._script([
             tool_round([("d1", "run_diagnostic_command", {"command": BAD_COMMAND})]),
+            final_round("Blocked: this command cannot run as a diagnostic."),
             final_round("Blocked: this command cannot run as a diagnostic."),
             final_round("Blocked: this command cannot run as a diagnostic."),
         ])
@@ -528,18 +530,20 @@ class TestBoundedProgressionThroughTheRealLoop:
 
         run(manager, Recorder())
 
-        assert len(backend.calls) == 4, "the turn must not circle"
         assert [bool(c.get("require_tool_call")) for c in backend.calls] == [
-            False, False, True, True,
+            False, False, True, True, False,
         ], (
-            "the stagnant recovery round hands the loop the focused request, and "
-            "the discarded prose response is corrected inside focused mode"
+            "the stagnant recovery round hands the loop the focused request, "
+            "the unusable prose response is corrected inside focused mode, and "
+            "the repeat falls back to the ordinary request"
         )
         # Nothing was written and nothing pretended otherwise.
         assert (project / "notes.md").read_text(encoding="utf-8") == (
             "# Notes\n\nold body\n"
         )
-        assert manager.last_turn_provider_contract_failure is True
+        assert manager.last_turn_provider_contract_failure is False, (
+            "a response shape is never a failed coding task"
+        )
 
 
 def test_no_new_owner_was_introduced() -> None:

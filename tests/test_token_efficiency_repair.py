@@ -74,13 +74,21 @@ from aura.conversation.tools.effects import ToolEffect
 from aura.model_streams import PRODUCTION_STREAM_HOOK, ModelStreamRegistry
 from tests.production_loop_harness import (
     IMPLEMENTATION_ROUTE,
+    KIND_CHECKPOINT,
+    KIND_FOCUSED,
+    KIND_ORDINARY,
     Recorder,
     ScriptedBackend,
     build_manager,
+    continue_round,
     final_round,
     run,
     tool_round,
 )
+
+ORD = KIND_ORDINARY
+CHK = KIND_CHECKPOINT
+ACT = KIND_FOCUSED
 
 FROZEN_PROMPT = "You are Aura's production coding agent."
 
@@ -1027,12 +1035,18 @@ class TestRecoveryPreservation:
     ) -> None:
         workspace = big_workspace(tmp_path / "proj")
         backend = ScriptedBackend([
-            # four legitimate discovery rounds (invariant: never bounded by a count)
+            # Four legitimate discovery rounds — never bounded by a count, each
+            # one bought at the checkpoint by a named unresolved question.
             tool_round([("r0", "read_file", {"path": "mod_04.py"})]),
+            continue_round("k0"),
             tool_round([("r1", "read_file", {"path": "mod_05.py"})]),
+            continue_round("k1"),
             tool_round([("r2", "read_file", {"path": "mod_06.py"})]),
+            continue_round("k2"),
             tool_round([("r3", "read_file", {"path": "mod_07.py"})]),
+            continue_round("k3"),
             stall_round("d1", "."),
+            continue_round("k4"),
             stall_round("d2", "./"),
             # write attempt that fails the write's own validation (the written
             # body is invalid Python: the write tool rejects it offline)
@@ -1071,16 +1085,16 @@ class TestRecoveryPreservation:
         assert "Validation passes" in recorder.chat_text, (
             "the turn completed truthfully"
         )
-        assert backend.request_shapes() == [
-            False, False, False, False, False, False,
-            True, False, True, False, False,
+        assert backend.request_kinds() == [
+            ORD, CHK, ORD, CHK, ORD, CHK, ORD, CHK, ORD, CHK, ORD,
+            ACT, ORD, ACT, ORD, ORD,
         ], "discovery → focused write → repair → corrected write → pass → final"
 
         _assert_every_request_valid(backend)
 
         # Older completed observations beyond the allowance became a ledger,
         # while the newest read and the stall rounds stayed.
-        w1_request = backend.calls[6]["messages"]
+        w1_request = backend.calls[11]["messages"]
         ledgers = ledgers_in(w1_request)
         assert len(ledgers) == 1, "no completed observation was retired"
         assert len(entries_in(w1_request)) >= 2
@@ -1093,7 +1107,7 @@ class TestRecoveryPreservation:
         # The failed write stays verbatim while it is still unresolved — in
         # the diagnosis request and the corrected-write request, the repair is
         # not yet visible in history.
-        for index in (7, 8):
+        for index in (12, 13):
             answered = {
                 m.get("tool_call_id")
                 for m in backend.calls[index]["messages"]
@@ -1106,7 +1120,7 @@ class TestRecoveryPreservation:
         # Once the repair is visible (passing-validation request and final
         # request), the failure retires into the ledger with its facts, and
         # the sequence ledger → repair write → passing validation is kept.
-        for index in (9, 10):
+        for index in (14, 15):
             call = backend.calls[index]["messages"]
             answered = {
                 m.get("tool_call_id") for m in call if m.get("role") == "tool"
@@ -1157,6 +1171,7 @@ class TestRecoveryPreservation:
         workspace = make_workspace(tmp_path / "proj")
         backend = ScriptedBackend([
             stall_round("d1", "."),
+            continue_round("k0"),
             stall_round("d2", "./"),
             # failure A: the path escapes the workspace
             tool_round([("w1", "write_file", {"path": "../outside.md",
@@ -1186,23 +1201,23 @@ class TestRecoveryPreservation:
         deletes = recorder.results_named("delete_file")
         assert len(deletes) == 1 and not deletes[0].ok
         assert "Applied on the third approach." in recorder.chat_text
-        assert backend.request_shapes() == [
-            False, False, True, False, True, False, True, False,
-        ]
+        assert backend.request_kinds() == [
+            ORD, CHK, ORD, ACT, ORD, ACT, ORD, ACT, ORD,
+        ], backend.request_kinds()
 
         _assert_every_request_valid(backend)
 
         # Invariant: unresolved failed mutation evidence stays available until
         # the turn ends — present in every request after each failure. Neither
         # failure is ever repaired on its own path, so neither may retire.
-        for call in backend.calls[3:]:
+        for call in backend.calls[4:]:
             answered = {
                 m.get("tool_call_id")
                 for m in call["messages"]
                 if m.get("role") == "tool"
             }
             assert "w1" in answered, "a later request lost the failed write"
-        for call in backend.calls[5:]:
+        for call in backend.calls[6:]:
             answered = {
                 m.get("tool_call_id")
                 for m in call["messages"]

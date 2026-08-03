@@ -77,8 +77,12 @@ def test_single_capsule_forbids_reopening_settled_decisions() -> None:
     assert "current action, genuinely new evidence, and the immediate next action" in text
     assert "edit as soon as the evidence supports the choice" in text
     assert "must answer a named unresolved question" in text
-    assert "batch independent repository observations in one tool response" in text
-    assert "implement it rather than continuing broad survey" in text
+    assert "batch independent observations into one response" in text
+    # The enforced alternation is stated, not merely encouraged.
+    assert "the next request is the **decision checkpoint**" in text
+    assert "continue_implementation_discovery" in text
+    assert "exact unresolved implementation question" in text
+    assert "apply the change first" in text
 
 
 def test_the_capsule_states_no_budget_for_getting_the_edit_right() -> None:
