@@ -107,7 +107,6 @@ class MainWindowSignalWiring:
         w._bridge.diffDecided.connect(w._on_diff_decided)
         w._bridge.streamDone.connect(w._on_stream_done)
         w._bridge.apiError.connect(w._on_api_error)
-        w._bridge.usageWithModel.connect(w._on_usage)
         w._chat.retry_requested.connect(w._on_retry)
 
         # ---- group 13: input panel ----

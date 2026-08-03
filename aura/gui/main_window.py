@@ -855,19 +855,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             replay_cb=lambda: self._persistence.replay_history(synchronous=True),
         )
 
-    def _on_usage(
-        self, model_id: str, prompt: int, completion: int, hit: int, miss: int
-    ) -> None:
-        # Some servers don't surface the cache split — fall back so we still meter cost.
-        if hit == 0 and miss == 0:
-            miss = prompt
-        bucket = self._worker_handler.session_usage.setdefault(
-            model_id, {"hit": 0, "miss": 0, "out": 0}
-        )
-        bucket["hit"] += hit
-        bucket["miss"] += miss
-        bucket["out"] += completion
-        self._refresh_status_bar()
 # ----- persistence (delegated to ConversationPersistence) --------------
 
     def _on_thread_selected(self, conversation_path: Path) -> None:

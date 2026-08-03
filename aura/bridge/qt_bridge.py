@@ -59,7 +59,6 @@ from aura.client import (
     ToolCallEnd,
     ToolCallStart,
     ToolResult,
-    Usage,
     WorkerDispatchRequested,
 )
 from aura.config import (
@@ -103,7 +102,6 @@ class _Worker(QObject):
     toolCallStart = Signal(int, str, str)  # index, id, name
     toolCallArgs = Signal(int, str)  # index, fragment
     toolCallEnd = Signal(int)
-    usageEmitted = Signal(int, int, int, int)
     apiError = Signal(int, str)
     streamDone = Signal(str, dict)
     toolResultEmitted = Signal(str, str, bool, str, dict)
@@ -199,15 +197,13 @@ class _Worker(QObject):
 
         Assistant prose is chat-owned and must reach ChatView through exactly
         one signal path, so ``ContentDelta`` surfaces here and is *not* also
-        projected into the workspace Worker Log.  Reasoning, tool calls, and
-        every other execution fact stay workspace-owned.
+        projected into the workspace Worker Log.  Reasoning, tool calls, usage
+        accounting, and every other execution fact stay workspace-owned: usage
+        reaches the GUI accumulator once, through the execution ledger's
+        ``workerUsage`` path.
         """
         if isinstance(ev, ContentDelta):
             self.contentDelta.emit(ev.text)
-        elif isinstance(ev, Usage):
-            self.usageEmitted.emit(
-                ev.prompt_tokens, ev.completion_tokens, ev.cache_hit_tokens, ev.cache_miss_tokens
-            )
         elif isinstance(ev, Done):
             if ev.full_message:
                 self.streamDone.emit(ev.finish_reason or "", ev.full_message)
@@ -229,10 +225,6 @@ class _Worker(QObject):
             self.toolCallArgs.emit(ev.index, ev.args_chunk)
         elif isinstance(ev, ToolCallEnd):
             self.toolCallEnd.emit(ev.index)
-        elif isinstance(ev, Usage):
-            self.usageEmitted.emit(
-                ev.prompt_tokens, ev.completion_tokens, ev.cache_hit_tokens, ev.cache_miss_tokens
-            )
         elif isinstance(ev, ApiError):
             from aura.config import redact_secrets
             self.apiError.emit(
@@ -278,8 +270,6 @@ class ConversationBridge(QObject):
     diffDecided = Signal(str, str, str, str, str, bool)
     started = Signal()
     finished = Signal()
-    usageEmitted = Signal(int, int, int, int)
-    usageWithModel = Signal(str, int, int, int, int)
 
     # Planner / worker signals (re-exposed from the dispatch proxy so the GUI
     # binds to a single object).
@@ -806,8 +796,6 @@ class ConversationBridge(QObject):
         self._worker.streamDone.connect(self.streamDone)
         self._worker.toolResultEmitted.connect(self._on_tool_result)
         self._worker.workerDispatchRequested.connect(self._on_worker_dispatch_requested)
-        self._worker.usageEmitted.connect(self.usageEmitted)
-        self._worker.usageEmitted.connect(self._forward_usage_with_model)
         self._worker.terminalOutput.connect(self.terminalOutput)
         self._worker.agentProcessStarted.connect(self.agentProcessStarted)
         self._worker.agentProcessOutput.connect(self.agentProcessOutput)
@@ -879,12 +867,6 @@ class ConversationBridge(QObject):
         # cards — the manager event arrives milliseconds earlier on the same
         # thread, so we just no-op here.
         return
-
-    @Slot(int, int, int, int)
-    def _forward_usage_with_model(
-        self, prompt: int, completion: int, hit: int, miss: int
-    ) -> None:
-        self.usageWithModel.emit(self._active_model, prompt, completion, hit, miss)
 
     @Slot()
     def _on_finished(self) -> None:
