@@ -126,11 +126,20 @@ def _blocker_reason_from_call(full_message: dict[str, Any]) -> str:
     return ""
 
 
-def _log_context_round(budget, stats, tool_defs: list[dict[str, Any]] | None) -> None:
+def _log_context_round(
+    budget,
+    stats,
+    tool_defs: list[dict[str, Any]] | None,
+    *,
+    request_growth_tokens: int | None = None,
+) -> None:
     """One line per model round describing where the context budget went.
 
     Deliberately a single log record, not a telemetry framework — enough to
-    answer "why was this turn's evidence cut?" from a normal log file.
+    answer "why was this turn's evidence cut?" from a normal log file. The
+    lifecycle fields prove the request plateaued: how many completed
+    observation blocks were retired, how many characters the receipts and the
+    active chain retain, and how the request grew from the preceding round.
     """
     try:
         tool_schema_chars = len(json.dumps(tool_defs, ensure_ascii=False)) if tool_defs else 0
@@ -143,13 +152,22 @@ def _log_context_round(budget, stats, tool_defs: list[dict[str, Any]] | None) ->
     # rather than only "how big was the part we budgeted?".
     tool_schema_tokens = max(tool_schema_chars, 0) // 4
     request_tokens = stats.tokens_after + tool_schema_tokens
+    growth = (
+        "na"
+        if request_growth_tokens is None
+        else str(request_growth_tokens)
+    )
 
     _log.info(
         "context_round model=%s provider=%s window=%d reserve=%d derived_budget=%d "
         "policy_cap=%s budget=%d capped_by_policy=%s budget_source=%s "
         "tokens_before=%d tokens_after=%d messages_before=%d messages_after=%d "
         "system_chars=%d tool_schema_chars=%d tool_schema_tokens=%d "
-        "request_tokens=%d request_headroom=%d "
+        "request_tokens=%d request_growth_tokens=%s request_headroom=%d "
+        "system_fingerprint=%s "
+        "retired_observation_blocks=%d receipt_chars_retained=%d "
+        "active_chain_chars_retained=%d recent_evidence_tokens=%d "
+        "bounded_replays=%d "
         "source_chars_generated=%d source_chars_retained=%d "
         "compacted_results=%d dropped_blocks=%d repaired=%d "
         "reasoning_chars_replayed=%d reasoning_chars_dropped=%d "
@@ -171,7 +189,14 @@ def _log_context_round(budget, stats, tool_defs: list[dict[str, Any]] | None) ->
         tool_schema_chars,
         tool_schema_tokens,
         request_tokens,
+        growth,
         budget.context_window_tokens - budget.output_reserve_tokens - request_tokens,
+        stats.system_prompt_fingerprint,
+        stats.retired_observation_blocks,
+        stats.receipt_chars_retained,
+        stats.active_chain_chars_retained,
+        stats.recent_evidence_tokens,
+        stats.bounded_replays,
         stats.source_result_chars_generated,
         stats.source_result_chars_retained,
         stats.compacted_results,
@@ -348,6 +373,8 @@ class ConversationManager:
                 state.worker_artifact_id = str(worker_dispatch_request.artifact_id or "")
                 state.worker_artifact_item_id = str(worker_dispatch_request.artifact_item_id or "")
 
+        prev_request_tokens: int | None = None
+
         while True:
             if (
                 state.mode in {"planner", "single"}
@@ -453,7 +480,23 @@ class ConversationManager:
             # self._history.messages is left exact.
             budget = resolve_model_budget(model)
             api_view = self._history.build_api_payload(budget.working_set_tokens)
-            _log_context_round(budget, api_view.stats, tool_defs)
+            try:
+                schema_chars = len(json.dumps(tool_defs, ensure_ascii=False)) if tool_defs else 0
+            except (TypeError, ValueError):
+                schema_chars = 0
+            request_tokens = api_view.stats.tokens_after + max(schema_chars, 0) // 4
+            growth = (
+                None
+                if prev_request_tokens is None
+                else request_tokens - prev_request_tokens
+            )
+            prev_request_tokens = request_tokens
+            _log_context_round(
+                budget,
+                api_view.stats,
+                tool_defs,
+                request_growth_tokens=growth,
+            )
 
             request_messages = api_view.messages
 

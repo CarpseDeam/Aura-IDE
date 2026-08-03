@@ -120,8 +120,24 @@ class PlannerRefreshState:
         model round sees updated code structure. Composes against the configured
         runtime role, so the production single-agent path never re-injects a
         Planner posture. Does nothing if configure was not called.
+
+        Production ``SINGLE`` freezes instead: the Tier-1 system prompt selected
+        at the start of the real user turn stays in place for every round of
+        that turn, so the request prefix does not churn mid-turn after each
+        applied write. Post-write correctness is preserved by the existing
+        machinery — the tool round clears stale read fingerprints
+        (``PreEditLoopGuard.note_stale_paths``), write results and hashes are
+        in history, and the next real user turn recomposes Tier 1 normally
+        (``qt_bridge._prepare_turn_context``). The legacy ``PLANNER`` path
+        recomposes as before.
         """
         if self._base_system_prompt is None or self._workspace_root is None:
+            return
+        if self._role == RuntimeRole.SINGLE:
+            logger.info(
+                "single_context_refresh_frozen writes=%d",
+                len(tuple(target_files or ())),
+            )
             return
         known_targets = tuple(dict.fromkeys((*self._target_files, *tuple(target_files or ()))))
         try:
@@ -155,12 +171,13 @@ class PlannerRefreshState:
     ) -> None:
         """Handle all post-write context updates, owned by the active role.
 
-        Production ``SINGLE`` refreshes Tier 1 context *silently*: the repo map
-        and system prompt recompose after a write, but no ``Planner stale-read
-        invalidation`` message and no dependency notice are appended, so the
-        turn keeps exactly one user boundary — the real request. Nothing here
-        touches the pre-edit guard or edit-recovery state; those live in the
-        tool round and are unchanged.
+        Production ``SINGLE`` keeps the Tier-1 prefix frozen: the system prompt
+        selected at the start of the real user turn is not rebuilt after an
+        applied write, and no ``Planner stale-read invalidation`` message and
+        no dependency notice are appended, so the turn keeps exactly one user
+        boundary — the real request. Nothing here touches the pre-edit guard
+        or edit-recovery state; those live in the tool round and are unchanged.
+        The next real user turn recomposes Tier 1 normally.
 
         Legacy ``PLANNER`` keeps the historical notices: the stale-read
         invalidation user message, then the Tier 1 refresh, then the dependent

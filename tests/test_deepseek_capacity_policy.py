@@ -197,6 +197,12 @@ class _FakeStats:
     reasoning_chars_replayed = 0
     reasoning_chars_dropped = 0
     boundary_messages_inserted = 0
+    retired_observation_blocks = 0
+    receipt_chars_retained = 0
+    active_chain_chars_retained = 0
+    recent_evidence_tokens = 0
+    bounded_replays = 0
+    system_prompt_fingerprint = ""
     over_budget = False
 
 

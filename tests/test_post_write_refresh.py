@@ -1,24 +1,27 @@
 """Post-write context refresh ownership for production SINGLE mode.
 
-After a successful write, production ``SINGLE`` refreshes the Tier 1 system
-prompt / repo map *silently*: no ``Planner stale-read invalidation`` message,
-no dependency notice, and no new user-turn boundary — the turn keeps exactly
-one real user message. The legacy ``PLANNER`` path keeps its historical
-notices.
+After a successful write, production ``SINGLE`` freezes the Tier 1 prefix that
+was selected at the start of the real user turn: the system prompt is *not*
+rebuilt mid-turn, no ``Planner stale-read invalidation`` message, no dependency
+notice, and no new user-turn boundary — the turn keeps exactly one real user
+message and one stable request prefix. The next real user turn recomposes
+Tier 1 normally. The legacy ``PLANNER`` path keeps its historical notices.
 
 What is asserted here:
 
-* a SINGLE write round recomposes the system prompt without adding any user
-  message or Planner text;
+* a SINGLE write round keeps the same system-prompt fingerprint without adding
+  any user message or Planner text;
 * the stale-file guard still sees the written paths (its note_stale_paths
-  input is the combined post-write file list);
-* the legacy PLANNER path still appends the stale-read notice;
-* applied write paths are collected from write-tool results so the silent
-  refresh actually fires.
+  input is the combined post-write file list), so a post-write reread is fresh
+  evidence;
+* the legacy PLANNER path still appends the stale-read notice and recomposes;
+* applied write paths are collected from write-tool results so the write
+  really lands and the freeze really fires.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 from pathlib import Path
@@ -93,7 +96,7 @@ def _history_blob(history: History) -> str:
     return json.dumps(history.messages) + (history.system_prompt or "")
 
 
-# ── production SINGLE: silent refresh ───────────────────────────────────────
+# ── production SINGLE: frozen prefix ────────────────────────────────────────
 
 
 def test_single_post_write_refresh_appends_no_user_message(tmp_path: Path) -> None:
@@ -108,16 +111,21 @@ def test_single_post_write_refresh_appends_no_user_message(tmp_path: Path) -> No
     assert users[0]["content"] == "Update app.py so the job pauses."
 
 
-def test_single_post_write_refresh_recomposes_system_prompt(tmp_path: Path) -> None:
+def test_single_post_write_refresh_freezes_system_prompt(tmp_path: Path) -> None:
+    """The Tier-1 prefix selected at turn start survives an applied write."""
     (tmp_path / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
     refresh = _configured_refresh(tmp_path, RuntimeRole.SINGLE)
     history = _history_with_turn()
+    fingerprint = hashlib.sha1(STALE.encode("utf-8")).hexdigest()[:12]
 
     refresh.handle_post_write_notices(history, ["app.py"])
 
-    assert history.system_prompt != STALE, "the system prompt must be recomposed"
-    assert "Core kernel:" in history.system_prompt
-    assert "### Target files (manifest)" in history.system_prompt
+    assert history.system_prompt == STALE, (
+        "a mid-turn write must not rebuild the frozen system prompt"
+    )
+    assert hashlib.sha1(history.system_prompt.encode("utf-8")).hexdigest()[:12] == (
+        fingerprint
+    ), "the system-prompt fingerprint changed inside the user turn"
 
 
 def test_single_post_write_refresh_contains_no_planner_text(tmp_path: Path) -> None:
@@ -132,9 +140,11 @@ def test_single_post_write_refresh_contains_no_planner_text(tmp_path: Path) -> N
     assert "Planner dependency context" not in blob
 
 
-def test_single_write_round_refreshes_context_silently(tmp_path: Path) -> None:
-    """The production regression: one real SINGLE write through the tool round
-    recomposes Tier 1 context without adding a user message or Planner text."""
+def test_single_write_round_freezes_the_prefix_silently(tmp_path: Path) -> None:
+    """The production contract: one real SINGLE write through the tool round
+    keeps the same system-prompt fingerprint, adds no user message, and adds
+    no Planner text — the next model round sees the exact prefix it started
+    the turn with, plus the write result and stale-path tracking."""
     (tmp_path / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
     history = History()
     history.set_system(STALE)
@@ -166,8 +176,9 @@ def test_single_write_round_refreshes_context_silently(tmp_path: Path) -> None:
     users = [m for m in history.messages if m.get("role") == "user"]
     assert len(users) == 1
     assert users[0]["content"] == "Update app.py so the job pauses."
-    assert history.system_prompt != STALE
-    assert "Core kernel:" in history.system_prompt
+    assert history.system_prompt == STALE, (
+        "the write round rebuilt the frozen Tier-1 prefix"
+    )
     blob = _history_blob(history)
     assert "Planner stale-read invalidation" not in blob
     assert "Planner dependency context" not in blob
