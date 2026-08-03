@@ -122,6 +122,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
         self._bridge.set_auto_dispatch(self._settings.auto_dispatch)
         self._bridge.set_auto_approve(self._settings.auto_approve)
+        # Restores a connection the user already turned on. Disabled is the
+        # default and does nothing at all — no process, no download, no
+        # network — so launch cost is unchanged for everyone else.
+        self._bridge.apply_windows_computer_use(self._settings)
 
         # ----- toolbar ----
         self._toolbar = MainWindowToolbar(self._settings, self)
@@ -381,6 +385,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._settings.playground_vertical_splitter_sizes = playground_vert
         save_settings(self._settings)
         self._companion_controller.stop()
+        # Closes the Windows MCP subprocess. Without this the server outlives
+        # the app that launched it.
+        self._bridge.shutdown_windows_computer_use()
         super().closeEvent(event)
 
     def showEvent(self, event) -> None:

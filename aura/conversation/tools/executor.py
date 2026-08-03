@@ -7,6 +7,7 @@ from typing import Any
 from aura.conversation.tools._types import ApprovalCallback, ApprovalRequest, ToolExecResult
 from aura.conversation.tools.consequential import is_consequential
 from aura.conversation.tools.dynamic import execute_dynamic_tool
+from aura.conversation.tools.effects import ToolEffect
 
 _PLANNER_FORBIDDEN_WRITE_TOOLS = frozenset({
     "apply_edit_transaction",
@@ -35,6 +36,18 @@ class ToolExecutor:
         self._owner = owner
         self._dynamic_tools = dynamic_tools
         self._mcp_tools = mcp_tools
+
+    def _dynamic_requires_approval(self, name: str) -> bool:
+        """Whether calling dynamic tool *name* must go through approval.
+
+        Only a script established as an observation is approval-free.  A
+        registry that cannot answer, or a tool it does not own, falls back to
+        the name heuristic rather than to "allow".
+        """
+        effect = self._dynamic_tools.resolved_effect(name)
+        if effect is None:
+            return is_consequential(name)
+        return effect is not ToolEffect.OBSERVATION
 
     def execute(
         self,
@@ -96,10 +109,17 @@ class ToolExecutor:
                             )
                 return self._mcp_tools.execute(name, args)
 
-            # 3. Dynamic tools
+            # 3. Dynamic tools.  Gated on the registry's resolved effect, the
+            # same authority the MCP branch above uses.  The old gate was the
+            # ``is_consequential`` name heuristic, which asks whether the name
+            # starts with a writing verb — so a workspace script called
+            # ``sync_notion`` or ``deploy`` ran with no approval prompt at all,
+            # while its ``AURA_TOOL_EFFECT`` declaration was consulted for
+            # read-only exposure and ignored for approval.  Resolution fails
+            # safe: an undeclared script is consequential.
             dynamic_path = self._dynamic_tools.get(name)
             if dynamic_path is not None:
-                if is_consequential(name):
+                if self._dynamic_requires_approval(name):
                     if reject_all:
                         return ToolExecResult(
                             ok=False,

@@ -32,6 +32,7 @@ class SettingsDialog(QDialog):
         parent: QWidget | None = None,
         open_api_keys_tab: bool = False,
         on_live_settings_applied: Callable[[AppSettings], None] | None = None,
+        windows_computer_use_manager: object | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(f"{APP_NAME} — Settings")
@@ -52,6 +53,9 @@ class SettingsDialog(QDialog):
         from aura.gui.settings_pages.models_page import ModelsPage
         from aura.gui.settings_pages.prompts_page import PromptsPage
         from aura.gui.settings_pages.sandbox_page import SandboxPage
+        from aura.gui.settings_pages.windows_computer_use_page import (
+            WindowsComputerUsePage,
+        )
         self._models_page = ModelsPage(self._settings)
 
         self._api_keys_page = ApiKeysPage(self._settings)
@@ -62,11 +66,20 @@ class SettingsDialog(QDialog):
 
         self._prompts_page = PromptsPage(self._settings)
 
+        self._windows_page = WindowsComputerUsePage(self._settings)
+        if windows_computer_use_manager is not None:
+            self._windows_page.set_manager(windows_computer_use_manager)
+        # Toggling the switch or editing the command applies immediately, so
+        # the status line reports a real connection attempt instead of leaving
+        # the user to press OK and guess.
+        self._windows_page.apply_requested.connect(self.apply)
+
         self._pages = [
             (self._models_page, "Models"),
             (self._api_keys_page, "API Keys"),
             (self._automation_page, "Automation"),
             (self._sandbox_page, "Sandbox / Workspace"),
+            (self._windows_page, "Windows Control"),
             (self._prompts_page, "Prompts"),
         ]
 
@@ -129,6 +142,7 @@ class SettingsDialog(QDialog):
         self._api_keys_page.collect_settings(result)
         self._automation_page.collect_settings(result)
         self._sandbox_page.collect_settings(result)
+        self._windows_page.collect_settings(result)
         self._prompts_page.collect_settings(result)
         return result
 

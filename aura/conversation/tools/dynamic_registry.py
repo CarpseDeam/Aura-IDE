@@ -15,13 +15,21 @@ Two scripts claiming one name are refused the same way, in sorted filename
 order, so which tool answers a name does not depend on directory iteration
 order or on which file was edited most recently.
 
+A connected MCP server's tool name is refused for a third reason: the executor
+dispatches MCP tools *before* dynamic ones, so a script claiming a connected
+server's name would never run while looking registered.  Its schema would also
+be published alongside the server's under one name.  That direction is checked
+through :attr:`reserved_names`, the mirror of the check
+:class:`~aura.conversation.tools.mcp_registry.MCPToolRegistry` runs against
+these names.
+
 Refusals are recorded in :attr:`collisions` rather than being silent, because
 "my tool never shows up" is otherwise indistinguishable from a parse error.
 """
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from aura.conversation.tools.dynamic import parse_tool_schema
 from aura.conversation.tools.effects import (
@@ -48,6 +56,10 @@ class DynamicToolRegistry:
         self._name_cache: dict[str, str] = {}     # str(file_path) -> declared name
         # file path -> why its declared name was refused.
         self._collisions: dict[str, str] = {}
+        # Names owned by a *different* extensible registry (MCP), consulted on
+        # every scan so a server connected after this directory was last read
+        # still wins the name it already answers to.
+        self.reserved_names: Callable[[], frozenset[str]] = frozenset
 
     @property
     def collisions(self) -> dict[str, str]:
@@ -81,6 +93,16 @@ class DynamicToolRegistry:
             return {}
 
         builtins = _builtin_tool_names()
+        try:
+            reserved = frozenset(self.reserved_names())
+        except Exception:
+            # Degrade rather than refuse every workspace script: this direction
+            # of the check protects legibility, not the boundary.  A script
+            # that duplicates a connected server's name is unreachable either
+            # way, because the executor dispatches MCP first — while the
+            # direction that *would* matter, a server claiming a script's name,
+            # is refused independently and fails closed in MCPToolRegistry.
+            reserved = frozenset()
         resolved: dict[str, Path] = {}
         collisions: dict[str, str] = {}
         fresh_mtimes: dict[str, float] = {}
@@ -112,6 +134,13 @@ class DynamicToolRegistry:
                 collisions[key] = (
                     f"declares the built-in tool name '{name}'; a workspace "
                     "script cannot shadow or redefine a built-in tool"
+                )
+                continue
+            if name in reserved:
+                collisions[key] = (
+                    f"declares tool name '{name}', already claimed by a "
+                    "connected MCP server; server tools are dispatched first, "
+                    "so this script could never run"
                 )
                 continue
             if name in resolved:

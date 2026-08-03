@@ -93,6 +93,12 @@ class ToolRegistry(
         self._catalog = ToolCatalog()
         self._dynamic_tools = DynamicToolRegistry(self._root)
         self._mcp_tools = MCPToolRegistry()
+        # Each extensible registry refuses a name the other already owns. They
+        # are pointed at each other here — the one place that holds both — so
+        # neither has to import the other and the check stays live rather than
+        # snapshotted.
+        self._mcp_tools.reserved_names = self._dynamic_tool_names
+        self._dynamic_tools.reserved_names = self._mcp_tools.registered_names
         self._contract: ExplicitSpecContract | None = None
         self._task_shape: TaskShape | None = None
         # The turn's cancel event, supplied per execute() call by the tool
@@ -202,8 +208,33 @@ class ToolRegistry(
             return dynamic_effect
         return DEFAULT_EXTENSIBLE_TOOL_EFFECT
 
-    def connect_mcp_server(self, server_command: str) -> int:
-        return self._mcp_tools.connect_server(server_command)
+    def _dynamic_tool_names(self) -> frozenset[str]:
+        """Names the workspace's dynamic tool scripts currently claim."""
+        return frozenset(self._dynamic_tools.scan())
+
+    def active_capabilities(self) -> frozenset[str]:
+        """Capability ids the connected extensible surface contributes now.
+
+        Read at prompt-composition time so capability-scoped context exists
+        exactly while the tools it describes do.
+        """
+        return self._mcp_tools.capabilities()
+
+    def connect_mcp_server(
+        self,
+        server_command: str,
+        *,
+        tool_filter: Any | None = None,
+        capability: str | None = None,
+    ) -> int:
+        """Connect a server, optionally narrowed to a reviewed tool surface.
+
+        ``tool_filter`` and ``capability`` are forwarded unchanged; see
+        :meth:`MCPToolRegistry.connect_server`.
+        """
+        return self._mcp_tools.connect_server(
+            server_command, tool_filter=tool_filter, capability=capability
+        )
 
     def disconnect_mcp_server(self, server_command: str) -> int:
         """Remove a server's tools from this registry and close its client.

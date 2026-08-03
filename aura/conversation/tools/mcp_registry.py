@@ -15,6 +15,14 @@ would either be silently unreachable or, when it reached the global table,
 replace the real write path — approval, backup, and path jail included — with
 an arbitrary subprocess.  Both outcomes are refusals here instead.
 
+The same holds in the other direction, against the *dynamic* registry.  The
+executor dispatches MCP before dynamic tools, so a server that claims a name a
+workspace script already owns would silently take that script's calls, and a
+script dropped in later that claims a connected server's name would silently
+never run.  Both registries consult the other's names through
+:attr:`reserved_names`, which :class:`~aura.conversation.tools.registry.ToolRegistry`
+wires to point at each other.
+
 **Atomic.**  A server's tools are validated as a set and committed as a set.
 A failure part-way through leaves the registry exactly as it was and closes
 the client, rather than exposing half a server that cannot be named,
@@ -25,7 +33,7 @@ from __future__ import annotations
 import os as _os
 import shlex
 import threading
-from typing import Any
+from typing import Any, Callable
 
 from aura.conversation.tools._types import ToolExecResult
 from aura.conversation.tools.consequential import is_consequential
@@ -80,6 +88,26 @@ def _builtin_tool_names() -> frozenset[str]:
     return frozenset(TOOL_HANDLERS)
 
 
+def parse_server_command(server_command: str) -> list[str]:
+    """Split a server command string into argv.
+
+    ``shlex`` in non-POSIX mode — which is what Windows paths need, so a
+    backslash is a separator and not an escape — keeps the quote characters
+    inside each token.  A quoted path would then be handed to ``CreateProcess``
+    with its quotes still attached and fail to launch, which is exactly the
+    shape a managed install under a user profile containing a space takes.  The
+    quotes are stripped back off here, once, in the one place the command is
+    parsed.
+    """
+    tokens = shlex.split(server_command, posix=(_os.name != "nt"))
+    stripped: list[str] = []
+    for token in tokens:
+        if len(token) >= 2 and token[0] == token[-1] and token[0] in "\"'":
+            token = token[1:-1]
+        stripped.append(token)
+    return stripped
+
+
 class MCPToolRegistry:
     """Owns MCP server connections, tool schemas, and execution."""
 
@@ -95,6 +123,12 @@ class MCPToolRegistry:
         # exactly that server's surface and nothing else.
         self._server_tools: dict[str, list[str]] = {}
         self._server_clients: dict[str, MCPClient] = {}
+        # server key -> the capability id it contributes while connected.
+        self._server_capabilities: dict[str, str] = {}
+        # Names owned by a *different* extensible registry, consulted so a
+        # collision is refused in both directions.  Never a fixed snapshot: a
+        # workspace script can appear between two connections.
+        self.reserved_names: Callable[[], frozenset[str]] = frozenset
 
     # ── registration ────────────────────────────────────────────────────
 
@@ -115,7 +149,23 @@ class MCPToolRegistry:
                 f"MCP tool '{name}' is already registered; tool names must be "
                 "unique across connected servers"
             )
+        if name in self._reserved_names():
+            raise MCPRegistrationError(
+                f"MCP tool '{name}' collides with a dynamic workspace tool of "
+                "the same name; the server's tool would silently take that "
+                "script's calls"
+            )
         return name
+
+    def _reserved_names(self) -> frozenset[str]:
+        try:
+            return frozenset(self.reserved_names())
+        except Exception:  # pragma: no cover - a broken provider must not
+            # turn into a *permissive* registration.
+            raise MCPRegistrationError(
+                "Could not determine which tool names are already claimed; "
+                "refusing to register a server surface that may collide"
+            )
 
     @staticmethod
     def _declared_effect(tool_def: dict[str, Any]) -> ToolEffect | None:
@@ -126,19 +176,36 @@ class MCPToolRegistry:
                 effect = ToolEffect.OBSERVATION
         return effect
 
-    def connect_server(self, server_command: str) -> int:
+    def connect_server(
+        self,
+        server_command: str,
+        *,
+        tool_filter: Callable[[list[dict[str, Any]]], list[dict[str, Any]]] | None = None,
+        capability: str | None = None,
+    ) -> int:
         """Launch an MCP server, fetch its tools, and register them atomically.
 
         Returns the number of tools registered.  Raises ``RuntimeError`` if the
         server fails to launch and :class:`MCPRegistrationError` if any of its
         tools is unregisterable — in which case *none* of them are registered
         and the client is closed, so a rejected server leaves no trace.
+
+        ``tool_filter`` runs against the definitions the *live* server actually
+        reported, before any of them is validated or committed.  That is where
+        a caller narrows a server to a reviewed surface: what the filter drops
+        is never registered, so it cannot be called or approved, and a filter
+        that raises rejects the whole connection like any other refusal.
+
+        ``capability`` tags the connection so request-time context can be
+        offered while this server is connected and withdrawn the moment it is
+        not — see :meth:`capabilities`.
         """
-        parsed = shlex.split(server_command, posix=(_os.name != "nt"))
-        client = MCPClient(parsed)
+        client = MCPClient(parse_server_command(server_command))
         client.connect()
         try:
             tool_defs = client.list_tools()
+            if tool_filter is not None:
+                tool_defs = tool_filter(list(tool_defs))
             with self._lock:
                 if server_command in self._server_tools:
                     raise MCPRegistrationError(
@@ -167,6 +234,8 @@ class MCPToolRegistry:
                         self._effects[name] = effect
                 self._server_tools[server_command] = [n for n, _, _ in prepared]
                 self._server_clients[server_command] = client
+                if capability:
+                    self._server_capabilities[server_command] = capability
                 return len(prepared)
         except Exception:
             # Nothing was committed; do not leave the subprocess running.
@@ -210,6 +279,7 @@ class MCPToolRegistry:
         with self._lock:
             names = self._server_tools.pop(server_command, None)
             client = self._server_clients.pop(server_command, None)
+            self._server_capabilities.pop(server_command, None)
             if names is None:
                 return 0
             for name in names:
@@ -227,6 +297,22 @@ class MCPToolRegistry:
         """Server commands currently connected to this registry."""
         with self._lock:
             return list(self._server_tools)
+
+    def registered_names(self) -> frozenset[str]:
+        """Tool names this registry currently owns."""
+        with self._lock:
+            return frozenset(self._clients)
+
+    def capabilities(self) -> frozenset[str]:
+        """Capability ids contributed by the servers connected right now.
+
+        Derived from live connection state rather than from a flag anyone sets,
+        so context keyed off a capability cannot outlive the tools that
+        justified it: disconnecting the server drops the entry in the same
+        locked step that removes its tools.
+        """
+        with self._lock:
+            return frozenset(self._server_capabilities.values())
 
     @property
     def schemas(self) -> list[dict[str, Any]]:

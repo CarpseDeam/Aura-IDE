@@ -104,6 +104,9 @@ PROVIDER_RULES = """### provider_rules
 - Surface provider errors cleanly without hiding useful diagnostics.
 - Do not hardcode pricing or model lists unless explicitly required."""
 
+WINDOWS_COMPUTER_USE_CONTEXT = """### Windows Computer Use
+Structured Windows UI Automation tools are available for GUI-only workflows. Prefer file, terminal, Git, and Godot tools when they can perform the task deterministically. Treat successful tool results as the only evidence that a UI action occurred."""
+
 BUILD_PIPELINE_RULES = """### build_pipeline_rules
 - Do not break the Nuitka or installer flow.
 - Keep build scripts Windows-safe.
@@ -128,6 +131,16 @@ _SCOPED_PACK_TEXT: dict[str, str] = {
 
 _PLANNER_RESEARCH_PACK_TEXT: dict[str, str] = {
     "web_research_rules": WEB_RESEARCH_RULES,
+}
+
+#: Context that exists only while the capability naming it is live.  Keyed by
+#: the capability id the tool registry reports, never by a setting: a setting
+#: says what someone asked for, and this text claims tools are *available*.
+#: Those diverge exactly when it matters — enabled but still connecting,
+#: enabled but the server failed to launch — and a prompt that promises tools
+#: the model cannot call is how a turn ends up inventing UI actions.
+_CAPABILITY_PACK_TEXT: dict[str, str] = {
+    "windows_computer_use": WINDOWS_COMPUTER_USE_CONTEXT,
 }
 
 _CODING_TASK_KINDS = {
@@ -355,6 +368,12 @@ CONTEXT_SOURCES: tuple[ContextSource, ...] = (
         reason="target files or task kind match build scope",
     ),
     ContextSource(
+        source_id="windows_computer_use",
+        kind="capability_pack",
+        roles=(RuntimeRole.PLANNER, RuntimeRole.WORKER, RuntimeRole.SINGLE),
+        reason="Windows UI Automation tools are connected for this request",
+    ),
+    ContextSource(
         source_id="skill_pack",
         kind="skill_pack",
         roles=(RuntimeRole.PLANNER, RuntimeRole.WORKER, RuntimeRole.SINGLE),
@@ -377,6 +396,7 @@ def collect_source_text(
     task_kind: str | None = None,
     target_files: tuple[str, ...] | None = None,
     content: str | None = None,
+    active_capabilities: frozenset[str] | None = None,
 ) -> tuple[str, ContextLedgerEntry, list[ContextLedgerEntry]]:
     try:
         pack: SkillPack | None = None
@@ -403,6 +423,7 @@ def collect_source_text(
                 task_kind=task_kind,
                 target_files=target_files,
                 content=content,
+                active_capabilities=active_capabilities,
             )
         included = bool(text)
         entry = ContextLedgerEntry(
@@ -465,9 +486,12 @@ def _load_source_text(
     task_kind: str | None,
     target_files: tuple[str, ...] | None,
     content: str | None,
+    active_capabilities: frozenset[str] | None = None,
 ) -> tuple[str, str]:
     if role not in source.roles:
         return "", f"not scoped to {role.value} role"
+    if source.kind == "capability_pack":
+        return _load_capability_pack(source, active_capabilities)
     if source.kind == "quality_contract":
         return _load_quality_contract(source, role, task_kind, target_files)
     if source.kind == "planner_research_pack":
@@ -715,6 +739,19 @@ def _load_quality_contract(
         source.source_id, task_kind, target_files,
     ):
         return "", "single-mode request has no coding task shape"
+    return text, source.reason
+
+
+def _load_capability_pack(
+    source: ContextSource,
+    active_capabilities: frozenset[str] | None,
+) -> tuple[str, str]:
+    """Load a capability pack only while its capability is actually live."""
+    text = _CAPABILITY_PACK_TEXT.get(source.source_id, "")
+    if not text:
+        return "", "unknown capability pack"
+    if source.source_id not in (active_capabilities or frozenset()):
+        return "", "capability is not connected for this request"
     return text, source.reason
 
 

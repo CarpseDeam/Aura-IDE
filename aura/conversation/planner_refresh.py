@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Callable
 
 from aura.context_gearbox.models import RuntimeRole
 from aura.context_gearbox.runtime import context_gearbox_metadata, compose_system_prompt
@@ -50,7 +51,14 @@ class PlannerRefreshState:
     compatibility alias.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        capabilities_provider: Callable[[], frozenset[str]] | None = None,
+    ) -> None:
+        # Asked again on every refresh rather than captured once: a mid-turn
+        # recomposition must describe the surface as it is now, and a server
+        # that dropped away mid-turn has to take its context block with it.
+        self._capabilities_provider = capabilities_provider
         self._base_system_prompt: str | None = None
         self._workspace_root: Path | None = None
         # SINGLE is the normal product; the legacy Planner path opts in through
@@ -90,6 +98,17 @@ class PlannerRefreshState:
     def role(self) -> RuntimeRole:
         return self._role
 
+    def _active_capabilities(self) -> frozenset[str]:
+        if self._capabilities_provider is None:
+            return frozenset()
+        try:
+            return frozenset(self._capabilities_provider())
+        except Exception:
+            # Withhold rather than assert: a capability block that cannot be
+            # confirmed must not claim tools are available.
+            logger.warning("Could not read active capabilities", exc_info=True)
+            return frozenset()
+
     def refresh_tier1_after_writes(
         self,
         history,
@@ -115,6 +134,7 @@ class PlannerRefreshState:
                 task_kind=self._task_kind,
                 target_files=known_targets,
                 content=self._content,
+                active_capabilities=self._active_capabilities(),
             )
             metadata = context_gearbox_metadata(
                 composed.ledger, workspace_root=self._workspace_root,

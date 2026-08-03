@@ -249,6 +249,7 @@ def build_context_text(
     task_kind: str | None = None,
     target_files: tuple[str, ...] | None = None,
     content: str | None = None,
+    active_capabilities: frozenset[str] | None = None,
 ) -> ComposedContext:
     runtime_role = RuntimeRole.from_value(role)
     parts: list[str] = []
@@ -264,6 +265,7 @@ def build_context_text(
             task_kind=task_kind,
             target_files=normalized_target_files,
             content=content,
+            active_capabilities=active_capabilities,
         )
         if text:
             parts.append(text)
@@ -287,6 +289,7 @@ def compose_system_prompt(
     task_kind: str | None = None,
     target_files: tuple[str, ...] | None = None,
     content: str | None = None,
+    active_capabilities: frozenset[str] | None = None,
 ) -> ComposedContext:
     """Compose the one canonical system prompt for *role*.
 
@@ -295,6 +298,10 @@ def compose_system_prompt(
     ``### Custom Instructions``; text it repeats verbatim from the canonical
     blocks is dropped so nothing is injected twice.  Full replacement is only
     available by opting in with ``FULL_REPLACEMENT_MARKER``.
+
+    ``active_capabilities`` names the extensible surfaces connected *right
+    now*, so a capability pack is composed in for exactly the requests whose
+    tool list actually carries those tools.
     """
     runtime_role = RuntimeRole.from_value(role)
     context = build_context_text(
@@ -305,6 +312,7 @@ def compose_system_prompt(
         task_kind=task_kind,
         target_files=target_files,
         content=content,
+        active_capabilities=active_capabilities,
     )
     custom = (custom_prompt or "").strip()
     if custom and FULL_REPLACEMENT_MARKER in custom:

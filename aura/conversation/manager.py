@@ -200,7 +200,11 @@ class ConversationManager:
             history=self._history,
             workspace_root=self._tools.workspace_root,
         )
-        self._planner_refresh = PlannerRefreshState()
+        self._planner_refresh = PlannerRefreshState(
+            capabilities_provider=getattr(
+                self._tools, "active_capabilities", None
+            ),
+        )
         self._tool_round_runner = ToolRoundRunner(
             history=self._history,
             tools=self._tools,

@@ -90,6 +90,7 @@ from aura.model_streams import (
     model_streams,
 )
 from aura.research.policy import NO_RESEARCH, decide_research_policy
+from aura.windows_mcp import WindowsComputerUseManager
 
 _log = logging.getLogger(__name__)
 
@@ -336,6 +337,11 @@ class ConversationBridge(QObject):
         self._history = History()
         self._registry = ToolRegistry(workspace_root=_dummy_root(), mode="single")
         self._manager = ConversationManager(self._history, self._registry)
+        # Owned here because this is where the production ToolRegistry lives —
+        # the manager drives that registry's MCP seam and adds no table of its
+        # own. Constructing it starts nothing: with the setting off it never
+        # touches the network, the disk, or a subprocess.
+        self._windows_computer_use = WindowsComputerUseManager(self._registry)
         self._parent_widget = parent_widget
         self._approval_proxy = _ApprovalProxy(parent_widget)
 
@@ -550,6 +556,22 @@ class ConversationBridge(QObject):
     def set_worker_temperature(self, temperature: float) -> None:
         self._dispatch_proxy.set_worker_temperature(temperature)
 
+    @property
+    def windows_computer_use(self) -> WindowsComputerUseManager:
+        """The Windows Computer Use lifecycle, for the settings page."""
+        return self._windows_computer_use
+
+    def apply_windows_computer_use(self, settings) -> None:
+        """Bring the Windows MCP connection in line with *settings*.
+
+        Returns immediately; connecting happens on the manager's worker.
+        """
+        self._windows_computer_use.apply_settings(settings)
+
+    def shutdown_windows_computer_use(self) -> None:
+        """Disconnect the Windows MCP server and close its process."""
+        self._windows_computer_use.shutdown()
+
     def set_auto_dispatch(self, enabled: bool) -> None:
         self._auto_dispatch = enabled
 
@@ -585,6 +607,7 @@ class ConversationBridge(QObject):
             task_kind=self._turn_task_kind,
             target_files=self._turn_target_files,
             content=self._turn_content or None,
+            active_capabilities=self._registry.active_capabilities(),
         )
         self._context_gearbox_metadata = context_gearbox_metadata(
             composed.ledger, workspace_root=self._registry.workspace_root,

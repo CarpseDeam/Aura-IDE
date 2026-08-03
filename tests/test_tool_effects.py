@@ -106,6 +106,41 @@ def test_dynamic_tool_declared_effect_via_script_metadata(tmp_path: Path) -> Non
     assert registry.effect("plain_observer") is None
 
 
+def test_dynamic_tool_approval_follows_the_resolved_effect(tmp_path: Path) -> None:
+    """Approval reads the effect model, not the name.
+
+    ``is_consequential`` asks whether a name starts with a writing verb, so a
+    script called ``sync_notion`` was executed with no prompt at all while its
+    ``AURA_TOOL_EFFECT`` declaration was honoured for read-only exposure and
+    ignored here. An undeclared script now resolves consequential and is
+    approved like one; only a declared observation stays prompt-free.
+    """
+    tools_dir = tmp_path / ".aura" / "tools"
+    tools_dir.mkdir(parents=True)
+    _write_dynamic_script(tools_dir, "sync_notion", None)
+    _write_dynamic_script(
+        tools_dir,
+        "declared_observer",
+        f'{DYNAMIC_EFFECT_METADATA_NAME} = "observation"',
+    )
+
+    registry = ToolRegistry(tmp_path)
+    prompted: list[str] = []
+
+    def approve(request):
+        prompted.append(request.tool_name)
+        raise AssertionError("this test rejects everything up front")
+
+    # Undeclared: consequential, so reject_all stops it before it runs.
+    result = registry.execute("sync_notion", {}, approval_cb=approve, reject_all=True)
+    assert result.ok is False
+    assert result.payload["rejected"] is True
+
+    # Declared observation: no approval is consulted at all.
+    registry.execute("declared_observer", {"query": "x"}, approval_cb=approve)
+    assert prompted == []
+
+
 def test_registry_lookup_unannotated_dynamic_tool_fails_safe(tmp_path: Path) -> None:
     """An undeclared dynamic script is arbitrary local code, not an observation."""
     tools_dir = tmp_path / ".aura" / "tools"

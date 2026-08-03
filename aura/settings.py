@@ -118,6 +118,14 @@ class AppSettings:
     companion_relay_url: str = DEFAULT_HOSTED_COMPANION_RELAY_URL
     companion_display_name: str = ""
     companion_web_url: str = DEFAULT_HOSTED_COMPANION_WEB_URL
+    # Windows Computer Use (structured Windows UI Automation over MCP).
+    # Off by default and persisted honestly, unlike companion_enabled: this
+    # grants no remote control, and a user who turned it on last session
+    # expects their tools back without re-enabling them every launch.
+    windows_computer_use_enabled: bool = False
+    #: A command to launch instead of the managed install. Non-empty means
+    #: "use exactly this", so managed installation is bypassed entirely.
+    windows_computer_use_command: str = ""
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppSettings":
@@ -231,6 +239,11 @@ class AppSettings:
         if os.environ.get("AURA_COMPANION_DEV_LOCAL") == "1":
             s.companion_relay_url = DEFAULT_LOCAL_COMPANION_RELAY_URL
             s.companion_web_url = DEFAULT_LOCAL_COMPANION_WEB_URL
+        # Windows Computer Use
+        if isinstance(data.get("windows_computer_use_enabled"), bool):
+            s.windows_computer_use_enabled = data["windows_computer_use_enabled"]
+        if isinstance(data.get("windows_computer_use_command"), str):
+            s.windows_computer_use_command = data["windows_computer_use_command"].strip()
         # Onboarding fields (backward-compatible)
         if isinstance(data.get("onboarding_checklist"), dict):
             s.onboarding_checklist = data["onboarding_checklist"]

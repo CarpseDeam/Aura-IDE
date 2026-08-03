@@ -36,6 +36,7 @@ class MainWindowSettingsController(QObject):
                 on_change_root=window._workspace_controller.on_change_root,
                 parent=window,
                 on_live_settings_applied=self._apply_settings,
+                windows_computer_use_manager=window._bridge.windows_computer_use,
             )
             if dlg.exec() == SettingsDialog.DialogCode.Accepted:
                 self._apply_settings(dlg.result_settings())
@@ -54,6 +55,7 @@ class MainWindowSettingsController(QObject):
                 parent=window,
                 open_api_keys_tab=True,
                 on_live_settings_applied=self._apply_settings,
+                windows_computer_use_manager=window._bridge.windows_computer_use,
             )
             if dlg.exec() == SettingsDialog.DialogCode.Accepted:
                 self._apply_settings(dlg.result_settings())
@@ -94,6 +96,9 @@ class MainWindowSettingsController(QObject):
         )
         window._bridge.set_auto_dispatch(settings.auto_dispatch)
         window._bridge.set_auto_approve(settings.auto_approve)
+        # Returns immediately: connecting (and, the first time, installing)
+        # happens on the manager's worker thread.
+        window._bridge.apply_windows_computer_use(settings)
         window._toolbar.set_auto_dispatch(settings.auto_dispatch)
         window._toolbar.set_auto_approve(settings.auto_approve)
         window._toolbar.set_auto_summon_drones(settings.auto_summon_drones)
