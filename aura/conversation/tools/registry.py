@@ -109,6 +109,11 @@ class ToolRegistry(
         # turn exposed no candidates and every activation request fails
         # truthfully.
         self._skill_turn_state: Any = None
+        # Whether the production single-agent catalog offers web research this
+        # turn.  Set once per real user turn from that turn's route and held
+        # for its whole duration, so the exposed catalog — and therefore the
+        # provider's cached request prefix — never moves between rounds.
+        self._web_search: bool = False
         self._executor = ToolExecutor(
             owner=self,
             dynamic_tools=self._dynamic_tools,
@@ -143,6 +148,20 @@ class ToolRegistry(
         self._mode = mode
 
     @property
+    def web_search_enabled(self) -> bool:
+        """Whether this turn's production catalog offers ``web_search``."""
+        return self._web_search
+
+    def set_web_search_enabled(self, value: bool) -> None:
+        """Fix web research availability for one real user turn.
+
+        Called once at the start of ``send()`` from the turn's research route.
+        Never called per round: a catalog that changed mid-turn would discard
+        the provider's cached prefix and move the schema under the model.
+        """
+        self._web_search = bool(value)
+
+    @property
     def active_cancel_event(self) -> threading.Event | None:
         """The cancel event of the tool call currently executing, if any.
 
@@ -167,6 +186,7 @@ class ToolRegistry(
             read_only=self._read_only,
             dynamic_schemas=dynamic_schemas or None,
             mcp_schemas=mcp_schemas or None,
+            web_search=self._web_search,
         )
 
     def replayable_tool_defs(self) -> list[dict[str, Any]]:

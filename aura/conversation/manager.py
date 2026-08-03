@@ -71,7 +71,6 @@ from aura.conversation.tools._types import (
     ApprovalDecision,
     ApprovalRequest,
 )
-from aura.conversation.tools.effects import ToolEffect
 from aura.conversation.tools.registry import ToolRegistry
 from aura.conversation.worker_finalization_gate import (
     handle_worker_candidate_finalization,
@@ -83,7 +82,7 @@ from aura.conversation.workflow_state import WorkflowStatus
 from aura.events import EventBus
 from aura.lifecycle import LifecycleHooks
 from aura.model_streams import PRODUCTION_STREAM_HOOK, model_streams
-from aura.research.policy import decide_research_policy
+from aura.research.policy import NO_RESEARCH, decide_research_policy
 from aura.skills.turn_state import SkillTurnState
 from aura.work_artifact.model import ValidationCommandSpec
 
@@ -121,21 +120,6 @@ def _blocker_reason_from_call(full_message: dict[str, Any]) -> str:
     return ""
 
 
-# ── generic runaway protection (production SINGLE) ─────────────────────────
-#: Consecutive observation-only rounds that trigger one compact steering
-#: message telling the model to act on its evidence or report a real blocker.
-OBSERVATION_STEER_STREAK: int = 4
-#: Consecutive observation-only rounds after which the loop stops gracefully.
-OBSERVATION_STOP_STREAK: int = 8
-
-_OBSERVATION_STEERING = (
-    "You have spent several consecutive rounds only observing or publishing "
-    "bookkeeping without attempting a mutation or command. Use the evidence "
-    "already in the conversation and act now — make the edit, run the "
-    "validation — or report a real blocker with report_blocker. Do not keep "
-    "inspecting the same ground."
-)
-
 _UNPROVEN_CONTINUATION = (
     "This turn has not reached a truthful terminal outcome: no edit has been "
     "applied, no structured already-satisfied evidence was recorded, and no "
@@ -144,35 +128,6 @@ _UNPROVEN_CONTINUATION = (
     "call report_already_satisfied with the repository evidence that the "
     "requested state already exists."
 )
-
-
-def _round_attempts_mutation_or_command(
-    tool_calls: list[dict[str, Any]] | Any,
-    effect_for: Callable[[str], ToolEffect],
-) -> bool:
-    """Whether a round's calls attempt any mutation or command.
-
-    Reads the calls the model actually made, not their results — a rejected or
-    malformed mutation call is still an attempt and resets the observation-only
-    streak.  ``ToolEffect.MUTATION`` and ``ToolEffect.COMMAND`` are the two
-    consequential classes; observation and bookkeeping do not count as acting.
-    """
-    for call in tool_calls or []:
-        if not isinstance(call, dict):
-            continue
-        fn = call.get("function")
-        if not isinstance(fn, dict):
-            continue
-        name = fn.get("name")
-        if not isinstance(name, str) or not name:
-            continue
-        try:
-            if effect_for(name) in (ToolEffect.MUTATION, ToolEffect.COMMAND):
-                return True
-        except Exception:
-            # An unclassifiable name is treated as an attempt: fail safe.
-            return True
-    return False
 
 
 #: Structured payload paired to a tool call that was cancelled before Aura
@@ -373,11 +328,6 @@ class ConversationManager:
         #: Read once from the turn's authoritative route at the start of send;
         #: completion receipts hold such turns to the truthful-outcome contract.
         self._last_turn_bears_production_action: bool = False
-        #: Whether the most recent turn stopped gracefully because a generic
-        #: runaway safeguard fired (the model-round ceiling or eight consecutive
-        #: observation-only rounds). Completion receipts read this as an
-        #: incomplete/runaway outcome — never as completion. Reset per send.
-        self._last_turn_runaway_stopped: bool = False
         #: The most recent send's frozen skill turn state (or None when the
         #: send exposed no candidates). Kept so the bridge can surface the
         #: activation ledger after the turn completes.
@@ -412,16 +362,6 @@ class ConversationManager:
     def last_turn_bears_production_action(self) -> bool:
         """Whether the last turn was routed for a production action."""
         return self._last_turn_bears_production_action
-
-    @property
-    def last_turn_runaway_stopped(self) -> bool:
-        """Whether the last turn stopped at a generic runaway safeguard.
-
-        A truthful incomplete/runaway stop: every applied write and tool result
-        is preserved, the transcript stays paired, and the completion receipt
-        reports it as incomplete rather than completed.
-        """
-        return self._last_turn_runaway_stopped
 
     def skill_activation_log(self) -> list[dict]:
         """Structured skill activation ledger of the last completed send.
@@ -533,10 +473,16 @@ class ConversationManager:
           the model is called again with the same catalog;
         * a response that carries no tool calls ends the turn only when it has
           a truthful terminal outcome — a completed action in completion
-          context, structured blocker or already-satisfied evidence, a
-          non-production answer, or a graceful runaway stop.  A production
-          turn that still owes its edit is told what remains unproven and
-          called again.
+          context, structured blocker or already-satisfied evidence, or a
+          non-production answer.  A production turn that still owes its edit is
+          told what remains unproven and called again.
+
+        Production SINGLE has no count-based termination: it never ends because
+        the turn performed N model rounds, read N files, inspected N times,
+        consumed N tokens, or spent N seconds.  It ends when the work is done,
+        when a structured blocker or already-satisfied result succeeds, when the
+        user cancels, or when the provider genuinely fails.  ``max_tool_rounds``
+        is honoured only by the legacy Planner/Worker compatibility path.
 
         `dispatch_cb` is required when the registry is in "planner" mode (the
         only mode that exposes the `dispatch_to_worker` tool). If the tool is
@@ -577,6 +523,15 @@ class ConversationManager:
             tool_effect=self._tools.tool_effect,
             read_only=bool(getattr(self._tools, "read_only", False)),
         )
+        # Fix web research availability for the whole real user turn from the
+        # turn's own research route. Decided once, before the first request, so
+        # every round of the turn sees the identical catalog and the provider's
+        # cached request prefix survives. A turn that needs no external facts
+        # never sees the tool at all.
+        if state.mode == "single":
+            self._tools.set_web_search_enabled(
+                getattr(state.research_policy, "route", NO_RESEARCH) != NO_RESEARCH
+            )
         # Freeze this real user turn's skill candidates once, so load_skills
         # resolves against the same deterministic selection that produced the
         # initial skill index — never a recomputation per round.
@@ -585,7 +540,6 @@ class ConversationManager:
         self._last_turn_blocked_reason = ""
         self._last_turn_provider_contract_failure = False
         self._last_turn_already_satisfied = False
-        self._last_turn_runaway_stopped = False
         # The authoritative route (the caller's, or the defensive resolution
         # above) decides whether this turn bore a production action. A
         # read-only registry exposes no mutation tools, so such turns never owe
@@ -614,13 +568,18 @@ class ConversationManager:
                 return
 
             state.rounds_used += 1
-            if max_tool_rounds is not None and state.rounds_used > max_tool_rounds:
-                # The overall round ceiling is a generic runaway safeguard, not
-                # a provider failure: every applied write and tool result is
-                # preserved, the transcript stays paired, and the receipt
-                # reports an incomplete/runaway stop — never completion, never
-                # an API/provider-contract dead-stop.
-                self._stop_runaway(on_event, state, reason="model_round_ceiling")
+            if (
+                state.mode != "single"
+                and max_tool_rounds is not None
+                and state.rounds_used > max_tool_rounds
+            ):
+                # Legacy Planner/Worker compatibility only. Production SINGLE
+                # never ends a live implementation task on a round count: a
+                # turn ends on an outcome, not on arithmetic.
+                _log.info(
+                    "legacy_round_ceiling_stop mode=%s rounds_used=%d",
+                    state.mode, state.rounds_used,
+                )
                 return
 
             state.limits.begin_model_round()
@@ -819,9 +778,9 @@ class ConversationManager:
                     # already-satisfied evidence, no blocker — so the turn is
                     # not allowed to close on it. Append one compact internal
                     # continuation stating exactly what remains unproven and
-                    # call the model again with the same catalog. The round
-                    # ceiling and the observation-only streak bound a model
-                    # that refuses to act.
+                    # call the model again with the same catalog, the same
+                    # thinking mode, the same history, and every tool result
+                    # gathered so far.
                     self._history.append_internal_user_text(_UNPROVEN_CONTINUATION)
                     _log.info(
                         "production_prose_not_terminal rounds_used=%d",
@@ -876,78 +835,17 @@ class ConversationManager:
                     state.rounds_used,
                 )
 
-            # ── Generic runaway protection ───────────────────────────────
-            # A finite safeguard, not workflow orchestration: count consecutive
-            # active SINGLE rounds that executed only observation or
-            # bookkeeping tools (no mutation or command attempt), steer once
-            # after four, and stop gracefully after eight. A structured
-            # terminal outcome above already ended the turn's work, so it is
-            # never counted here. A successful write resets the streak on its
-            # own because it is a mutation attempt.
-            if state.mode == "single":
-                if (
-                    not tool_round.blocker_succeeded
-                    and not tool_round.already_satisfied_succeeded
-                ):
-                    if _round_attempts_mutation_or_command(
-                        tool_calls, self._tools.tool_effect
-                    ):
-                        state.observation_only_streak = 0
-                        state.observation_steering_sent = False
-                    else:
-                        state.observation_only_streak += 1
-                        if (
-                            state.observation_only_streak
-                            >= OBSERVATION_STOP_STREAK
-                        ):
-                            self._stop_runaway(
-                                on_event,
-                                state,
-                                reason="observation_only_runaway",
-                            )
-                            return
-                        if (
-                            state.observation_only_streak
-                            >= OBSERVATION_STEER_STREAK
-                            and not state.observation_steering_sent
-                        ):
-                            self._history.append_internal_user_text(
-                                _OBSERVATION_STEERING
-                            )
-                            state.observation_steering_sent = True
-                            _log.info(
-                                "observation_steering_issued streak=%d",
-                                state.observation_only_streak,
-                            )
+            # Observations are never counted. A turn that keeps returning
+            # genuinely new evidence keeps going; the only loop protection is
+            # the deterministic duplicate gate in PreEditLoopGuard, which
+            # rejects one wasteful repeat as a recoverable tool result and
+            # never ends the turn.
 
             if tool_round.action == "return":
                 return
             if tool_round.action == "continue":
                 continue
 
-    def _stop_runaway(
-        self,
-        on_event: EventCallback,
-        state: _SendState,
-        *,
-        reason: str,
-    ) -> None:
-        """Stop the loop gracefully at a generic runaway safeguard.
-
-        A graceful runaway stop preserves every applied write and tool result
-        (they are already in history), preserves valid conversation pairing
-        (no incomplete tool-call block is left), and reports an
-        incomplete/runaway outcome rather than completion.  It never crashes
-        and never emits a provider-contract dead-stop; the completion receipt
-        reads :attr:`last_turn_runaway_stopped` and reports the status
-        truthfully.
-        """
-        self._last_turn_runaway_stopped = True
-        _log.info(
-            "production_runaway_stopped reason=%s rounds_used=%d",
-            reason,
-            state.rounds_used,
-        )
     def _finish_worker_unrecoverable(
         self,
         on_event: EventCallback,

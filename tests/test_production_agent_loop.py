@@ -28,15 +28,17 @@ from pathlib import Path
 
 import pytest
 
+import dataclasses
+
 from aura.bridge.production_receipt import (
     STATUS_BLOCKED,
     STATUS_COMPLETED,
-    STATUS_RUNAWAY_STOPPED,
     ProductionRunEvidence,
     build_production_receipt,
 )
 from aura.client import ApiError, Done, Event, ToolCallArgsDelta, ToolCallEnd, ToolCallStart, ToolResult
 from aura.conversation.manager import ConversationManager
+from aura.conversation.pre_edit_loop_guard import DUPLICATE_READ_REASON
 from aura.conversation.tool_limits import TERMINAL_TOOLS, WRITE_TOOLS
 from aura.model_streams import PRODUCTION_STREAM_HOOK, ModelStreamRegistry
 from tests.production_loop_harness import (
@@ -168,7 +170,6 @@ def build_evidence(
         blocked_reason=manager.last_turn_blocked_reason,
         already_satisfied=manager.last_turn_already_satisfied,
         bears_production_action=manager.last_turn_bears_production_action,
-        runaway_stopped=manager.last_turn_runaway_stopped,
     )
 
 
@@ -422,111 +423,255 @@ class TestMalformedToolCall:
         assert [m["tool_call_id"] for m in tool_messages] == ["m0", "w0"]
 
 
-# ── 7. observation steering ─────────────────────────────────────────────────
+# ── 7. unbounded legitimate observation ─────────────────────────────────────
 
 
-class TestObservationSteering:
-    def test_four_observation_rounds_emit_exactly_one_steering_message(
+class TestUnboundedObservation:
+    """Distinct legitimate observations are never counted, steered, or stopped.
+
+    The old runtime steered after four consecutive observation-only rounds and
+    terminated the turn after eight.  Both are gone: production SINGLE ends on
+    an outcome, never on arithmetic.
+    """
+
+    def test_twelve_distinct_observation_rounds_then_write_validate_finish(
         self, tmp_path, isolated_streams,
     ) -> None:
-        workspace = make_workspace(tmp_path / "proj")
-        backend = ScriptedBackend([
-            read_round("r0", 0),
-            read_round("r1", 1),
-            read_round("r2", 2),
-            read_round("r3", 3),
-            write_round("w1"),
-            final_round("Acted."),
-        ])
-        isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
-        manager = build_manager(workspace, "Update notes.md.")
-        recorder = Recorder()
-
-        run(manager, recorder)
-
-        # The steering is appended exactly once, after the fourth consecutive
-        # observation-only round.
-        steerings = [
-            m
-            for m in manager.history.messages
-            if m.get("role") == "user"
-            and m.get("aura_internal")
-            and "consecutive rounds" in str(m.get("content", ""))
+        workspace = make_multi_file_workspace(tmp_path / "proj")
+        rounds: list[list[Event]] = []
+        for i in range(6):
+            rounds.append(
+                tool_round([(f"r{i}", "read_file", {"path": f"file_{i:02d}.py"})])
+            )
+        for i in range(6, 12):
+            rounds.append(tool_round([(f"r{i}", "read_file", {
+                "path": f"file_{i - 6:02d}.py", "offset": 1, "limit": i - 4,
+            })]))
+        rounds += [
+            write_file("w0", "file_00.py", "VALUE_00 = 100\nTARGET = 1\n"),
+            check_target_value("file_00.py", 1),
+            final_round("Set TARGET to 1 in file_00.py; verified by the check."),
         ]
-        assert len(steerings) == 1, (
-            f"expected exactly one steering message, got {len(steerings)}"
-        )
-        # Tools and thinking were not changed to make room for it.
-        assert_stable_loop(backend)
-        # The write still applied afterwards.
-        writes = recorder.results_named("write_file")
-        assert writes and json.loads(writes[-1].result).get("applied") is True
-
-
-# ── 8. observation runaway ──────────────────────────────────────────────────
-
-
-class TestObservationRunaway:
-    def test_eight_observation_rounds_stop_gracefully(
-        self, tmp_path, isolated_streams,
-    ) -> None:
-        workspace = make_workspace(tmp_path / "proj")
-        rounds = [read_round(f"r{i}", i) for i in range(8)]
-        rounds.append(final_round("(should never run)"))
         backend = ScriptedBackend(rounds)
         isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
-        manager = build_manager(workspace, "Update notes.md.")
+        manager = build_manager(workspace, "Set TARGET to 1 in file_00.py.")
         recorder = Recorder()
 
         run(manager, recorder)
 
-        # The loop stopped after the eighth observation-only round, before the
-        # next request would have been issued.
-        assert len(backend.calls) == 8, backend.calls
-        assert manager.last_turn_runaway_stopped is True, (
-            "eight observation-only rounds must stop the loop gracefully"
-        )
-        # No completion was claimed, and no provider-contract failure fired.
-        receipt = build_production_receipt(build_evidence(manager, recorder))
-        assert receipt.status == STATUS_RUNAWAY_STOPPED
-        assert not recorder.of_type(ApiError)
-        # Every observed result is preserved and paired in the transcript.
-        assert len(recorder.results_named("read_file")) == 8
-        assert all(r.ok for r in recorder.results_named("read_file"))
-        tool_messages = [
-            m for m in manager.history.messages if m.get("role") == "tool"
+        # Far more than eight observation rounds ran, and every one executed.
+        reads = recorder.results_named("read_file")
+        assert len(reads) == 12, [r.tool_call_id for r in reads]
+        assert all(r.ok for r in reads), "no legitimate observation was refused"
+        # No steering message was injected at four, or ever.
+        internal = [
+            str(m.get("content", ""))
+            for m in manager.history.messages
+            if m.get("role") == "user" and m.get("aura_internal")
         ]
-        assert len(tool_messages) == 8
+        assert not any("consecutive rounds" in text for text in internal), internal
+        # The turn went on to write, validate, and finish truthfully.
+        writes = recorder.results_named("write_file")
+        assert writes and json.loads(writes[-1].result)["applied"] is True
+        receipt = build_production_receipt(build_evidence(manager, recorder))
+        assert receipt.status == STATUS_COMPLETED, receipt.text
+        assert_stable_loop(backend)
+
+    def test_no_runaway_status_or_observation_counters_exist(self) -> None:
+        """The runaway outcome is gone from the production state and receipt."""
+        import aura.bridge.production_receipt as receipt_module
+        import aura.conversation.manager as manager_module
+        from aura.conversation.manager_send_state import _SendState
+
+        assert not hasattr(receipt_module, "STATUS_RUNAWAY_STOPPED")
+        assert "runaway_stopped" not in {
+            f.name for f in dataclasses.fields(receipt_module.ProductionRunEvidence)
+        }
+        assert not hasattr(ConversationManager, "last_turn_runaway_stopped")
+        assert not hasattr(ConversationManager, "_stop_runaway")
+        for name in (
+            "OBSERVATION_STEER_STREAK",
+            "OBSERVATION_STOP_STREAK",
+            "_OBSERVATION_STEERING",
+        ):
+            assert not hasattr(manager_module, name), name
+        send_state_fields = {f.name for f in dataclasses.fields(_SendState)}
+        assert "observation_only_streak" not in send_state_fields
+        assert "observation_steering_sent" not in send_state_fields
 
 
-# ── 9. overall round ceiling ────────────────────────────────────────────────
+# ── 8. duplicate protection is recoverable, not terminal ────────────────────
 
 
-class TestRoundCeiling:
-    def test_ceiling_stops_gracefully_without_api_failure(
+class TestDuplicateProtection:
+    def test_exact_resident_repeat_is_rejected_and_the_turn_continues(
         self, tmp_path, isolated_streams,
     ) -> None:
-        workspace = make_workspace(tmp_path / "proj")
+        """The one real loop protection: an identical call whose identical
+        result is still in the request.  It comes back as a recoverable tool
+        result, and the very next ordinary request writes."""
+        workspace = make_multi_file_workspace(tmp_path / "proj")
         backend = ScriptedBackend([
-            read_round("r0", 0),
-            read_round("r1", 1),
-            read_round("r2", 2),
-            read_round("r3", 3),
-            final_round("(should never run)"),
+            tool_round([("r0", "read_file", {"path": "file_00.py"})]),
+            tool_round([("r1", "read_file", {"path": "file_00.py"})]),
+            write_file("w0", "file_00.py", "VALUE_00 = 100\nTARGET = 1\n"),
+            final_round("Used the read I already had and applied the edit."),
         ])
         isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
-        manager = build_manager(workspace, "Update notes.md.")
+        manager = build_manager(workspace, "Set TARGET to 1 in file_00.py.")
+        recorder = Recorder()
+
+        run(manager, recorder)
+
+        results = {r.tool_call_id: r for r in recorder.tool_results()}
+        assert results["r0"].ok is True
+        rejected = json.loads(results["r1"].result)
+        assert rejected["reason"] == DUPLICATE_READ_REASON
+        assert rejected["recoverable"] is True
+        # The rejection did not end the turn: the loop kept issuing ordinary
+        # requests and the write landed on the next one.
+        assert results["w0"].ok is True
+        assert json.loads(results["w0"].result)["applied"] is True
+        receipt = build_production_receipt(build_evidence(manager, recorder))
+        assert receipt.status != STATUS_BLOCKED
+        assert_stable_loop(backend)
+
+    def test_distinct_files_ranges_and_search_arguments_are_never_loops(
+        self, tmp_path, isolated_streams,
+    ) -> None:
+        workspace = make_multi_file_workspace(tmp_path / "proj")
+        backend = ScriptedBackend([
+            tool_round([
+                ("a0", "read_file", {"path": "file_00.py"}),
+                ("a1", "read_file", {"path": "file_01.py"}),
+            ]),
+            tool_round([
+                ("b0", "read_file", {"path": "file_00.py", "offset": 1, "limit": 1}),
+                ("b1", "read_file", {"path": "file_00.py", "offset": 2, "limit": 1}),
+            ]),
+            tool_round([
+                ("c0", "grep_search", {"pattern": "TARGET"}),
+                ("c1", "grep_search", {"pattern": "VALUE_00"}),
+                ("c2", "grep_search", {"pattern": "TARGET", "max_results": 5}),
+            ]),
+            write_file("w0", "file_00.py", "VALUE_00 = 100\nTARGET = 1\n"),
+            final_round("Applied the edit."),
+        ])
+        isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
+        manager = build_manager(workspace, "Set TARGET to 1 in file_00.py.")
+        recorder = Recorder()
+
+        run(manager, recorder)
+
+        for result in recorder.tool_results():
+            payload = json.loads(result.result) if result.result else {}
+            assert payload.get("loop_guard") is not True, (
+                f"{result.tool_call_id} ({result.name}) was wrongly rejected as a loop"
+            )
+        assert len(recorder.results_named("read_file")) == 4
+        assert len(recorder.results_named("grep_search")) == 3
+        assert json.loads(
+            recorder.results_named("write_file")[-1].result
+        )["applied"] is True
+
+    def test_a_reread_after_the_edit_is_not_a_loop(
+        self, tmp_path, isolated_streams,
+    ) -> None:
+        """Post-edit verification of the file you just wrote is normal work."""
+        workspace = make_multi_file_workspace(tmp_path / "proj")
+        backend = ScriptedBackend([
+            tool_round([("r0", "read_file", {"path": "file_00.py"})]),
+            write_file("w0", "file_00.py", "VALUE_00 = 100\nTARGET = 1\n"),
+            tool_round([("r1", "read_file", {"path": "file_00.py"})]),
+            final_round("Applied and re-read the edited file."),
+        ])
+        isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
+        manager = build_manager(workspace, "Set TARGET to 1 in file_00.py.")
+        recorder = Recorder()
+
+        run(manager, recorder)
+
+        results = {r.tool_call_id: r for r in recorder.tool_results()}
+        assert results["r1"].ok is True, results["r1"].result
+        assert "TARGET = 1" in json.dumps(json.loads(results["r1"].result))
+
+
+# ── 9. no count-based termination ───────────────────────────────────────────
+
+
+class TestNoRoundCeiling:
+    def test_production_single_ignores_max_tool_rounds(
+        self, tmp_path, isolated_streams,
+    ) -> None:
+        """``max_tool_rounds`` is not a production ceiling.
+
+        A turn given a ceiling of 3 keeps going past it and finishes on its
+        outcome — the write, the validation, and the truthful final response.
+        """
+        workspace = make_multi_file_workspace(tmp_path / "proj")
+        backend = ScriptedBackend([
+            tool_round([("r0", "read_file", {"path": "file_00.py"})]),
+            tool_round([("r1", "read_file", {"path": "file_01.py"})]),
+            tool_round([("r2", "read_file", {"path": "file_02.py"})]),
+            tool_round([("r3", "read_file", {"path": "file_03.py"})]),
+            write_file("w0", "file_00.py", "VALUE_00 = 100\nTARGET = 1\n"),
+            check_target_value("file_00.py", 1),
+            final_round("Set TARGET to 1; verified by the check."),
+        ])
+        isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
+        manager = build_manager(workspace, "Set TARGET to 1 in file_00.py.")
         recorder = Recorder()
 
         run(manager, recorder, max_tool_rounds=3)
 
-        assert len(backend.calls) == 3
-        assert manager.last_turn_runaway_stopped is True
-        assert not recorder.of_type(ApiError), (
-            "the ceiling is a graceful incomplete stop, not an API failure"
+        assert len(backend.calls) == 7, (
+            "the loop stopped at the round ceiling instead of at its outcome"
+        )
+        assert not recorder.of_type(ApiError)
+        receipt = build_production_receipt(build_evidence(manager, recorder))
+        assert receipt.status == STATUS_COMPLETED, receipt.text
+
+    def test_prose_only_while_the_edit_is_pending_continues(
+        self, tmp_path, isolated_streams,
+    ) -> None:
+        """A prose-only response is non-terminal while the action is pending.
+
+        It receives exactly one compact continuation and the same request shape
+        — same catalog, same thinking mode, same history, same accumulated tool
+        results — never a narrowed schema or a finished turn.
+        """
+        workspace = make_multi_file_workspace(tmp_path / "proj")
+        backend = ScriptedBackend([
+            tool_round([("r0", "read_file", {"path": "file_00.py"})]),
+            final_round("Here is what I would change in file_00.py."),
+            write_file("w0", "file_00.py", "VALUE_00 = 100\nTARGET = 1\n"),
+            check_target_value("file_00.py", 1),
+            final_round("Set TARGET to 1; verified by the check."),
+        ])
+        isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
+        manager = build_manager(workspace, "Set TARGET to 1 in file_00.py.")
+        recorder = Recorder()
+
+        run(manager, recorder)
+
+        # The prose round did not end the turn.
+        assert len(backend.calls) == 5, backend.calls
+        continuations = [
+            str(m.get("content", ""))
+            for m in manager.history.messages
+            if m.get("role") == "user" and m.get("aura_internal")
+        ]
+        assert len(continuations) == 1, continuations
+        assert "truthful terminal outcome" in continuations[0]
+        # Nothing about the request shape changed to deliver it, and the
+        # earlier read result is still in the request that followed.
+        assert_stable_loop(backend)
+        assert any(
+            m.get("role") == "tool" and m.get("tool_call_id") == "r0"
+            for m in manager.history.messages
         )
         receipt = build_production_receipt(build_evidence(manager, recorder))
-        assert receipt.status == STATUS_RUNAWAY_STOPPED
+        assert receipt.status == STATUS_COMPLETED, receipt.text
 
 
 # ── 10. cancellation ────────────────────────────────────────────────────────

@@ -16,9 +16,9 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
             "description": (
                 "Inspect recognized, project-specific Godot asset catalogs without changing files or the open "
                 "scene. Returns generic asset descriptors with resource paths, domains, kinds, tags, semantic "
-                "roles, dimensions, sockets, placement modes, calibrations, and catalog diagnostics. Use this "
-                "to understand what ruins, camps, barriers, buildings, props, or other kits are available before "
-                "planning spatial work. Catalog adapters remain separate from Aura's conversation loop."
+                "roles, dimensions, sockets, placement modes, calibrations, and catalog diagnostics. Covers the "
+                "project's ruin, camp, barrier, building, and prop kits. Catalog adapters remain separate from "
+                "Aura's conversation loop."
             ),
             "parameters": {
                 "type": "object",
@@ -65,8 +65,8 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
             "name": "inspect_godot_asset_preview",
             "description": (
                 "Inspect AuraPreview in the scene currently open in Godot. Returns catalog identities, "
-                "transforms, semantic roles, and conservative footprint-overlap diagnostics. This is read-only. "
-                "Use it after edit_godot_asset_preview and before deciding on the next spatial revision."
+                "transforms, semantic roles, and conservative footprint-overlap diagnostics. This is read-only "
+                "and reflects the live scene, including changes made by edit_godot_asset_preview."
             ),
             "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
         },
@@ -123,9 +123,8 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
             "description": (
                 "Query the exact engine API exposed by the live Godot editor's ClassDB. Search engine class "
                 "names or inspect a class's methods, argument/default signatures, properties, signals, integer "
-                "constants, and enums before writing GDScript or editor-plugin code. This is read-only and "
-                "version-exact. ClassDB does not include project script-defined class_name types; inspect project "
-                "code for those."
+                "constants, and enums. This is read-only and version-exact. ClassDB does not include project "
+                "script-defined class_name types."
             ),
             "parameters": {
                 "type": "object",
@@ -161,10 +160,9 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
             "name": "inspect_godot_editor",
             "description": (
                 "Inspect the scene currently open in the live Godot editor. Returns the exact scene tree, "
-                "selected nodes, node types, scripts, transforms, and editor-visible properties. Use this "
-                "before live scene edits and again afterward to observe the result. The Aura Editor Bridge "
-                "must be installed and Godot must have the project open. If it is absent, do not write a "
-                "new addon: dispatch a Worker to call install_godot_editor_bridge."
+                "selected nodes, node types, scripts, transforms, and editor-visible properties. This is "
+                "read-only. Requires the Aura Editor Bridge to be installed (install_godot_editor_bridge) and "
+                "Godot to have the project open; otherwise the call fails with that reason."
             ),
             "parameters": {
                 "type": "object",
@@ -195,7 +193,6 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
                 "(capped at 200KB). Pass offset/limit to read a specific window of lines instead — "
                 "far more context-efficient than re-reading a whole file when you already know which "
                 "lines you need, and it can reach any line in a file too large to return in full. "
-                "Use this to inspect the user's source code, configs, or notes before answering or editing. "
                 "To read several files, issue several read_file calls in the same round. "
                 "The path argument MUST be relative to the workspace root."
             ),
@@ -403,17 +400,13 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
                 "function": {
                     "name": "grep_search",
                     "description": (
-                        "Discover candidate files and locations by searching workspace file contents "
-                        "for a given string or regex pattern. This is a discovery tool, not proof of "
-                        "exact edited content; use read_file to verify known files. "
+                        "Search workspace file contents for a string or regex pattern. "
                         "Returns matching file paths, line numbers, the matching line content, "
                         "and the column where the match starts, plus search metadata such as the "
                         "engine used, searched file count, skipped file count, truncation, and regex hint state. "
-                        "Use this whenever you know the text you are looking for: where a function "
-                        "is defined, where a variable is used, an error message, any pattern. "
-                        "For exact symbol usages before a rename, anchor with word boundaries, "
-                        "e.g. '\\bcount_items\\b'. When you cannot name the text and only know what "
-                        "the code does, use search_codebase instead."
+                        "A returned line is the line as it stood on disk at search time, not a "
+                        "guarantee of current content. Anchor with word boundaries for exact symbol "
+                        "matches, e.g. '\\bcount_items\\b'."
                     ),
                     "parameters": {
                         "type": "object",
@@ -625,9 +618,7 @@ GIT_TOOL_DEFS: list[dict[str, Any]] = [
             "description": (
                 "Show the current git working tree status. Returns the current branch "
                 "name, remote tracking info (ahead/behind counts, remote URL), and "
-                "lists staged, unstaged, and untracked files. Use this before "
-                "finishing a coding task to review what files were changed, or to verify "
-                "the repository state before making edits."
+                "lists staged, unstaged, and untracked files. Read-only."
             ),
             "parameters": {
                 "type": "object",
@@ -644,9 +635,7 @@ GIT_TOOL_DEFS: list[dict[str, Any]] = [
                 "Show the git diff of changes in the workspace. By default shows "
                 "unstaged changes (working tree vs HEAD). Set staged=true to see "
                 "changes staged for commit. Optionally restrict to a single file "
-                "with the path parameter. Output is capped at 200KB. Use this to "
-                "review your own changes for mistakes before finishing, or to verify "
-                "exactly what was modified."
+                "with the path parameter. Output is capped at 200KB. Read-only."
             ),
             "parameters": {
                 "type": "object",
@@ -1194,7 +1183,7 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                 "Install and enable Aura's modular, localhost-only EditorPlugin in the current Godot project. "
                 "This creates addons/aura_bridge and writes a token-authenticated local config. By default, "
                 "activate it normally in Godot under Project Settings > Plugins. Set enable_plugin only for "
-                "headless setup. Use this bundled installer instead of authoring another bridge."
+                "headless setup. This is the bundled bridge implementation; it does not author project code."
             ),
             "parameters": {
                 "type": "object",
@@ -1225,7 +1214,7 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
             "description": (
                 "Manipulate the scene currently open in the live Godot editor. Changes use Godot's own "
                 "EditorUndoRedoManager. Use action=apply for node/property operations, action=select to focus "
-                "nodes in Godot, or action=save to save the active scene. Inspect before and after iterating. "
+                "nodes in Godot, or action=save to save the active scene. "
                 "Values use Godot Variant text such as 'Vector3(1, 2, 3)', 'true', or '\"hello\"'."
             ),
             "parameters": {
@@ -1274,7 +1263,7 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                 "Safely assemble catalog-approved PackedScenes beneath a dedicated AuraPreview Node3D in the "
                 "scene currently open in Godot, or clear its children. Every call is approval-gated and one "
                 "Godot UndoRedo action. Asset IDs must come from inspect_godot_assets; arbitrary resource paths "
-                "are not accepted. This never saves the scene automatically. Inspect the preview afterward."
+                "are not accepted. This never saves the scene automatically."
             ),
             "parameters": {
                 "type": "object",
@@ -1346,8 +1335,8 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
         "function": {
             "name": "edit_godot_scene",
             "description": (
-                "Apply structured node edits to an existing Godot .tscn text scene. "
-                "Prefer this over raw text patches for adding/removing nodes or changing node properties. "
+                "Apply structured node edits to an existing Godot .tscn text scene: add or remove nodes and "
+                "change node properties, without hand-editing the scene's text. "
                 "Node paths are relative to the scene root: '.' is the root and 'Player/Sprite' is a descendant. "
                 "Property values are raw one-line Godot expressions such as 'Vector2(10, 20)', 'true', "
                 "'\"Ready\"', or 'ExtResource(\"1_script\")'. All operations are validated in memory and "
@@ -1426,13 +1415,10 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
         "function": {
             "name": "write_file",
             "description": (
-                "Write the given content to a workspace file. "
-                "Use this for new files, or for an intentional full-file replacement only. "
-                "For normal existing-file edits, read the file first and use patch_file instead. "
-                "For intentional whole-file replacement of an existing file, set full_replace_existing "
-                "to true and provide replacement_reason; these fields are not for patch_file failure recovery. "
-                "If a patch_file hunk is missing or ambiguous, recover with read_file and "
-                "a corrected patch_file hunk, not write_file. "
+                "Write the given content to a workspace file, creating it or replacing it whole. "
+                "Writing over an existing file REQUIRES full_replace_existing=true and a "
+                "replacement_reason; without both the call is rejected. Those fields declare an "
+                "intentional whole-file replacement and are rejected as patch_file failure recovery. "
                 "The user MUST approve every write through a diff dialog before it is applied. "
                 "Existing files are backed up before being overwritten."
             ),
@@ -1473,7 +1459,6 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
             "name": "delete_file",
             "description": (
                 "Delete one existing workspace file after user approval. "
-                "Use this for cleanup files or files intentionally removed during refactors. "
                 "Directories, globs, wildcards, workspace metadata paths, and paths outside "
                 "the workspace are rejected. Existing files are backed up before deletion."
             ),
@@ -1501,15 +1486,12 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
             "name": "patch_file",
             "description": (
                 "Apply multiple exact-text replacement hunks to one existing workspace file as a single "
-                "atomic, approval-gated transaction. Use this for normal existing-file edits after "
-                "reading the file. In Worker mode, after reading an existing file, pass the "
-                "content_hash returned by read_file or read_files as "
-                "expected_file_hash. Every hunk is applied to an in-memory copy first; "
-                "if any hunk is missing or ambiguous, nothing is written. Use occurrence to disambiguate "
-                "repeated exact text, or add more surrounding context to the old block. Craft reviews the full "
-                "proposed file once and the user sees one approval diff. If a hash mismatch or hunk failure "
-                "occurs, re-read and retry patch_file once with a corrected hunk and the new expected_file_hash. "
-                "Do not switch to write_file unless the task intentionally requires whole-file replacement."
+                "atomic, approval-gated transaction. Each hunk's old text must match the file exactly. "
+                "In Worker mode expected_file_hash is required and must be the content_hash returned by "
+                "read_file or read_files. Every hunk is applied to an in-memory copy first; if any hunk is "
+                "missing or ambiguous, nothing is written and the result names which hunk failed. Use "
+                "occurrence to disambiguate repeated exact text, or give more surrounding context in the old "
+                "block. Craft reviews the full proposed file once and the user sees one approval diff."
             ),
             "parameters": {
                 "type": "object",
@@ -1641,9 +1623,8 @@ LOAD_SKILLS_TOOL_DEF: dict[str, Any] = {
             "Load the full body of a candidate skill already listed in this "
             "turn's initial skill index. Only skills in that index are loadable; "
             "the index is frozen for this request, so unrelated global skills "
-            "are never available. Load only the skills whose detailed procedure "
-            "the requested work materially needs, and batch related activations "
-            "into one call. This is read-only and never changes any file. "
+            "are never available. Several ids may be loaded in one call. "
+            "This is read-only and never changes any file. "
             "Returned bodies are the exact bodies the index described (each with "
             "a body hash), and re-loading an already-active skill is inert."
         ),
@@ -1673,10 +1654,8 @@ WORKER_TODO_TOOL_DEF: dict[str, Any] = {
     "function": {
         "name": "update_worker_todo",
         "description": (
-            "Publish the Worker's live TODO checklist as a full snapshot. "
-            "Use this after a quick repo orientation and before the first real file mutation, "
-            "then call it again whenever the active item advances or the concrete work changes. "
-            "Keep three to seven action-shaped rows. Exactly one item should be active unless "
+            "Publish the live TODO checklist as a full snapshot, replacing the previous one. "
+            "Requires three to seven action-shaped rows. Exactly one item should be active unless "
             "the work is complete, in which case all items may be done. This tool is only a UI "
             "lens; it never completes, blocks, or gates the task."
         ),
@@ -1693,11 +1672,11 @@ WORKER_TODO_TOOL_DEF: dict[str, Any] = {
                         "properties": {
                             "id": {
                                 "type": "string",
-                                "description": "Stable row identity, e.g. 'inspect-persistence'.",
+                                "description": "Stable row identity, e.g. 'guard-persistence'.",
                             },
                             "text": {
                                 "type": "string",
-                                "description": "Short concrete action, e.g. 'Inspect replay paths'.",
+                                "description": "Short concrete action, e.g. 'Add the replay guard'.",
                             },
                             "status": {
                                 "type": "string",
@@ -1721,30 +1700,17 @@ TERMINAL_TOOL_DEF: dict[str, Any] = {
     "function": {
         "name": "run_terminal_command",
         "description": (
-            "Execute a shell command in the workspace or an optional workspace-relative cwd and stream its output. "
-            "Use this when the work genuinely needs the shell rather than a single read-only "
-            "check: shell behavior (pipes, redirects, chaining), streamed output from a longer "
-            "command, environment or project setup, dependency installs, or any command that "
-            "mutates the workspace. For a short, read-only, self-terminating inspection or "
-            "validation, prefer run_diagnostic_command. "
-            "Use this to run project validation/build commands: linters, type checkers, "
-            "test suites explicitly requested by the user, or other validation/build "
-            "commands. The command runs with the workspace as its working "
-            "directory unless cwd/working_directory is provided. Stdout and stderr are both captured and streamed in real-time, "
-            "including periodic status heartbeats if the command is quiet. Returns the "
-            "exit code and complete output on completion. Use focused one-shot commands, "
-            "not long-running watchers, dev servers, REPLs, or commands that wait for "
-            "interactive input. Prefer targeted validation commands over watch mode. "
-            "In Worker mode this tool supports validation/build/test commands and "
-            "dependency installs; use read_file/read_files/"
-            "grep_search for source inspection. "
-            "Prefer detected project-local tools. For Python projects, validation prefers "
-            "the project-local .venv interpreter when present. If a dependency is needed "
-            "for the current coding task, install it with an appropriate command such as "
-            "pip install, python -m pip install, uv sync, poetry install, or pdm install. "
-            "IMPORTANT: If the user specifies a test or lint command, you MUST run it "
-            "after modifying files. If the command fails, analyze the output and fix the "
-            "code before finishing."
+            "Execute a shell command in the workspace or an optional workspace-relative cwd and "
+            "stream its output. The full system shell is available: pipes, redirects, and "
+            "chaining work, as do linters, type checkers, test suites, build commands, git, "
+            "dependency installs (pip install, python -m pip install, uv sync, poetry install, "
+            "pdm install), and any command that mutates the workspace. The command runs with the "
+            "workspace as its working directory unless cwd/working_directory is provided. Stdout "
+            "and stderr are both captured and streamed in real-time, including periodic status "
+            "heartbeats if the command is quiet. Returns the exit code and complete output on "
+            "completion. The command must self-terminate: long-running watchers, dev servers, "
+            "REPLs, and commands that wait for interactive input hit the timeout and are killed. "
+            "For Python projects the project-local .venv interpreter is selected when present."
         ),
         "parameters": {
             "type": "object",

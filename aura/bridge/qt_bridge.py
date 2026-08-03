@@ -123,7 +123,6 @@ class _Worker(QObject):
         thinking: ThinkingMode,
         temperature: float = 0.7,
         workspace_root: Path | None = None,
-        max_tool_rounds: int | None = None,
         production_session: "ProductionExecutionSession | None" = None,
         hook_name: str = PRODUCTION_STREAM_HOOK,
         task_route: TaskRoute | None = None,
@@ -137,7 +136,6 @@ class _Worker(QObject):
         self._thinking = thinking
         self._temperature = temperature
         self._workspace_root = workspace_root
-        self._max_tool_rounds = max_tool_rounds
         self._production_session = production_session
         self._hook_name = hook_name
         self._task_route = task_route
@@ -145,7 +143,6 @@ class _Worker(QObject):
         self._provider_contract_failure: bool = False
         self._already_satisfied: bool = False
         self._bears_production_action: bool = False
-        self._runaway_stopped: bool = False
 
     @Slot()
     def run(self) -> None:
@@ -170,7 +167,6 @@ class _Worker(QObject):
                 workflow_state_cb=workflow_state_cb,
                 temperature=self._temperature,
                 hook_name=self._hook_name,
-                max_tool_rounds=self._max_tool_rounds,
                 task_route=self._task_route,
             )
             self._blocked_reason = self._manager.last_turn_blocked_reason
@@ -181,7 +177,6 @@ class _Worker(QObject):
             self._bears_production_action = (
                 self._manager.last_turn_bears_production_action
             )
-            self._runaway_stopped = self._manager.last_turn_runaway_stopped
         except Exception as exc:
             from aura.config import redact_secrets
             self.apiError.emit(-1, redact_secrets(f"{type(exc).__name__}: {exc}"))
@@ -735,6 +730,10 @@ class ConversationBridge(QObject):
     ) -> None:
         """Run one production turn over the existing conversation.
 
+        ``max_tool_rounds`` is *not* a production ceiling. Production SINGLE
+        never ends a live task on a round count; the setting is relayed only to
+        the legacy Planner/Worker dispatch path, which still honours it.
+
         ``route`` is the deterministic ``TaskRoute`` selected at send time and
         is the authority for this turn's task kind. Callers that genuinely do
         not provide one fall back to the previous research-only recomputation
@@ -790,7 +789,6 @@ class ConversationBridge(QObject):
             thinking=thinking,
             temperature=self._temperature,
             workspace_root=self._registry.workspace_root,
-            max_tool_rounds=max_tool_rounds,
             production_session=self._production_session,
             hook_name=PRODUCTION_STREAM_HOOK,
             task_route=self._turn_task_route,
@@ -890,9 +888,9 @@ class ConversationBridge(QObject):
         # ``report_blocker`` names the reason so the receipt reports the turn as
         # blocked, never as completed; a provider-contract failure is reported
         # as its own terminal status rather than as a completed turn.
-        # Structured ``report_already_satisfied`` evidence, the turn's
-        # production-action route, and a graceful runaway stop are carried so
-        # the completion contract can report truthfully.
+        # Structured ``report_already_satisfied`` evidence and the turn's
+        # production-action route are carried so the completion contract can
+        # report truthfully.
         blocked_reason = worker._blocked_reason if worker is not None else ""
         provider_contract_failure = (
             worker._provider_contract_failure if worker is not None else False
@@ -901,14 +899,12 @@ class ConversationBridge(QObject):
         bears_production_action = (
             worker._bears_production_action if worker is not None else False
         )
-        runaway_stopped = worker._runaway_stopped if worker is not None else False
         try:
             self._production_session.finish(
                 blocked_reason=blocked_reason,
                 provider_contract_failure=provider_contract_failure,
                 already_satisfied=already_satisfied,
                 bears_production_action=bears_production_action,
-                runaway_stopped=runaway_stopped,
             )
         except Exception:
             _log.exception("Failed to build production completion receipt")

@@ -1,7 +1,7 @@
 """Worker Log Live-state and terminal-visibility tests.
 
 Covers the proven failure from the 2026-08-03 production run: the backend
-finished the turn truthfully (``status=runaway_stopped``, receipt built and
+finished the turn truthfully (``status=no_authoritative_change``, receipt built and
 emitted) while the GUI threw the receipt away and left the Worker Log chip
 reading ``Live`` forever.
 
@@ -155,8 +155,8 @@ def test_stopping_is_idempotent_and_preserves_a_rendered_receipt(pane) -> None:
 
     pane.set_worker_running(True)
     pane.show_final_summary(
-        False, "Stopped by runaway protection", needs_followup=True,
-        status="runaway_stopped",
+        False, "No authoritative change", needs_followup=True,
+        status="no_authoritative_change",
     )
     assert _chip(pane) == _CHIP_RECEIPT
 
@@ -166,15 +166,15 @@ def test_stopping_is_idempotent_and_preserves_a_rendered_receipt(pane) -> None:
     assert _chip(pane) == _CHIP_RECEIPT
 
 
-def test_runaway_receipt_text_is_visible_in_the_log(pane) -> None:
+def test_non_success_receipt_text_is_visible_in_the_log(pane) -> None:
     pane.set_worker_running(True)
     pane.show_final_summary(
-        False, "Stopped by runaway protection", needs_followup=True,
-        status="runaway_stopped",
+        False, "No authoritative change", needs_followup=True,
+        status="no_authoritative_change",
     )
     pane.set_worker_running(False)
 
-    assert "Stopped by runaway protection" in pane._log_view.toPlainText()
+    assert "No authoritative change" in pane._log_view.toPlainText()
 
 
 # ── WorkerFinishPresenter: truthful terminal visibility ─────────────────
@@ -183,7 +183,7 @@ def test_runaway_receipt_text_is_visible_in_the_log(pane) -> None:
 @pytest.mark.parametrize(
     "status",
     [
-        "runaway_stopped",
+        "no_authoritative_change",
         "harness_error",
         "blocked",
         "validation_failed",
@@ -226,8 +226,8 @@ def test_production_finish_does_not_fabricate_a_chat_summary() -> None:
     """No false completion receipt: the incomplete run must not gain an
     assistant-facing completion claim in the chat transcript."""
     chat, _playground = _present(
-        ok=False, summary="Stopped (runaway protection)", needs_followup=True,
-        status="runaway_stopped", spec_card=None,
+        ok=False, summary="No authoritative change", needs_followup=True,
+        status="no_authoritative_change", spec_card=None,
     )
 
     assert chat.worker_summaries == []
@@ -294,8 +294,8 @@ def test_finish_cleanup_runs_exactly_once(qt_app) -> None:
 
     handler._on_worker_started("prod-1")
     handler._on_worker_finished(
-        "prod-1", ok=False, summary="Stopped (runaway protection)",
-        needs_followup=True, status="runaway_stopped",
+        "prod-1", ok=False, summary="No authoritative change",
+        needs_followup=True, status="no_authoritative_change",
     )
     pending = handler._pending_worker_finish
     assert pending is not None

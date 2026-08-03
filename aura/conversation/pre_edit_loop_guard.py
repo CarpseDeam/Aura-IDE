@@ -1,13 +1,13 @@
-"""Deterministic pre-edit duplicate-read guard for the SINGLE production runtime.
+"""Deterministic duplicate-observation guard for the SINGLE production runtime.
 
 This is the production loop's *only* pre-execution gate, and it is deliberately
 narrow.  It exists to stop the one mechanical waste a conventional coding-agent
 loop cannot tolerate — re-reading the exact same thing whose result is still in
 front of the model — without pretending to judge how much looking is enough.
 
-The rule: **before the first applied write**, the same read-only tool call with
-the same arguments is rejected the second time it is issued — *while its first
-result is still materially in the model's request*.  That qualifier is the
+The rule: the same read-only tool call with the same arguments is rejected the
+second time it is issued — *while its first result is still materially in the
+model's request*.  That qualifier is the
 whole rule.  The rejection's justification is "the result is already in the
 conversation above", and compaction can make that false: a read retired into an
 evidence receipt, truncated to a floor, bounded on replay, folded into a
@@ -29,17 +29,22 @@ or a failed validation, the model is expected to look again, and the duplicate
 gate does not stand in its way.  The grace is exactly one round — a failure in
 a later round renews it, and a round without one spends it.
 
-**After the first applied write the gate is dormant.**  Re-reading to verify
-your own edit is normal work, not a loop, and the observation-only runaway
-streak in the send loop owns the anti-circling bound from there on.
+**Post-edit verification is not a loop.**  An applied write retires every read
+fingerprint that touched the written paths (see :meth:`note_stale_paths`, driven
+by the tool round's post-write notices), so re-reading a file you just changed
+returns different bytes and is never refused.  What stays refused after a write
+is what stayed refused before one: issuing the identical call whose identical
+result is still sitting in the request.
 
-There is deliberately **no counter of discovery calls, files, tokens, or
-elapsed time** here, and no "how many files should this task need" budget.
-Discovery is never refused by a count; a turn that keeps returning genuinely
-new evidence may keep surveying across as many ordinary requests as the work
-needs.  What bounds a runaway is the send loop's generic finite safeguard —
-the configurable model-round ceiling and the observation-only streak — never
-semantic workflow orchestration.
+There is deliberately **no counter of discovery calls, files, tokens, model
+rounds, or elapsed time** anywhere in production SINGLE, and no "how many files
+should this task need" budget.  Distinct searches, different files, different
+ranges, different arguments, changed results, failure recovery, and post-edit
+verification are not loops and are never rejected.  A turn that keeps returning
+genuinely new evidence may keep surveying across as many ordinary requests as
+the work needs, and a rejection here is a recoverable tool result — it tells the
+model to use the evidence it already has and choose a different next action, and
+it never ends the turn.
 """
 from __future__ import annotations
 
@@ -250,14 +255,14 @@ def _condense(text: str) -> str:
 
 @dataclass
 class PreEditLoopGuard:
-    """Track read repetition and write-applied state before the first edit.
+    """Track read repetition and whether an applied mutation has landed.
 
     A generic loop-safety gate, not a workflow state machine: ``focused``,
     stall detection, and cycle detection do not exist here.  What the guard
     answers is exactly two things —
 
-    * has an applied mutation landed yet (``write_applied``), which the send
-      loop reads to know the turn no longer owes its pre-edit read discipline;
+    * has an applied mutation landed yet (``write_applied``), which the
+      completion contract reads to know whether the turn still owes its edit;
     * is this exact observation call a wasteful repeat of a result still in the
       request (``check``).
 
@@ -387,17 +392,17 @@ class PreEditLoopGuard:
     ) -> dict[str, Any] | None:
         """Return a rejection payload for a call this turn should not make.
 
-        ``None`` means the call may run.  One rejection is possible, recoverable
-        and dormant once any write has applied — rereading to verify your own
-        edit is normal work:
+        ``None`` means the call may run.  Exactly one rejection is possible, and
+        it is recoverable — never terminal:
 
-        * an unjustified exact repeat read.
+        * an unjustified exact repeat read whose original result is still in the
+          request.
 
         Broad discovery is never refused by a count; a turn that keeps returning
-        genuinely new evidence is allowed to keep surveying, and the send loop's
-        generic round ceiling plus the observation-only streak bound the rest.
+        genuinely new evidence is allowed to keep surveying for as long as the
+        work needs.  Nothing else in production SINGLE bounds the turn.
         """
-        if self.write_applied or not self._is_observation(name):
+        if not self._is_observation(name):
             return None
         if self._reread_grace_active or recovery_pending:
             # A distinct failure, a stale-file notice, or a pending edit-recovery
@@ -451,8 +456,8 @@ class PreEditLoopGuard:
         """Fold one tool result into the guard's state.
 
         A mutation that explicitly applied flips ``write_applied`` — the one
-        fact the send loop's completion truth reads — and makes the duplicate
-        gate dormant.  A failure of any tool opens the one-round reread grace,
+        fact the send loop's completion truth reads.  A failure of any tool
+        opens the one-round reread grace,
         because a failed read, write, patch, or validation is exactly when the
         model should be allowed to look again.
         """

@@ -7,9 +7,9 @@ with a compact, readable state setup instead of a wall of local declarations.
 This module also owns :func:`implementation_action_pending` — the per-turn fact
 that a production SINGLE turn bears a production action it has not yet
 performed.  It is a *fact about the turn*, not a budget: nothing here counts
-requests, files, tokens, or elapsed time, and nothing here ends the loop.  The
-loop ends only on a truthful terminal outcome or the generic runaway ceiling —
-never on a count of how much discovery the turn may do.
+requests, files, tokens, or elapsed time, and nothing here ends the loop.  A
+production turn ends only on a truthful terminal outcome — never on a count of
+how much discovery it did.
 """
 from __future__ import annotations
 
@@ -103,15 +103,6 @@ class _SendState:
     last_completion_final_text: str = ""
     planner_dispatch_gate_steered: bool = False
 
-    # --- generic runaway protection (production SINGLE) -------------------
-    #: Consecutive model/tool rounds that executed only observation or
-    #: bookkeeping tools — no mutation or command attempt.  Reset the moment
-    #: the model attempts a mutation or command.
-    observation_only_streak: int = 0
-    #: Whether the steering message has already been appended for the current
-    #: streak, so it is sent at most once per streak.
-    observation_steering_sent: bool = False
-
     # --- worker-only objects (initialised in __post_init__) ---
     limits: ToolLimitState = field(init=False)
     stream_buffer: WorkerStreamBuffer | None = field(init=False)
@@ -122,7 +113,7 @@ class _SendState:
     """Holds each round's ContentDelta until ``Done`` says who owns it."""
 
     pre_edit_guard: PreEditLoopGuard | None = field(init=False)
-    """Deterministic duplicate-read / write-applied guard before the first write."""
+    """Deterministic duplicate-observation guard for the production turn."""
 
     # --- worker recovery state ---
     worker_flow_last_steering: str = ""

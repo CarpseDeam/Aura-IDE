@@ -517,14 +517,22 @@ def test_web_search_handler_is_registered():
 
 def test_web_search_tool_in_catalog_for_active_modes():
     catalog = ToolCatalog()
-    # Production ("single") and planner expose web_search. The legacy worker
-    # surface never carried it.
-    for mode in ("planner", "single"):
+    # Planner always exposes web_search. The legacy worker surface never
+    # carried it. Production ("single") exposes it only for a turn whose route
+    # genuinely requires external research, and then for the whole turn.
+    planner_names = {
+        tool["function"]["name"]
+        for tool in catalog.build_tool_defs(mode="planner", read_only=False)
+    }
+    assert "web_search" in planner_names
+    for web_search, expected in ((True, True), (False, False)):
         names = {
             tool["function"]["name"]
-            for tool in catalog.build_tool_defs(mode=mode, read_only=False)
+            for tool in catalog.build_tool_defs(
+                mode="single", read_only=False, web_search=web_search
+            )
         }
-        assert "web_search" in names, f"missing in {mode}"
+        assert ("web_search" in names) is expected, web_search
     read_only_names = {
         tool["function"]["name"]
         for tool in catalog.build_tool_defs(mode="single", read_only=True)

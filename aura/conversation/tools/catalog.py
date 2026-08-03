@@ -37,14 +37,22 @@ from aura.conversation.tools.effects import BUILTIN_TOOL_EFFECTS, ToolEffect
 # Every one of these is reachable through a tool that remains: line windows via
 # ``read_file``'s offset/limit, multi-file reads via several ``read_file`` calls
 # in one round, directory listing via ``glob``, and symbol/structure lookup via
-# ``grep_search``. Presenting all of them made the model choose an approach
-# before it could choose an action.
+# ``grep_search``. ``search_codebase`` is ranked recall of the same files
+# ``grep_search`` and ``glob`` already reach exactly. Presenting all of them
+# made the model choose an approach before it could choose an action.
 #
 # The handlers stay registered, so a replayed historical tool call still runs,
 # and Planner/Worker mode keep their existing sets.
 SINGLE_SUPERSEDED_READ_TOOL_NAMES: frozenset[str] = tool_names_for(
     {BULK_READ, CODE_INTEL}
-)
+) | {"search_codebase"}
+
+#: The git tools production SINGLE offers. ``git_status`` and ``git_diff`` are
+#: the two an implementation turn genuinely needs — what changed, and exactly
+#: how. History, branch, and stash inspection is ordinary shell work reachable
+#: through ``run_terminal_command``, and a wrapper per git subcommand only
+#: enlarged the surface the model has to choose from.
+SINGLE_GIT_TOOL_NAMES: frozenset[str] = frozenset({"git_status", "git_diff"})
 
 PLANNER_TOOL_NAMES = {
     "read_file",
@@ -123,8 +131,16 @@ class ToolCatalog:
         read_only: bool,
         dynamic_schemas: list[dict[str, Any]] | None = None,
         mcp_schemas: list[dict[str, Any]] | None = None,
+        web_search: bool = False,
     ) -> list[dict[str, Any]]:
-        """Build tool definitions for the given mode and state."""
+        """Build tool definitions for the given mode and state.
+
+        ``web_search`` adds the research tool to the production single-agent
+        catalog.  It is decided once per real user turn from that turn's route
+        and held for the whole turn, so the catalog the model sees never moves
+        between rounds.  Other modes offer web research unconditionally, as
+        they always have.
+        """
         if read_only:
             tools: list[dict[str, Any]] = (
                 list(READ_TOOL_DEFS)
@@ -175,14 +191,26 @@ class ToolCatalog:
                 + [dict(LOAD_SKILLS_TOOL_DEF)]
             )
         else:
-            # Production single-agent mode: one continuous model owns
-            # inspection → live TODO → edits → validation → repair.  The
-            # catalog is stable — the same set on every active request — and
-            # includes the two structured exit tools so a turn that cannot
-            # truthfully continue may end blocked or already-satisfied.
+            # Production single-agent mode: one continuous model owns the whole
+            # request.  The catalog is the minimum a normal implementation turn
+            # needs — read/glob/grep, TODO, the write and Godot edit tools, the
+            # terminal, git status/diff, skills, and the two structured exit
+            # tools — and it is stable: the same set on every active request of
+            # the turn.  ``web_search`` joins it only for a turn whose route
+            # genuinely requires external research, and then for the whole turn.
+            #
+            # Deliberately absent: diagnostic and snapshot wrappers, extra git
+            # subcommand wrappers, and drone tools.  Every one of them is either
+            # reachable through ``run_terminal_command`` or unrelated to normal
+            # implementation, and each one made the model pick an approach
+            # before it could pick an action.
             single_read_tools = [
                 tool for tool in READ_TOOL_DEFS
                 if _tool_name(tool) not in SINGLE_SUPERSEDED_READ_TOOL_NAMES
+            ]
+            single_git_tools = [
+                tool for tool in GIT_TOOL_DEFS
+                if _tool_name(tool) in SINGLE_GIT_TOOL_NAMES
             ]
             tools = (
                 single_read_tools
@@ -192,14 +220,11 @@ class ToolCatalog:
                 + [dict(REPORT_ALREADY_SATISFIED_TOOL_DEF)]
                 + [dict(TERMINAL_TOOL_DEF)]
                 + [dict(RUN_AND_WATCH_TOOL_DEF)]
-                + list(GIT_TOOL_DEFS)
-                + [dict(DIAGNOSTIC_TOOL_DEF)]
-                + [dict(WORKSPACE_SNAPSHOT_TOOL_DEF)]
-                + [dict(WEB_SEARCH_TOOL_DEF)]
-                + [dict(RUN_READ_ONLY_DRONE_TOOL_DEF)]
-                + [dict(REGISTER_DRONE_FOLDER_TOOL_DEF)]
+                + single_git_tools
                 + [dict(LOAD_SKILLS_TOOL_DEF)]
             )
+            if web_search:
+                tools.append(dict(WEB_SEARCH_TOOL_DEF))
 
         if not read_only and mode != "planner" and dynamic_schemas:
             tools.extend(dynamic_schemas)
@@ -218,12 +243,13 @@ class ToolCatalog:
         """Defs for tools this mode withholds but still accepts when called.
 
         A mode narrows its catalog to shape *choice*, not to revoke capability:
-        the single-agent catalog drops the superseded read tools because
-        offering all of them made the model pick an approach before it could
-        pick an action, but their handlers stay registered so a replayed
-        historical tool call still runs.  Preflight rejects any name outside
-        the exposed catalog, so those withheld-but-callable names need their
-        schemas from here or the replay is rejected instead of executed.
+        the single-agent catalog drops the superseded read, search, git-history
+        and snapshot tools because offering all of them made the model pick an
+        approach before it could pick an action, but their handlers stay
+        registered so a replayed historical tool call still runs.  Preflight
+        rejects any name outside the exposed catalog, so those
+        withheld-but-callable names need their schemas from here or the replay
+        is rejected instead of executed.
 
         Only observations qualify.  Nothing that can change the workspace is
         callable from outside the catalog that offered it, which is what keeps
@@ -232,9 +258,20 @@ class ToolCatalog:
         """
         if read_only or mode != "single":
             return []
+        exposed = {
+            _tool_name(tool)
+            for tool in self.build_tool_defs(
+                mode=mode, read_only=read_only, web_search=True
+            )
+        }
+        candidates = (
+            list(READ_TOOL_DEFS)
+            + list(GIT_TOOL_DEFS)
+            + [WORKSPACE_SNAPSHOT_TOOL_DEF, RUN_READ_ONLY_DRONE_TOOL_DEF]
+        )
         return [
-            tool for tool in READ_TOOL_DEFS
-            if _tool_name(tool) in SINGLE_SUPERSEDED_READ_TOOL_NAMES
+            tool for tool in candidates
+            if _tool_name(tool) not in exposed
             and BUILTIN_TOOL_EFFECTS.get(_tool_name(tool)) is ToolEffect.OBSERVATION
         ]
 

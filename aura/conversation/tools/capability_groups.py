@@ -33,8 +33,9 @@ GODOT = "godot"
 
 CAPABILITY_TOOLS: dict[str, frozenset[str]] = {
     CORE_READ: frozenset({"read_file", "glob"}),
-    # Two searches that do not overlap: an exact-string sweep, and ranked
-    # recall of whole files by what they are about.
+    # ``grep_search`` is production's search. ``search_codebase`` is ranked
+    # recall over the same files it and ``glob`` already reach exactly; it is
+    # withheld from the production catalog and stays callable on replay.
     CORE_SEARCH: frozenset({"grep_search", "search_codebase"}),
     CORE_EDIT: frozenset({"write_file", "patch_file", "delete_file"}),
     CORE_TERMINAL: frozenset({"run_terminal_command", "run_and_watch"}),

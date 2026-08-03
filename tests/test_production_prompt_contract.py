@@ -77,21 +77,49 @@ def test_the_capsule_owns_the_whole_durable_production_loop() -> None:
     text = _capsule_text().lower()
 
     durable = {
+        "own the request end to end": "you own one request end to end",
         "scope preserved": "keep the user's intent",
-        "identify the edit surface": "authoritative owner and the concrete edit surface",
-        "act on evidence": "act as soon as repository evidence supports the edit",
+        "minimum evidence, then act": "minimum evidence you need for the next concrete action",
+        "make the change": "when the request needs a repository change, make it",
+        "act over speculative inspection": (
+            "prefer acting and correcting from real tool output over more looking"
+        ),
         "continue after writes": "keep going after a write",
         "recover from failures": "correct the approach, and act again",
-        "focused validation": "validate the changed surface",
+        "focused validation": "run the focused validation",
         "truthful result": "finish with a compact receipt",
         "structured outcomes": "report_already_satisfied",
     }
     for behaviour, clause in durable.items():
         assert clause in text, f"the capsule no longer owns {behaviour}"
 
-    # The reasoning-continuity shape, stated once and directly.
-    assert "understand once, decide once, act" in text
-    assert "react only to new tool evidence" in text
+
+def test_the_capsule_carries_no_inspection_first_language() -> None:
+    """The prompt no longer teaches the behaviour the runtime then punished.
+
+    "Inspect until", hunting an authoritative owner, proving blast radius,
+    gathering enough certainty, named discovery phases, and procedural read
+    discipline are all gone — a conventional coding agent is told to act on the
+    minimum evidence its next step needs.
+    """
+    text = _capsule_text().lower()
+
+    for retired in (
+        "inspect until",
+        "authoritative owner",
+        "blast radius",
+        "enough certainty",
+        "gather enough",
+        "discovery phase",
+        "batch independent reads",
+        "named unresolved question",
+        "settled decision",
+        "before you edit",
+        "before editing",
+        "understand once",
+        "read discipline",
+    ):
+        assert retired not in text, f"inspection-first language is back: {retired!r}"
 
 
 def test_the_contract_stays_a_capsule_not_a_procedural_manual() -> None:
@@ -192,16 +220,16 @@ def test_each_durable_concept_has_exactly_one_owner(tmp_path: Path) -> None:
         r"Work inside the selected workspace",
         # scope preservation — the capsule
         r"No speculative cleanup",
-        # anti-circling — the capsule
-        r"Do not reopen or restate a settled decision",
-        # act on evidence — the capsule
-        r"Act as soon as repository evidence supports the edit",
+        # act over speculative inspection — the capsule
+        r"Prefer acting and correcting from real tool output",
+        # make the change — the capsule
+        r"When the request needs a repository change, make it",
         # code shape — the capsule
         r"reads like its neighbours",
         # failure recovery — the capsule
         r"correct the approach, and act again",
         # validation selection — the capsule
-        r"discover it rather than assuming",
+        r"the focused validation this repository actually runs",
         # receipt honesty — the capsule
         r"Never claim a check that did not run",
         # live TODO — the capsule
@@ -250,7 +278,7 @@ def test_custom_prompts_remain_additive_over_the_contract(tmp_path: Path) -> Non
 
     assert "### Custom Instructions" in composed.system_prompt
     assert "Always prefer the Qt signal path." in composed.system_prompt
-    assert "Act as soon as repository evidence supports the edit." in composed.system_prompt
+    assert "When the request needs a repository change, make it." in composed.system_prompt
 
 
 # ── 4-5. project rules and the target-file manifest survive ─────────────────
