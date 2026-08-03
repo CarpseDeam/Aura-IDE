@@ -7,9 +7,23 @@ counters are gone.  Discovery is never refused by a count — a turn may survey
 as long as every call returns genuinely new evidence — and the focused action
 protocol is entered on the first round that stops producing evidence.
 
+**Scope: this module tests the guard in isolation, and the guard alone never
+bounds novelty.**  That is deliberate and it is not the whole system contract.
+Because rule 2 fires on repetition, a turn whose every result is genuinely new
+never stalls *here* — which is precisely how a production implementation turn
+could read different files forever.  The bound on that lives outside this
+module, in
+:class:`~aura.conversation.manager_send_state.ImplementationStage`: a production
+SINGLE implementation turn gets two ordinary discovery hops before its first
+applied write, and the send loop enters focused action on ``guard.focused OR
+implementation_stage_exhausted``.  So "unbounded" below means *this guard does
+not refuse it* — never "the turn may keep asking".  See
+``tests/test_implementation_discovery_stage.py`` for the bound.
+
 What is asserted here:
 
-* broad discovery is never refused, however many unique calls a turn makes;
+* broad discovery is never refused *by the guard*, however many unique calls a
+  turn makes;
 * a stalled round (tools ran, results were seen, no new evidence, no progress)
   is the single protocol transition into the focused action request;
 * a stalled round that followed a distinct failure is a recovery round, not a
@@ -84,21 +98,27 @@ def applied_write(guard: PreEditLoopGuard) -> None:
     guard.observe_result("write_file", True, json.dumps({"applied": True}))
 
 
-# ── discovery is unbounded ──────────────────────────────────────────────────
+# ── the guard itself refuses no unique call ─────────────────────────────────
 
 
 class TestDiscoveryIsUnbounded:
+    """The guard never refuses a call by a count, and novelty never stalls it.
+
+    These are statements about *this guard*, not about how many requests a turn
+    gets. ``ImplementationStage`` supplies that bound; see the module docstring.
+    """
 
     def test_every_unique_call_is_allowed(self) -> None:
         guard = PreEditLoopGuard()
         # Far past any old budget, every call still runs and none is refused.
         burn_discovery(guard, 40)
 
-        assert guard.focused is False, "unique evidence never stalls"
+        assert guard.focused is False, "unique evidence never stalls the guard"
         assert guard.check("glob", {"pattern": "**/*.py"}) is None
         assert guard.check("search_codebase", {"query": "anything"}) is None
 
     def test_new_evidence_prevents_the_stalled_round_transition(self) -> None:
+        """Novelty defeats the guard's stall rule — the exact gap the stage fills."""
         guard = PreEditLoopGuard()
         burn_discovery(guard, 40)
 

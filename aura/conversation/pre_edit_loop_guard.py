@@ -19,6 +19,23 @@ Two mechanical signals, both derived from state the send loop already keeps:
    genuinely new evidence; the first round that does not is where the focused
    action protocol takes over.
 
+**This guard is no longer the only authority over that transition, and it was
+never sufficient on its own.**  Rule 2 fires on *repetition*, so a turn whose
+every result is technically novel — a different file each round, a search with
+new matches, a fresh diagnostic — is by this guard's own reckoning always still
+progressing, and ``focused`` never becomes true.  That is a real production
+loop, not a hypothetical one.  Bounding it here would mean making novelty itself
+suspect, which would break the honest signal rule 2 depends on.  So the bound
+lives outside instead:
+:class:`~aura.conversation.manager_send_state.ImplementationStage` gives a
+production ``single`` implementation turn exactly two ordinary discovery hops
+before its first applied write, and the send loop enters focused action on
+``guard.focused OR implementation_stage_exhausted``.  Nothing in this module
+changed for that: evidence novelty still closes failure recovery, still resets
+the stall, and is still judged purely by the result.  It simply no longer
+*postpones* action indefinitely, because it is no longer the only thing that can
+end discovery.
+
 Evidence is judged by the *result*, never by the call arguments.  Each
 successful read-only result is folded into a normalized fingerprint: a
 genuinely new file, line range, search match, or result payload resets the

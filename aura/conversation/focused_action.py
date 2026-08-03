@@ -13,7 +13,9 @@ Every input is state the loop already keeps:
 * the mode is production ``single``;
 * the deterministic :class:`~aura.conversation.task_router.TaskRoute` for this
   turn is the ``implementation`` lane;
-* :attr:`PreEditLoopGuard.focused` is true;
+* discovery is over — either :attr:`PreEditLoopGuard.focused` is true (the guard
+  saw a round gather nothing) *or* the turn has spent both ordinary discovery
+  hops of :class:`~aura.conversation.manager_send_state.ImplementationStage`;
 * no write has applied;
 * no completion response is pending;
 * no focused action request has already been spent this turn.
@@ -42,6 +44,20 @@ from aura.conversation.task_router import TaskLane, TaskRoute
 
 #: The one control tool the focused action request adds to the mutation set.
 REPORT_BLOCKER: str = "report_blocker"
+
+#: The ephemeral protocol instruction carried by the *final ordinary* request of
+#: an implementation turn — the last request before focused action.
+#:
+#: Request-local by construction: the send loop appends it as a system message to
+#: the outbound message list for one request only.  It is never appended to
+#: history, never a user message, never streamed to chat, never a visible turn
+#: boundary, and never part of the base system prompt.  The next request, whatever
+#: shape it takes, is built from history that has never seen it.
+FINAL_EVIDENCE_INSTRUCTION: str = (
+    "Use the gathered evidence and act now when possible. Otherwise batch every "
+    "remaining exact read or probe in this response. This is the final ordinary "
+    "discovery request; the next request is action-only."
+)
 
 #: Thinking mode used for the action-serialization request, always.
 FOCUSED_ACTION_THINKING: str = "off"
@@ -104,19 +120,52 @@ def should_enter_focused_action(
     guard: PreEditLoopGuard | None,
     task_completion_context: bool,
     state: FocusedActionState,
+    stage_exhausted: bool = False,
 ) -> bool:
     """Return whether the next request must be the focused action request.
 
     Pure over state the send loop already owns.  Every condition is a fact,
     not an estimate — there is nothing here to tune.
+
+    Two independent authorities can declare discovery over, and either suffices::
+
+        focused = stalled_round OR implementation_stage_exhausted
+
+    ``guard.focused`` is the first: the guard saw a round run tools, observe
+    their results, and gather nothing.  ``stage_exhausted`` is the second, from
+    :class:`~aura.conversation.manager_send_state.ImplementationStage` — the turn
+    has spent both of its ordinary discovery hops.  The guard's rule cannot fire
+    while every result is technically novel, which is exactly the production loop
+    the stage exists to close; the stage cannot fire early, because it only
+    counts rounds that actually executed.  Neither weakens the other, and every
+    remaining condition below still binds both.
     """
     if mode != "single":
         return False
     if route is None or route.lane != TaskLane.implementation:
         return False
-    if guard is None or not guard.focused or guard.write_applied:
+    if guard is None or guard.write_applied:
         return False
-    if task_completion_context:
+    if not (guard.focused or stage_exhausted):
+        return False
+    if task_completion_context and not stage_exhausted:
+        # A pending completion response normally outranks the focused request:
+        # the turn already acted and owes prose, not another mutation.
+        #
+        # But ``task_completion_context`` is set by any *successful* call in
+        # ``ACTION_COMPLETION_TOOL_NAMES`` — which includes ``git_status``,
+        # ``run_diagnostic_command`` and the terminal tools. Before the first
+        # applied write, one such probe therefore claims the turn "completed an
+        # action" when nothing was completed at all, and that claim used to
+        # suppress the focused transition for the rest of the turn. A model
+        # could run one successful probe and then read new files indefinitely:
+        # a second unbounded pre-write loop, distinct from the novelty one, and
+        # reachable by a single ``git_status``.
+        #
+        # An exhausted stage overrides it, and can only do so honestly:
+        # ``stage_exhausted`` requires ``implementation_staging_applies``, which
+        # is false once any write has applied. So this can never pre-empt a
+        # completion that a real write earned — only one a probe invented.
         return False
     return not (state.spent or state.blocked)
 
@@ -198,6 +247,7 @@ def provider_contract_failure_message() -> tuple[str, dict[str, Any]]:
 
 
 __all__ = [
+    "FINAL_EVIDENCE_INSTRUCTION",
     "FOCUSED_ACTION_THINKING",
     "FocusedActionState",
     "OUTCOME_BLOCKER",

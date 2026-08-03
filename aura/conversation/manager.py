@@ -50,6 +50,7 @@ from aura.conversation.dispatch import (
     WorkerDispatchResult,
 )
 from aura.conversation.focused_action import (
+    FINAL_EVIDENCE_INSTRUCTION,
     FOCUSED_ACTION_THINKING,
     OUTCOME_BLOCKER,
     OUTCOME_PROVIDER_CONTRACT_FAILURE,
@@ -352,18 +353,33 @@ class ConversationManager:
             # user's thinking selection is untouched — it is simply not the
             # mode for this request, and the next round runs on it again.
             focused = state.focused_action
+            read_only = bool(getattr(self._tools, "read_only", False))
             focused.active = should_enter_focused_action(
                 mode=state.mode,
                 route=state.task_route,
                 guard=state.pre_edit_guard,
                 task_completion_context=state.task_completion_context,
                 state=focused,
+                stage_exhausted=state.implementation_stage_exhausted(
+                    read_only=read_only
+                ),
             )
-            if focused.active and self._tools.read_only:
+            if focused.active and read_only:
                 # A read-only registry exposes no mutation tools, so there is
                 # nothing for a focused action request to act on. Do not enter
                 # focused mutation mode under a read-only registry.
                 focused.active = False
+            # The last ordinary request of an implementation turn carries the
+            # ephemeral protocol instruction. It is never the focused request
+            # itself, and it changes nothing about the request's shape: same
+            # thinking level, same full tool catalog, so the model can still
+            # either act now or batch every remaining read in one response.
+            final_evidence_request = (
+                not focused.active
+                and not focused.blocked
+                and not state.task_completion_context
+                and state.awaiting_final_evidence_request(read_only=read_only)
+            )
             if focused.active:
                 tool_defs = self._tools.focused_action_tool_defs()
                 round_thinking: ThinkingMode = FOCUSED_ACTION_THINKING
@@ -432,6 +448,27 @@ class ConversationManager:
             api_view = self._history.build_api_payload(budget.working_set_tokens)
             _log_context_round(budget, api_view.stats, tool_defs)
 
+            # The final ordinary request carries the protocol instruction as a
+            # request-local system message. ``build_api_payload`` already
+            # returned a freshly rendered list built from a deep copy, so this
+            # append cannot reach canonical history — and because it is appended
+            # here rather than recorded, the next round rebuilds its view from a
+            # history that never saw it. It is a system message, not a user
+            # message, so it opens no turn boundary; it is never emitted as a
+            # ContentDelta, so it never reaches the transcript or the chat.
+            request_messages = api_view.messages
+            if final_evidence_request:
+                request_messages = [
+                    *api_view.messages,
+                    {"role": "system", "content": FINAL_EVIDENCE_INSTRUCTION},
+                ]
+                _log.info(
+                    "implementation_final_evidence_request route_lane=%s "
+                    "thinking=%s",
+                    getattr(getattr(state.task_route, "lane", None), "value", ""),
+                    round_thinking,
+                )
+
             # ``require_tool_call`` is only passed when it is actually
             # required, so every other request reaches the backend with the
             # exact call signature it has always had.
@@ -441,7 +478,7 @@ class ConversationManager:
 
             for ev in model_streams.trigger(
                 hook_name,
-                messages=api_view.messages,
+                messages=request_messages,
                 tools=tool_defs,
                 model=model,
                 thinking=round_thinking,

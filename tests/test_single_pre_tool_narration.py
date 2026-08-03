@@ -15,10 +15,16 @@ Two contracts are under test:
    write are rejected, and the first round that produces no new evidence and
    no progress is the focused action transition — the send loop answers the
    next request with the one-required-tool-call action request instead of
-   another reasoning stream.  Unique evidence never stalls, truncated reads
-   and their continuations count as evidence, successful commands are progress
-   (failed ones are not), and rereads justified by a failure, a stale-file
-   notice, or pending edit-recovery state stay allowed.
+   another reasoning stream.  Unique evidence never stalls *the guard*,
+   truncated reads and their continuations count as evidence, successful
+   commands are progress (failed ones are not), and rereads justified by a
+   failure, a stale-file notice, or pending edit-recovery state stay allowed.
+3. **Implementation discovery stage.**  The guard's rule alone cannot end a
+   turn whose every result is technically novel, so an implementation turn also
+   gets exactly two ordinary discovery hops before the first applied write.
+   Whatever the guard concludes, the third request is the focused action
+   request.  See ``tests/test_implementation_discovery_stage.py`` for the full
+   stage contract.
 """
 
 from __future__ import annotations
@@ -592,10 +598,15 @@ class TestStalledDiscoveryFiresTheFocusedRequest:
     transition: the send loop answers the next request with the focused action
     request instead of another reasoning stream."""
 
-    def test_unique_reads_never_fire_the_focused_request(
+    def test_unique_reads_reach_focused_action_after_two_hops(
         self, workspace, isolated_streams
     ) -> None:
-        """Genuinely new evidence, however much is gathered, is not a stall."""
+        """Novel evidence no longer buys unbounded ordinary discovery.
+
+        The guard's own stall rule cannot fire here — every read returns a
+        different file — which is exactly the production loop that ran forever.
+        The discovery stage ends it: two executed hops, then action-only.
+        """
         for name in ("alpha.py", "beta.py", "gamma.py", "delta.py"):
             (workspace / name).write_text(
                 f"# {name}\n\ncontent unique to {name}\n", encoding="utf-8"
@@ -613,10 +624,15 @@ class TestStalledDiscoveryFiresTheFocusedRequest:
 
         run(manager, Recorder())
 
-        assert not [
-            c.get("require_tool_call") for c in backend.calls
-            if c.get("require_tool_call")
-        ], "five unique reads are discovery, never a focused action request"
+        assert not backend.calls[0].get("require_tool_call"), (
+            "the survey request is an ordinary request"
+        )
+        assert not backend.calls[1].get("require_tool_call"), (
+            "the final-evidence request is still an ordinary request"
+        )
+        assert backend.calls[2].get("require_tool_call") is True, (
+            "the third request must be action-only, however novel the evidence"
+        )
 
     def test_equivalent_evidence_rounds_fire_the_focused_action_request(
         self, workspace, isolated_streams
@@ -675,14 +691,24 @@ class TestStalledDiscoveryFiresTheFocusedRequest:
         ]
         backend = ScriptedBackend(rounds)
         isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
+        recorder = Recorder()
         manager = build_manager(workspace, "Update big.md.")
 
-        run(manager, Recorder())
+        run(manager, recorder)
 
-        assert not [
-            c.get("require_tool_call") for c in backend.calls
-            if c.get("require_tool_call")
-        ], "truncated reads and their continuations are new evidence"
+        # The continuation reads are still ordinary discovery: neither is
+        # refused as a repeat, and both actually execute. The guard has no
+        # quarrel with them — a truncated read's continuation is real evidence.
+        rejected = [
+            r for r in recorder.of_type(ToolResult)
+            if DUPLICATE_READ_REASON in str(r.result)
+        ]
+        assert not rejected, "a truncated read's continuation is never a repeat"
+        assert not backend.calls[1].get("require_tool_call"), (
+            "the continuation round is the final ordinary request, not action-only"
+        )
+        # What ends discovery is the stage, not the guard's stall rule.
+        assert backend.calls[2].get("require_tool_call") is True
 
     def test_identical_results_under_changed_arguments_stall(self) -> None:
         """Cosmetic argument changes cannot launder the same evidence as new."""

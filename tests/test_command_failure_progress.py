@@ -434,6 +434,13 @@ def no_focused_request_fired(backend: ScriptedBackend) -> bool:
     return not any(c.get("require_tool_call") for c in backend.calls)
 
 
+def focused_request_indexes(backend: ScriptedBackend) -> list[int]:
+    """Indexes of the requests that demanded exactly one action call."""
+    return [
+        i for i, c in enumerate(backend.calls) if c.get("require_tool_call")
+    ]
+
+
 class TestBoundedProgressionThroughTheRealLoop:
     """One scripted turn, driven through the production manager and registry."""
 
@@ -467,12 +474,14 @@ class TestBoundedProgressionThroughTheRealLoop:
         assert (project / "notes.md").read_text(encoding="utf-8") == (
             "# Notes\n\nfixed body\n"
         )
-        # The failure never pushed the turn into a focused mutation request:
-        # the distinct failure opened recovery, the corrected command closed it
-        # inside the granted round, and the write went through the ordinary
-        # path. The old code laundered the failure as progress and hid the
-        # decision entirely.
-        assert no_focused_request_fired(backend)
+        # Recovery did its job *inside* the two ordinary hops: the distinct
+        # failure opened it, the corrected command ran in the round it granted,
+        # and neither round was blocked or laundered as progress. What recovery
+        # no longer does is mint a third ordinary request — both hops executed,
+        # so the write request is the focused action request. The edit still
+        # lands through it (asserted above), which is the point: the discovery
+        # stage changes which request carries the act, never whether it happens.
+        assert focused_request_indexes(backend) == [2]
 
     def test_the_failures_stay_visible_and_structured(
         self, project, isolated_streams  # noqa: F811
