@@ -19,7 +19,7 @@ from aura.conversation.edit_orchestrator import EditRetryLedger
 from aura.conversation.focused_action import FocusedActionState
 from aura.conversation.pre_edit_loop_guard import PreEditLoopGuard
 from aura.conversation.single_content_gate import SingleContentGate
-from aura.conversation.task_router import TaskLane, TaskRoute
+from aura.conversation.task_router import TaskRoute, route_bears_production_action
 from aura.conversation.tool_limits import ToolLimitState
 from aura.conversation.tools.effects import ToolEffect
 from aura.conversation.validation_ledger import WorkerValidationLedger
@@ -92,15 +92,21 @@ def implementation_staging_applies(
     """Whether the discovery stage governs this turn at this moment.
 
     Pure over state the send loop already owns, and deliberately the same four
-    facts the protocol is specified against: production ``single`` mode, the
-    deterministic ``implementation`` lane, no applied write yet, and a registry
-    that is not read-only.  A read-only registry exposes no mutation tools, so
-    there is no action to serialize and nothing to bound; those turns keep their
-    existing unbounded-discovery behaviour exactly.
+    facts the protocol is specified against: production ``single`` mode, a route
+    that bears a production action, no applied write yet, and a registry that is
+    not read-only.  A read-only registry exposes no mutation tools, so there is
+    no action to serialize and nothing to bound; those turns keep their existing
+    unbounded-discovery behaviour exactly.
+
+    "Bears a production action" is
+    :func:`~aura.conversation.task_router.route_bears_production_action`, the one
+    shared predicate — never a lane comparison written out again here.  A hybrid
+    ``research`` / ``research_then_worker`` turn is a coding turn that needed
+    facts first, and reading the lane alone silently exempted every one of them.
     """
     if mode != "single" or read_only:
         return False
-    if route is None or route.lane != TaskLane.implementation:
+    if not route_bears_production_action(route):
         return False
     return guard is not None and not guard.write_applied
 

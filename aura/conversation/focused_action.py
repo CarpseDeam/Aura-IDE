@@ -12,7 +12,10 @@ Every input is state the loop already keeps:
 
 * the mode is production ``single``;
 * the deterministic :class:`~aura.conversation.task_router.TaskRoute` for this
-  turn is the ``implementation`` lane;
+  turn bears a production action —
+  :func:`~aura.conversation.task_router.route_bears_production_action`, which is
+  the ``implementation`` lane *or* a hybrid ``research`` /
+  ``research_then_worker`` route, the same predicate the discovery stage uses;
 * discovery is over — either :attr:`PreEditLoopGuard.focused` is true (the guard
   saw a round gather nothing) *or* the turn has spent both ordinary discovery
   hops of :class:`~aura.conversation.manager_send_state.ImplementationStage`;
@@ -40,7 +43,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from aura.conversation.pre_edit_loop_guard import PreEditLoopGuard
-from aura.conversation.task_router import TaskLane, TaskRoute
+from aura.conversation.task_router import TaskRoute, route_bears_production_action
 
 #: The one control tool the focused action request adds to the mutation set.
 REPORT_BLOCKER: str = "report_blocker"
@@ -67,6 +70,20 @@ FOCUSED_ACTION_THINKING: str = "off"
 OUTCOME_WRITE: str = "write"
 OUTCOME_BLOCKER: str = "blocker"
 OUTCOME_PROVIDER_CONTRACT_FAILURE: str = "provider_contract_failure"
+
+#: The focused request's one act ran and left the workspace unchanged — the
+#: write failed, or the user rejected it, or ``report_blocker`` was called
+#: invalidly — and ordinary discovery was already spent before it ran.
+OUTCOME_ACTION_FAILED: str = "action_failed"
+
+ACTION_FAILED_MESSAGE = (
+    "The edit did not land. This turn had already spent both of its ordinary "
+    "discovery rounds, so its one action request was the last thing it could "
+    "do, and that action failed or was rejected — the tool result above is the "
+    "exact reason. Nothing was written and nothing was retried. The "
+    "conversation and its gathered evidence are intact; send again to try "
+    "another approach."
+)
 
 PROVIDER_CONTRACT_FAILURE_MESSAGE = (
     "Provider contract failure: this request required exactly one tool call — "
@@ -142,7 +159,7 @@ def should_enter_focused_action(
     """
     if mode != "single":
         return False
-    if route is None or route.lane != TaskLane.implementation:
+    if not route_bears_production_action(route):
         return False
     if guard is None or guard.write_applied:
         return False
@@ -232,6 +249,28 @@ def focused_contract_ok(
     return name in set(exposed_tools)
 
 
+def action_failed_message() -> tuple[str, dict[str, Any]]:
+    """Return the honest ending for a focused act that changed nothing.
+
+    The alternative this replaces was not a recovery path but an escape: with
+    the discovery stage already ``EXHAUSTED``, a failed or rejected focused
+    write fell back into the *ordinary* loop, where the stage can no longer
+    advance and ``guard.focused`` needs a fresh stalled round to fire again.
+    The turn therefore resumed unrestricted pre-write discovery with no bound
+    left on it — the exact runaway the stage exists to close, reached through
+    the one path that had already used the stage up.
+
+    Ending here is narrow by construction: it requires
+    :meth:`~aura.conversation.manager_send_state._SendState.implementation_stage_exhausted`,
+    which is false the moment a write applies.  A focused write that *landed*
+    keeps its existing validation and final-response path untouched, and a
+    focused turn entered on the guard's stall rule with an ordinary hop still
+    unspent keeps its existing write-recovery path too.
+    """
+    content = ACTION_FAILED_MESSAGE
+    return content, {"role": "assistant", "content": content}
+
+
 def provider_contract_failure_message() -> tuple[str, dict[str, Any]]:
     """Return the honest ending for a provider that ignored the tool contract.
 
@@ -245,14 +284,17 @@ def provider_contract_failure_message() -> tuple[str, dict[str, Any]]:
 
 
 __all__ = [
+    "ACTION_FAILED_MESSAGE",
     "FINAL_EVIDENCE_INSTRUCTION",
     "FOCUSED_ACTION_THINKING",
     "FocusedActionState",
+    "OUTCOME_ACTION_FAILED",
     "OUTCOME_BLOCKER",
     "OUTCOME_PROVIDER_CONTRACT_FAILURE",
     "OUTCOME_WRITE",
     "PROVIDER_CONTRACT_FAILURE_MESSAGE",
     "REPORT_BLOCKER",
+    "action_failed_message",
     "focused_contract_ok",
     "provider_contract_failure_message",
     "should_enter_focused_action",

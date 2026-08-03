@@ -52,10 +52,12 @@ from aura.conversation.dispatch import (
 from aura.conversation.focused_action import (
     FINAL_EVIDENCE_INSTRUCTION,
     FOCUSED_ACTION_THINKING,
+    OUTCOME_ACTION_FAILED,
     OUTCOME_BLOCKER,
     OUTCOME_PROVIDER_CONTRACT_FAILURE,
     OUTCOME_WRITE,
     REPORT_BLOCKER,
+    action_failed_message,
     focused_contract_ok,
     provider_contract_failure_message,
     should_enter_focused_action,
@@ -68,7 +70,7 @@ from aura.conversation.planner_dispatch_gate import maybe_force_worker_dispatch
 from aura.conversation.planner_refresh import PlannerRefreshState
 from aura.conversation.planner_stream_hygiene import PlannerStreamHygiene
 from aura.conversation.stream_event_router import StreamEventRouter
-from aura.conversation.task_router import TaskRoute
+from aura.conversation.task_router import TaskRoute, classify_user_request
 from aura.conversation.tool_runner import ToolRunner
 from aura.conversation.tools._types import (
     ApprovalCallback,
@@ -310,9 +312,24 @@ class ConversationManager:
         unreachable compatibility scaffolding.
         """
         mode = getattr(self._tools, "mode", "single")
+        latest_user_text = _latest_user_text(self._history)
+        if task_route is None and mode == "single":
+            # A production send with no route is not an unbounded turn. The
+            # discovery ceiling reads the route, so a caller that omits one
+            # would silently switch the ceiling off for the whole turn — the
+            # bound must not depend on a caller remembering to pass an argument.
+            # Resolving it here is the same deterministic classification the
+            # send layer already performs, over the same real user message, so
+            # a route that *was* passed is still never recomputed.
+            task_route = classify_user_request(latest_user_text)
+            _log.info(
+                "task_route_resolved_defensively lane=%s action=%s",
+                task_route.lane.value,
+                task_route.action,
+            )
         state = _SendState(
             mode=mode,
-            research_policy=decide_research_policy(_latest_user_text(self._history)),
+            research_policy=decide_research_policy(latest_user_text),
             task_route=task_route,
             tool_effect=self._tools.tool_effect,
             read_only=bool(getattr(self._tools, "read_only", False)),
@@ -682,6 +699,38 @@ class ConversationManager:
                         self._last_turn_blocked_reason = _blocker_reason_from_call(
                             full_message
                         )
+                if (
+                    not focused.blocked
+                    and not cancel_event.is_set()
+                    and state.implementation_stage_exhausted()
+                ):
+                    # The one act ran and changed nothing — a failed write, a
+                    # rejected write, or an invalid blocker — and both ordinary
+                    # discovery hops were already spent before it ran. Falling
+                    # through here would hand the turn back to the ordinary
+                    # loop with no bound left on it: the stage cannot advance
+                    # past EXHAUSTED and the focused request is spent, so the
+                    # turn would resume unrestricted pre-write discovery. End
+                    # truthfully instead. The guard's own write_applied is the
+                    # gate — a write that landed makes this predicate false, so
+                    # the successful path is untouched.
+                    focused.outcome = OUTCOME_ACTION_FAILED
+                    _log.info(
+                        "focused_action_outcome outcome=%s selected_action=%s "
+                        "write_applied=False selected_thinking=%s "
+                        "focused_action_thinking=%s",
+                        focused.outcome,
+                        focused.selected_action or "<none>",
+                        focused.selected_thinking,
+                        FOCUSED_ACTION_THINKING,
+                    )
+                    content, failure_message = action_failed_message()
+                    self._history.append_assistant(failure_message)
+                    on_event(ContentDelta(text=content))
+                    on_event(
+                        Done(finish_reason="stop", full_message=failure_message)
+                    )
+                    return
                 _log.info(
                     "focused_action_outcome outcome=%s selected_action=%s "
                     "write_applied=%s selected_thinking=%s "

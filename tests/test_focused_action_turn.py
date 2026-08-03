@@ -37,6 +37,7 @@ import pytest
 
 from aura.client.events import ApiError, ContentDelta, Done, ToolResult
 from aura.conversation.focused_action import (
+    ACTION_FAILED_MESSAGE,
     PROVIDER_CONTRACT_FAILURE_MESSAGE,
     FocusedActionState,
     focused_contract_ok,
@@ -298,13 +299,21 @@ def test_large_write_arguments_are_not_truncated(tmp_path):
     assert (tmp_path / "big.py").read_text(encoding="utf-8") == body
 
 
-# ── 12: a rejected write returns to the existing recovery path ──────────────
+# ── 12: a rejected write ends the turn truthfully ───────────────────────────
 
 
-def test_rejected_write_uses_existing_recovery_and_does_not_re_enter(tmp_path):
+def test_rejected_write_ends_truthfully_and_does_not_re_enter(tmp_path):
+    """A rejected focused write does not re-enter, and does not reopen either.
+
+    The focused request is spent and both ordinary discovery hops were spent
+    before it ran, so there is no bounded state left to return to: handing the
+    turn back to the ordinary loop would resume unrestricted pre-write
+    discovery. It ends as failed instead, with the rejection still recorded as
+    an ordinary tool result.
+    """
     harness = make_harness(
         tmp_path,
-        [*discovery_round(), WRITE_ROUND, assistant(content="Blocked by rejection.")],
+        [*discovery_round(), WRITE_ROUND],
     )
     harness.manager.send(
         on_event=harness.events.append,
@@ -315,17 +324,12 @@ def test_rejected_write_uses_existing_recovery_and_does_not_re_enter(tmp_path):
         hook_name=HOOK,
         task_route=IMPLEMENTATION_ROUTE,
     )
-    # The file is untouched, the rejection is in history as an ordinary tool
-    # result, and the turn goes back to normal reasoning rather than firing a
-    # second thinking-off request at the same decision.
     assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 1\n"
     assert [r.require_tool_call for r in harness.stream.requests] == [
         False,
         False,
         True,
-        False,
-    ]
-    assert harness.stream.requests[3].thinking == "high"
+    ], "no fourth request: the turn ends rather than reopening discovery"
     assert harness.approvals == ["alpha.py"]
     last_tool_result = json.loads(
         [m for m in harness.manager.history.messages if m.get("role") == "tool"][-1][
@@ -334,6 +338,9 @@ def test_rejected_write_uses_existing_recovery_and_does_not_re_enter(tmp_path):
     )
     assert last_tool_result["ok"] is False
     assert last_tool_result.get("applied") is not True
+    assert ACTION_FAILED_MESSAGE in "".join(
+        e.text for e in harness.events if isinstance(e, ContentDelta)
+    )
 
 
 # ── 13: report_blocker mutates nothing and yields one factual final ─────────
@@ -701,7 +708,10 @@ def test_read_only_mode_exposes_no_focused_mutation_request(tmp_path):
 @pytest.mark.parametrize(
     "route",
     [
-        None,
+        # ``None`` is deliberately not here: a production send with no route now
+        # resolves one from the real user message, and this harness's message
+        # ("Fix the loader in alpha.py") is a coding request. The predicate is
+        # still pure over a ``None`` route — see ``test_activation_predicate``.
         CHAT_ROUTE,
         TaskRoute(TaskLane.research, "web_research", 0.9, "research"),
         TaskRoute(TaskLane.validation, "validation", 0.9, "validation"),

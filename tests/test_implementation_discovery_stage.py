@@ -476,14 +476,29 @@ class TestUngovernedTurns:
 
         assert not backend.focused_calls()
 
-    def test_absent_route_is_untouched(self, workspace, isolated_streams) -> None:
+    def test_absent_route_on_a_non_coding_request_is_untouched(
+        self, workspace, isolated_streams
+    ) -> None:
+        """An omitted route is resolved, not ignored — and this one is chat.
+
+        A caller that passes no route no longer switches the ceiling off; the
+        send resolves one from the real user message. Here that message asks a
+        question, so the resolved route is the chat lane and the turn keeps its
+        existing unbounded discovery. The coding-request half of the same rule
+        is ``test_resolved_route_reaches_focused_action`` in
+        ``test_hybrid_route_discovery_ceiling.py``.
+        """
         backend = ScriptedBackend([
             read_round("r0", 0), read_round("r1", 1),
             read_round("r2", 2), read_round("r3", 3),
         ])
         isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
 
-        run(build_manager(workspace), Recorder(), route=None)
+        run(
+            build_manager(workspace, "What does this project do?"),
+            Recorder(),
+            route=None,
+        )
 
         assert not backend.focused_calls()
 

@@ -33,6 +33,33 @@ class TaskRoute:
     reason: str
 
 
+def route_bears_production_action(route: TaskRoute | None) -> bool:
+    """Whether this route's turn is expected to end in an edit.
+
+    The single authority on "does this turn owe the workspace an act", shared by
+    :func:`~aura.conversation.manager_send_state.implementation_staging_applies`
+    and :func:`~aura.conversation.focused_action.should_enter_focused_action` so
+    the two can never disagree about which turns are bounded.
+
+    Two lanes qualify:
+
+    * :attr:`TaskLane.implementation` — the plain coding request.
+    * :attr:`TaskLane.research` with action :data:`RESEARCH_THEN_WORKER` — a
+      coding request that also needs current external facts.  It is routed to
+      the research lane because the *research* has to happen first, not because
+      the turn stops there; it still ends in an edit.  Reading only the lane
+      here left every such turn unbounded, which is the whole hybrid loop.
+
+    ``TaskLane.research`` with action ``web_research`` (``ANSWER_ONLY``) does not
+    qualify: that turn owes prose, and there is no act to serialize.
+    """
+    if route is None:
+        return False
+    if route.lane == TaskLane.implementation:
+        return True
+    return route.lane == TaskLane.research and route.action == RESEARCH_THEN_WORKER
+
+
 def classify_user_request(text: str) -> TaskRoute:
     """Classify a user request into the lane that should handle it."""
     raw = str(text or "").strip()
@@ -206,4 +233,9 @@ def _implementation_action(normalized: str) -> str:
     return "implementation"
 
 
-__all__ = ["TaskLane", "TaskRoute", "classify_user_request"]
+__all__ = [
+    "TaskLane",
+    "TaskRoute",
+    "classify_user_request",
+    "route_bears_production_action",
+]
