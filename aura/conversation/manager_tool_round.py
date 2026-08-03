@@ -17,6 +17,7 @@ from aura.conversation.dispatch_tool_round import (
     DispatchToolRoundContext,
     handle_dispatch_to_worker_round,
 )
+from aura.conversation.focused_action import REPORT_ALREADY_SATISFIED
 from aura.conversation.history import History
 from aura.conversation.manager_recovery import (
     update_worker_recovery_state,
@@ -350,6 +351,7 @@ class ToolRoundOutcome:
     action: str
     enter_silent_preflight: bool = False
     blocker_succeeded: bool = False
+    already_satisfied_succeeded: bool = False
 
 
 class ToolRoundRunner:
@@ -631,6 +633,27 @@ class ToolRoundRunner:
                 blocker_succeeded = True
             break
 
+        # Whether a ``report_already_satisfied`` call in this round actually
+        # succeeded with the structured payload. Completion as already-satisfied
+        # is terminal only on this fact — never on the tool name alone, never
+        # on the absence of a write, and never on assistant prose.
+        already_satisfied_succeeded = False
+        for task in tasks:
+            if task["name"] != REPORT_ALREADY_SATISFIED:
+                continue
+            res = results_by_id.get(task["id"])
+            if not res:
+                continue
+            payload = parse_tool_payload(str(res.get("result_payload", "")))
+            if (
+                bool(payload.get("ok"))
+                and bool(payload.get("already_satisfied_reported"))
+                and payload.get("mutation") is False
+                and payload.get("applied") is False
+            ):
+                already_satisfied_succeeded = True
+            break
+
         completed_dispatch_for_final = False
         completed_tool_result_for_final = False
         planner_stale_read_files: list[str] = []
@@ -742,6 +765,7 @@ class ToolRoundRunner:
             action="next_round",
             enter_silent_preflight=enter_silent_preflight,
             blocker_succeeded=blocker_succeeded,
+            already_satisfied_succeeded=already_satisfied_succeeded,
         )
 
 

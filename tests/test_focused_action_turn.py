@@ -238,9 +238,12 @@ def test_selected_thinking_mode_is_restored_after_the_action(focused_write):
     assert focused_write.stream.requests[3].thinking == "high"
 
 
-def test_only_mutation_tools_and_report_blocker_are_exposed(focused_write):
+def test_only_mutation_tools_and_the_control_exits_are_exposed(focused_write):
     exposed = set(focused_write.stream.requests[2].tool_names)
-    assert exposed == set(MUTATION_TOOL_NAMES) | {"report_blocker"}
+    assert exposed == set(MUTATION_TOOL_NAMES) | {
+        "report_blocker",
+        "report_already_satisfied",
+    }
     forbidden = {
         "read_file",
         "read_file_range",
@@ -454,6 +457,85 @@ def test_blocker_final_uses_no_tool_catalog(tmp_path):
     harness.run()
 
     assert harness.stream.requests[-1].tool_names == ()
+
+
+# ── 13b: report_already_satisfied records explicit evidence, no mutation ────
+
+
+def test_already_satisfied_ends_the_turn_without_a_write(tmp_path):
+    """The focused action request exposes the already-satisfied exit; a
+    structured report ends the attempt with no mutation and exactly one
+    factual final."""
+    harness = make_harness(
+        tmp_path,
+        [
+            *discovery_round(),
+            assistant(
+                tool_call(
+                    "s1",
+                    "report_already_satisfied",
+                    {"evidence": "alpha.py already sets alpha = 2"},
+                )
+            ),
+            assistant(content="alpha.py already sets alpha = 2."),
+        ],
+    )
+    before = sorted(p.name for p in tmp_path.iterdir())
+    harness.run()
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == before
+    assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 1\n"
+    assert harness.approvals == []
+    # Exactly four requests: evidence, stall, the action, and one factual final.
+    assert len(harness.stream.requests) == 4
+    # The focused request offered the already-satisfied control tool.
+    assert "report_already_satisfied" in harness.stream.requests[2].tool_names
+
+    assert harness.manager.last_turn_already_satisfied is True
+    assert harness.manager.last_turn_bears_production_action is True
+
+    results = [
+        json.loads(m["content"])
+        for m in harness.manager.history.messages
+        if m.get("role") == "tool" and "already_satisfied_reported" in str(m.get("content"))
+    ]
+    assert len(results) == 1
+    payload = results[0]
+    assert payload["ok"] is True
+    assert payload["mutation"] is False
+    assert payload["applied"] is False
+    assert payload["evidence"] == "alpha.py already sets alpha = 2"
+
+
+def test_already_satisfied_final_uses_no_tool_catalog(tmp_path):
+    harness = make_harness(
+        tmp_path,
+        [
+            *discovery_round(),
+            assistant(
+                tool_call("s1", "report_already_satisfied", {"evidence": "already set"})
+            ),
+            assistant(content="Already present; nothing to change."),
+        ],
+    )
+    harness.run()
+    assert harness.stream.requests[-1].tool_names == ()
+
+
+def test_schema_invalid_already_satisfied_report_does_not_complete(tmp_path):
+    """A report_already_satisfied call missing its required evidence argument is
+    rejected by preflight like any invalid act: it does not complete the turn
+    as already-satisfied."""
+    harness = make_harness(
+        tmp_path,
+        [
+            *discovery_round(),
+            assistant(tool_call("s1", "report_already_satisfied", {})),
+            assistant(content="The report was rejected; I will re-check."),
+        ],
+    )
+    harness.run()
+    assert harness.manager.last_turn_already_satisfied is False
     assert [r.require_tool_call for r in harness.stream.requests] == [
         False,
         False,

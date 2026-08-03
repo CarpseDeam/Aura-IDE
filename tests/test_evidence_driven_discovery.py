@@ -802,6 +802,7 @@ class TestSurvivingInvariants:
             "spent",
             "active",
             "blocked",
+            "already_satisfied",
             "selected_thinking",
             "exposed_tools",
             "selected_action",

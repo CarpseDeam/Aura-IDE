@@ -180,8 +180,16 @@ class ProductionExecutionSession(QObject):
         self,
         blocked_reason: str = "",
         provider_contract_failure: bool = False,
+        already_satisfied: bool = False,
+        bears_production_action: bool = False,
     ) -> ProductionReceipt | None:
-        """Build exactly one completion receipt and emit the finish lifecycle."""
+        """Build exactly one completion receipt and emit the finish lifecycle.
+
+        ``already_satisfied`` and ``bears_production_action`` are structured
+        receipt inputs that the completion contract reads (see
+        :mod:`aura.bridge.production_receipt`): a production-action turn may
+        only be reported completed when one truthful terminal outcome occurred.
+        """
         if not self._run_id or self._finished:
             return None
         self._finished = True
@@ -194,6 +202,8 @@ class ProductionExecutionSession(QObject):
             self.evidence(
                 blocked_reason=blocked_reason,
                 provider_contract_failure=provider_contract_failure,
+                already_satisfied=already_satisfied,
+                bears_production_action=bears_production_action,
             )
         )
         self._result_metadata[self._run_id] = dict(receipt.metadata)
@@ -216,6 +226,8 @@ class ProductionExecutionSession(QObject):
         self,
         blocked_reason: str = "",
         provider_contract_failure: bool = False,
+        already_satisfied: bool = False,
+        bears_production_action: bool = False,
     ) -> ProductionRunEvidence:
         """Return the structured execution evidence for the active run."""
         relay = self._relay
@@ -233,6 +245,8 @@ class ProductionExecutionSession(QObject):
             cancelled=self._cancelled,
             blocked_reason=blocked_reason,
             provider_contract_failure=provider_contract_failure,
+            bears_production_action=bears_production_action,
+            already_satisfied=already_satisfied,
         )
 
     def result_metadata(self, run_id: str) -> dict[str, Any]:

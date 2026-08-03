@@ -1992,3 +1992,51 @@ REPORT_BLOCKER_TOOL_DEF: dict[str, Any] = {
         },
     },
 }
+
+
+#: The focused action turn's second exit hatch: the requested state already
+#: exists in the repository, so no change is required.
+#:
+#: Like ``report_blocker`` it is deliberately absent from every ordinary
+#: catalog: the model may only reach it when the send loop has already decided
+#: that discovery is finished and this turn owes exactly one action.  It
+#: mutates nothing — it serializes "the change is already present, and here is
+#: the repository evidence" into structured data so the turn can complete
+#: truthfully without manufacturing an edit.  The structured result is what the
+#: completion receipt reads; plain assistant prose is never proof.
+REPORT_ALREADY_SATISFIED_TOOL_DEF: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "report_already_satisfied",
+        "description": (
+            "Report that the requested state already exists in the repository, "
+            "and end the attempt. Use this ONLY when authoritative repository "
+            "evidence you inspected this turn shows the change is already "
+            "present and no edit is required — not to avoid a write you are "
+            "able to make, and not because you simply chose not to act. "
+            "Performs no mutation."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "evidence": {
+                    "type": "string",
+                    "description": (
+                        "One concrete sentence naming the authoritative "
+                        "repository evidence you inspected that shows the "
+                        "requested state already exists (file, symbol, search "
+                        "match, or command result)."
+                    ),
+                },
+                "target_files": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Optional: the files whose requested state is already present."
+                    ),
+                },
+            },
+            "required": ["evidence"],
+        },
+    },
+}

@@ -52,10 +52,12 @@ from aura.conversation.dispatch import (
 from aura.conversation.focused_action import (
     FOCUSED_ACTION_THINKING,
     OUTCOME_ACTION_FAILED,
+    OUTCOME_ALREADY_SATISFIED,
     OUTCOME_BLOCKER,
     OUTCOME_NOT_APPLIED,
     OUTCOME_PROVIDER_CONTRACT_FAILURE,
     OUTCOME_WRITE,
+    REPORT_ALREADY_SATISFIED,
     REPORT_BLOCKER,
     action_failed_message,
     focused_contract_ok,
@@ -70,7 +72,11 @@ from aura.conversation.planner_dispatch_gate import maybe_force_worker_dispatch
 from aura.conversation.planner_refresh import PlannerRefreshState
 from aura.conversation.planner_stream_hygiene import PlannerStreamHygiene
 from aura.conversation.stream_event_router import StreamEventRouter
-from aura.conversation.task_router import TaskRoute, classify_user_request
+from aura.conversation.task_router import (
+    TaskRoute,
+    classify_user_request,
+    route_bears_production_action,
+)
 from aura.conversation.tool_runner import ToolRunner
 from aura.conversation.tools._types import (
     ApprovalCallback,
@@ -124,6 +130,71 @@ def _blocker_reason_from_call(full_message: dict[str, Any]) -> str:
         reason = args.get("blocker")
         return str(reason).strip() if isinstance(reason, str) else ""
     return ""
+
+
+#: Structured payload paired to a tool call that was cancelled before Aura
+#: received its authoritative result. Deliberately fail-closed: never
+#: ``applied``, never successful, and it explicitly refuses to claim the tool
+#: made no workspace changes — the operation's effects are simply unknown.
+_CANCELLATION_TOOL_RESULT_TEMPLATE: dict[str, Any] = {
+    "ok": False,
+    "cancelled": True,
+    "recoverable": False,
+    "failure_class": "cancelled",
+    "execution_status": "interrupted_before_authoritative_result",
+    "message": (
+        "Cancelled before Aura received an authoritative result. Do not "
+        "infer that the operation completed or that a mutation applied."
+    ),
+}
+
+
+def _synthetic_cancellation_result(tool_name: str) -> str:
+    """Return the JSON tool-result payload for one cancelled tool call.
+
+    The structured payload exists only to restore the transcript's tool-call
+    pairing.  It must never be read as a successful execution, a validation
+    pass, or an applied mutation: ``ok`` is false, ``applied`` is absent, and
+    the message states that nothing about the operation's effect may be
+    inferred.
+    """
+    payload = dict(_CANCELLATION_TOOL_RESULT_TEMPLATE)
+    payload["tool"] = tool_name or "<unknown>"
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _assistant_tool_call_name(call: Any) -> str:
+    """Return the tool name for one assistant tool-call entry, or ``""``.
+
+    Repair/reporting only: a malformed entry yields the empty string so the
+    caller can decide whether safe pairing is even possible.
+    """
+    if not isinstance(call, dict):
+        return ""
+    function = call.get("function")
+    if not isinstance(function, dict):
+        return ""
+    name = function.get("name")
+    return name if isinstance(name, str) else ""
+
+
+def _repairable_tool_call_block(tool_calls: Any) -> bool:
+    """Return whether every entry in a tool-call list can receive a paired result.
+
+    A block is repairable when each entry is a dict carrying a usable ``id`` —
+    the only key a synthetic tool result needs to pair back.  A non-dict entry,
+    a missing id, or an empty id means no synthetic result could safely pair,
+    so the newest block is removed instead of fabricating unpaired results.
+    """
+    if not isinstance(tool_calls, list):
+        return False
+    for call in tool_calls:
+        if not isinstance(call, dict):
+            return False
+        call_id = call.get("id")
+        if not isinstance(call_id, str) or not call_id:
+            return False
+    return True
 
 
 def _log_context_round(
@@ -250,6 +321,15 @@ class ConversationManager:
         #: failure (the required-tool call was not honoured). Completion
         #: receipts report it as its own terminal status. Reset per send.
         self._last_turn_provider_contract_failure: bool = False
+        #: Whether the most recent turn ended in a successful structured
+        #: ``report_already_satisfied`` outcome — the requested state already
+        #: exists. Completion receipts read this as explicit evidence, never
+        #: inferred from the absence of a write. Reset per send.
+        self._last_turn_already_satisfied: bool = False
+        #: Whether the most recent turn was routed for a production action.
+        #: Read once from the turn's authoritative route at the start of send;
+        #: completion receipts hold such turns to the truthful-outcome contract.
+        self._last_turn_bears_production_action: bool = False
 
     @property
     def history(self) -> History:
@@ -264,6 +344,16 @@ class ConversationManager:
     def last_turn_provider_contract_failure(self) -> bool:
         """Whether the last turn ended in a focused provider-contract failure."""
         return self._last_turn_provider_contract_failure
+
+    @property
+    def last_turn_already_satisfied(self) -> bool:
+        """Whether the last turn ended in structured already-satisfied evidence."""
+        return self._last_turn_already_satisfied
+
+    @property
+    def last_turn_bears_production_action(self) -> bool:
+        """Whether the last turn was routed for a production action."""
+        return self._last_turn_bears_production_action
 
     @property
     def tools(self) -> ToolRegistry:
@@ -370,6 +460,17 @@ class ConversationManager:
         state.focused_action.selected_thinking = str(thinking)
         self._last_turn_blocked_reason = ""
         self._last_turn_provider_contract_failure = False
+        self._last_turn_already_satisfied = False
+        # The authoritative route (the caller's, or the defensive resolution
+        # above) decides whether this turn bore a production action. A
+        # read-only registry exposes no mutation tools, so such turns never owe
+        # an act and keep their ordinary completion behaviour. Read once and
+        # carried to the completion receipt, which holds production-action
+        # turns to the truthful-outcome contract.
+        self._last_turn_bears_production_action = (
+            not state.read_only
+            and route_bears_production_action(state.task_route)
+        )
         if state.mode == "worker":
             state.loaded_target_files = list(loaded_target_files or [])
             if worker_dispatch_request is not None:
@@ -434,11 +535,12 @@ class ConversationManager:
                     FOCUSED_ACTION_THINKING,
                     ",".join(focused.exposed_tools),
                 )
-            elif focused.blocked:
-                # A successful blocker has already ended the implementation
-                # attempt: the turn owes exactly one factual final response and
-                # nothing else, so the request that produces it exposes no tool
-                # catalog. The final cannot mutate, search, or re-open planning.
+            elif focused.blocked or focused.already_satisfied:
+                # A successful blocker or already-satisfied report has already
+                # ended the implementation attempt: the turn owes exactly one
+                # factual final response and nothing else, so the request that
+                # produces it exposes no tool catalog. The final cannot mutate,
+                # search, or re-open planning.
                 tool_defs = []
                 round_thinking = thinking
             else:
@@ -628,11 +730,14 @@ class ConversationManager:
                         Done(finish_reason="stop", full_message=failure_message)
                     )
                     return
-                focused.outcome = (
-                    OUTCOME_BLOCKER
-                    if REPORT_BLOCKER in selected
-                    else OUTCOME_WRITE
-                )
+                if REPORT_ALREADY_SATISFIED in selected:
+                    focused.outcome = OUTCOME_ALREADY_SATISFIED
+                else:
+                    focused.outcome = (
+                        OUTCOME_BLOCKER
+                        if REPORT_BLOCKER in selected
+                        else OUTCOME_WRITE
+                    )
                 # The response is valid: the provider's own Done is forwarded
                 # now, exactly once, before the single tool runs.
                 router.release_deferred_done()
@@ -720,20 +825,36 @@ class ConversationManager:
                         self._last_turn_blocked_reason = _blocker_reason_from_call(
                             full_message
                         )
+                if focused.outcome == OUTCOME_ALREADY_SATISFIED:
+                    # Already-satisfied completion is terminal only when the
+                    # matching tool result actually succeeded and its structured
+                    # payload recorded it. An invalid call is an ordinary failed
+                    # tool result and must not end the attempt as satisfied —
+                    # it returns to the ordinary loop like any other failed act.
+                    if tool_round.already_satisfied_succeeded:
+                        # The requested state already exists: no mutation
+                        # happened and none is required. The attempt ends here
+                        # and the turn owes exactly one factual final response,
+                        # against a request that exposes no tool catalog.
+                        focused.already_satisfied = True
+                        state.task_completion_context = True
+                        self._last_turn_already_satisfied = True
                 if (
                     not focused.blocked
+                    and not focused.already_satisfied
                     and not write_applied
                     and not cancel_event.is_set()
                     and state.implementation_action_pending()
                 ):
                     # The act ran and changed nothing — a failed write, a stale
-                    # patch, a rejected approval, an invalid blocker. That is
-                    # evidence, not a completed task: the tool result is in
-                    # history and says what to fix. The request is spent for
-                    # *this* decision only, and the turn goes back to the
-                    # ordinary loop to inspect, correct, and act again. Nothing
-                    # here counts attempts; the evidence judgement below is the
-                    # only thing that can end the turn.
+                    # patch, a rejected approval, an invalid blocker, or an
+                    # invalid already-satisfied report. That is evidence, not a
+                    # completed task: the tool result is in history and says
+                    # what to fix. The request is spent for *this* decision
+                    # only, and the turn goes back to the ordinary loop to
+                    # inspect, correct, and act again. Nothing here counts
+                    # attempts; the evidence judgement below is the only thing
+                    # that can end the turn.
                     focused.outcome = OUTCOME_NOT_APPLIED
                 _log.info(
                     "focused_action_outcome outcome=%s selected_action=%s "
@@ -759,6 +880,7 @@ class ConversationManager:
                 focused.spent
                 and guard is not None
                 and not focused.blocked
+                and not focused.already_satisfied
                 and not write_applied
                 and not cancel_event.is_set()
                 and tool_round.action != "return"
@@ -810,49 +932,84 @@ class ConversationManager:
         on_event(Done(finish_reason="stop", full_message=full_message))
 
     def _cleanup_cancelled(self, on_event: EventCallback) -> None:
-        """Call this when a turn is cancelled while waiting for model or tool.
-        Ensure history doesn't contain an assistant message with pending tool calls
-        that haven't been followed by tool result messages.
+        """Repair the current real-user turn after a cancellation.
+
+        Cancellation can interrupt an assistant tool-call block mid-batch:
+        history then ends at an assistant message whose calls have no results.
+        The old behaviour rewound the whole turn back to the preceding user
+        message, silently erasing completed reads, applied writes, terminal
+        commands, and validation evidence from the same turn even though the
+        workspace was already modified.
+
+        This repairs instead of rewinding.  Every completed assistant/tool-
+        result block is preserved byte-for-byte; only the newest incomplete
+        assistant tool-call block is touched, and only by appending one
+        structured synthetic cancellation result for each call whose
+        authoritative result never arrived, in call order, so the provider's
+        tool-call pairing stays valid.  Synthetic results are fail-closed —
+        never ``applied``, never successful — and exist only to restore that
+        pairing.  Repair is idempotent: a second call finds every call already
+        paired and changes nothing.
+
+        A newest block too malformed to pair safely removes only that newest
+        malformed assistant/result block; the real-user turn is never rewound.
         """
         if not self._history.messages:
             on_event(ApiError(status_code=None, message="Cancelled."))
             return
 
-        # We look for the MOST RECENT assistant message.
-        # If it has tool calls that are missing results, we MUST clean it up.
-        for i in range(len(self._history.messages) - 1, -1, -1):
-            msg = self._history.messages[i]
-            if msg.get("role") == "user":
-                # If we hit a user message first, it means the turn was cancelled
-                # before the assistant even started responding.
-                break
+        messages = self._history.messages
+        user_idx = self._history.latest_real_user_index()
+        start = (user_idx + 1) if user_idx is not None else 0
 
-            if msg.get("role") == "assistant":
-                tool_calls = msg.get("tool_calls")
-                if tool_calls:
-                    call_ids = {tc["id"] for tc in tool_calls}
-                    # Look at messages following this one.
-                    for j in range(i + 1, len(self._history.messages)):
-                        m = self._history.messages[j]
-                        if m.get("role") == "tool":
-                            call_ids.discard(m.get("tool_call_id"))
+        for i in range(len(messages) - 1, start - 1, -1):
+            msg = messages[i]
+            if msg.get("role") != "assistant":
+                continue
 
-                    if call_ids:
-                        # Incomplete! Truncate history back to BEFORE this assistant message.
-                        # We find the user message that preceded it.
-                        user_idx = -1
-                        for k in range(i - 1, -1, -1):
-                            if self._history.messages[k].get("role") == "user":
-                                user_idx = k
-                                break
-                        if user_idx != -1:
-                            self._history.truncate_after(user_idx + 1)
-                        else:
-                            self._history.truncate_after(i)
-                elif not msg.get("content") and not msg.get("reasoning_content"):
-                    # Empty assistant message — strip it.
+            tool_calls = msg.get("tool_calls")
+            if not tool_calls:
+                # Newest assistant block of the turn, without tool calls. A
+                # block that carried only reasoning or prose is preserved —
+                # partial-stream output survives cancellation — while an empty
+                # block (no content, reasoning, or calls) is stripped exactly
+                # as before.
+                if not msg.get("content") and not msg.get("reasoning_content"):
                     self._history.truncate_after(i)
                 break
+
+            if not _repairable_tool_call_block(tool_calls):
+                # A malformed block no synthetic result could pair to. Remove
+                # only this newest malformed assistant/result block; never the
+                # whole real-user turn.
+                self._history.truncate_after(i)
+                break
+
+            # Authoritative results that already arrived before the cancel are
+            # kept verbatim. Collect them so an existing result is never
+            # replaced by a synthetic one.
+            present: set[str] = set()
+            for j in range(i + 1, len(messages)):
+                m = messages[j]
+                if m.get("role") == "tool":
+                    present.add(m.get("tool_call_id"))
+
+            missing = [
+                call for call in tool_calls if call.get("id") not in present
+            ]
+            if not missing:
+                break  # every call is already paired; nothing to repair
+
+            for call in tool_calls:
+                if call.get("id") in present:
+                    continue
+                self._history.append_tool_result(
+                    call["id"],
+                    _synthetic_cancellation_result(
+                        _assistant_tool_call_name(call)
+                    ),
+                )
+            break
 
         on_event(ApiError(status_code=None, message="Cancelled."))
 

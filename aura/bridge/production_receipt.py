@@ -32,6 +32,10 @@ STATUS_CANCELLED = "cancelled"
 STATUS_BLOCKED = "blocked"
 STATUS_HARNESS_ERROR = "harness_error"
 STATUS_PROVIDER_CONTRACT_FAILURE = "provider_contract_failure"
+# A production-action turn ended with none of the truthful terminal outcomes:
+# no applied mutation, no structured already-satisfied evidence, and no
+# blocker. The turn is not completed and nothing is claimed proven.
+STATUS_NO_AUTHORITATIVE_CHANGE = "no_authoritative_change"
 
 _BORDER = "═" * 38
 _DIVIDER = "─" * 38
@@ -44,6 +48,7 @@ _HEADER_LABELS = {
     STATUS_BLOCKED: "Blocked",
     STATUS_HARNESS_ERROR: "Production Error",
     STATUS_PROVIDER_CONTRACT_FAILURE: "Provider Contract Failure",
+    STATUS_NO_AUTHORITATIVE_CHANGE: "No authoritative change",
 }
 
 
@@ -64,6 +69,14 @@ class ProductionRunEvidence:
     cancelled: bool = False
     blocked_reason: str = ""
     provider_contract_failure: bool = False
+    #: Whether the turn was routed for a production action (an implementation
+    #: or hybrid coding request). Only such turns are held to the completion
+    #: contract: a production action must end in one truthful terminal outcome.
+    bears_production_action: bool = False
+    #: Whether structured evidence recorded that the requested state already
+    #: existed. Set only by the explicit ``report_already_satisfied`` outcome —
+    #: never inferred from "no write happened" and never from assistant prose.
+    already_satisfied: bool = False
 
 
 @dataclass(frozen=True)
@@ -160,6 +173,17 @@ def _resolve_status(
     evidence: ProductionRunEvidence,
     outcomes: list[ValidationOutcome],
 ) -> str:
+    """Project the turn's final status from its structured execution evidence.
+
+    Precedence is fixed: cancellation, harness error, provider-contract
+    failure, a blocker, and failing validation all outrank success.  For a turn
+    that bears a production action, success additionally requires one truthful
+    terminal outcome — an applied mutation (with validation attempted and not
+    failing), structured already-satisfied evidence, or a blocker.  A
+    production-action turn that ends with none of them is reported as
+    ``no_authoritative_change``, never as completed.  Read-only and genuinely
+    non-production turns keep their historical completion behaviour.
+    """
     if evidence.cancelled:
         return STATUS_CANCELLED
     if evidence.api_errors:
@@ -179,6 +203,16 @@ def _resolve_status(
     # meaningful validation is explicitly NOT reported as proven.
     if evidence.write_results:
         return STATUS_COMPLETED_UNVERIFIED
+    # Structured already-satisfied evidence is an explicit terminal outcome of
+    # a production-action turn. It is a receipt input, never inferred from the
+    # absence of a write and never from assistant prose.
+    if evidence.already_satisfied:
+        return STATUS_COMPLETED
+    if evidence.bears_production_action:
+        # None of the truthful terminal outcomes occurred: no authoritative
+        # mutation applied, no structured already-satisfied evidence, no
+        # blocker. A completed receipt would be untruthful.
+        return STATUS_NO_AUTHORITATIVE_CHANGE
     return STATUS_COMPLETED
 
 
@@ -194,6 +228,7 @@ def build_production_receipt(
         STATUS_BLOCKED,
         STATUS_HARNESS_ERROR,
         STATUS_PROVIDER_CONTRACT_FAILURE,
+        STATUS_NO_AUTHORITATIVE_CHANGE,
     )
 
     writes = _write_paths(evidence.write_results)
@@ -310,6 +345,13 @@ def build_production_receipt(
         lines.append("")
         lines.append(" Stopped by user before completion.")
 
+    if status == STATUS_NO_AUTHORITATIVE_CHANGE:
+        lines.append("")
+        lines.append(" This turn was routed for a production action but ended")
+        lines.append(" with no applied write, no structured evidence that the")
+        lines.append(" requested state already exists, and no blocker. Nothing")
+        lines.append(" was proven and no mutation was made.")
+
     # The final assistant answer is chat-owned and has already been streamed
     # into the chat transcript.  The receipt reports execution facts only and
     # deliberately does not restate the prose; it stays in metadata for
@@ -319,6 +361,11 @@ def build_production_receipt(
     if status == STATUS_COMPLETED_UNVERIFIED:
         lines.append("")
         lines.append(" No validation command was run — changes are unverified.")
+
+    if evidence.already_satisfied:
+        lines.append("")
+        lines.append(" Already satisfied — the requested state was already")
+        lines.append(" present; no change was required.")
 
     lines.append(_BORDER)
 
@@ -353,6 +400,8 @@ def build_production_receipt(
         "cancelled": bool(evidence.cancelled),
         "blocked_reason": evidence.blocked_reason,
         "provider_contract_failure": bool(evidence.provider_contract_failure),
+        "already_satisfied": bool(evidence.already_satisfied),
+        "bears_production_action": bool(evidence.bears_production_action),
         "final_response": final_response,
         "extras": {
             "production_run": True,
@@ -380,6 +429,7 @@ __all__ = [
     "STATUS_COMPLETED",
     "STATUS_COMPLETED_UNVERIFIED",
     "STATUS_HARNESS_ERROR",
+    "STATUS_NO_AUTHORITATIVE_CHANGE",
     "STATUS_PROVIDER_CONTRACT_FAILURE",
     "STATUS_VALIDATION_FAILED",
 ]

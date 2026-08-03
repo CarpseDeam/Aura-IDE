@@ -17,6 +17,7 @@ from aura.conversation.tools._schemas import (
     DISPATCH_TOOL_DEF,
     GIT_TOOL_DEFS,
     READ_TOOL_DEFS,
+    REPORT_ALREADY_SATISFIED_TOOL_DEF,
     REPORT_BLOCKER_TOOL_DEF,
     RUN_AND_WATCH_TOOL_DEF,
     SUMMON_DRONE_TOOL_DEF,
@@ -243,15 +244,21 @@ class ToolCatalog:
         """Build the tool set for one focused action request.
 
         Exactly the production mutation tools already registered, plus
-        ``report_blocker``. Nothing here is a replacement editing tool and
-        nothing is invented: this is the normal write catalog with everything
-        that invites another round of thinking — reads, search, research, TODO,
-        git, terminal, diagnostics, drones, inspection, MCP, dynamic tools —
-        left out, because the decision those tools serve has already been made.
+        ``report_blocker`` and ``report_already_satisfied``. Nothing here is a
+        replacement editing tool and nothing is invented: this is the normal
+        write catalog with everything that invites another round of thinking —
+        reads, search, research, TODO, git, terminal, diagnostics, drones,
+        inspection, MCP, dynamic tools — left out, because the decision those
+        tools serve has already been made. The two control tools let a turn
+        that cannot edit end truthfully: blocked, or already satisfied by the
+        repository.
         """
         mutation_tools = [
             copy.deepcopy(tool)
             for tool in WRITE_TOOL_DEFS
             if _tool_name(tool) in MUTATION_TOOL_NAMES
         ]
-        return mutation_tools + [copy.deepcopy(REPORT_BLOCKER_TOOL_DEF)]
+        return mutation_tools + [
+            copy.deepcopy(REPORT_BLOCKER_TOOL_DEF),
+            copy.deepcopy(REPORT_ALREADY_SATISFIED_TOOL_DEF),
+        ]

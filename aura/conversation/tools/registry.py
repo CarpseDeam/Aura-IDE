@@ -352,6 +352,7 @@ TOOL_HANDLERS["edit_godot_asset_preview"] = ToolRegistry._handle_edit_godot_asse
 TOOL_HANDLERS["install_godot_editor_bridge"] = ToolRegistry._handle_install_godot_editor_bridge
 TOOL_HANDLERS["update_worker_todo"] = ToolRegistry._handle_update_worker_todo
 TOOL_HANDLERS["report_blocker"] = ToolRegistry._handle_report_blocker
+TOOL_HANDLERS["report_already_satisfied"] = ToolRegistry._handle_report_already_satisfied
 
 TOOL_HANDLERS["search_project_memory"] = ToolRegistry._handle_search_project_memory
 TOOL_HANDLERS["save_to_project_memory"] = ToolRegistry._handle_save_to_project_memory

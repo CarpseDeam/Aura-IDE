@@ -77,8 +77,12 @@ from typing import Any
 from aura.conversation.pre_edit_loop_guard import PreEditLoopGuard
 from aura.conversation.task_router import TaskRoute, route_bears_production_action
 
-#: The one control tool the focused action request adds to the mutation set.
+#: The control tools the focused action request adds to the mutation set.
+#: ``report_blocker`` names why no edit is possible; ``report_already_satisfied``
+#: records — as structured evidence, never as prose — that the requested state
+#: already exists in the repository and no change is required.
 REPORT_BLOCKER: str = "report_blocker"
+REPORT_ALREADY_SATISFIED: str = "report_already_satisfied"
 
 #: Thinking mode used for the action-serialization request, always.
 FOCUSED_ACTION_THINKING: str = "off"
@@ -86,6 +90,7 @@ FOCUSED_ACTION_THINKING: str = "off"
 #: Outcomes one focused action request can reach.
 OUTCOME_WRITE: str = "write"
 OUTCOME_BLOCKER: str = "blocker"
+OUTCOME_ALREADY_SATISFIED: str = "already_satisfied"
 OUTCOME_PROVIDER_CONTRACT_FAILURE: str = "provider_contract_failure"
 
 #: The focused act ran and left the workspace unchanged.  **Not terminal**: the
@@ -139,6 +144,14 @@ class FocusedActionState:
 
     blocked: bool = False
     """Whether ``report_blocker`` ended the implementation attempt."""
+
+    already_satisfied: bool = False
+    """Whether ``report_already_satisfied`` ended the implementation attempt.
+
+    True only when the structured tool result succeeded: the model inspected
+    authoritative repository evidence and recorded, explicitly, that the
+    requested state already exists.  Never inferred from the absence of a
+    write and never from assistant prose."""
 
     selected_thinking: str = ""
     """The user-selected thinking mode, restored for every other request."""
@@ -307,11 +320,13 @@ __all__ = [
     "FOCUSED_ACTION_THINKING",
     "FocusedActionState",
     "OUTCOME_ACTION_FAILED",
+    "OUTCOME_ALREADY_SATISFIED",
     "OUTCOME_BLOCKER",
     "OUTCOME_NOT_APPLIED",
     "OUTCOME_PROVIDER_CONTRACT_FAILURE",
     "OUTCOME_WRITE",
     "PROVIDER_CONTRACT_FAILURE_MESSAGE",
+    "REPORT_ALREADY_SATISFIED",
     "REPORT_BLOCKER",
     "action_failed_message",
     "focused_contract_ok",
