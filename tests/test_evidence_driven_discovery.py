@@ -17,11 +17,12 @@ that the turn has stopped moving:
   individually productive;
 * an exact repeated observation call, still rejected outright.
 
-And the act that follows is no longer all-or-nothing: a first *distinct* focused
-mutation failure buys exactly one ordinary recovery round, through the same
-failure fingerprints the guard already keeps, after which the turn either
-succeeds or ends truthfully.  There is no second retry manager and no way to
-cycle focus → failure → focus.
+And the act that follows is not one swing at the task.  A focused mutation that
+did not apply is *evidence*: its result goes back into the ordinary tool loop,
+the model inspects, corrects, and acts again, and the focused request is handed
+back every time the ordinary loop actually advances the turn.  Nothing counts
+those corrections.  The turn ends without a write only when a round neither
+advanced it nor produced a failure the guard had not already fingerprinted.
 
 Every loop test here drives the real ``ConversationManager`` over the real
 ``ToolRegistry`` and a real workspace, and asserts the tools really executed.
@@ -33,7 +34,7 @@ import json
 
 import pytest
 
-from aura.client import Done
+from aura.client import Done, Event
 from aura.conversation.focused_action import (
     ACTION_FAILED_MESSAGE,
     FOCUSED_ACTION_THINKING,
@@ -42,6 +43,8 @@ from aura.conversation.focused_action import (
     should_enter_focused_action,
 )
 from aura.conversation.pre_edit_loop_guard import PreEditLoopGuard
+from aura.conversation.tool_limits import MAX_TOOL_CALLS_BY_MODE, ToolLimitState
+from aura.conversation.tools._types import ApprovalDecision
 from aura.model_streams import PRODUCTION_STREAM_HOOK, ModelStreamRegistry
 from tests.production_loop_harness import (
     IMPLEMENTATION_ROUTE,
@@ -110,7 +113,7 @@ class TestNewEvidenceIsNeverBounded:
             )
         assert guard.last_round_advanced
 
-    def test_three_novel_rounds_through_the_real_loop_stay_ordinary(
+    def test_four_novel_rounds_through_the_real_loop_stay_ordinary(
         self, workspace, isolated_streams
     ) -> None:
         """Proof 1, through the send loop: the removed two-hop ceiling is gone."""
@@ -275,29 +278,69 @@ class TestCycleDetection:
         assert writes and writes[0].ok
 
 
-# ── 4-5: bounded focused-mutation recovery ──────────────────────────────────
+# ── 4-5: a failed act is evidence, and the turn keeps working ───────────────
 
 
-class TestFocusedMutationRecovery:
-    """The focused state is reusable exactly once, and only for recovery."""
+STALL = [
+    tool_round([("d1", "list_directory", {"path": "."})]),
+    tool_round([("d2", "list_directory", {"path": "./"})]),
+]
+"""Two rounds returning the same listing: discovery stalls, focus opens."""
 
-    def test_a_first_distinct_failure_opens_one_recovery_round(self) -> None:
-        state = FocusedActionState(spent=True)
-        assert state.open_recovery(), "the first failure is granted recovery"
-        assert not state.spent, "focused action is re-armed behind the round"
-        assert state.awaiting_recovery
 
-    def test_recovery_is_granted_at_most_once(self) -> None:
-        state = FocusedActionState(spent=True)
-        assert state.open_recovery()
-        state.spent = True
-        assert not state.open_recovery(), (
-            "a second grant would be an unbounded focus/failure/recovery cycle"
-        )
-        assert state.spent, "the focused request stays spent"
+def escaping_write(call_id: str = "bad") -> list[Event]:
+    """A write that fails on its own terms: the path escapes the workspace."""
+    return tool_round([(call_id, "write_file", {
+        "path": "../outside.md", "content": "nope",
+    })])
+
+
+def missing_delete(call_id: str = "del") -> list[Event]:
+    """A delete of a file that is not there — a *different* failure shape."""
+    return tool_round([(call_id, "delete_file", {"path": "gone.md"})])
+
+
+def stale_patch(call_id: str = "p1") -> list[Event]:
+    """A patch whose ``old`` block is not in the file: a stale-patch failure."""
+    return tool_round([(call_id, "patch_file", {
+        "path": "notes.md",
+        "edits": [{"old": "text that is not there", "new": "acted"}],
+    })])
+
+
+def good_patch(call_id: str = "p2") -> list[Event]:
+    return tool_round([(call_id, "patch_file", {
+        "path": "notes.md",
+        "edits": [{"old": "old body", "new": "acted"}],
+    })])
+
+
+def read_notes(call_id: str) -> list[Event]:
+    return tool_round([(call_id, "read_file", {"path": "notes.md"})])
+
+
+class RejectFirstProposal:
+    """Reject the first proposal outright; approve whatever Aura brings back.
+
+    Stands in for a user who does not want *that* change. It never sets
+    reject-all, so the turn is free to come back with a different approach.
+    """
+
+    def __init__(self) -> None:
+        self.proposals: list[str] = []
+
+    def __call__(self, request):
+        self.proposals.append(str(getattr(request, "rel_path", "")))
+        if len(self.proposals) == 1:
+            return ApprovalDecision(action="reject")
+        return ApprovalDecision(action="approve")
+
+
+class TestAFailedActIsEvidenceNotCompletion:
+    """A mutation that did not apply returns to the loop; only evidence ends it."""
 
     def test_a_repeated_failure_never_opens_recovery_in_the_guard(self) -> None:
-        """Proof 5, at the guard: the same fingerprint buys nothing."""
+        """At the guard: the same fingerprint is not a changed diagnosis."""
         guard = PreEditLoopGuard()
         payload = json.dumps({"path": "notes.md", "error": "write rejected by user"})
 
@@ -312,11 +355,11 @@ class TestFocusedMutationRecovery:
         guard.observe_result("write_file", False, payload)
         guard.end_round()
         assert not guard.recovery_open, (
-            "the same failure repeated grants no further recovery"
+            "the same failure repeated is nothing the turn had not already seen"
         )
         assert guard.repeated_failures == 1
 
-    def test_recovery_open_holds_the_focused_transition_for_one_round(self) -> None:
+    def test_recovery_open_holds_the_focused_transition_for_a_round(self) -> None:
         guard = PreEditLoopGuard()
         guard.focused = True
         args = dict(
@@ -335,32 +378,19 @@ class TestFocusedMutationRecovery:
         )
         guard.end_round()
         assert not should_enter_focused_action(**args), (
-            "a distinct failure buys one ordinary round to correct it"
+            "a failure the turn has not seen buys an ordinary round to read it"
         )
 
-    def test_a_failed_focused_write_recovers_and_then_edits(
+    def test_a_failed_focused_write_gathers_evidence_and_then_edits(
         self, workspace, isolated_streams
     ) -> None:
-        """Proof 4, through the send loop.
-
-        The focused write targets a path outside the workspace, so it fails on
-        its own terms rather than by test scaffolding. That first distinct
-        failure opens one ordinary recovery round, which gathers new evidence,
-        and the re-armed focused request then edits successfully.
-        """
+        """Proof 2: focused write fails → new evidence → corrected write applies."""
         backend = ScriptedBackend([
-            # Two rounds returning the same evidence: discovery stalls.
-            tool_round([("d1", "list_directory", {"path": "."})]),
-            tool_round([("d2", "list_directory", {"path": "./"})]),
-            # Focused act #1 — fails: the path escapes the workspace.
-            tool_round([("bad", "write_file", {
-                "path": "../outside.md", "content": "nope",
-            })]),
-            # The one granted ordinary recovery round: new evidence.
-            read_round("rec", 7),
-            # Focused act #2 — the corrected write.
-            write_round("good"),
-            final_round("Applied after recovery."),
+            *STALL,
+            escaping_write(),                     # focused act #1 — fails
+            read_round("rec", 7),                 # ordinary: new evidence
+            write_round("good"),                  # focused act #2 — applies
+            final_round("Applied after correcting the path."),
         ])
         isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
         recorder = Recorder()
@@ -374,31 +404,122 @@ class TestFocusedMutationRecovery:
         assert not writes[0].ok, "the first focused write really failed"
         assert writes[1].ok, "the corrected write really applied"
 
-        shapes = backend.request_shapes()
-        assert shapes[:5] == [False, False, True, False, True], (
-            "stall → focused act → one ordinary recovery round → re-armed "
-            f"focused act — got {shapes}"
+        assert backend.request_shapes() == [
+            False, False, True, False, True, False,
+        ], (
+            "stall → focused act → ordinary round → corrected focused act — "
+            f"got {backend.request_shapes()}"
         )
         assert ACTION_FAILED_MESSAGE not in recorder.chat_text, (
-            "a recoverable first failure must not end the task"
+            "a failed act is evidence, not a completed task"
         )
         assert (workspace / "notes.md").read_text(encoding="utf-8") == (
             "# Notes\n\nacted\n"
         )
 
-    def test_the_same_focused_failure_twice_ends_blocked(
+    def test_two_different_failures_still_reach_a_successful_third_write(
         self, workspace, isolated_streams
     ) -> None:
-        """Proof 5, through the send loop: no second recovery, no loop."""
-        bad_write = tool_round([("bad", "write_file", {
-            "path": "../outside.md", "content": "nope",
-        })])
+        """Proof 3: two distinct failures, each followed by new evidence, edit."""
         backend = ScriptedBackend([
-            tool_round([("d1", "list_directory", {"path": "."})]),
-            tool_round([("d2", "list_directory", {"path": "./"})]),
-            bad_write,                                   # focused act #1
-            read_round("rec", 7),                        # recovery round
-            bad_write,                                   # focused act #2: same failure
+            *STALL,
+            escaping_write(),                     # failure A: path escape
+            read_round("e1", 7),                  # new evidence
+            missing_delete(),                     # failure B: a different shape
+            read_round("e2", 8),                  # new evidence
+            write_round("good"),                  # the third act — applies
+            final_round("Applied on the third approach."),
+        ])
+        isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
+        recorder = Recorder()
+
+        run(build_manager(workspace), recorder)
+
+        assert [r.ok for r in recorder.results_named("write_file")] == [False, True]
+        deletes = recorder.results_named("delete_file")
+        assert len(deletes) == 1 and not deletes[0].ok, (
+            "non-vacuous: the second, differently-shaped act really ran and failed"
+        )
+        assert backend.request_shapes() == [
+            False, False, True, False, True, False, True, False,
+        ], (
+            "two distinct failures, each read and corrected, still reach the "
+            f"edit — got {backend.request_shapes()}"
+        )
+        assert ACTION_FAILED_MESSAGE not in recorder.chat_text
+        assert (workspace / "notes.md").read_text(encoding="utf-8") == (
+            "# Notes\n\nacted\n"
+        )
+
+    def test_a_stale_patch_rereads_and_then_patches_successfully(
+        self, workspace, isolated_streams
+    ) -> None:
+        """Proof 4: a stale hunk is a reread, not the end of the task."""
+        backend = ScriptedBackend([
+            *STALL,
+            stale_patch(),                        # focused act #1 — hunk not found
+            read_notes("rr"),                     # the reread: new evidence
+            good_patch(),                         # focused act #2 — applies
+            final_round("Patched after rereading."),
+        ])
+        isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
+        recorder = Recorder()
+
+        run(build_manager(workspace), recorder)
+
+        patches = recorder.results_named("patch_file")
+        assert len(patches) == 2 and [p.ok for p in patches] == [False, True], (
+            f"non-vacuous: both patches really ran — got {patches}"
+        )
+        assert "patch_hunk_not_found" in str(patches[0].result), (
+            "the first patch failed as a genuine stale hunk"
+        )
+        assert recorder.results_named("read_file"), "the reread really happened"
+        assert (workspace / "notes.md").read_text(encoding="utf-8") == (
+            "# Notes\n\nacted\n"
+        )
+        assert ACTION_FAILED_MESSAGE not in recorder.chat_text
+
+    def test_a_rejected_proposal_recovers_with_a_different_approved_one(
+        self, workspace, isolated_streams
+    ) -> None:
+        """Proof 5: the user's "no" is not the turn's failure.
+
+        The rejected proposal is never silently re-sent: the second act carries
+        materially different content, and it is the one that lands.
+        """
+        backend = ScriptedBackend([
+            *STALL,
+            write_round("w1", body="rejected body"),   # focused act #1 — rejected
+            read_notes("rr"),                          # new evidence
+            write_round("w2", body="approved body"),   # a different proposal
+            final_round("Applied the revised change."),
+        ])
+        isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
+        recorder = Recorder()
+        approvals = RejectFirstProposal()
+
+        run(build_manager(workspace), recorder, approval_cb=approvals)
+
+        writes = recorder.results_named("write_file")
+        assert len(writes) == 2 and [w.ok for w in writes] == [False, True], (
+            f"non-vacuous: both proposals really reached approval — got {writes}"
+        )
+        assert "not_applied_user_rejected" in str(writes[0].result)
+        assert approvals.proposals == ["notes.md", "notes.md"]
+        assert (workspace / "notes.md").read_text(encoding="utf-8") == (
+            "# Notes\n\napproved body\n"
+        ), "the approved, materially different proposal is what landed"
+        assert ACTION_FAILED_MESSAGE not in recorder.chat_text
+
+    def test_the_same_failure_with_nothing_new_ends_truthfully(
+        self, workspace, isolated_streams
+    ) -> None:
+        """Proof 6: a repeat of a known failure, knowing nothing new, ends."""
+        backend = ScriptedBackend([
+            *STALL,
+            escaping_write("bad1"),               # focused act — distinct failure
+            escaping_write("bad2"),               # ordinary round — the same failure
             # Anything past this point is the unbounded loop this forbids.
             read_round("x1", 8),
             read_round("x2", 9),
@@ -410,28 +531,24 @@ class TestFocusedMutationRecovery:
 
         writes = recorder.results_named("write_file")
         assert len(writes) == 2 and not any(w.ok for w in writes), (
-            "non-vacuous: both focused writes really ran and really failed"
+            "non-vacuous: both writes really ran and really failed"
         )
-        assert len(backend.calls) == 5, (
-            "no request after the second focused act — "
+        assert len(backend.calls) == 4, (
+            "the repeat of a known failure ends the turn — "
             f"got {backend.request_shapes()}"
         )
-        assert ACTION_FAILED_MESSAGE in recorder.chat_text, (
-            "the turn ends truthfully rather than circling"
-        )
+        assert ACTION_FAILED_MESSAGE in recorder.chat_text
         assert isinstance(recorder.events[-1], Done), "the turn is terminated"
 
-    def test_a_recovery_round_that_recovers_nothing_ends_blocked(
+    def test_a_round_that_learns_nothing_after_an_act_ends_truthfully(
         self, workspace, isolated_streams
     ) -> None:
-        """A granted round that learns nothing must not hand back the act."""
+        """Proof 7: no progress and no new evidence is the honest ending."""
         backend = ScriptedBackend([
-            tool_round([("d1", "list_directory", {"path": "."})]),
-            tool_round([("d2", "list_directory", {"path": "./"})]),
-            tool_round([("bad", "write_file", {
-                "path": "../outside.md", "content": "nope",
-            })]),
-            # The granted recovery round: evidence already seen.
+            *STALL,
+            escaping_write(),
+            # The round after the act: a listing already seen. Nothing learned,
+            # nothing failed anew — nothing left can change what happens next.
             tool_round([("d3", "list_directory", {"path": "."})]),
             read_round("x1", 8),
         ])
@@ -440,22 +557,28 @@ class TestFocusedMutationRecovery:
 
         run(build_manager(workspace), recorder)
 
+        assert recorder.results_named("write_file"), "the act really ran"
         assert len(backend.calls) == 4, (
-            f"no request after the spent recovery round — {backend.request_shapes()}"
+            f"no request after the round that learned nothing — "
+            f"{backend.request_shapes()}"
         )
         assert ACTION_FAILED_MESSAGE in recorder.chat_text
         assert isinstance(recorder.events[-1], Done)
 
-    def test_a_rejected_focused_write_still_gets_its_one_recovery(
+    def test_a_user_rejection_alone_never_ends_the_turn(
         self, workspace, isolated_streams
     ) -> None:
-        """A user rejection is a distinct failure like any other, and bounded."""
+        """A rejection is preserved as a result and handed back to the loop.
+
+        With reject-all standing, the turn still gets to look again; what ends
+        it is the *second* identical rejection, which teaches it nothing new —
+        not the rejection itself.
+        """
         backend = ScriptedBackend([
-            tool_round([("d1", "list_directory", {"path": "."})]),
-            tool_round([("d2", "list_directory", {"path": "./"})]),
-            write_round("w1"),
-            read_round("rec", 7),
-            write_round("w2", body="again"),
+            *STALL,
+            write_round("w1"),                    # focused act — rejected
+            read_round("rec", 7),                 # new evidence: the loop continues
+            write_round("w2", body="again"),      # a second act, rejected identically
             read_round("x1", 8),
         ])
         isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
@@ -464,16 +587,17 @@ class TestFocusedMutationRecovery:
         run(build_manager(workspace), recorder, approval_cb=reject_all)
 
         writes = recorder.results_named("write_file")
-        assert writes and not any(w.ok for w in writes), (
-            "non-vacuous: the write tool really ran and was really rejected"
+        assert len(writes) == 2 and not any(w.ok for w in writes), (
+            "non-vacuous: the write tool really ran twice and was really rejected"
+        )
+        assert backend.request_shapes()[:5] == [False, False, True, False, True], (
+            "the first rejection returned to the loop and reached a second act — "
+            f"got {backend.request_shapes()}"
         )
         assert (workspace / "notes.md").read_text(encoding="utf-8") == (
             "# Notes\n\nold body\n"
         ), "nothing was written"
         assert ACTION_FAILED_MESSAGE in recorder.chat_text
-        assert len(backend.calls) <= 5, (
-            f"recovery is bounded, not a loop — {backend.request_shapes()}"
-        )
         assert isinstance(recorder.events[-1], Done)
 
 
@@ -523,16 +647,51 @@ class TestSurvivingInvariants:
         assert focused_call.get("require_tool_call") is True
         assert focused_call["thinking"] == FOCUSED_ACTION_THINKING
 
+    def test_the_catastrophic_emergency_brake_is_untouched(self) -> None:
+        """The 300-call backstop still fires, and it is the only hard stop."""
+        limits = ToolLimitState(mode="single")
+        assert MAX_TOOL_CALLS_BY_MODE["single"] == 300
+        for _ in range(300):
+            allowed, _info = limits.check("read_file")
+            assert allowed, "the brake is a catastrophic backstop, not a budget"
+            limits.record("read_file")
+        allowed, info = limits.check("read_file")
+        assert not allowed and info["limit_reached"] is True
+        assert info["reason"] == "single_emergency_tool_call_limit_reached"
+
     def test_no_module_reintroduces_a_pre_write_budget(self) -> None:
-        """The ceiling is gone and nothing counted replaced it."""
+        """The ceiling is gone and nothing counted or allowanced replaced it."""
         from pathlib import Path
 
         import aura.conversation.focused_action as fa
+        import aura.conversation.manager as manager_mod
         import aura.conversation.manager_send_state as mss
         import aura.conversation.pre_edit_loop_guard as guard_mod
 
-        for module in (fa, mss, guard_mod):
+        for module in (fa, mss, guard_mod, manager_mod):
             source = Path(module.__file__).read_text(encoding="utf-8")
             assert "ImplementationStage" not in source
             assert "implementation_staging_applies" not in source
             assert "FINAL_EVIDENCE" not in source
+            # The one-recovery-per-turn allowance, and any successor to it.
+            assert "recovery_used" not in source
+            assert "open_recovery" not in source
+            assert "awaiting_recovery" not in source
+
+    def test_the_focused_state_owns_no_lifetime_allowance(self) -> None:
+        """``FocusedActionState`` tracks the current request, and nothing else."""
+        fields = set(FocusedActionState.__dataclass_fields__)
+        assert fields == {
+            "spent",
+            "active",
+            "blocked",
+            "selected_thinking",
+            "exposed_tools",
+            "selected_action",
+            "outcome",
+            "contract_violated",
+        }
+        assert not any(
+            "recovery" in name or "attempt" in name or "count" in name
+            for name in fields
+        )

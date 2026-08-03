@@ -53,8 +53,8 @@ from aura.conversation.focused_action import (
     FOCUSED_ACTION_THINKING,
     OUTCOME_ACTION_FAILED,
     OUTCOME_BLOCKER,
+    OUTCOME_NOT_APPLIED,
     OUTCOME_PROVIDER_CONTRACT_FAILURE,
-    OUTCOME_RECOVERY_OPENED,
     OUTCOME_WRITE,
     REPORT_BLOCKER,
     action_failed_message,
@@ -650,12 +650,10 @@ class ConversationManager:
                 declared_run_command=declared_run_command,
                 tool_defs=tool_defs,
             )
+            guard = state.pre_edit_guard
+            write_applied = bool(guard is not None and guard.write_applied)
             if focused.active:
                 focused.active = False
-                write_applied = bool(
-                    state.pre_edit_guard is not None
-                    and state.pre_edit_guard.write_applied
-                )
                 if focused.outcome == OUTCOME_BLOCKER:
                     # Blocked completion is terminal only when the matching
                     # tool result actually succeeded and its structured payload
@@ -678,47 +676,15 @@ class ConversationManager:
                     and not cancel_event.is_set()
                     and state.implementation_action_pending()
                 ):
-                    # The act ran and changed nothing — a failed write, a
-                    # rejected write, or an invalid blocker. Whether that is
-                    # recoverable is not a new judgement: the guard already
-                    # fingerprinted the failure while folding in this round's
-                    # results, so ``recovery_open`` is the answer. A first
-                    # distinct failure buys exactly one ordinary round and
-                    # re-arms focused action behind it; a repeat, or a turn
-                    # whose one recovery is already spent, ends truthfully
-                    # rather than falling back into an unbounded loop.
-                    guard = state.pre_edit_guard
-                    recoverable = bool(guard is not None and guard.recovery_open)
-                    if recoverable and focused.open_recovery():
-                        focused.outcome = OUTCOME_RECOVERY_OPENED
-                        _log.info(
-                            "focused_action_outcome outcome=%s "
-                            "selected_action=%s write_applied=False "
-                            "recovery_round=1",
-                            focused.outcome,
-                            focused.selected_action or "<none>",
-                        )
-                    else:
-                        focused.outcome = OUTCOME_ACTION_FAILED
-                        _log.info(
-                            "focused_action_outcome outcome=%s "
-                            "selected_action=%s write_applied=False "
-                            "recoverable=%s recovery_used=%s "
-                            "selected_thinking=%s focused_action_thinking=%s",
-                            focused.outcome,
-                            focused.selected_action or "<none>",
-                            recoverable,
-                            focused.recovery_used,
-                            focused.selected_thinking,
-                            FOCUSED_ACTION_THINKING,
-                        )
-                        content, failure_message = action_failed_message()
-                        self._history.append_assistant(failure_message)
-                        on_event(ContentDelta(text=content))
-                        on_event(
-                            Done(finish_reason="stop", full_message=failure_message)
-                        )
-                        return
+                    # The act ran and changed nothing — a failed write, a stale
+                    # patch, a rejected approval, an invalid blocker. That is
+                    # evidence, not a completed task: the tool result is in
+                    # history and says what to fix. The request is spent for
+                    # *this* decision only, and the turn goes back to the
+                    # ordinary loop to inspect, correct, and act again. Nothing
+                    # here counts attempts; the evidence judgement below is the
+                    # only thing that can end the turn.
+                    focused.outcome = OUTCOME_NOT_APPLIED
                 _log.info(
                     "focused_action_outcome outcome=%s selected_action=%s "
                     "write_applied=%s selected_thinking=%s "
@@ -729,30 +695,41 @@ class ConversationManager:
                     focused.selected_thinking,
                     FOCUSED_ACTION_THINKING,
                 )
-            elif focused.awaiting_recovery:
-                # The one granted recovery round has now completed. It is spent
-                # here whatever it produced, so the re-armed focused request can
-                # never be fed by a second recovery round.
-                focused.awaiting_recovery = False
-                recovery_guard = state.pre_edit_guard
-                recovered = bool(
-                    recovery_guard is not None
-                    and (
-                        recovery_guard.write_applied
-                        or recovery_guard.last_round_advanced
+
+            # ── Is the turn still advancing? ─────────────────────────────
+            # Asked only once a focused act has already run without applying,
+            # and answered only from the guard's existing ledgers. A round that
+            # advanced the turn is a corrected decision: re-arm the focused
+            # request, however many times that happens. A round that produced a
+            # failure the turn had not seen before changes the diagnosis, so the
+            # ordinary loop keeps it. A round that did neither means nothing
+            # left in this turn can change what happens next — that, and only
+            # that, is the honest ending.
+            if (
+                focused.spent
+                and guard is not None
+                and not focused.blocked
+                and not write_applied
+                and not cancel_event.is_set()
+                and tool_round.action != "return"
+                and state.implementation_action_pending()
+            ):
+                if guard.last_round_advanced:
+                    focused.spent = False
+                    _log.info(
+                        "focused_action_rearmed reason=round_advanced "
+                        "selected_action=%s",
+                        focused.selected_action or "<none>",
                     )
-                )
-                _log.info(
-                    "focused_action_recovery_round recovered=%s write_applied=%s",
-                    recovered,
-                    bool(recovery_guard is not None and recovery_guard.write_applied),
-                )
-                if not recovered and not cancel_event.is_set():
-                    # Recovery gathered no new evidence and made no progress.
-                    # Handing back the re-armed focused request would ask the
-                    # model to repeat the act that just failed, knowing nothing
-                    # new. End truthfully instead.
+                elif not guard.recovery_open:
                     focused.outcome = OUTCOME_ACTION_FAILED
+                    _log.info(
+                        "focused_action_outcome outcome=%s selected_action=%s "
+                        "advanced=False new_failure=False repeated_failures=%s",
+                        focused.outcome,
+                        focused.selected_action or "<none>",
+                        guard.repeated_failures,
+                    )
                     content, failure_message = action_failed_message()
                     self._history.append_assistant(failure_message)
                     on_event(ContentDelta(text=content))

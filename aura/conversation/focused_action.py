@@ -20,7 +20,7 @@ Every input is state the loop already keeps:
   guard saw a round gather nothing or saw the turn circling in an ``A, B, A, B``
   cycle.  There is no request, file, token, or time budget: a turn returning
   genuinely new evidence keeps surveying;
-* no failure recovery round is open (:attr:`PreEditLoopGuard.recovery_open`);
+* no distinct failure is currently open (:attr:`PreEditLoopGuard.recovery_open`);
 * no write has applied;
 * no completion response is pending;
 * no focused action request is currently available to spend.
@@ -38,31 +38,36 @@ There are no token, character, time, round, or tool-call limits here, no
 classifier, no phase engine, and no watchdog.  The state is spent by the one
 request it authorizes.
 
-**Bounded recovery from a failed act.**  A focused mutation that failed or was
-rejected must not kill the task merely because focused action was the thing
-that was attempted — the tool result usually says exactly what to fix.  So the
-outcome is fed back through the guard's existing failure ledger rather than
-through a second retry manager:
+**A failed act is evidence, not completion.**  A focused mutation that failed or
+was rejected must not kill the task — the tool result usually says exactly what
+to fix, and the turn was asked to complete a change, not to take one swing at
+it.  So the outcome is fed back through the guard's existing evidence and
+failure ledgers rather than through a retry manager:
 
 * an applied mutation leaves focused action for the ordinary post-write
   validation path;
 * a successful structured blocker ends the turn blocked;
 * a provider contract violation ends the turn with a provider-contract failure;
-* the **first distinct** mutation failure — distinct by
-  :func:`~aura.conversation.pre_edit_loop_guard.failure_fingerprint`, so
-  :attr:`PreEditLoopGuard.recovery_open` is true — un-spends the focused state
-  once (:meth:`FocusedActionState.open_recovery`) and reopens exactly one
-  ordinary round;
-* that recovery round either advances the turn, in which case focused action is
-  available again for the corrected act, or it advances nothing, in which case
-  the turn ends truthfully as failed;
-* the same failure repeated grants nothing, because the guard's fingerprint
-  already knows it, and :attr:`FocusedActionState.recovery_used` makes the
-  re-arm available exactly once per turn.
+* **any other outcome** — a failed write, a stale patch, a rejected approval, an
+  invalid blocker — marks the focused request spent *for that decision* and
+  returns to the ordinary tool loop with the tool result in history, so the
+  model can inspect, reread, correct, and act again.
 
-That is the whole recovery structure: one extra ordinary round, owned by state
-that already existed, with no parallel state machine and no way to cycle
-focus → failure → focus indefinitely.
+Whether the turn is advancing or repeating is then decided by the guard alone,
+exactly as it is during discovery.  While the ordinary loop keeps producing new
+evidence, successful commands, applied mutations, or genuinely *different*
+failures, the turn continues; when the ordinary loop develops a corrected
+decision — a round that actually advanced — the focused request becomes
+available again, however many times that happens.  There is no allowance, no
+recovery counter, and no cap on how many corrected decisions a turn may reach.
+
+The turn ends without a write only on evidence: a round that neither advanced
+nor produced a failure the turn had not already seen (see
+:func:`~aura.conversation.pre_edit_loop_guard.failure_fingerprint`) means
+nothing left in the turn can change what happens next, and that is the honest
+ending.  The ``A, B, A, B`` cycle detector, a truthful blocker, a provider
+contract violation, cancellation, and the catastrophic 300-call brake are the
+other terminal paths, and none of them counts attempts.
 """
 from __future__ import annotations
 
@@ -78,27 +83,27 @@ REPORT_BLOCKER: str = "report_blocker"
 #: Thinking mode used for the action-serialization request, always.
 FOCUSED_ACTION_THINKING: str = "off"
 
-#: Outcomes one focused action request can reach.  Every one is terminal for
-#: the focused state — none of them schedules another focused request.
+#: Outcomes one focused action request can reach.
 OUTCOME_WRITE: str = "write"
 OUTCOME_BLOCKER: str = "blocker"
 OUTCOME_PROVIDER_CONTRACT_FAILURE: str = "provider_contract_failure"
 
-#: The focused request's act ran and left the workspace unchanged, and the one
-#: recovery round this turn allows is unavailable or produced nothing.
+#: The focused act ran and left the workspace unchanged.  **Not terminal**: the
+#: tool result is in history, the request is spent for that one decision, and
+#: the turn returns to the ordinary loop to inspect, correct, and act again.
+OUTCOME_NOT_APPLIED: str = "not_applied"
+
+#: The turn ran out of evidence: a round neither advanced nor produced a failure
+#: the turn had not already seen.  Terminal, and reached from the ordinary loop —
+#: never from an attempt count.
 OUTCOME_ACTION_FAILED: str = "action_failed"
 
-#: The one bounded recovery round has been opened for a first distinct failure.
-#: Not terminal — it is a note in the telemetry that the next ordinary round is
-#: recovery, and that focused action is re-armed behind it.
-OUTCOME_RECOVERY_OPENED: str = "recovery_opened"
-
 ACTION_FAILED_MESSAGE = (
-    "The edit did not land. The action failed or was rejected — the tool "
-    "result above is the exact reason — and the one recovery round this turn "
-    "allows either was already used or recovered nothing. Nothing was written "
-    "and nothing was retried further. The conversation and its gathered "
-    "evidence are intact; send again to try another approach."
+    "The change did not land. The last round neither made progress nor "
+    "produced anything the turn had not already seen — the tool results above "
+    "are the exact reasons — so continuing would repeat the same failure "
+    "knowing nothing new. Nothing was written. The conversation and its "
+    "gathered evidence are intact; send again to try another approach."
 )
 
 PROVIDER_CONTRACT_FAILURE_MESSAGE = (
@@ -112,17 +117,22 @@ PROVIDER_CONTRACT_FAILURE_MESSAGE = (
 
 @dataclass
 class FocusedActionState:
-    """Per-turn record of the focused action request and its bounded recovery.
+    """Per-turn record of the *current* focused action request.
 
-    ``spent`` is the control structure: the request that runs consumes it, and
-    nothing re-arms it except :meth:`open_recovery`, which may fire at most once
-    per turn.  So a turn issues at most two focused requests — the act, and the
-    corrected act after exactly one ordinary recovery round — and a failure can
-    never cycle focus → failure → focus indefinitely.
+    Deliberately not a budget.  It tracks the request in flight, whether a
+    blocker ended the attempt, which action the model chose, and whether the
+    provider honoured the contract — nothing here is a lifetime allowance, and
+    there is no count of how many focused requests a turn has issued.
+
+    ``spent`` is scoped to one decision: the request that runs consumes it so a
+    single decision cannot be re-issued unchanged, and the send loop clears it
+    once the ordinary loop has actually advanced — which is a corrected
+    decision, not a retry.  How often that may happen is unbounded; what stops
+    the turn is the guard finding no new evidence, never arithmetic.
     """
 
     spent: bool = False
-    """Whether the currently available focused action request has been issued."""
+    """Whether the focused request for the current decision has been issued."""
 
     active: bool = False
     """Whether the request currently being built is the focused action request."""
@@ -145,31 +155,6 @@ class FocusedActionState:
     contract_violated: bool = False
     """Whether the provider returned prose instead of the required tool call."""
 
-    recovery_used: bool = False
-    """Whether this turn's one focused-mutation recovery has been granted."""
-
-    awaiting_recovery: bool = False
-    """Whether the next ordinary round *is* the granted recovery round.
-
-    Cleared by the send loop as soon as that round completes, which is also
-    where the round is judged: a recovery round that advanced nothing ends the
-    turn rather than handing back a re-armed focused request.
-    """
-
-    def open_recovery(self) -> bool:
-        """Grant the one recovery round, if it has not been granted already.
-
-        Returns whether it was granted.  The re-arm and the "only once" record
-        are the same act, so the focused state can never be re-armed twice, and
-        the second focused request — should recovery reach one — is final.
-        """
-        if self.recovery_used:
-            return False
-        self.recovery_used = True
-        self.awaiting_recovery = True
-        self.spent = False
-        return True
-
 
 def should_enter_focused_action(
     *,
@@ -189,11 +174,15 @@ def should_enter_focused_action(
     detected ``A, B, A, B`` cycle.  A turn whose rounds keep returning genuinely
     new evidence never reaches this gate, however many rounds that takes.
 
-    ``guard.recovery_open`` holds the transition back for exactly one round when
-    a distinct failure has just occurred — the same ledger that grants the
-    ordinary loop its reread grace, and the same one that grants a failed
-    focused mutation its single recovery round.  It is never latched: the guard
-    closes it when that one round ends, whatever the round produced.
+    ``guard.recovery_open`` holds the transition back while a failure the turn
+    has not seen before is unresolved — the same ledger that grants the ordinary
+    loop its reread grace.  It is never latched: the guard closes it when the
+    round after the failure ends, whatever that round produced.
+
+    ``state.spent`` is per-decision, not per-turn.  The send loop clears it
+    whenever an ordinary round actually advances the turn, so a corrected
+    decision always gets its focused request and nothing limits how many
+    corrected decisions a turn may reach.
     """
     if mode != "single":
         return False
@@ -203,10 +192,10 @@ def should_enter_focused_action(
         return False
     if not guard.focused:
         return False
-    if guard.recovery_open or state.awaiting_recovery:
-        # A distinct failure just bought one ordinary round to correct it.
-        # Forcing a mutation now would push the model straight back into the
-        # act the failure already explained.
+    if guard.recovery_open:
+        # A failure the turn has not seen before just landed. Forcing a mutation
+        # now would push the model straight back into the act the failure
+        # already explained; the ordinary loop reads it first.
         return False
     if task_completion_context:
         # A pending completion response outranks the focused request: the turn
@@ -280,13 +269,18 @@ def focused_contract_ok(
 
 
 def action_failed_message() -> tuple[str, dict[str, Any]]:
-    """Return the honest ending for a focused act that changed nothing.
+    """Return the honest ending for a turn that ran out of evidence.
 
-    Reached only when recovery cannot help: the failure repeats one the guard
-    already fingerprinted, the one recovery round was already granted, or that
-    granted round ended without progress or new evidence.  Falling back into the
-    ordinary loop from any of those states is an unbounded failure loop by
+    Reached only from the one evidence-based judgement the send loop makes after
+    a focused act has already run without applying: the round that just ended
+    neither advanced the turn (no applied mutation, no successful command, no
+    new evidence) nor produced a failure the guard had not already
+    fingerprinted.  Continuing from *that* state is an unbounded failure loop by
     construction, because nothing left in the turn can change what happens next.
+
+    It is not reached because a write failed, a patch was stale, approval was
+    rejected, a command failed, or a corrected attempt failed differently — each
+    of those returns to the ordinary loop with its result in history.
 
     Narrow by construction: a focused act whose write *applied* makes
     ``guard.write_applied`` true and never reaches here, so the successful path
@@ -314,7 +308,7 @@ __all__ = [
     "FocusedActionState",
     "OUTCOME_ACTION_FAILED",
     "OUTCOME_BLOCKER",
-    "OUTCOME_RECOVERY_OPENED",
+    "OUTCOME_NOT_APPLIED",
     "OUTCOME_PROVIDER_CONTRACT_FAILURE",
     "OUTCOME_WRITE",
     "PROVIDER_CONTRACT_FAILURE_MESSAGE",

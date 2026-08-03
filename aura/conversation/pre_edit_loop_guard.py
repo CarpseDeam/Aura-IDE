@@ -52,15 +52,16 @@ diagnostic call proves nothing — the command may not even start.  Only an
 and a *successful* command count as forward progress and clear the failure
 state.  A failed command leaves the round stalled, but a distinct failure opens
 recovery: rereads are allowed while it is open, and the focused transition waits
-so the agent can fix the command and recover.  Recovery is exactly one round
-long.  Progress or genuinely new evidence resolves it; another distinct failure
-opens its own round; and a granted round that ends with neither closes recovery
-outright — the reread grace is spent *and* that same stalled round becomes the
-focused transition, because a turn that cannot recover must still act rather
-than circle.  Re-running the same command into the same failure is not a new
-distinct failure and renews nothing.  A corrected command is never blocked by
-this guard — commands are outside its gate entirely — and when the correction
-succeeds, recovery closes like any other progress.
+so the agent can fix the command and recover.  Recovery is one round long, and
+it is renewable by evidence, never by a count.  Progress or genuinely new
+evidence resolves it; another distinct failure opens its own round; and a
+granted round that ends with neither closes recovery outright — the reread grace
+is spent *and* that same stalled round becomes the focused transition, because a
+turn that cannot recover must still act rather than circle.  Re-running the same
+command into the same failure is not a new distinct failure and renews nothing.
+A corrected command is never blocked by this guard — commands are outside its
+gate entirely — and when the correction succeeds, recovery closes like any other
+progress.
 
 There is deliberately no semantic classification of model output, no
 planner/worker workflow, and no phase state machine here.  The 300-call
@@ -69,9 +70,13 @@ guard; this guard is the ordinary nudge that fires long before it.
 
 The guard also owns the *only* failure-recovery ledger for the pre-write phase.
 The focused action turn reuses it rather than keeping a retry manager of its
-own: a focused mutation that failed distinctly opens the same one recovery
-round any other distinct failure opens (:attr:`recovery_open`), and a repeat of
-a failure fingerprint already seen opens nothing.
+own: a focused mutation that failed distinctly opens the same recovery round any
+other distinct failure opens (:attr:`recovery_open`), and a repeat of a failure
+fingerprint already seen opens nothing.  There is no per-turn allowance of
+recoveries — the send loop reads :attr:`last_round_advanced` and
+:attr:`recovery_open` after every pre-write round and ends the turn only when a
+round both failed to advance it and produced nothing the turn had not already
+seen.
 """
 from __future__ import annotations
 
@@ -376,10 +381,13 @@ class PreEditLoopGuard:
         """Whether a distinct failure has bought the next round as recovery.
 
         The single source of truth for "this failure earns one more ordinary
-        round", shared by the guard's own reread grace and by the focused action
-        turn's bounded mutation recovery.  It is true only after a *distinct*
-        failure fingerprint; a repeat of a failure already seen this turn leaves
-        it false, which is what stops a failure loop from renewing itself.
+        round", shared by the guard's own reread grace and by the send loop's
+        judgement of a focused mutation that did not apply.  It is true only
+        after a *distinct* failure fingerprint; a repeat of a failure already
+        seen this turn leaves it false, which is what stops a failure loop from
+        renewing itself.  Read immediately after :meth:`end_round`, it answers
+        "did the round that just ended produce a failure this turn had not seen
+        before" — the signal that the diagnosis actually changed.
         """
         return self._failure_pending
 

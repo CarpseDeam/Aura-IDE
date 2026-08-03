@@ -116,7 +116,8 @@ class _SendState:
     """Deterministic repeat-read / stagnant-discovery guard before the first write."""
 
     focused_action: FocusedActionState = field(default_factory=FocusedActionState)
-    """The action-serialization request state, including its bounded recovery."""
+    """The action-serialization request state. Tracks the current focused
+    request only — it holds no retry allowance and counts no attempts."""
 
     # --- worker recovery state ---
     worker_flow_last_steering: str = ""

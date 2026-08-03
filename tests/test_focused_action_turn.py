@@ -16,7 +16,8 @@ stalling the loop, not by poking state. What is asserted:
 * the exact tool surface the focused request exposes;
 * each provider's own required-tool mapping;
 * that a write, a rejected write, a blocker, and a contract-violating provider
-  each leave focused action by their own path, with no retry and no cap;
+  each leave focused action by their own path, none of them through a retry
+  allowance or an attempt count;
 * that zero, multiple, unknown, and mixed tool-call responses execute nothing
   and end in exactly one terminal failure response, with the violating prose and
   reasoning discarded rather than preserved;
@@ -299,7 +300,7 @@ def test_large_write_arguments_are_not_truncated(tmp_path):
     assert (tmp_path / "big.py").read_text(encoding="utf-8") == body
 
 
-# ── 12: a rejected write gets one recovery round, then ends truthfully ──────
+# ── 12: a rejected write returns to the loop; only evidence ends the turn ───
 
 
 def _send_rejecting(harness) -> None:
@@ -314,21 +315,20 @@ def _send_rejecting(harness) -> None:
     )
 
 
-def test_rejected_write_reopens_exactly_one_ordinary_recovery_round(tmp_path):
-    """The first distinct focused failure is recoverable, and bounded to one round.
+def test_a_rejected_write_returns_to_the_ordinary_loop(tmp_path):
+    """A rejection is a result to read, not the end of the implementation.
 
-    A rejected write is a distinct failure by the guard's own fingerprint, so it
-    buys exactly one ordinary round to correct the approach — not a fall back
-    into unrestricted pre-write discovery. Here that round gathers nothing new,
-    so the turn ends truthfully rather than handing the act back on no new
-    information.
+    The rejected write hands its result back to the ordinary loop. Here the
+    round that follows repeats a glob whose evidence the turn already has, so
+    it neither advances the turn nor changes the diagnosis — and *that*, not the
+    rejection, is what ends the turn truthfully.
     """
     harness = make_harness(
         tmp_path,
         [
             *discovery_round(),
             WRITE_ROUND,
-            # The one granted recovery round, repeating evidence already seen.
+            # Back in the ordinary loop, repeating evidence already seen.
             assistant(tool_call("d2", "glob", {"pattern": "**/*.py"})),
             assistant(tool_call("d3", "glob", {"pattern": "**/alpha*.py"})),
         ],
@@ -341,23 +341,25 @@ def test_rejected_write_reopens_exactly_one_ordinary_recovery_round(tmp_path):
         False,
         True,
         False,
-    ], "one ordinary recovery round, and no request after it"
+    ], "the act returned to an ordinary round, which learned nothing"
     assert harness.approvals == ["alpha.py"]
     assert ACTION_FAILED_MESSAGE in "".join(
         e.text for e in harness.events if isinstance(e, ContentDelta)
     )
 
 
-def test_a_repeated_rejection_ends_blocked_instead_of_looping(tmp_path):
-    """Recovery is granted once per turn; the same failure never renews it."""
+def test_a_repeated_identical_rejection_ends_truthfully(tmp_path):
+    """New evidence hands the act back; a failure already seen does not."""
     harness = make_harness(
         tmp_path,
         [
             *discovery_round(),
             WRITE_ROUND,
-            # Recovery gathers genuinely new evidence, re-arming the act...
+            # The ordinary round gathers genuinely new evidence, so the act is
+            # handed back for a corrected decision...
             assistant(tool_call("d2", "glob", {"pattern": "**/*.md"})),
-            # ...which is rejected identically. No second recovery follows.
+            # ...but the decision is not corrected, and the identical rejection
+            # teaches the turn nothing it had not already seen.
             WRITE_ROUND,
             assistant(tool_call("d4", "glob", {"pattern": "**/*.txt"})),
         ],
@@ -371,7 +373,7 @@ def test_a_repeated_rejection_ends_blocked_instead_of_looping(tmp_path):
         True,
         False,
         True,
-    ], "at most two focused acts, separated by the one recovery round"
+    ], "new evidence re-armed the act; the repeat of a known failure ended it"
     assert harness.approvals == ["alpha.py", "alpha.py"], (
         "non-vacuous: the write tool really ran twice and was really rejected"
     )
