@@ -324,26 +324,14 @@ def full_script() -> list[list]:
         ],
         # 2. repository read
         _tool_round([("read-1", "read_file", {"path": "test_calc.py"})]),
-        # 3. the decision checkpoint the read earns: the owner, the seam, the
-        #    target file, and the change are all known, so discovery ends here.
-        _tool_round([(
-            "commit-1",
-            "commit_implementation_decision",
-            {
-                "objective": "Implement add() so the suite passes.",
-                "owners": ["calc.py owns the arithmetic used by test_calc"],
-                "target_files": ["calc.py"],
-                "change": "Create calc.add returning the sum of its arguments.",
-            },
-        )]),
-        # 4. the focused act: the write, and only the write
+        # 3. the first edit — the ordinary loop simply continues after it
         [
             ReasoningDelta(text="test_calc imports calc.add; creating it.\n"),
             *_tool_round([
                 ("write-1", "write_file", {"path": "calc.py", "content": BROKEN_CALC}),
             ]),
         ],
-        # 5. TODO advances now that the edit landed, then terminal validation —
+        # 4. TODO advances now that the edit landed, then terminal validation —
         #    which fails
         [
             *_tool_round([(

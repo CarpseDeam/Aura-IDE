@@ -77,12 +77,14 @@ def test_single_capsule_forbids_reopening_settled_decisions() -> None:
     assert "current action, genuinely new evidence, and the immediate next action" in text
     assert "edit as soon as the evidence supports the choice" in text
     assert "must answer a named unresolved question" in text
-    assert "batch independent observations into one response" in text
-    # The enforced alternation is stated, not merely encouraged.
-    assert "the next request is the **decision checkpoint**" in text
-    assert "continue_implementation_discovery" in text
-    assert "exact unresolved implementation question" in text
+    assert "batching independent observations into one response" in text
     assert "apply the change first" in text
+    # The normal loop is a single ordinary catalog, not an enforced alternation
+    # of checkpoint/action request shapes.
+    assert "decision checkpoint" not in text
+    assert "commit_implementation_decision" not in text
+    assert "continue_implementation_discovery" not in text
+    assert "the harness alternates your requests" not in text
 
 
 def test_the_capsule_states_no_budget_for_getting_the_edit_right() -> None:

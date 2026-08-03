@@ -439,9 +439,6 @@ class TestGuardEffectClassification:
             "observation results through non-built-in channels were not "
             "treated as evidence"
         )
-        assert guard.focused is False, (
-            "a round full of new evidence through every channel must not stall"
-        )
 
     def test_unannotated_extensible_tools_are_not_observations(
         self, tmp_path,

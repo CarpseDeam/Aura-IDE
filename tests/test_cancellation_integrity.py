@@ -331,10 +331,10 @@ class TestCancelAfterWork:
         assert history.messages[10]["tool_call_id"] == "w3"
 
 
-# ── 8. focused-action cancellation ──────────────────────────────────────────
+# ── 8. control-tool cancellation ────────────────────────────────────────────
 
 
-class TestFocusedActionCancellation:
+class TestControlToolCancellation:
     def test_a_single_focused_call_is_paired_with_a_synthetic_result(self) -> None:
         history = History()
         history.append_user_text("land the edit")

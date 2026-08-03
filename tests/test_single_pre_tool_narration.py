@@ -12,19 +12,10 @@ Two contracts are under test:
    nor persisted; its ``tool_calls`` survive intact and execute.  A no-tool
    round streams and persists normally.
 2. **Pre-edit loop guard.**  Exact repeated reads before the first applied
-   write are rejected, and the first round that produces no new evidence and
-   no progress is the focused action transition — the send loop answers the
-   next request with the one-required-tool-call action request instead of
-   another reasoning stream.  Unique evidence never stalls *the guard*,
-   truncated reads and their continuations count as evidence, successful
-   commands are progress (failed ones are not), and rereads justified by a
-   failure, a stale-file notice, or pending edit-recovery state stay allowed.
-3. **Implementation discovery stage.**  The guard's rule alone cannot end a
-   turn whose every result is technically novel, so an implementation turn also
-   gets exactly two ordinary discovery hops before the first applied write.
-   Whatever the guard concludes, the third request is the focused action
-   request.  See ``tests/test_implementation_discovery_stage.py`` for the full
-   stage contract.
+   write are rejected while the original result is still in the request, and
+   rereads justified by a failure, a stale-file notice, or pending edit-recovery
+   state stay allowed.  After the first applied write the gate is dormant, so
+   re-reading to verify an edit is normal work.
 """
 
 from __future__ import annotations
@@ -57,8 +48,6 @@ from aura.conversation.tools._types import ApprovalDecision
 from aura.conversation.tools.registry import ToolRegistry
 from aura.model_streams import PRODUCTION_STREAM_HOOK, ModelStreamRegistry
 
-#: These are implementation turns, so a stalled discovery round hands the send
-#: loop the focused action request rather than another reasoning stream.
 IMPLEMENTATION_ROUTE = TaskRoute(
     lane=TaskLane.implementation,
     action="implementation",
@@ -132,51 +121,8 @@ def final_round(text: str) -> list[Event]:
     ]
 
 
-def continue_round(call_id: str = "k0") -> list[Event]:
-    """A decision-checkpoint answer electing one more observation round.
-
-    Production SINGLE puts the checkpoint after every pre-write observation
-    round, so a script with two consecutive observation rounds needs this
-    between them — it is the model saying what it is still trying to find out.
-    """
-    return tool_round([(call_id, "continue_implementation_discovery", {
-        "unresolved_question": f"what else bears on the change ({call_id})?",
-        "needed_evidence": "the contents of the next candidate file",
-    })])
-
-
-def commit_round(call_id: str = "c1", target_files: list[str] | None = None) -> list[Event]:
-    """A decision-checkpoint answer committing the implementation decision."""
-    return tool_round([(call_id, "commit_implementation_decision", {
-        "objective": "Apply the requested change.",
-        "owners": ["the file under test owns the behaviour"],
-        "target_files": target_files or ["notes.md"],
-        "change": "Rewrite the body.",
-    })])
-
-
-def request_kinds(backend: "ScriptedBackend") -> list[str]:
-    """Classify each recorded request by the catalog it exposed."""
-    out: list[str] = []
-    for call in backend.calls:
-        names = {
-            str(t.get("function", {}).get("name", ""))
-            for t in (call.get("tools") or [])
-        }
-        if not names:
-            out.append("completion")
-        elif "commit_implementation_decision" in names and "write_file" not in names:
-            out.append("checkpoint")
-        elif call.get("require_tool_call"):
-            out.append("focused")
-        else:
-            out.append("ordinary")
-    return out
-
-
-def action_requests(backend: "ScriptedBackend") -> list[str]:
-    """The focused *mutation* requests only — checkpoints are not actions."""
-    return [k for k in request_kinds(backend) if k == "focused"]
+def write_round(call_id: str = "w1", *, content: str = "# Notes\n\nnew\n") -> list[Event]:
+    return tool_round([(call_id, "write_file", {"path": "notes.md", "content": content})])
 
 
 class ScriptedBackend:
@@ -193,6 +139,24 @@ class ScriptedBackend:
 
     def messages_for_round(self, index: int) -> list[dict]:
         return self.calls[index]["messages"]
+
+    def all_requests_stable(self) -> list[str]:
+        """Any request whose catalog or require_tool_call broke the stable shape."""
+        violations: list[str] = []
+        reference: list[str] | None = None
+        for index, call in enumerate(self.calls):
+            names = [
+                str(t.get("function", {}).get("name", ""))
+                for t in (call.get("tools") or [])
+                if isinstance(t.get("function"), dict)
+            ]
+            if reference is None:
+                reference = names
+            if names != reference:
+                violations.append(f"request {index} exposed {names} != {reference}")
+            if "require_tool_call" in call:
+                violations.append(f"request {index} sent require_tool_call=True")
+        return violations
 
 
 class Recorder:
@@ -267,6 +231,7 @@ def run(
     recorder: Recorder,
     *,
     max_tool_rounds: int = 12,
+    task_route: TaskRoute | None = IMPLEMENTATION_ROUTE,
 ) -> None:
     manager.send(
         on_event=recorder,
@@ -276,7 +241,7 @@ def run(
         thinking="off",
         hook_name=PRODUCTION_STREAM_HOOK,
         max_tool_rounds=max_tool_rounds,
-        task_route=IMPLEMENTATION_ROUTE,
+        task_route=task_route,
     )
 
 
@@ -465,7 +430,10 @@ class TestConversationalTurnIsUnaffected:
         manager = build_manager(workspace, "What do you think of this project?")
         recorder = Recorder()
 
-        run(manager, recorder)
+        # A conversational turn owes no edit: no production-action route, so the
+        # plain answer closes the turn instead of triggering the
+        # prose-not-terminal continuation.
+        run(manager, recorder, task_route=None)
 
         assert recorder.chat_text == answer
         assert assistant_messages(manager)[-1]["content"] == answer
@@ -505,9 +473,9 @@ class TestRepeatedReadsAreBlocked:
         read_call = ("r1", "read_file", {"path": "notes.md"})
         backend = ScriptedBackend([
             tool_round([read_call]),
-            continue_round(),
             tool_round([("r2", "read_file", {"path": "notes.md"})]),
-            final_round("Stopped re-reading."),
+            write_round("w1"),
+            final_round("Applied."),
         ])
         isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
         manager = build_manager(workspace, "Update notes.md.")
@@ -526,15 +494,17 @@ class TestRepeatedReadsAreBlocked:
             m.get("role") == "tool" and m.get("tool_call_id") == "r2"
             for m in manager.history.messages
         )
+        # The loop kept its stable shape: no narrowed request appeared.
+        assert backend.all_requests_stable() == [], backend.all_requests_stable()
 
     def test_a_different_read_is_not_blocked(
         self, workspace, isolated_streams
     ) -> None:
         backend = ScriptedBackend([
             tool_round([("r1", "read_file", {"path": "notes.md"})]),
-            continue_round(),
             tool_round([("r2", "read_file", {"path": "other.md"})]),
-            final_round("Read both."),
+            write_round("w1"),
+            final_round("Read both and applied."),
         ])
         isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
         manager = build_manager(workspace, "Compare the two notes.")
@@ -550,10 +520,7 @@ class TestRepeatedReadsAreBlocked:
         """Re-reading to verify your own edit is normal work, not a loop."""
         backend = ScriptedBackend([
             tool_round([("r1", "read_file", {"path": "notes.md"})]),
-            commit_round("c1", ["notes.md"]),
-            tool_round([("w1", "write_file", {
-                "path": "notes.md", "content": "# Notes\n\nnew\n",
-            })]),
+            write_round("w1"),
             tool_round([("r2", "read_file", {"path": "notes.md"})]),
             final_round("Verified the write."),
         ])
@@ -577,7 +544,6 @@ class TestLegitimateRereadsSurvive:
         """A failing edit is exactly when the model *should* look again."""
         backend = ScriptedBackend([
             tool_round([("r1", "read_file", {"path": "notes.md"})]),
-            commit_round("c1", ["notes.md"]),
             # A patch that cannot match — the tool fails.
             tool_round([("p1", "patch_file", {
                 "path": "notes.md",
@@ -585,7 +551,8 @@ class TestLegitimateRereadsSurvive:
                 "new_str": "replacement",
             })]),
             tool_round([("r2", "read_file", {"path": "notes.md"})]),
-            final_round("Re-read after the failure."),
+            write_round("w1", content="# Notes\n\npatched body\n"),
+            final_round("Re-read and applied after the failure."),
         ])
         isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
         manager = build_manager(workspace, "Patch notes.md.")
@@ -644,297 +611,8 @@ class TestLegitimateRereadsSurvive:
         assert guard.check("read_file", {"path": "notes.md"}) is not None
 
 
-class TestStalledDiscoveryFiresTheFocusedRequest:
-    """The first round with no new evidence and no progress is the protocol
-    transition: the send loop answers the next request with the focused action
-    request instead of another reasoning stream."""
-
-    def test_unique_reads_are_never_forced_into_focused_action(
-        self, workspace, isolated_streams
-    ) -> None:
-        """Genuinely new evidence continues across as many requests as it needs.
-
-        Every read here returns a different file, so nothing repeats and nothing
-        cycles. A turn like this is working, not circling, and no request,
-        file, token, or time budget may cut it off.
-        """
-        for name in ("alpha.py", "beta.py", "gamma.py", "delta.py"):
-            (workspace / name).write_text(
-                f"# {name}\n\ncontent unique to {name}\n", encoding="utf-8"
-            )
-        rounds: list[list[Event]] = []
-        for i, target in enumerate(
-            ("notes.md", "other.md", "alpha.py", "beta.py", "gamma.py")
-        ):
-            if i:
-                rounds.append(continue_round(f"k{i}"))
-            rounds.append(tool_round([(f"r{i}", "read_file", {"path": target})]))
-        rounds.append(final_round("Enough evidence; implementing."))
-        backend = ScriptedBackend(rounds)
-        isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
-        manager = build_manager(workspace, "Update notes.md.")
-
-        recorder = Recorder()
-        run(manager, recorder)
-
-        reads = [
-            r for r in recorder.of_type(ToolResult) if r.name == "read_file"
-        ]
-        assert len(reads) == 5 and all(r.ok for r in reads), (
-            "non-vacuous: all five sequential reads really executed"
-        )
-        assert not action_requests(backend), (
-            "no request is action-only: every round returned new evidence, and "
-            "each extra observation round was bought by a named unresolved "
-            f"question — got {request_kinds(backend)}"
-        )
-
-    def test_equivalent_evidence_rounds_fire_the_focused_action_request(
-        self, workspace, isolated_streams
-    ) -> None:
-        """Re-reading the same bytes under a new argument is not new evidence,
-        so the round after the stall is the action-serialization request."""
-        rounds: list[list[Event]] = [
-            tool_round([("r0", "read_file", {"path": "notes.md"})]),
-            continue_round(),
-            tool_round([("r1", "read_file", {"path": "notes.md", "_n": 1})]),
-            tool_round([("w1", "write_file", {
-                "path": "notes.md", "content": "# Notes\n\nnew\n",
-            })]),
-            final_round("Applied the change."),
-        ]
-        backend = ScriptedBackend(rounds)
-        isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
-        manager = build_manager(workspace, "Update notes.md.")
-
-        run(manager, Recorder())
-
-        focused = backend.calls[3]
-        assert focused.get("require_tool_call") is True, (
-            "the request after the stalled round must require exactly one tool call"
-        )
-        exposed = {
-            str(t.get("function", {}).get("name", "")) for t in focused.get("tools") or []
-        }
-        assert "write_file" in exposed
-        assert "report_blocker" in exposed
-        assert "read_file" not in exposed
-        # The one authorized act really landed.
-        assert (workspace / "notes.md").read_text(encoding="utf-8") == (
-            "# Notes\n\nnew\n"
-        )
-
-    def test_truncated_reads_allow_focused_continuation(
-        self, workspace, isolated_streams
-    ) -> None:
-        """A truncated read plus range continuations is discovery, not a stall."""
-        from aura.config import MAX_READ_BYTES
-
-        lines = [
-            f"line {i:05d} " + ("x" * 120)
-            for i in range((MAX_READ_BYTES // 100) + 200)
-        ]
-        (workspace / "big.md").write_text("\n".join(lines), encoding="utf-8")
-        rounds: list[list[Event]] = [
-            tool_round([("t0", "read_file", {"path": "big.md"})]),
-            continue_round("k1"),
-            tool_round([("t1", "read_file_range", {
-                "path": "big.md", "start_line": 2100, "end_line": 2200,
-            })]),
-            continue_round("k2"),
-            tool_round([("t2", "read_file_range", {
-                "path": "big.md", "start_line": 2201, "end_line": 2250,
-            })]),
-            final_round("Continuing from the truncated read."),
-        ]
-        backend = ScriptedBackend(rounds)
-        isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
-        recorder = Recorder()
-        manager = build_manager(workspace, "Update big.md.")
-
-        run(manager, recorder)
-
-        # The continuation reads are still ordinary discovery: neither is
-        # refused as a repeat, and both actually execute. The guard has no
-        # quarrel with them — a truncated read's continuation is real evidence.
-        rejected = [
-            r for r in recorder.of_type(ToolResult)
-            if DUPLICATE_READ_REASON in str(r.result)
-        ]
-        assert not rejected, "a truncated read's continuation is never a repeat"
-        assert not action_requests(backend), (
-            "each continuation returns genuinely new bytes, so the turn is still "
-            f"discovering — got {request_kinds(backend)}"
-        )
-
-    def test_identical_results_under_changed_arguments_stall(self) -> None:
-        """Cosmetic argument changes cannot launder the same evidence as new."""
-        guard = PreEditLoopGuard()
-        payload = {
-            "ok": True,
-            "path": "notes.md",
-            "content": "# Notes\n\nold body\n",
-            "truncated": False,
-            "content_hash": "a" * 64,
-            "file_size": 18,
-        }
-        for index in range(2):
-            guard.begin_round()
-            guard.record("read_file", {"path": "notes.md", "_n": index})
-            guard.observe_result("read_file", True, payload)
-            guard.end_round()
-        assert guard.focused is True
-
-    def test_new_search_results_never_stall(self) -> None:
-        """A genuinely new search result is evidence, not a stall."""
-        guard = PreEditLoopGuard()
-        for pattern in ("loop", "guard", "steering"):
-            guard.begin_round()
-            guard.record("grep_search", {"pattern": pattern})
-            guard.observe_result("grep_search", True, {
-                "ok": True,
-                "matches": [{
-                    "path": f"src/{pattern}.py",
-                    "line_number": 1,
-                    "content": f"def {pattern}():",
-                }],
-                "engine": "ripgrep",
-                "searched_files": 3,
-                "skipped_files": 0,
-                "summary": f"found {pattern}",
-            })
-            guard.end_round()
-        assert guard.focused is False
-
-    def test_equivalent_search_results_stall(self) -> None:
-        """The same matches under a different pattern are the same evidence."""
-        guard = PreEditLoopGuard()
-        matches = [
-            {"path": "src/a.py", "line_number": 3, "content": "x = 1"},
-        ]
-        for index in range(2):
-            guard.begin_round()
-            guard.record("grep_search", {"pattern": "x" if index == 0 else "X"})
-            guard.observe_result("grep_search", True, {
-                "ok": True,
-                "matches": matches,
-                "engine": "ripgrep",
-                "searched_files": 7,
-                "skipped_files": 0,
-                "summary": "same matches again",
-            })
-            guard.end_round()
-        assert guard.focused is True
-
-    def test_a_truncated_read_counts_as_new_evidence_then_repeats_stall(self) -> None:
-        """A truncated payload is new evidence; only its repetition stalls."""
-        guard = PreEditLoopGuard()
-        payload = {
-            "ok": True,
-            "path": "big.md",
-            "content": "first 200KB of the file...",
-            "truncated": True,
-            "content_hash": "b" * 64,
-            "file_size": 300000,
-        }
-        guard.begin_round()
-        guard.record("read_file", {"path": "big.md"})
-        guard.observe_result("read_file", True, payload)
-        guard.end_round()
-        assert guard.focused is False, "the truncated read is new evidence"
-
-        guard.begin_round()
-        guard.record("read_file", {"path": "big.md", "_n": 1})
-        guard.observe_result("read_file", True, payload)
-        guard.end_round()
-        assert guard.focused is True, "an identical repeat of it is a stall"
-
-    def test_no_focused_request_when_the_turn_makes_progress(
-        self, workspace, isolated_streams
-    ) -> None:
-        """A turn that applied a write never opens a focused request, and the
-        guard stays dormant for reads after the write."""
-        rounds: list[list[Event]] = [
-            tool_round([("r0", "read_file", {"path": "notes.md"})]),
-            commit_round("c1", ["notes.md"]),
-            tool_round([("w0", "write_file", {
-                "path": "notes.md", "content": "# Notes\n\nnew\n",
-            })]),
-            tool_round([("r1", "read_file", {"path": "other.md"})]),
-            tool_round([("r2", "read_file", {"path": "notes.md", "n": 2})]),
-            tool_round([("r3", "read_file", {"path": "other.md", "n": 3})]),
-            final_round("Finished."),
-        ]
-        backend = ScriptedBackend(rounds)
-        isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
-        manager = build_manager(workspace, "Rewrite notes.md.")
-
-        run(manager, Recorder())
-
-        # The write applied on the request the committed decision handed to the
-        # mutation surface. Every request after it is ordinary: the pre-write
-        # protocol — checkpoint and focused action alike — is over.
-        assert request_kinds(backend) == [
-            "ordinary", "checkpoint", "focused",
-            "ordinary", "ordinary", "ordinary", "ordinary",
-        ], request_kinds(backend)
-
-    def test_successful_terminal_commands_count_as_progress(self) -> None:
-        """Progress is the command's *result*, not the decision to run one."""
-        guard = PreEditLoopGuard()
-        for _ in range(2):
-            guard.begin_round()
-            guard.record("read_file", {"path": "a"})
-            guard.record("run_terminal_command", {"command": "pytest -q"})
-            guard.observe_result(
-                "run_terminal_command", True, json.dumps({"exit_code": 0})
-            )
-            guard.end_round()
-        assert guard.focused is False
-
-    def test_failing_terminal_commands_open_recovery_not_focus(self) -> None:
-        """The bug: intent was recorded as progress before the command ran.
-
-        The failing round opens recovery rather than forcing a mutation. The
-        round after it is the one granted recovery round — and if it recovers
-        nothing, it is the transition, so recovery cannot latch focus off.
-        """
-        guard = PreEditLoopGuard()
-        guard.begin_round()
-        guard.record("read_file", {"path": "a"})
-        guard.record("run_terminal_command", {"command": "pytest -q"})
-        guard.observe_result(
-            "run_terminal_command",
-            False,
-            json.dumps({"exit_code": 1, "command": "pytest -q"}),
-        )
-        guard.end_round()
-
-        assert guard.focused is False
-        assert guard._failure_active is True
-
-    def test_the_todo_tool_does_not_launder_a_stalled_round(self) -> None:
-        """Bookkeeping is not evidence — it must not reset the stall."""
-        guard = PreEditLoopGuard()
-        payload = {
-            "ok": True,
-            "path": "notes.md",
-            "content": "# Notes\n\nold body\n",
-            "truncated": False,
-            "content_hash": "a" * 64,
-            "file_size": 18,
-        }
-        for index in range(2):
-            guard.begin_round()
-            guard.record("update_worker_todo", {"items": []})
-            guard.record("read_file", {"path": "notes.md", "_n": index})
-            guard.observe_result("read_file", True, payload)
-            guard.end_round()
-        assert guard.focused is True
-
-
 class TestEmergencyBrakeIsStillTheBackstop:
-    def test_the_300_call_brake_is_untouched(self) -> None:
+    def test_the_call_ceiling_is_untouched(self) -> None:
         from aura.conversation.tool_limits import MAX_TOOL_CALLS_BY_MODE
 
         assert MAX_TOOL_CALLS_BY_MODE["single"] == 300

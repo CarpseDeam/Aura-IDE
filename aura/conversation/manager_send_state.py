@@ -7,9 +7,9 @@ with a compact, readable state setup instead of a wall of local declarations.
 This module also owns :func:`implementation_action_pending` — the per-turn fact
 that a production SINGLE turn bears a production action it has not yet
 performed.  It is a *fact about the turn*, not a budget: nothing here counts
-requests, files, tokens, or elapsed time, and nothing here ends discovery.
-Whether discovery has stopped moving is decided entirely by the evidence rules
-in :class:`~aura.conversation.pre_edit_loop_guard.PreEditLoopGuard`.
+requests, files, tokens, or elapsed time, and nothing here ends the loop.  The
+loop ends only on a truthful terminal outcome or the generic runaway ceiling —
+never on a count of how much discovery the turn may do.
 """
 from __future__ import annotations
 
@@ -17,7 +17,6 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from aura.conversation.edit_orchestrator import EditRetryLedger
-from aura.conversation.focused_action import FocusedActionState
 from aura.conversation.pre_edit_loop_guard import PreEditLoopGuard
 from aura.conversation.single_content_gate import SingleContentGate
 from aura.conversation.task_router import TaskRoute, route_bears_production_action
@@ -104,6 +103,15 @@ class _SendState:
     last_completion_final_text: str = ""
     planner_dispatch_gate_steered: bool = False
 
+    # --- generic runaway protection (production SINGLE) -------------------
+    #: Consecutive model/tool rounds that executed only observation or
+    #: bookkeeping tools — no mutation or command attempt.  Reset the moment
+    #: the model attempts a mutation or command.
+    observation_only_streak: int = 0
+    #: Whether the steering message has already been appended for the current
+    #: streak, so it is sent at most once per streak.
+    observation_steering_sent: bool = False
+
     # --- worker-only objects (initialised in __post_init__) ---
     limits: ToolLimitState = field(init=False)
     stream_buffer: WorkerStreamBuffer | None = field(init=False)
@@ -114,11 +122,7 @@ class _SendState:
     """Holds each round's ContentDelta until ``Done`` says who owns it."""
 
     pre_edit_guard: PreEditLoopGuard | None = field(init=False)
-    """Deterministic repeat-read / stagnant-discovery guard before the first write."""
-
-    focused_action: FocusedActionState = field(default_factory=FocusedActionState)
-    """The action-serialization request state. Tracks the current focused
-    request only — it holds no retry allowance and counts no attempts."""
+    """Deterministic duplicate-read / write-applied guard before the first write."""
 
     # --- worker recovery state ---
     worker_flow_last_steering: str = ""
@@ -204,8 +208,9 @@ class _SendState:
         edit, the edit has not happened, and nothing was completed.
 
         Believing it there had a concrete cost.  ``task_completion_context``
-        vetoes the focused action transition, so one successful ``git_status``
-        before the first write bought an unbounded pre-write discovery loop.
+        would let one successful ``git_status`` before the first write end the
+        turn as if the edit had happened, which is why an implementation turn
+        before its first applied write answers ``False``.
         """
         return not self.implementation_action_pending()
 

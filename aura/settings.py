@@ -101,7 +101,7 @@ class AppSettings:
     auto_approve: bool = False
     auto_summon_drones: bool = False
     sandbox_mode: str = DEFAULT_SANDBOX_MODE
-    max_tool_rounds: int = 300
+    max_tool_rounds: int = 48
     terminal_window_geometry: str = ""
     drone_reports_window_geometry: str = ""
     drone_workbay_window_geometry: str = ""

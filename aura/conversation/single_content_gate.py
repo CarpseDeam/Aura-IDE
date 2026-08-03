@@ -55,10 +55,6 @@ class SingleContentGate:
 
     _buffered: list[ContentDelta] = field(default_factory=list)
 
-    #: Whether the current round is a focused action round whose prose final is
-    #: held for the manager to discard (a provider-contract violation).
-    _holding_final: bool = False
-
     #: Telemetry — how many rounds and characters of pre-tool essay were dropped.
     suppressed_rounds: int = 0
     suppressed_chars: int = 0
@@ -68,23 +64,17 @@ class SingleContentGate:
     def begin_round(self) -> None:
         """Start holding content for one model round."""
         self._buffered.clear()
-        self._holding_final = False
 
     def capture(self, event: ContentDelta) -> None:
         """Hold one content delta instead of forwarding it."""
         self._buffered.append(event)
 
-    def resolve_done(self, event: Done, on_event: EventCallback, *, discard_prose_final: bool = False) -> Done:
+    def resolve_done(self, event: Done, on_event: EventCallback) -> Done:
         """Decide the round and return the ``Done`` that should be forwarded.
 
         A tool-calling round drops its buffer and yields a message whose
         ``content`` is normalised, so neither chat nor history ever sees the
         pre-tool essay.  Any other round replays its buffer verbatim.
-
-        ``discard_prose_final`` marks a focused action round: its contract is
-        exactly one tool call, so a prose ``Done`` is a violation and the
-        buffer is held instead of replayed — the manager discards it and
-        streams the single factual failure response.
         """
         message = event.full_message if isinstance(event.full_message, dict) else None
         if message is not None and message.get("tool_calls"):
@@ -97,38 +87,17 @@ class SingleContentGate:
             normalize_tool_call_message(message)
             return event
 
-        if discard_prose_final:
-            self._holding_final = True
-            return event
-
         self.flush(on_event)
         return event
 
     def flush(self, on_event: EventCallback) -> None:
-        """Emit whatever is still held, in order. No-op once a round resolved.
-
-        A focused action round's prose final is never replayed here — it is
-        held for the manager, which either discards it (contract violation) or
-        lets the completion path own the turn's one factual response.
-        """
-        if self._holding_final:
-            return
+        """Emit whatever is still held, in order. No-op once a round resolved."""
         if not self._buffered:
             return
         buffered = list(self._buffered)
         self._buffered.clear()
         for delta in buffered:
             on_event(delta)
-
-    def discard_buffer(self) -> None:
-        """Drop whatever is still held without emitting it.
-
-        Used when a focused action round ends in a provider-contract failure:
-        the violating pre-tool prose must never reach chat or history, so the
-        buffered deltas are thrown away rather than flushed.
-        """
-        self._buffered.clear()
-        self._holding_final = False
 
     # ---- introspection ---------------------------------------------------
 

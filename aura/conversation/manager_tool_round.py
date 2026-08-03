@@ -17,11 +17,7 @@ from aura.conversation.dispatch_tool_round import (
     DispatchToolRoundContext,
     handle_dispatch_to_worker_round,
 )
-from aura.conversation.focused_action import (
-    COMMIT_IMPLEMENTATION_DECISION,
-    CONTINUE_IMPLEMENTATION_DISCOVERY,
-    REPORT_ALREADY_SATISFIED,
-)
+from aura.conversation._report_tools import REPORT_ALREADY_SATISFIED
 from aura.conversation.history import History
 from aura.conversation.manager_recovery import (
     update_worker_recovery_state,
@@ -660,58 +656,6 @@ class ToolRoundRunner:
                 and payload.get("applied") is False
             ):
                 already_satisfied_succeeded = True
-            break
-
-        # Whether a ``commit_implementation_decision`` call in this round
-        # actually succeeded with the structured packet. The transition to
-        # focused action is owned by ``FocusedActionState`` and turns on this
-        # fact alone — never on the tool name, never on assistant prose. It is
-        # applied here rather than carried out on the round outcome so that a
-        # round which also triggers an early return (a completion, a silent
-        # preflight) still leaves the committed decision recorded.
-        for task in tasks:
-            if task["name"] != COMMIT_IMPLEMENTATION_DECISION:
-                continue
-            res = results_by_id.get(task["id"])
-            if not res:
-                continue
-            payload = parse_tool_payload(str(res.get("result_payload", "")))
-            if (
-                bool(payload.get("ok"))
-                and bool(payload.get("implementation_decision_committed"))
-                and payload.get("mutation") is False
-                and payload.get("applied") is False
-            ):
-                state.focused_action.commit_decision(
-                    str(payload.get("decision_id", ""))
-                )
-            break
-
-        # Whether a ``continue_implementation_discovery`` call in this round
-        # actually succeeded with the structured packet. It is the *only* way an
-        # additional observation round is granted, and it turns on this fact
-        # alone — never on the tool name, never on assistant prose. An invalid
-        # call is an ordinary failed tool result: the checkpoint returns and
-        # asks again.
-        for task in tasks:
-            if task["name"] != CONTINUE_IMPLEMENTATION_DISCOVERY:
-                continue
-            res = results_by_id.get(task["id"])
-            if not res:
-                continue
-            payload = parse_tool_payload(str(res.get("result_payload", "")))
-            if (
-                bool(payload.get("ok"))
-                and bool(payload.get("implementation_discovery_continued"))
-                and payload.get("mutation") is False
-                and payload.get("applied") is False
-            ):
-                unresolved = payload.get("unresolved")
-                state.focused_action.continue_discovery(
-                    str(unresolved.get("unresolved_question", ""))
-                    if isinstance(unresolved, dict)
-                    else ""
-                )
             break
 
         completed_dispatch_for_final = False

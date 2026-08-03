@@ -34,22 +34,12 @@ class StreamEventRouter:
         mode: str = "single",
         stream_buffer: WorkerStreamBuffer | None = None,
         content_gate: SingleContentGate | None = None,
-        discard_prose_final: bool = False,
-        defer_done: bool = False,
     ) -> None:
         self._planner_hygiene = planner_hygiene
         self._on_event = on_event
         self._mode = mode
         self._stream_buffer = stream_buffer
         self._content_gate = content_gate
-        self._discard_prose_final = discard_prose_final
-        # A focused action round's ``Done`` is held here instead of being
-        # projected as it arrives: whether the provider honoured the
-        # exactly-one-tool-call contract is not known until the manager has
-        # inspected the full message, and a violating response must never
-        # project a ``Done`` of its own before the factual failure response.
-        self._defer_done = defer_done
-        self._deferred_done: Done | None = None
 
     def process(self, ev: Event) -> StreamEventResult:
         # 1. Planner ContentDelta filter
@@ -81,20 +71,12 @@ class StreamEventRouter:
                 self._content_gate.capture(ev)
                 return StreamEventResult()
             if isinstance(ev, Done):
-                ev = self._content_gate.resolve_done(
-                    ev, self._on_event, discard_prose_final=self._discard_prose_final
-                )
+                ev = self._content_gate.resolve_done(ev, self._on_event)
             elif isinstance(ev, ApiError):
                 self._content_gate.flush(self._on_event)
 
         # 4. Worker stream_buffer routing / normal forwarding.
-        #
-        # A deferred ``Done`` is held rather than forwarded; the manager
-        # releases or discards it once the focused contract has been decided.
-        # Everything else on the stream is routed exactly as before.
-        if self._defer_done and isinstance(ev, Done):
-            self._deferred_done = ev
-        elif self._mode == "worker" and self._stream_buffer is not None:
+        if self._mode == "worker" and self._stream_buffer is not None:
             self._stream_buffer.capture_or_forward(ev, self._on_event)
         else:
             self._on_event(ev)
@@ -109,36 +91,6 @@ class StreamEventRouter:
 
         # 7. Default
         return StreamEventResult()
-
-    # ---- deferred Done ---------------------------------------------------
-
-    @property
-    def has_deferred_done(self) -> bool:
-        """Whether a held ``Done`` is still waiting to be released or dropped."""
-        return self._deferred_done is not None
-
-    def release_deferred_done(self) -> bool:
-        """Forward the held ``Done`` exactly once, if there is one.
-
-        Clearing before forwarding is what makes "exactly once" structural: a
-        second call after a release is a no-op, so no caller can double-project
-        the provider's terminal event.
-        """
-        event = self._deferred_done
-        if event is None:
-            return False
-        self._deferred_done = None
-        self._on_event(event)
-        return True
-
-    def discard_deferred_done(self) -> None:
-        """Drop the held ``Done`` without ever projecting it.
-
-        Used when the focused response violated the provider contract: that
-        response is discarded whole, so its terminal event must not reach the
-        UI either — the turn's only ``Done`` is the factual failure's.
-        """
-        self._deferred_done = None
 
 
 __all__ = ["StreamEventRouter", "StreamEventResult"]

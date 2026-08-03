@@ -1,29 +1,21 @@
-"""A failed command is not progress, and does not reopen pre-edit planning.
+"""A failed command is not progress, and failures stay rereadable.
 
-The production failure this pins down: ``PreEditLoopGuard.record()`` marked
-every terminal call as forward progress *before the command ran*, and
-``observe_result()`` then handed the failure a round of reread grace without
-undoing that progress. A command that failed therefore reset the stall counter
-and unlocked rereads at the same time, so a turn could fail the same validation
-over and over while the guard reported movement and never reached a decision.
+The pre-edit guard's one gate is the exact-repeat read before the first applied
+write.  Failures of any tool are truth: they open one round of reread grace so
+the model can look again at whatever the failure contradicts, and they never
+reset any boundary on intent alone — a command that is about to fail is not
+progress because its result has not been seen.
 
 The contract asserted here:
 
 * tool intent proves nothing — only results do;
-* an applied write is progress;
-* a **successful** terminal or diagnostic result is progress;
-* a **failed** command is not, so the round stays stalled and failure recovery
-  opens instead of a push into mutation;
-* one distinct failure opens recovery **for exactly one round**; repeating the
-  same command into the same failure renews nothing and is not new evidence;
-* a corrected command is never blocked, and when it succeeds recovery closes;
-* a distinct failure holds the focused action request off for its one recovery
-  round — the agent gets a chance to fix the failing step rather than being
-  forced to mutate — but a recovery round that recovers nothing closes recovery
-  and is itself the focused transition, so recovery cannot latch forever;
+* an applied write is the one fact that flips the guard's ``write_applied``;
+* a write that did not apply is never progress (fail-closed ``applied: True``);
+* a failed result opens exactly one round of reread grace;
 * driven through the real manager loop, a turn that starts with a failing
-  validation still reaches an edit — or a clear stop — in a bounded number of
-  rounds, with its tool output and structured failures intact.
+  command still reaches an edit in a bounded number of rounds, with its tool
+  output and structured failures intact and every request on the stable
+  catalog.
 """
 
 from __future__ import annotations
@@ -78,78 +70,13 @@ def succeeding_round(guard: PreEditLoopGuard, tool: str, payload: dict) -> None:
     guard.end_round()
 
 
-def burn_discovery(guard: PreEditLoopGuard, count: int) -> None:
-    """Rounds of genuinely new evidence, so the guard is not stalled."""
-    for i in range(count):
-        guard.begin_round()
-        args = {"path": f"src/m{i}.py"}
-        guard.record("read_file", args)
-        guard.observe_result(
-            "read_file", True, json.dumps({"path": args["path"], "body": i})
-        )
-        guard.end_round()
-
-
-# ── intent is not progress ──────────────────────────────────────────────────
-
-
-class TestIntentIsNotProgress:
-
-    @pytest.mark.parametrize("tool", sorted(COMMAND_TOOLS))
-    def test_recording_a_command_call_does_not_claim_progress(self, tool: str) -> None:
-        guard = PreEditLoopGuard()
-        guard.begin_round()
-        guard.record(tool, {"command": "pytest"})
-        guard.end_round()
-
-        assert guard._round_made_progress is False, (
-            "asking for a command is not evidence that anything moved"
-        )
-        # No result was observed, so the round cannot be a stalled transition.
-        assert guard.focused is False
-
-    def test_record_never_sets_the_round_progress_flag(self) -> None:
-        guard = PreEditLoopGuard()
-        guard.begin_round()
-        for tool in sorted(COMMAND_TOOLS | {"write_file"}):
-            guard.record(tool, {})
-
-        assert guard._round_made_progress is False
-
-    def test_the_diagnostic_tool_is_a_command_tool(self) -> None:
-        assert "run_diagnostic_command" in DIAGNOSTIC_TOOLS
-        assert DIAGNOSTIC_TOOLS <= COMMAND_TOOLS
-        assert "run_terminal_command" in COMMAND_TOOLS
-
-
 # ── results decide ──────────────────────────────────────────────────────────
 
 
 class TestResultsDecideProgress:
 
-    @pytest.mark.parametrize("tool", sorted(COMMAND_TOOLS))
-    def test_a_failed_command_opens_recovery_not_mutation(self, tool: str) -> None:
-        guard = PreEditLoopGuard()
-
-        failing_round(guard, tool, FAILED_COMMAND)
-
-        assert guard.focused is False, "a failure must not push a mutation"
-        assert guard._failure_active is True
-        assert guard._failure_pending is True
-
-    @pytest.mark.parametrize("tool", sorted(COMMAND_TOOLS))
-    def test_a_successful_command_closes_recovery(self, tool: str) -> None:
-        guard = PreEditLoopGuard()
-
-        failing_round(guard, tool, FAILED_COMMAND)
-        succeeding_round(guard, tool, OK_COMMAND)
-
-        assert guard._failure_active is False
-        assert guard.focused is False
-
     def test_an_applied_write_is_progress(self) -> None:
         guard = PreEditLoopGuard()
-        failing_round(guard, "run_diagnostic_command", FAILED_COMMAND)
 
         guard.begin_round()
         guard.record("write_file", {"path": "notes.md"})
@@ -157,8 +84,9 @@ class TestResultsDecideProgress:
         guard.end_round()
 
         assert guard.write_applied is True
-        assert guard._failure_active is False
-        assert guard.focused is False
+        # After the write, the duplicate-read gate is dormant.
+        guard.begin_round()
+        assert guard.check("read_file", {"path": "notes.md"}) is None
 
     def test_a_write_that_did_not_apply_is_not_progress(self) -> None:
         guard = PreEditLoopGuard()
@@ -200,7 +128,6 @@ class TestResultsDecideProgress:
         guard.end_round()
 
         assert guard.write_applied is False
-        assert guard._round_made_progress is False
 
     def test_an_explicit_applied_true_payload_is_an_applied_write(self) -> None:
         guard = PreEditLoopGuard()
@@ -210,15 +137,14 @@ class TestResultsDecideProgress:
         guard.end_round()
 
         assert guard.write_applied is True
-        assert guard._round_made_progress is True
 
 
-# ── failure grace is spent once per distinct failure ────────────────────────
+# ── failure grace is spent per round ────────────────────────────────────────
 
 
 class TestFailureGrace:
 
-    def test_one_distinct_failure_buys_one_recovery_round(self) -> None:
+    def test_one_failure_buys_one_reread_round(self) -> None:
         guard = PreEditLoopGuard()
         guard.begin_round()
         guard.record("read_file", {"path": "notes.md"})
@@ -236,74 +162,17 @@ class TestFailureGrace:
         guard.begin_round()
         assert guard.check("read_file", {"path": "notes.md"}) is not None
 
-    def test_repeating_the_same_failure_renews_nothing(self) -> None:
+    def test_a_failed_read_opens_the_same_reread_grace(self) -> None:
         guard = PreEditLoopGuard()
         guard.begin_round()
         guard.record("read_file", {"path": "notes.md"})
+        guard.observe_result("read_file", False, json.dumps({"error": "no such file"}))
         guard.end_round()
 
-        for _ in range(4):
-            failing_round(guard, "run_diagnostic_command", FAILED_COMMAND)
-
         guard.begin_round()
-        assert guard.check("read_file", {"path": "notes.md"}) is not None, (
-            "retrying one broken command must not buy grace forever"
+        assert guard.check("read_file", {"path": "notes.md"}) is None, (
+            "the failed read's round grants one reread"
         )
-        assert guard.repeated_failures == 3
-
-    def test_a_genuinely_different_failure_buys_its_own_round(self) -> None:
-        guard = PreEditLoopGuard()
-        guard.begin_round()
-        guard.record("read_file", {"path": "notes.md"})
-        guard.end_round()
-
-        failing_round(guard, "run_diagnostic_command", FAILED_COMMAND)
-        for _ in range(3):
-            guard.begin_round()
-            guard.end_round()
-        assert guard.check("read_file", {"path": "notes.md"}) is not None
-
-        failing_round(
-            guard,
-            "run_diagnostic_command",
-            {**FAILED_COMMAND,
-             "failure_class": "diagnostic_command_path_escapes_workspace",
-             "requested_command": "cat ../../etc/passwd"},
-        )
-        guard.begin_round()
-        assert guard.check("read_file", {"path": "notes.md"}) is None
-
-    def test_repeated_failures_are_not_new_evidence(self) -> None:
-        guard = PreEditLoopGuard()
-        for _ in range(5):
-            failing_round(guard, "run_terminal_command", FAILED_COMMAND)
-
-        assert guard.seen_evidence == set()
-
-    def test_a_repeated_failure_does_not_reopen_recovery(self) -> None:
-        """The second identical failure is a recovery round that recovered
-        nothing — it closes recovery instead of granting another one."""
-        guard = PreEditLoopGuard()
-        failing_round(guard, "run_terminal_command", FAILED_COMMAND)
-        assert guard._failure_active is True
-
-        failing_round(guard, "run_terminal_command", FAILED_COMMAND)
-
-        assert guard.repeated_failures == 1
-        assert guard._failure_active is False, "recovery must not renew itself"
-        assert guard._failure_pending is False
-        assert guard.focused is True, (
-            "a recovery round that recovered nothing is the focused transition"
-        )
-
-    def test_recovery_is_never_latched_open(self) -> None:
-        """However long the same command keeps failing, recovery is one round."""
-        guard = PreEditLoopGuard()
-        for _ in range(8):
-            failing_round(guard, "run_diagnostic_command", FAILED_COMMAND)
-
-        assert guard._failure_active is False
-        assert guard._failure_pending is False
 
     def test_the_same_failure_has_one_fingerprint(self) -> None:
         first = failure_fingerprint("run_diagnostic_command", json.dumps(FAILED_COMMAND))
@@ -315,98 +184,6 @@ class TestFailureGrace:
 
         assert first == again
         assert first != other
-
-
-# ── failures hold focus off; corrections still work ─────────────────────────
-
-
-class TestFailuresHoldFocusOffForOneRound:
-
-    def test_the_failing_round_itself_never_pushes_into_focused_mutation(
-        self,
-    ) -> None:
-        guard = PreEditLoopGuard()
-        burn_discovery(guard, 2)
-        failing_round(guard, "run_diagnostic_command", FAILED_COMMAND)
-
-        assert guard.focused is False, (
-            "a fresh distinct failure must not force a mutation; it grants the "
-            "agent one round to correct the failing step"
-        )
-        assert guard._failure_active is True
-
-    def test_a_stagnant_recovery_round_enters_focused_action(self) -> None:
-        """Discovery evidence, then a failure, then a stall.
-
-        The stall is the granted recovery round. It recovered nothing — no
-        progress, no new evidence, no new distinct failure — so recovery closes
-        there and that same round is the focused transition. Latching recovery
-        open instead is what let the turn circle indefinitely.
-        """
-        guard = PreEditLoopGuard()
-        burn_discovery(guard, 4)
-        failing_round(guard, "run_terminal_command", FAILED_COMMAND)
-
-        guard.begin_round()
-        guard.record("read_file", {"path": "src/m0.py"})
-        guard.observe_result(
-            "read_file", True, json.dumps({"path": "src/m0.py", "body": 0})
-        )
-        guard.end_round()
-
-        assert guard.focused is True
-        assert guard._failure_active is False
-
-    def test_a_corrected_command_is_never_blocked(self) -> None:
-        guard = PreEditLoopGuard()
-        for _ in range(6):
-            failing_round(guard, "run_diagnostic_command", FAILED_COMMAND)
-
-        for tool in sorted(COMMAND_TOOLS):
-            assert guard.check(tool, {"command": "python -m pytest -q"}) is None
-
-    def test_a_successful_correction_closes_recovery_without_focus(self) -> None:
-        guard = PreEditLoopGuard()
-        failing_round(guard, "run_diagnostic_command", FAILED_COMMAND)
-        assert guard._failure_active is True
-
-        succeeding_round(guard, "run_diagnostic_command", OK_COMMAND)
-
-        assert guard._failure_active is False
-        assert guard.focused is False
-
-    def test_new_evidence_in_the_recovery_round_resolves_recovery(self) -> None:
-        """Recovery is resolved by evidence as well as by progress, and the
-        turn keeps its ordinary reasoning round."""
-        guard = PreEditLoopGuard()
-        burn_discovery(guard, 1)
-        failing_round(guard, "run_terminal_command", FAILED_COMMAND)
-
-        guard.begin_round()
-        guard.record("read_file", {"path": "src/new.py"})
-        guard.observe_result(
-            "read_file", True, json.dumps({"path": "src/new.py", "body": "fresh"})
-        )
-        guard.end_round()
-
-        assert guard._failure_active is False
-        assert guard._failure_pending is False
-        assert guard.focused is False
-
-    def test_a_second_distinct_failure_opens_its_own_recovery_round(self) -> None:
-        guard = PreEditLoopGuard()
-        failing_round(guard, "run_diagnostic_command", FAILED_COMMAND)
-        failing_round(
-            guard,
-            "run_diagnostic_command",
-            {**FAILED_COMMAND,
-             "failure_class": "diagnostic_command_path_escapes_workspace",
-             "requested_command": "cat ../../etc/passwd"},
-        )
-
-        assert guard._failure_active is True
-        assert guard._failure_pending is True
-        assert guard.focused is False
 
 
 # ── the real manager loop ───────────────────────────────────────────────────
@@ -427,18 +204,6 @@ BAD_COMMAND = "npm install left-pad"
 # Read-only and allowed: `python -c` is refused outright, since whether an
 # inline program only inspects is not a judgement the tool can make.
 GOOD_COMMAND = "python --version"
-
-
-def no_focused_request_fired(backend: ScriptedBackend) -> bool:
-    """The focused action request never fired: no call required a tool call."""
-    return not any(c.get("require_tool_call") for c in backend.calls)
-
-
-def focused_request_indexes(backend: ScriptedBackend) -> list[int]:
-    """Indexes of the requests that demanded exactly one action call."""
-    return [
-        i for i, c in enumerate(backend.calls) if c.get("require_tool_call")
-    ]
 
 
 class TestBoundedProgressionThroughTheRealLoop:
@@ -474,19 +239,19 @@ class TestBoundedProgressionThroughTheRealLoop:
         assert (project / "notes.md").read_text(encoding="utf-8") == (
             "# Notes\n\nfixed body\n"
         )
-        # Recovery did its job: the distinct failure opened it, the corrected
-        # command ran in the round it granted and succeeded, and that success is
-        # real forward progress. Nothing ever stalled and nothing repeated, so
-        # the turn was never pushed into the focused action request at all — it
-        # simply did the work and edited on an ordinary request.
-        assert focused_request_indexes(backend) == []
+        # Every request used the one stable catalog — no narrowed request.
+        assert backend.all_requests_stable() == [], backend.all_requests_stable()
 
     def test_the_failures_stay_visible_and_structured(
         self, project, isolated_streams  # noqa: F811
     ) -> None:
         rounds = self._script([
             tool_round([("d2", "run_diagnostic_command", {"command": GOOD_COMMAND})]),
-            final_round("Corrected the command."),
+            tool_round([("w0", "write_file", {
+                "path": "notes.md",
+                "content": "# Notes\n\ncorrected body\n",
+            })]),
+            final_round("Corrected the command and applied the edit."),
         ])
         backend = ScriptedBackend(rounds)
         isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
@@ -502,48 +267,6 @@ class TestBoundedProgressionThroughTheRealLoop:
         assert "install" in rejected
         # The corrected command's real output survives to the transcript.
         assert "Python" in rejected
-
-    def test_a_turn_that_only_fails_stops_instead_of_circling(
-        self, project, isolated_streams  # noqa: F811
-    ) -> None:
-        """The recovery round re-runs the same broken command and recovers
-        nothing, so the turn stops circling: recovery closes and the focused
-        action request fires instead of a third identical validation round.
-
-        The scripted model then answers that focused request with prose. That is
-        a formatting disagreement, not an impossible task, so the turn does not
-        die on it: nothing executes, and the *same* focused request goes out
-        again carrying one explicit correction. Here the model repeats the
-        identical shape, which is evidence that this request shape is not
-        working — so the send loop falls back to the ordinary production
-        request, evidence intact, rather than ending the coding task.
-        """
-        rounds = self._script([
-            tool_round([("d1", "run_diagnostic_command", {"command": BAD_COMMAND})]),
-            final_round("Blocked: this command cannot run as a diagnostic."),
-            final_round("Blocked: this command cannot run as a diagnostic."),
-            final_round("Blocked: this command cannot run as a diagnostic."),
-        ])
-        backend = ScriptedBackend(rounds)
-        isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
-        manager = build_manager(project, "Validate the project.")
-
-        run(manager, Recorder())
-
-        assert [bool(c.get("require_tool_call")) for c in backend.calls] == [
-            False, False, True, True, False,
-        ], (
-            "the stagnant recovery round hands the loop the focused request, "
-            "the unusable prose response is corrected inside focused mode, and "
-            "the repeat falls back to the ordinary request"
-        )
-        # Nothing was written and nothing pretended otherwise.
-        assert (project / "notes.md").read_text(encoding="utf-8") == (
-            "# Notes\n\nold body\n"
-        )
-        assert manager.last_turn_provider_contract_failure is False, (
-            "a response shape is never a failed coding task"
-        )
 
 
 def test_no_new_owner_was_introduced() -> None:

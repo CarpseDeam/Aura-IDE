@@ -1,4 +1,4 @@
-"""Handlers for the focused action turn's control tools.
+"""Handlers for the production SINGLE exit tools.
 
 ``report_blocker`` is the exit hatch for an attempt that cannot be carried out.
 ``report_already_satisfied`` is the exit hatch for an attempt the repository
@@ -6,11 +6,9 @@ already satisfies: the model inspected authoritative repository evidence and
 records, explicitly, that the requested state already exists and no change is
 required.
 
-Neither tool is in any ordinary catalog; each reaches the model only through
-:meth:`aura.conversation.tools.catalog.ToolCatalog.build_focused_action_tool_defs`.
-The handlers stay registered like every other handler so a replayed historical
-call still resolves, and so the ordinary executor path — approvals, receipts,
-history pairing — runs unchanged.
+Both are ordinary tools on the stable production catalog, so their handlers
+resolve through the ordinary executor path — approvals, receipts, history
+pairing — exactly like any other tool.
 
 Both perform no mutation of any kind: they read nothing, write nothing, and
 touch no workspace state.  All each does is turn the model's stated outcome
@@ -24,8 +22,8 @@ from aura.conversation.tools._types import ApprovalCallback, ToolExecResult
 
 
 class BlockerHandlersMixin:
-    """Provides ``report_blocker`` / ``report_already_satisfied``, the focused
-    action turn's clean exits."""
+    """Provides ``report_blocker`` / ``report_already_satisfied``, the
+    production SINGLE clean exits."""
 
     def _handle_report_blocker(
         self,

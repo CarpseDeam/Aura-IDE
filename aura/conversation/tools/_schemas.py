@@ -1993,13 +1993,12 @@ WEB_SEARCH_TOOL_DEF: dict[str, Any] = {
 }
 
 
-#: The one control tool exposed during a focused action request.
+#: The production SINGLE exit hatch for an attempt that cannot be carried out.
 #:
-#: It is deliberately absent from every ordinary catalog: the model may only
-#: reach it when the send loop has already decided that discovery is finished
-#: and this turn owes exactly one action. It mutates nothing — it serializes
-#: "I cannot make this edit, and here is why" into structured data so the turn
-#: can end honestly instead of reopening planning.
+#: An ordinary tool on the stable production catalog, alongside
+#: ``report_already_satisfied``. It mutates nothing — it serializes "I cannot
+#: make this edit, and here is why" into structured data so the turn can end
+#: honestly instead of reopening planning.
 REPORT_BLOCKER_TOOL_DEF: dict[str, Any] = {
     "type": "function",
     "function": {
@@ -2039,153 +2038,15 @@ REPORT_BLOCKER_TOOL_DEF: dict[str, Any] = {
 }
 
 
-#: The production single agent's explicit transition from repository discovery
-#: to implementation.
+#: The production SINGLE exit hatch for an attempt the repository already
+#: satisfies: the requested state already exists, so no change is required.
 #:
-#: It is not a planner, a second agent, or a workflow framework: it records, in
-#: one compact structured packet, the decision the turn has *already* reached —
-#: what it is doing, who owns the surface, which files it will edit, what the
-#: change is, and how it will check it.  Recording it is what lets the send loop
-#: stop opening ordinary discovery requests, and what lets detailed source
-#: evidence retire later without the model having to rediscover the decision.
-#:
-#: Exposed only on the ordinary production SINGLE tool surface — never in
-#: read-only mode, never in Planner compatibility mode, and never in the focused
-#: action catalog, where the decision it records has already been made.
-COMMIT_IMPLEMENTATION_DECISION_TOOL_DEF: dict[str, Any] = {
-    "type": "function",
-    "function": {
-        "name": "commit_implementation_decision",
-        "description": (
-            "Record the implementation decision you have reached and begin "
-            "implementing. Call this as soon as you can name the authoritative "
-            "owner, the concrete seams, the target files, and the intended "
-            "change. Once those facts are known, do not continue surveying "
-            "adjacent implementations merely to increase confidence. "
-            "Validation-tool discovery — test runners, executables, optional "
-            "validation infrastructure — normally belongs after the first "
-            "applied mutation, unless the requested change itself concerns "
-            "tooling or cannot be implemented without generated/API "
-            "information. The next request after this call is the focused "
-            "action request, which exposes only the editing tools, so commit "
-            "the decision you actually intend to carry out. Performs no "
-            "mutation."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "objective": {
-                    "type": "string",
-                    "description": (
-                        "One sentence naming the change the user asked for."
-                    ),
-                },
-                "owners": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": (
-                        "The authoritative owners and seams you established — "
-                        "the class, script, node, or field that actually owns "
-                        "the behaviour, and the seam you will edit through."
-                    ),
-                },
-                "target_files": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": (
-                        "The concrete files you expect to edit or create."
-                    ),
-                },
-                "change": {
-                    "type": "string",
-                    "description": (
-                        "The intended implementation, concretely: what you will "
-                        "add, alter, or remove in those files."
-                    ),
-                },
-                "validation": {
-                    "type": "string",
-                    "description": (
-                        "Optional: the focused check you will run after the "
-                        "edit lands. Do not go hunting for a test runner or an "
-                        "executable to fill this in before editing."
-                    ),
-                },
-            },
-            "required": ["objective", "owners", "target_files", "change"],
-        },
-    },
-}
-
-
-#: The decision checkpoint's other answer: discovery is genuinely unfinished.
-#:
-#: Bookkeeping only — it reads nothing, writes nothing, and touches no workspace
-#: state.  What it does is make "keep looking" cost a *named* implementation
-#: question and the specific evidence that would answer it, so an additional
-#: observation round can never be an unexamined continuation of the last one.
-#: Deliberately absent from every ordinary catalog: it is only meaningful at the
-#: checkpoint, which is the one request that asks the question it answers.
-CONTINUE_IMPLEMENTATION_DISCOVERY_TOOL_DEF: dict[str, Any] = {
-    "type": "function",
-    "function": {
-        "name": "continue_implementation_discovery",
-        "description": (
-            "Record that one specific implementation question is still "
-            "unanswered, and take exactly one more observation round to answer "
-            "it. Name the question and the repository evidence that would "
-            "settle it — not a general wish for more confidence. Do not use "
-            "this to survey adjacent subsystems, neighbouring examples, test "
-            "runners, executable locations, or optional validation "
-            "infrastructure: those belong after the first applied mutation "
-            "unless one of them *is* the unresolved implementation question. "
-            "If you can already name the owner, the seams, the target files, "
-            "and the change, call commit_implementation_decision instead. "
-            "Performs no mutation."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "unresolved_question": {
-                    "type": "string",
-                    "description": (
-                        "The exact implementation question that remains "
-                        "unanswered, in one sentence."
-                    ),
-                },
-                "needed_evidence": {
-                    "type": "string",
-                    "description": (
-                        "The specific repository evidence that would answer "
-                        "it — the symbol, definition, call site, or result you "
-                        "need to see."
-                    ),
-                },
-                "likely_files": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": (
-                        "Optional: the concrete files or paths you expect to "
-                        "contain that evidence."
-                    ),
-                },
-            },
-            "required": ["unresolved_question", "needed_evidence"],
-        },
-    },
-}
-
-
-#: The focused action turn's second exit hatch: the requested state already
-#: exists in the repository, so no change is required.
-#:
-#: Like ``report_blocker`` it is deliberately absent from every ordinary
-#: catalog: the model may only reach it when the send loop has already decided
-#: that discovery is finished and this turn owes exactly one action.  It
-#: mutates nothing — it serializes "the change is already present, and here is
-#: the repository evidence" into structured data so the turn can complete
-#: truthfully without manufacturing an edit.  The structured result is what the
-#: completion receipt reads; plain assistant prose is never proof.
+#: An ordinary tool on the stable production catalog, alongside
+#: ``report_blocker``.  It mutates nothing — it serializes "the change is
+#: already present, and here is the repository evidence" into structured data so
+#: the turn can complete truthfully without manufacturing an edit.  The
+#: structured result is what the completion receipt reads; plain assistant prose
+#: is never proof.
 REPORT_ALREADY_SATISFIED_TOOL_DEF: dict[str, Any] = {
     "type": "function",
     "function": {

@@ -310,6 +310,13 @@ def _run_circular_transcript(repo: Path, isolated_streams):
             f"{CIRCULAR_PROSE[5]}\n{CIRCULAR_PROSE[6]}\n{CIRCULAR_PROSE[7]}",
             [("r3", "read_file", {"path": runner})],
         ),
+        # The circling reads were all rejected as duplicates; the loop then
+        # asks again on the same ordinary catalog and the model finally acts.
+        _scripted_tool_round(
+            "Editing the runner.",
+            [("w1", "write_file", {"path": runner, "content": "CAP = 10\n\n"
+               "def _run_item(job):\n    return job\n"})],
+        ),
         _scripted_final_round("Stopped."),
     ])
     isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
@@ -442,5 +449,7 @@ class TestManagerControlsRealStreamedRounds:
         _manager, events, _backend = _run_circular_transcript(repo, isolated_streams)
 
         started = [e.name for e in events if isinstance(e, ToolCallStart)]
-        assert started == ["grep_search", "read_file", "read_file", "read_file"]
-        assert len([e for e in events if isinstance(e, ToolResult)]) == 4
+        assert started == [
+            "grep_search", "read_file", "read_file", "read_file", "write_file",
+        ]
+        assert len([e for e in events if isinstance(e, ToolResult)]) == 5

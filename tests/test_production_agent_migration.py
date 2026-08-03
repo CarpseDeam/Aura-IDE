@@ -70,6 +70,9 @@ class TestProductionToolCatalog:
             "write_file",
             "patch_file",
             "delete_file",
+            # structured exits
+            "report_blocker",
+            "report_already_satisfied",
             # git
             "git_status",
             "git_diff",
@@ -156,14 +159,14 @@ class TestProductionToolCatalog:
             "inspect_godot_assets", "inspect_godot_asset_preview",
             "capture_godot_asset_preview", "inspect_godot_api",
             "inspect_godot_editor",
-            # the explicit discovery → implementation handoff
-            "commit_implementation_decision",
             # the live TODO tool
             "update_worker_todo",
             # writes / patches / deletes
             "write_file", "patch_file", "delete_file",
             "edit_godot_scene", "edit_godot_editor", "edit_godot_asset_preview",
             "install_godot_editor_bridge",
+            # structured exits — truthful end-states for an implementation turn
+            "report_blocker", "report_already_satisfied",
             # terminal + run-and-watch
             "run_terminal_command", "run_and_watch",
             # git

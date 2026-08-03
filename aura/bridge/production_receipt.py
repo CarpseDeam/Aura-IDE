@@ -36,6 +36,10 @@ STATUS_PROVIDER_CONTRACT_FAILURE = "provider_contract_failure"
 # no applied mutation, no structured already-satisfied evidence, and no
 # blocker. The turn is not completed and nothing is claimed proven.
 STATUS_NO_AUTHORITATIVE_CHANGE = "no_authoritative_change"
+# The loop stopped at a generic runaway safeguard (the model-round ceiling or
+# eight consecutive observation-only rounds). Every applied write and tool
+# result is preserved; the turn is explicitly incomplete, never completed.
+STATUS_RUNAWAY_STOPPED = "runaway_stopped"
 
 _BORDER = "═" * 38
 _DIVIDER = "─" * 38
@@ -49,6 +53,7 @@ _HEADER_LABELS = {
     STATUS_HARNESS_ERROR: "Production Error",
     STATUS_PROVIDER_CONTRACT_FAILURE: "Provider Contract Failure",
     STATUS_NO_AUTHORITATIVE_CHANGE: "No authoritative change",
+    STATUS_RUNAWAY_STOPPED: "Stopped (runaway protection)",
 }
 
 
@@ -77,6 +82,11 @@ class ProductionRunEvidence:
     #: existed. Set only by the explicit ``report_already_satisfied`` outcome —
     #: never inferred from "no write happened" and never from assistant prose.
     already_satisfied: bool = False
+    #: Whether the loop stopped at a generic runaway safeguard (the model-round
+    #: ceiling or eight consecutive observation-only rounds). Every applied
+    #: write and tool result is preserved; the turn is explicitly incomplete,
+    #: never completed.
+    runaway_stopped: bool = False
 
 
 @dataclass(frozen=True)
@@ -189,10 +199,14 @@ def _resolve_status(
     if evidence.api_errors:
         return STATUS_HARNESS_ERROR
     if evidence.provider_contract_failure:
-        # The focused action request required exactly one tool call and the
-        # provider did not honour it. Nothing executed and nothing was retried;
-        # a completed status would be untruthful.
+        # A provider that genuinely cannot be used. Nothing executed and
+        # nothing was retried; a completed status would be untruthful.
         return STATUS_PROVIDER_CONTRACT_FAILURE
+    if evidence.runaway_stopped:
+        # A generic runaway safeguard stopped the loop. Every applied write and
+        # tool result is preserved, and the turn is explicitly incomplete —
+        # never completed, and never a provider-contract dead-stop.
+        return STATUS_RUNAWAY_STOPPED
     if evidence.blocked_reason:
         return STATUS_BLOCKED
     if any(not outcome.passed for outcome in outcomes):
@@ -229,6 +243,7 @@ def build_production_receipt(
         STATUS_HARNESS_ERROR,
         STATUS_PROVIDER_CONTRACT_FAILURE,
         STATUS_NO_AUTHORITATIVE_CHANGE,
+        STATUS_RUNAWAY_STOPPED,
     )
 
     writes = _write_paths(evidence.write_results)
@@ -337,9 +352,16 @@ def build_production_receipt(
 
     if evidence.provider_contract_failure:
         lines.append("")
-        lines.append(" The focused action request required exactly one tool call")
-        lines.append(" (a write/edit tool or report_blocker); the provider returned")
-        lines.append(" none. No edit was made and nothing was retried.")
+        lines.append(" The provider was unusable for this turn. No edit was made")
+        lines.append(" and nothing was retried.")
+
+    if evidence.runaway_stopped:
+        lines.append("")
+        lines.append(" Stopped by runaway protection: the loop hit a generic")
+        lines.append(" safeguard (the model-round ceiling or too many consecutive")
+        lines.append(" observation-only rounds). Every applied write and tool result")
+        lines.append(" above is preserved; the turn is incomplete and was not")
+        lines.append(" claimed complete.")
 
     if evidence.cancelled:
         lines.append("")
@@ -402,6 +424,7 @@ def build_production_receipt(
         "provider_contract_failure": bool(evidence.provider_contract_failure),
         "already_satisfied": bool(evidence.already_satisfied),
         "bears_production_action": bool(evidence.bears_production_action),
+        "runaway_stopped": bool(evidence.runaway_stopped),
         "final_response": final_response,
         "extras": {
             "production_run": True,
@@ -431,5 +454,6 @@ __all__ = [
     "STATUS_HARNESS_ERROR",
     "STATUS_NO_AUTHORITATIVE_CHANGE",
     "STATUS_PROVIDER_CONTRACT_FAILURE",
+    "STATUS_RUNAWAY_STOPPED",
     "STATUS_VALIDATION_FAILED",
 ]

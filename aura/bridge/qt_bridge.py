@@ -144,6 +144,7 @@ class _Worker(QObject):
         self._provider_contract_failure: bool = False
         self._already_satisfied: bool = False
         self._bears_production_action: bool = False
+        self._runaway_stopped: bool = False
 
     @Slot()
     def run(self) -> None:
@@ -179,6 +180,7 @@ class _Worker(QObject):
             self._bears_production_action = (
                 self._manager.last_turn_bears_production_action
             )
+            self._runaway_stopped = self._manager.last_turn_runaway_stopped
         except Exception as exc:
             from aura.config import redact_secrets
             self.apiError.emit(-1, redact_secrets(f"{type(exc).__name__}: {exc}"))
@@ -882,13 +884,13 @@ class ConversationBridge(QObject):
         self._worker = None
 
         # Exactly one completion receipt per production turn, built from the
-        # run's structured execution evidence, then back to idle. A focused
-        # action that ended in a successful ``report_blocker`` names the reason
-        # so the receipt reports the turn as blocked, never as completed; a
-        # focused provider-contract failure is reported as its own terminal
-        # status rather than as a completed turn. Structured
-        # ``report_already_satisfied`` evidence and the turn's production-action
-        # route are carried so the completion contract can report truthfully.
+        # run's structured execution evidence, then back to idle. A successful
+        # ``report_blocker`` names the reason so the receipt reports the turn as
+        # blocked, never as completed; a provider-contract failure is reported
+        # as its own terminal status rather than as a completed turn.
+        # Structured ``report_already_satisfied`` evidence, the turn's
+        # production-action route, and a graceful runaway stop are carried so
+        # the completion contract can report truthfully.
         blocked_reason = worker._blocked_reason if worker is not None else ""
         provider_contract_failure = (
             worker._provider_contract_failure if worker is not None else False
@@ -897,12 +899,14 @@ class ConversationBridge(QObject):
         bears_production_action = (
             worker._bears_production_action if worker is not None else False
         )
+        runaway_stopped = worker._runaway_stopped if worker is not None else False
         try:
             self._production_session.finish(
                 blocked_reason=blocked_reason,
                 provider_contract_failure=provider_contract_failure,
                 already_satisfied=already_satisfied,
                 bears_production_action=bears_production_action,
+                runaway_stopped=runaway_stopped,
             )
         except Exception:
             _log.exception("Failed to build production completion receipt")

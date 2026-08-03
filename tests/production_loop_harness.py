@@ -1,4 +1,4 @@
-"""Scripted production-loop harness shared by the pre-write loop tests.
+"""Scripted production-loop harness shared by the coding-agent loop tests.
 
 Not a test module.  It builds a real :class:`ConversationManager` over a real
 :class:`ToolRegistry` and a real workspace, and drives it with a scripted model
@@ -6,15 +6,18 @@ backend, so the tests that use it assert on behaviour of the actual send loop
 rather than on a simulation of it.
 
 The scripted backend records every request it receives, which is how a test can
-tell an ordinary reasoning request (no ``require_tool_call``) from the focused
-action request (``require_tool_call=True``) without inspecting private state.
+prove the loop uses one stable catalog and the user-selected thinking mode on
+every active request — same tool names, same ordering, same schema hash, no
+``require_tool_call`` — without inspecting private state.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 from pathlib import Path
+from typing import Any
 
 from aura.client import (
     ContentDelta,
@@ -54,8 +57,9 @@ HYBRID_ROUTE = TaskRoute(
     reason="scripted hybrid coding turn",
 )
 
-#: The user's selection for these turns. Deliberately not "off", so the focused
-#: request's thinking-off can be told apart from the ambient setting.
+#: The user's thinking selection for these turns. Deliberately not "off", so a
+#: request that accidentally falls back to the old focused/checkpoint thinking
+#: override can be told apart from the ambient setting.
 SELECTED_THINKING = "high"
 
 
@@ -98,72 +102,15 @@ def read_round(call_id: str, index: int) -> list[Event]:
     return tool_round([(call_id, "read_file", {"path": f"mod_{index:02d}.py"})])
 
 
-def continue_round(call_id: str, *, question: str = "", evidence: str = "") -> list[Event]:
-    """A decision-checkpoint answer electing one more observation round."""
-    return tool_round([(call_id, "continue_implementation_discovery", {
-        "unresolved_question": question or f"What owns the value read by {call_id}?",
-        "needed_evidence": evidence or "the definition of the owning symbol",
-    })])
-
-
-def commit_round(
-    call_id: str = "c1", *, target_files: list[str] | None = None
-) -> list[Event]:
-    """A decision-checkpoint answer committing the implementation decision."""
-    return tool_round([(call_id, "commit_implementation_decision", {
-        "objective": "Update the notes file.",
-        "owners": ["notes.md is the authoritative note surface"],
-        "target_files": target_files or ["notes.md"],
-        "change": "Replace the body with the requested text.",
-    })])
-
-
-def discovery_then_commit(reads: int = 1, *, first: int = 0) -> list[list[Event]]:
-    """``reads`` observation rounds, each cleared at the checkpoint, then a commit.
-
-    The alternation the production loop actually enforces:
-    ``observation -> checkpoint -> observation -> ... -> checkpoint(commit)``.
-    """
-    rounds: list[list[Event]] = []
-    for i in range(reads):
-        rounds.append(read_round(f"r{first + i}", first + i))
-        if i < reads - 1:
-            rounds.append(continue_round(f"k{first + i}"))
-    rounds.append(commit_round())
-    return rounds
-
-
-#: Request shapes, as the send loop issues them.
-KIND_ORDINARY = "ordinary"
-KIND_CHECKPOINT = "checkpoint"
-KIND_FOCUSED = "focused"
-KIND_COMPLETION = "completion"
-
-
-def request_kind(call: dict) -> str:
-    """Classify one recorded provider request by the catalog it exposed.
-
-    Both narrowed requests set ``require_tool_call``; what tells them apart is
-    the surface. The checkpoint offers the decision controls and no editing
-    tool; the focused request offers editing tools and no decision control.
-    """
-    names = {
-        str(t.get("function", {}).get("name", ""))
-        for t in (call.get("tools") or [])
-    }
-    if not names:
-        return KIND_COMPLETION
-    if "commit_implementation_decision" in names and "write_file" not in names:
-        return KIND_CHECKPOINT
-    if call.get("require_tool_call"):
-        return KIND_FOCUSED
-    return KIND_ORDINARY
-
-
 def write_round(call_id: str = "w1", *, body: str = "acted") -> list[Event]:
     return tool_round([(call_id, "write_file", {
         "path": "notes.md", "content": f"# Notes\n\n{body}\n",
     })])
+
+
+def read_files_round(call_id: str, paths: list[str]) -> list[Event]:
+    """One round reading several distinct files — a batch of observations."""
+    return tool_round([(call_id, "read_file", {"path": path}) for path in paths])
 
 
 class ScriptedBackend:
@@ -182,27 +129,69 @@ class ScriptedBackend:
         # test expected. Say so here rather than letting the turn quietly end.
         return iter(final_round("(script exhausted)"))
 
-    def ordinary_calls(self) -> list[dict]:
-        return [c for c in self.calls if not c.get("require_tool_call")]
+    # ---- request inspection -------------------------------------------------
 
-    def focused_calls(self) -> list[dict]:
-        """The focused *action* requests — the mutation surface, not checkpoints."""
-        return [c for c in self.calls if request_kind(c) == KIND_FOCUSED]
+    def tool_names(self, index: int) -> list[str]:
+        """Exposed tool names, in order, of one recorded request."""
+        names: list[str] = []
+        for tool in self.calls[index].get("tools") or []:
+            fn = tool.get("function") if isinstance(tool, dict) else None
+            name = fn.get("name") if isinstance(fn, dict) else None
+            if name:
+                names.append(str(name))
+        return names
 
-    def request_shapes(self) -> list[bool]:
-        """``True`` for each narrowed protocol request, ``False`` for ordinary."""
-        return [bool(c.get("require_tool_call")) for c in self.calls]
+    def schema_hash(self, index: int) -> str:
+        """Stable identity of one request's exposed tool schemas."""
+        tools = self.calls[index].get("tools") or []
+        rendered = json.dumps(tools, sort_keys=True, ensure_ascii=False)
+        return hashlib.sha1(rendered.encode("utf-8")).hexdigest()[:16]
 
-    def request_kinds(self) -> list[str]:
-        """The shape of every request the loop issued, in order."""
-        return [request_kind(c) for c in self.calls]
+    def thinking(self, index: int) -> str:
+        return str(self.calls[index].get("thinking", ""))
 
-    def checkpoint_calls(self) -> list[dict]:
-        return [c for c in self.calls if request_kind(c) == KIND_CHECKPOINT]
+    def sent_require_tool_call(self, index: int) -> bool:
+        """Whether ``require_tool_call`` was supplied to this request at all."""
+        return "require_tool_call" in self.calls[index]
 
-    def action_calls(self) -> list[dict]:
-        """Only the focused *mutation* requests, not the decision checkpoints."""
-        return [c for c in self.calls if request_kind(c) == KIND_FOCUSED]
+    def all_requests_stable(self) -> list[str]:
+        """Describe any request whose catalog or thinking broke the stable shape.
+
+        Returns a list of human-readable violations; empty means every recorded
+        request exposed the same tool names, the same ordering, the same schema
+        hash, and no ``require_tool_call``.
+        """
+        violations: list[str] = []
+        reference_hash: str | None = None
+        reference_names: list[str] | None = None
+        for index, call in enumerate(self.calls):
+            names = self.tool_names(index)
+            if reference_names is None:
+                reference_names = names
+            if names != reference_names:
+                violations.append(
+                    f"request {index} exposed different tool names: "
+                    f"{names} != {reference_names}"
+                )
+            schema = self.schema_hash(index)
+            if reference_hash is None:
+                reference_hash = schema
+            if schema != reference_hash:
+                violations.append(
+                    f"request {index} schema hash {schema} != {reference_hash}"
+                )
+            if self.sent_require_tool_call(index):
+                violations.append(
+                    f"request {index} sent require_tool_call=True"
+                )
+        return violations
+
+    def every_request_thinking(self) -> str:
+        """The one thinking mode every recorded request used, or ``"<mixed>"``."""
+        values = {self.thinking(i) for i in range(len(self.calls))}
+        if len(values) == 1:
+            return next(iter(values))
+        return "<mixed>"
 
 
 class Recorder:
@@ -241,6 +230,16 @@ def make_workspace(root: Path, *, modules: int = 50) -> Path:
     return root
 
 
+def make_multi_file_workspace(root: Path, count: int = 6) -> Path:
+    """Create a workspace with ``count`` editable source files."""
+    root.mkdir(parents=True, exist_ok=True)
+    for i in range(count):
+        (root / f"file_{i:02d}.py").write_text(
+            f"VALUE_{i:02d} = {i}\n\nTARGET = 0\n", encoding="utf-8"
+        )
+    return root
+
+
 def approve_all(_request) -> ApprovalDecision:
     return ApprovalDecision(action="approve")
 
@@ -268,13 +267,14 @@ def run(
     route: TaskRoute | None = IMPLEMENTATION_ROUTE,
     approval_cb=approve_all,
     max_tool_rounds: int = 20,
+    thinking: str = SELECTED_THINKING,
 ) -> None:
     manager.send(
         on_event=recorder,
         approval_cb=approval_cb,
         cancel_event=threading.Event(),
         model="scripted-production-model",
-        thinking=SELECTED_THINKING,
+        thinking=thinking,
         hook_name=PRODUCTION_STREAM_HOOK,
         max_tool_rounds=max_tool_rounds,
         task_route=route,
@@ -287,3 +287,14 @@ def system_texts(call: dict) -> list[str]:
         for m in call.get("messages") or []
         if m.get("role") == "system"
     ]
+
+
+def tool_call_ids(history_messages: list[dict[str, Any]]) -> list[str]:
+    """Tool-call ids present in an assistant/tool pairing, in order."""
+    ids: list[str] = []
+    for msg in history_messages:
+        if msg.get("role") == "assistant":
+            for tc in (msg.get("tool_calls") or []):
+                if isinstance(tc, dict) and tc.get("id"):
+                    ids.append(str(tc["id"]))
+    return ids

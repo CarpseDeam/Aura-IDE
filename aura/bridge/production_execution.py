@@ -182,13 +182,16 @@ class ProductionExecutionSession(QObject):
         provider_contract_failure: bool = False,
         already_satisfied: bool = False,
         bears_production_action: bool = False,
+        runaway_stopped: bool = False,
     ) -> ProductionReceipt | None:
         """Build exactly one completion receipt and emit the finish lifecycle.
 
-        ``already_satisfied`` and ``bears_production_action`` are structured
-        receipt inputs that the completion contract reads (see
-        :mod:`aura.bridge.production_receipt`): a production-action turn may
-        only be reported completed when one truthful terminal outcome occurred.
+        ``already_satisfied``, ``bears_production_action``, and
+        ``runaway_stopped`` are structured receipt inputs that the completion
+        contract reads (see :mod:`aura.bridge.production_receipt`): a
+        production-action turn may only be reported completed when one truthful
+        terminal outcome occurred, and a runaway stop is reported as explicitly
+        incomplete.
         """
         if not self._run_id or self._finished:
             return None
@@ -204,6 +207,7 @@ class ProductionExecutionSession(QObject):
                 provider_contract_failure=provider_contract_failure,
                 already_satisfied=already_satisfied,
                 bears_production_action=bears_production_action,
+                runaway_stopped=runaway_stopped,
             )
         )
         self._result_metadata[self._run_id] = dict(receipt.metadata)
@@ -228,6 +232,7 @@ class ProductionExecutionSession(QObject):
         provider_contract_failure: bool = False,
         already_satisfied: bool = False,
         bears_production_action: bool = False,
+        runaway_stopped: bool = False,
     ) -> ProductionRunEvidence:
         """Return the structured execution evidence for the active run."""
         relay = self._relay
@@ -247,6 +252,7 @@ class ProductionExecutionSession(QObject):
             provider_contract_failure=provider_contract_failure,
             bears_production_action=bears_production_action,
             already_satisfied=already_satisfied,
+            runaway_stopped=runaway_stopped,
         )
 
     def result_metadata(self, run_id: str) -> dict[str, Any]:

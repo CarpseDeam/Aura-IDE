@@ -13,8 +13,6 @@ from aura.conversation.tools._drone_schemas import (
     RUN_READ_ONLY_DRONE_TOOL_DEF,
 )
 from aura.conversation.tools._schemas import (
-    COMMIT_IMPLEMENTATION_DECISION_TOOL_DEF,
-    CONTINUE_IMPLEMENTATION_DISCOVERY_TOOL_DEF,
     DIAGNOSTIC_TOOL_DEF,
     DISPATCH_TOOL_DEF,
     GIT_TOOL_DEFS,
@@ -85,9 +83,9 @@ NORMAL_WORKER_WRITE_TOOL_NAMES = {
     "install_godot_editor_bridge",
 }
 
-#: The production mutation tools — the only tools that can carry out an
-#: implementation decision. Same set the normal catalogs already register; the
-#: focused action request narrows to these rather than introducing replacements.
+#: The production mutation tools — the write/edit tools the model acts through.
+#: The same set the normal catalogs already register; used by the effect-model
+#: tests to prove every mutation tool is explicitly classified.
 MUTATION_TOOL_NAMES: frozenset[str] = frozenset(NORMAL_WORKER_WRITE_TOOL_NAMES)
 
 
@@ -178,19 +176,20 @@ class ToolCatalog:
             )
         else:
             # Production single-agent mode: one continuous model owns
-            # inspection → live TODO → edits → validation → repair.
+            # inspection → live TODO → edits → validation → repair.  The
+            # catalog is stable — the same set on every active request — and
+            # includes the two structured exit tools so a turn that cannot
+            # truthfully continue may end blocked or already-satisfied.
             single_read_tools = [
                 tool for tool in READ_TOOL_DEFS
                 if _tool_name(tool) not in SINGLE_SUPERSEDED_READ_TOOL_NAMES
             ]
-            # ``commit_implementation_decision`` belongs to this surface alone:
-            # read-only turns owe no implementation, Planner never implements,
-            # and the focused action catalog is what the decision *leads to*.
             tools = (
                 single_read_tools
-                + [dict(COMMIT_IMPLEMENTATION_DECISION_TOOL_DEF)]
                 + [dict(WORKER_TODO_TOOL_DEF)]
                 + list(WRITE_TOOL_DEFS)
+                + [dict(REPORT_BLOCKER_TOOL_DEF)]
+                + [dict(REPORT_ALREADY_SATISFIED_TOOL_DEF)]
                 + [dict(TERMINAL_TOOL_DEF)]
                 + [dict(RUN_AND_WATCH_TOOL_DEF)]
                 + list(GIT_TOOL_DEFS)
@@ -253,52 +252,3 @@ class ToolCatalog:
                 "add it to BUILTIN_TOOL_EFFECTS in "
                 "aura/conversation/tools/effects.py"
             ) from None
-
-    def build_focused_action_tool_defs(self) -> list[dict[str, Any]]:
-        """Build the tool set for one focused action request.
-
-        Exactly the production mutation tools already registered, plus
-        ``report_blocker`` and ``report_already_satisfied``. Nothing here is a
-        replacement editing tool and nothing is invented: this is the normal
-        write catalog with everything that invites another round of thinking —
-        reads, search, research, TODO, git, terminal, diagnostics, drones,
-        inspection, MCP, dynamic tools — left out, because the decision those
-        tools serve has already been made. The two control tools let a turn
-        that cannot edit end truthfully: blocked, or already satisfied by the
-        repository.
-        """
-        mutation_tools = [
-            copy.deepcopy(tool)
-            for tool in WRITE_TOOL_DEFS
-            if _tool_name(tool) in MUTATION_TOOL_NAMES
-        ]
-        return mutation_tools + [
-            copy.deepcopy(REPORT_BLOCKER_TOOL_DEF),
-            copy.deepcopy(REPORT_ALREADY_SATISFIED_TOOL_DEF),
-        ]
-
-    def build_decision_checkpoint_tool_defs(
-        self, *, include_blocker: bool = True
-    ) -> list[dict[str, Any]]:
-        """Build the tool set for one decision checkpoint request.
-
-        The checkpoint asks one question — is the implementation decision made?
-        — so it exposes only the tools that can answer it:
-        ``commit_implementation_decision`` (yes),
-        ``continue_implementation_discovery`` (no, and here is the named
-        unresolved question), and ``report_blocker`` when the task is genuinely
-        blocked from outside.
-
-        Everything else is withheld *by construction*, not by instruction: no
-        read, search, terminal, diagnostic, mutation, web, Git, Godot
-        inspection, TODO, MCP, or drone tool appears here.  That is what makes
-        another discovery round cost a named question instead of being the
-        default a prompt has to talk the model out of.
-        """
-        tools = [
-            copy.deepcopy(COMMIT_IMPLEMENTATION_DECISION_TOOL_DEF),
-            copy.deepcopy(CONTINUE_IMPLEMENTATION_DISCOVERY_TOOL_DEF),
-        ]
-        if include_blocker:
-            tools.append(copy.deepcopy(REPORT_BLOCKER_TOOL_DEF))
-        return tools

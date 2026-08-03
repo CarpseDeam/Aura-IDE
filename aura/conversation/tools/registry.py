@@ -9,7 +9,6 @@ from aura.codebase_index.indexer import CodebaseIndex  # noqa: F401
 from aura.codebase_index.tool import search_codebase as _search_codebase  # noqa: F401
 from aura.conversation.tools._blocker_mixin import BlockerHandlersMixin
 from aura.conversation.tools._code_intel_mixin import CodeIntelHandlersMixin
-from aura.conversation.tools._decision_mixin import ImplementationDecisionHandlersMixin
 from aura.conversation.tools._diagnostic_mixin import DiagnosticHandlersMixin
 from aura.conversation.tools._git_mixin import GitHandlersMixin
 from aura.conversation.tools._godot_asset_preview_mixin import GodotAssetPreviewHandlersMixin
@@ -62,7 +61,6 @@ TOOL_HANDLERS: dict[str, Any] = {}
 
 class ToolRegistry(
     BlockerHandlersMixin,
-    ImplementationDecisionHandlersMixin,
     CodeIntelHandlersMixin,
     TaskContextHandlersMixin,
     ReadHandlersMixin,
@@ -182,28 +180,6 @@ class ToolRegistry(
         return self._catalog.build_replayable_tool_defs(
             mode=self._mode,
             read_only=self._read_only,
-        )
-
-    def focused_action_tool_defs(self) -> list[dict[str, Any]]:
-        """Tool defs for one focused action request: mutations + report_blocker.
-
-        Deliberately independent of ``read_only`` mode plumbing and of the
-        dynamic/MCP schemas — a focused action request exposes the fixed
-        action surface and nothing else.
-        """
-        return self._catalog.build_focused_action_tool_defs()
-
-    def decision_checkpoint_tool_defs(
-        self, *, include_blocker: bool = True
-    ) -> list[dict[str, Any]]:
-        """Tool defs for one decision checkpoint request.
-
-        Deliberately independent of ``read_only`` mode plumbing and of the
-        dynamic/MCP schemas — the checkpoint exposes the fixed control surface
-        and nothing else.
-        """
-        return self._catalog.build_decision_checkpoint_tool_defs(
-            include_blocker=include_blocker
         )
 
     def tool_effect(self, name: str) -> ToolEffect:
@@ -411,12 +387,6 @@ TOOL_HANDLERS["install_godot_editor_bridge"] = ToolRegistry._handle_install_godo
 TOOL_HANDLERS["update_worker_todo"] = ToolRegistry._handle_update_worker_todo
 TOOL_HANDLERS["report_blocker"] = ToolRegistry._handle_report_blocker
 TOOL_HANDLERS["report_already_satisfied"] = ToolRegistry._handle_report_already_satisfied
-TOOL_HANDLERS["commit_implementation_decision"] = (
-    ToolRegistry._handle_commit_implementation_decision
-)
-TOOL_HANDLERS["continue_implementation_discovery"] = (
-    ToolRegistry._handle_continue_implementation_discovery
-)
 
 TOOL_HANDLERS["search_project_memory"] = ToolRegistry._handle_search_project_memory
 TOOL_HANDLERS["save_to_project_memory"] = ToolRegistry._handle_save_to_project_memory

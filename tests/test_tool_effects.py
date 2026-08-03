@@ -45,7 +45,6 @@ def _production_catalog_names() -> set[str]:
     for mode in ("single", "worker", "planner"):
         names.update(_tool_names(catalog.build_tool_defs(mode=mode, read_only=False)))
     names.update(_tool_names(catalog.build_tool_defs(mode="single", read_only=True)))
-    names.update(_tool_names(catalog.build_focused_action_tool_defs()))
     return names
 
 
