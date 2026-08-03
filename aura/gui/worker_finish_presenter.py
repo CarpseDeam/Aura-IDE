@@ -67,7 +67,19 @@ class WorkerFinishPresenter:
             self._active_mismatch_card_id = tool_call_id
 
         self._playground.stop_aura()
-        if outcome.terminal_success:
+        # A direct production run (no SpecCard, no Planner dispatch) has exactly
+        # one visible outcome: the receipt the backend already built from its
+        # execution evidence. Rendering it only on success made every truthful
+        # non-success terminal status — runaway_stopped, blocked,
+        # validation_failed, harness_error, no_authoritative_change — vanish,
+        # leaving the run with no visible end at all. Rendering the receipt the
+        # backend produced states the real outcome; it never invents one.
+        # Dispatch flows keep their existing contract: a spec card owns their
+        # non-success presentation, and a mismatch is answered by its own card.
+        render_receipt = outcome.terminal_success or (
+            spec_card is None and outcome.should_show_visible_summary
+        )
+        if render_receipt:
             if needs_followup is None:
                 self._playground.worker_finished(ok, summary, status=status)
             else:

@@ -69,6 +69,14 @@ from aura.config import (
 
 FIRST_STREAM_EVENT_TIMEOUT_SECONDS = 60.0
 
+# Maximum gap between two chat-completions transport chunks once the stream has
+# started. The first-event watchdog above stops guarding the moment any chunk
+# arrives — including an empty or metadata-only one — so without this a provider
+# that goes silent mid-stream leaves the run polling forever and the UI Live.
+# Deliberately its own constant, and conservative: a thinking model can be slow
+# between chunks, and this is a stall detector, not a latency budget.
+CHAT_INTER_EVENT_TIMEOUT_SECONDS = 180.0
+
 # Maximum gap between two Responses stream events before the search is
 # declared dead. Exceeding it produces a terminal failed result, never a
 # silent "still in progress" one.
@@ -376,6 +384,21 @@ class DeepSeekClient:
 
         _first_event_start = time.time()
         _first_read = True
+        # Time of the most recent transport chunk of any kind, and whether the
+        # stream has produced anything the caller can act on. Both feed the
+        # inter-event watchdog's report so a stall is diagnosable.
+        _last_chunk_at = _first_event_start
+        _meaningful_emitted = False
+
+        def _close_stream_quietly() -> None:
+            """Best-effort release of the underlying HTTP stream on timeout."""
+            closer = getattr(stream, "close", None)
+            if closer is None:
+                return
+            try:
+                closer()
+            except Exception:  # noqa: BLE001 — teardown must not mask the timeout
+                _log.debug("provider_stream_close_failed provider=%s", self._provider)
 
         while True:
             if cancel_event is not None and cancel_event.is_set():
@@ -407,6 +430,37 @@ class DeepSeekClient:
                             ),
                         )
                         return
+                    continue
+
+                # Stream started, then went silent. Terminate instead of polling
+                # forever: no Done is fabricated, no partial tool call is
+                # completed, and every tool result already produced this turn
+                # stays exactly as it was recorded.
+                stalled_for = time.time() - _last_chunk_at
+                if stalled_for > CHAT_INTER_EVENT_TIMEOUT_SECONDS:
+                    _log.info(
+                        "provider_stream_inter_event_timeout provider=%s model=%s "
+                        "elapsed_since_last_chunk_ms=%d meaningful_output=%s "
+                        "metadata_only_stream=%s base_url_host=%s",
+                        self._provider, model,
+                        int(stalled_for * 1000),
+                        _meaningful_emitted,
+                        not _meaningful_emitted,
+                        urlparse(self._base_url).hostname,
+                    )
+                    _close_stream_quietly()
+                    yield ApiError(
+                        status_code=None,
+                        message=(
+                            f"Provider stream stalled after starting: no further "
+                            f"response chunk for "
+                            f"{int(CHAT_INTER_EVENT_TIMEOUT_SECONDS)} seconds "
+                            f"({'partial output was received' if _meaningful_emitted else 'no model output was received'})."
+                            f" The turn is incomplete; completed tool results are "
+                            f"preserved. Retry when the provider is healthy."
+                        ),
+                    )
+                    return
                 continue
 
             if kind == 'sentinel':
@@ -423,6 +477,10 @@ class DeepSeekClient:
 
             # kind == 'chunk'
             chunk = value
+            # Any chunk counts as liveness, including an empty or metadata-only
+            # one — that is exactly the case the first-event watchdog stops
+            # covering.
+            _last_chunk_at = time.time()
 
             if _first_read:
                 _first_read = False
@@ -453,6 +511,13 @@ class DeepSeekClient:
             delta = choice.delta
             if choice.finish_reason:
                 finish_reason = choice.finish_reason
+                _meaningful_emitted = True
+            if (
+                getattr(delta, "reasoning_content", None)
+                or delta.content
+                or delta.tool_calls
+            ):
+                _meaningful_emitted = True
 
             # Reasoning text (CoT) — the thinking-mode field.
             rc = getattr(delta, "reasoning_content", None)

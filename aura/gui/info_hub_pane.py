@@ -27,6 +27,13 @@ from aura.gui.worker_log_stream import WorkerLogStreamBuffer
 
 _log = logging.getLogger(__name__)
 
+#: Worker Log status chip texts. The chip is the UI's only claim about whether a
+#: run is still going, so the three states are named rather than spelled inline:
+#: a run that has stopped must never be left reading ``LIVE``.
+_CHIP_IDLE = "Idle"
+_CHIP_LIVE = "● Live"
+_CHIP_RECEIPT = "● Receipt"
+
 
 class InfoHubPane(QWidget):
     """Bottom pane with permanent Worker Log tab.
@@ -248,7 +255,7 @@ class InfoHubPane(QWidget):
         receipt_text = f"{'═' * 46}\n{prefix}\n{summary}\n{'═' * 46}"
         self._receipt_text = receipt_text
         self._copy_receipt_btn.setVisible(True)
-        self._status_chip.setText("● Receipt")
+        self._status_chip.setText(_CHIP_RECEIPT)
         self._status_chip.setStyleSheet(f"color: {ACCENT}; font-size: 10px; font-weight: 600;")
 
     def _on_header_copy_receipt(self) -> None:
@@ -280,8 +287,7 @@ class InfoHubPane(QWidget):
         self._todo_widget.clear()
         self._copy_receipt_btn.setVisible(False)
         self._receipt_text = ""
-        self._status_chip.setText("Idle")
-        self._status_chip.setStyleSheet(f"color: {FG_MUTED}; font-size: 10px;")
+        self._set_chip_idle()
 
         # Remove all dynamic cards
         while self._cards_layout.count() > 0:
@@ -296,18 +302,32 @@ class InfoHubPane(QWidget):
         self.stop_worker_requested.emit()
 
     def set_worker_running(self, running: bool) -> None:
-        """Show/hide the Stop button based on worker running state."""
+        """Show/hide the Stop button and own the Live claim on the status chip.
+
+        Stopping is the authoritative end of the Live state: whatever path got
+        here — receipt, surfaced error, mismatch, cancellation, or a worker
+        thread that simply exited — the chip must stop claiming the run is
+        going. A terminal chip already written by :meth:`show_final_summary` is
+        left alone so the truthful outcome survives, which also makes repeated
+        calls idempotent.
+        """
         self._stop_worker_btn.setVisible(running)
         if running:
             self._stop_worker_btn.setEnabled(True)
             self._stop_worker_btn.setText("Stop")
-            self._status_chip.setText("● Live")
+            self._status_chip.setText(_CHIP_LIVE)
             self._status_chip.setStyleSheet(f"color: {SUCCESS}; font-size: 10px; font-weight: 600;")
             self._copy_receipt_btn.setVisible(False)
         else:
             self._stop_worker_btn.setVisible(False)
             self._stop_worker_btn.setEnabled(True)
             self._stop_worker_btn.setText("Stop")
+            if self._status_chip.text() == _CHIP_LIVE:
+                self._set_chip_idle()
+
+    def _set_chip_idle(self) -> None:
+        self._status_chip.setText(_CHIP_IDLE)
+        self._status_chip.setStyleSheet(f"color: {FG_MUTED}; font-size: 10px;")
 
     # Styling
 
