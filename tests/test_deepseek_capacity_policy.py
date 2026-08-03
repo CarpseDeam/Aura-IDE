@@ -196,7 +196,6 @@ class _FakeStats:
     repaired_messages = 0
     reasoning_chars_replayed = 0
     reasoning_chars_dropped = 0
-    boundary_messages_inserted = 0
     retired_blocks = 0
     ledger_entries = 0
     ledger_chars_retained = 0

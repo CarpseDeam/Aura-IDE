@@ -33,7 +33,6 @@ from aura.conversation.api_view import (
     estimate_message_tokens,
     estimate_tokens,
     is_real_user_message,
-    is_step_boundary_message,
     repair_tool_call_blocks,
     user_message_text,
 )
@@ -198,12 +197,8 @@ class History:
             max_tokens,
             keep_last_n_turns=keep_last_n_turns,
         )
-        # The completed-step boundary is a transient ``aura_internal`` marker
-        # that ``_render`` emits without its flag; it must never be stored.
         self.messages = [
-            m
-            for m in view.messages
-            if m.get("role") != "system" and not is_step_boundary_message(m)
+            m for m in view.messages if m.get("role") != "system"
         ]
 
     def _truncate_tool_results_in_range(

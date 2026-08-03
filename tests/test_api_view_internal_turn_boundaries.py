@@ -29,7 +29,6 @@ import pytest
 from aura.conversation.api_view import (
     _turn_starts,
     build_api_view,
-    is_step_boundary_message,
 )
 from aura.conversation.history import History
 
@@ -362,13 +361,16 @@ class TestOnlyInternalUserMessages:
         assert_tool_pairing_valid(view.messages)
 
 
-# ── 5: the completed-step boundary inside one real user turn ────────────────
+# ── 5: intra-turn reasoning replay is byte-stable (provider cache) ──────────
 
 
-class TestCompletedStepBoundary:
-    """A finished tool batch in the *same* real user turn sheds its reasoning
-    while the active chain keeps its own — without persisting or displaying a
-    fake user request."""
+class TestIntraTurnReasoningReplayIsPrefixStable:
+    """Inside one real user turn a finished tool batch's reasoning is replayed
+    verbatim on every later round. No transient user message is inserted, no
+    already-sent reasoning is rewritten, so round N+1's request carries round
+    N's request as an exact message prefix — the provider's prefix cache then
+    covers every previously-emitted token (a DeepSeek Flash cache miss is 50x
+    the price of a hit)."""
 
     def _history(self, steps: int = 3) -> History:
         h = History()
@@ -383,19 +385,19 @@ class TestCompletedStepBoundary:
                 h.messages.append(msg)
         return h
 
-    def test_the_boundary_reaches_the_model_as_an_internal_user_message(
-        self,
-    ) -> None:
+    def test_no_fake_user_message_reaches_the_model(self) -> None:
         h = self._history()
         view = h.build_api_payload(10_000_000)
 
-        boundaries = [m for m in view.messages if is_step_boundary_message(m)]
-        assert len(boundaries) == 1, "the boundary was not placed in the view"
-        assert "aura_internal" not in boundaries[0], (
-            "the internal marker leaked into the outbound payload"
+        user_messages = [m for m in view.messages if m.get("role") == "user"]
+        assert len(user_messages) == 1, (
+            "a transient completed-step boundary must not be emitted; "
+            f"got {len(user_messages)} user messages"
         )
+        assert user_messages[0]["content"] == "Fix the retry cap so the job pauses."
+        assert "aura_internal" not in user_messages[0]
 
-    def test_the_boundary_is_never_persisted(self) -> None:
+    def test_the_request_shapes_nothing_into_storage(self) -> None:
         h = self._history()
         before = json.dumps(h.messages, sort_keys=True)
 
@@ -404,42 +406,41 @@ class TestCompletedStepBoundary:
         assert json.dumps(h.messages, sort_keys=True) == before, (
             "canonical history was edited to fit the request"
         )
-        assert not any(is_step_boundary_message(m) for m in h.messages)
 
-    def test_the_boundary_does_not_start_a_real_user_turn(self) -> None:
+    def test_the_request_does_not_start_a_real_user_turn(self) -> None:
         h = self._history()
         h.build_api_payload(10_000_000)
 
-        assert _turn_starts(h.messages) == [0], (
-            "the boundary leaked into real user-turn counting"
-        )
+        assert _turn_starts(h.messages) == [0]
 
-    def test_completed_steps_shed_reasoning_but_the_active_chain_keeps_its_own(
+    def test_completed_steps_replay_reasoning_and_the_active_chain_keeps_its_own(
         self,
     ) -> None:
         h = self._history()
         view = h.build_api_payload(10_000_000)
 
         assistants = [m for m in view.messages if m.get("role") == "assistant"]
-        # c0 and c1 are completed — their reasoning is shed.
-        assert "reasoning_content" not in assistants[0]
-        assert "reasoning_content" not in assistants[1]
-        # c2 is the active chain — its reasoning is replayed (DeepSeek rule).
-        assert assistants[2]["reasoning_content"] == "thinking about step 2\n"
-        assert view.stats.reasoning_chars_replayed == len("thinking about step 2\n")
-        assert view.stats.reasoning_chars_dropped == 2 * len("thinking about step 0\n")
+        # Every batch keeps its reasoning — replaying is always provider-valid,
+        # and rewriting any one of them would break the cached request prefix.
+        for i, step in enumerate(assistants):
+            assert step["reasoning_content"] == f"thinking about step {i}\n"
+        assert view.stats.reasoning_chars_dropped == 0, (
+            "intra-turn reasoning must not be shed from a previously-sent batch"
+        )
+        assert view.stats.reasoning_chars_replayed == 3 * len(
+            "thinking about step 0\n"
+        )
 
     @pytest.mark.parametrize("budget", [10_000_000, 4_000, 800, 200])
-    def test_pairing_and_the_active_chain_survive_every_budget(self, budget) -> None:
+    def test_pairing_and_provider_validity_survive_every_budget(self, budget) -> None:
         h = self._history()
         view = h.build_api_payload(budget)
 
         assert_tool_pairing_valid(view.messages)
-        boundaries = [
-            i for i, m in enumerate(view.messages) if is_step_boundary_message(m)
-        ]
-        assert boundaries, "compaction removed the completed-step boundary"
-        for m in view.messages[boundaries[-1] + 1:]:
-            assert m.get("reasoning_content") or not m.get("tool_calls"), (
-                "the active chain lost reasoning while the boundary is present"
-            )
+        # Whatever the ladder cut, the assistant batches that survive still
+        # carry their reasoning — the DeepSeek replay rule is never violated.
+        for m in view.messages:
+            if m.get("role") == "assistant" and m.get("tool_calls"):
+                assert m.get("reasoning_content"), (
+                    "an assistant tool-call batch lost its reasoning"
+                )

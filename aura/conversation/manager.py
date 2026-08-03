@@ -286,7 +286,7 @@ def _log_context_round(
         "source_chars_generated=%d source_chars_retained=%d "
         "compacted_results=%d dropped_blocks=%d repaired=%d "
         "reasoning_chars_replayed=%d reasoning_chars_dropped=%d "
-        "boundary_messages_inserted=%d over_budget=%s",
+        "over_budget=%s",
         budget.model_id,
         budget.provider_id,
         budget.context_window_tokens,
@@ -322,7 +322,6 @@ def _log_context_round(
         stats.repaired_messages,
         stats.reasoning_chars_replayed,
         stats.reasoning_chars_dropped,
-        stats.boundary_messages_inserted,
         stats.over_budget,
     )
 
