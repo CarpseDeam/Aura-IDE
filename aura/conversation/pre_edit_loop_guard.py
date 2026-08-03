@@ -15,6 +15,15 @@ Three mechanical signals, all derived from state the send loop already keeps:
    tools plus ``report_blocker``, exactly one tool call — instead of another
    ordinary reasoning stream.
 
+   A round whose calls were *all* bookkeeping is exempt the first time it
+   happens.  Publishing a TODO records state; it is not an attempt to move the
+   turn, so its failure to move the turn proves nothing — and the capsule tells
+   the agent to publish that checklist early, which made the very first round of
+   an ordinary turn a "stall" that forced a blind edit before a single file had
+   been read.  The exemption is not a free pass: the same bookkeeping round
+   arriving twice is recognised through the round signatures rule 3 already
+   keeps, and stalls normally.
+
 3. **Short repeating cycles.** Rule 2 asks whether *this* round moved; a turn
    can still circle across rounds — read A, run B, read A, run B — where each
    round in isolation looks like it did something.  Every round is folded into
@@ -371,6 +380,11 @@ class PreEditLoopGuard:
     _round_new_evidence: bool = False
     _round_observed: bool = False
     _round_fresh_failure: bool = False
+    #: Whether any call this round could have moved the turn — an observation, a
+    #: mutation, or a command.  A round of pure bookkeeping leaves this false.
+    _round_substantive: bool = False
+    #: Whether this round's signature had already been recorded this turn.
+    _round_signature_repeated: bool = False
     _round_call_parts: list[str] = field(default_factory=list)
     _round_result_parts: list[str] = field(default_factory=list)
 
@@ -421,6 +435,8 @@ class PreEditLoopGuard:
         self._round_new_evidence = False
         self._round_observed = False
         self._round_fresh_failure = False
+        self._round_substantive = False
+        self._round_signature_repeated = False
         self._round_call_parts = []
         self._round_result_parts = []
 
@@ -450,6 +466,14 @@ class PreEditLoopGuard:
         if recovered or self._round_fresh_failure:
             return
         if not self._round_had_tools or not self._round_observed:
+            return
+        if not self._round_substantive and not self._round_signature_repeated:
+            # Every call this round was bookkeeping — a TODO publication, a
+            # memory write.  That round did not *try* to move the turn, so it is
+            # no evidence the turn has stopped moving; treating it as a stall
+            # forced the very first round of a turn that opens by publishing its
+            # checklist straight into a blind edit.  A repeat of the same
+            # bookkeeping round is a different matter, and falls through.
             return
         # A round that ran tools, saw their results, and neither advanced the
         # turn nor gathered evidence has stopped moving: hand the send loop the
@@ -481,6 +505,7 @@ class PreEditLoopGuard:
             sort_keys=True,
             ensure_ascii=False,
         )
+        self._round_signature_repeated = signature in self.round_signatures
         self.round_signatures.append(signature)
         if len(self.round_signatures) > _MAX_ROUND_SIGNATURES:
             del self.round_signatures[:-_MAX_ROUND_SIGNATURES]
@@ -544,6 +569,11 @@ class PreEditLoopGuard:
         """
         self._round_had_tools = True
         self._round_call_parts.append(read_fingerprint(name, args))
+        if self._effect(name) is not ToolEffect.BOOKKEEPING:
+            # Observation, mutation, command: a call that could have moved the
+            # turn. Whether it *did* is decided by its result, in
+            # :meth:`observe_result` — this only records that the round tried.
+            self._round_substantive = True
         if self._is_observation(name):
             fingerprint = read_fingerprint(name, args)
             self.seen_reads[fingerprint] = self.seen_reads.get(fingerprint, 0) + 1

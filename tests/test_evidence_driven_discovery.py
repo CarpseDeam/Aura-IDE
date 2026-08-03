@@ -189,6 +189,123 @@ class TestAStalledRoundEndsDiscovery:
         assert backend.focused_calls()[0]["thinking"] == FOCUSED_ACTION_THINKING
 
 
+# ── 2b: bookkeeping is not an attempt, so it cannot be a stall ──────────────
+
+
+TODO_ITEMS = [
+    {"id": "inspect", "text": "Inspect the project", "status": "active"},
+    {"id": "implement", "text": "Implement the change", "status": "pending"},
+    {"id": "validate", "text": "Validate the changed surface", "status": "pending"},
+]
+
+
+def todo_round(call_id: str = "t1", *, items=None) -> list[Event]:
+    return tool_round([(call_id, "update_worker_todo", {
+        "items": items if items is not None else TODO_ITEMS,
+    })])
+
+
+def publish_todo(guard: PreEditLoopGuard, items=None) -> None:
+    args = {"items": items if items is not None else TODO_ITEMS}
+    guard.begin_round()
+    guard.record("update_worker_todo", args)
+    guard.observe_result("update_worker_todo", True, json.dumps({"ok": True}))
+    guard.end_round()
+
+
+class TestBookkeepingIsNotAStall:
+    """A round that only recorded state never tried to move the turn."""
+
+    def test_a_todo_only_round_does_not_end_discovery(self) -> None:
+        guard = PreEditLoopGuard()
+        publish_todo(guard)
+        assert not guard.focused, (
+            "publishing the checklist is not evidence the turn stopped moving"
+        )
+        assert not guard.last_round_advanced, (
+            "and it is not progress either — bookkeeping proves nothing"
+        )
+
+    def test_the_same_todo_round_repeated_does_end_discovery(self) -> None:
+        """The exemption is for the first one, not for circling on it."""
+        guard = PreEditLoopGuard()
+        publish_todo(guard)
+        assert not guard.focused
+        publish_todo(guard)
+        assert guard.focused, (
+            "the identical bookkeeping round arriving twice is circling"
+        )
+
+    def test_a_different_todo_round_is_not_a_repeat(self) -> None:
+        guard = PreEditLoopGuard()
+        publish_todo(guard)
+        publish_todo(guard, items=[
+            {"id": "inspect", "text": "Inspect the project", "status": "done"},
+            {"id": "implement", "text": "Implement the change", "status": "active"},
+            {"id": "validate", "text": "Validate the changed surface", "status": "pending"},
+        ])
+        assert not guard.focused, "advancing the checklist is not a repeat"
+
+    def test_bookkeeping_batched_with_a_stalled_read_still_ends_discovery(
+        self,
+    ) -> None:
+        """One substantive call in the round is enough to make it an attempt."""
+        guard = PreEditLoopGuard()
+        payload = {"path": "a.py", "content": "same"}
+        repeat_round(guard, "list_directory", {"path": "."}, payload)
+        assert not guard.focused
+
+        guard.begin_round()
+        guard.record("update_worker_todo", {"items": TODO_ITEMS})
+        guard.observe_result("update_worker_todo", True, json.dumps({"ok": True}))
+        guard.record("list_directory", {"path": "./"})
+        guard.observe_result("list_directory", True, json.dumps(payload))
+        guard.end_round()
+        assert guard.focused, (
+            "the round really looked and really learned nothing; the TODO "
+            "alongside it does not excuse that"
+        )
+
+    def test_a_turn_that_opens_with_its_checklist_still_reads_before_editing(
+        self, workspace, isolated_streams
+    ) -> None:
+        """The regression, through the send loop.
+
+        The capsule tells the agent to publish its TODO early. That first round
+        must not be read as a stall — doing so handed the turn a focused
+        mutation request before it had read a single file.
+        """
+        backend = ScriptedBackend([
+            todo_round(),                                    # the checklist
+            read_round("r0", 0),                             # new evidence
+            tool_round([("d1", "list_directory", {"path": "."})]),
+            tool_round([("d2", "list_directory", {"path": "./"})]),   # stall
+            write_round(),
+            final_round("Applied."),
+        ])
+        isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
+        recorder = Recorder()
+
+        run(build_manager(workspace), recorder)
+
+        todos = recorder.results_named("update_worker_todo")
+        assert len(todos) == 1 and todos[0].ok, (
+            f"non-vacuous: the TODO really published — {recorder.tool_results()}"
+        )
+        assert backend.request_shapes() == [
+            False, False, False, False, True, False,
+        ], (
+            "the checklist round stayed ordinary, and focus arrived only when a "
+            f"round that really looked learned nothing — {backend.request_shapes()}"
+        )
+        assert recorder.results_named("read_file"), "the turn really read first"
+        writes = recorder.results_named("write_file")
+        assert writes and writes[0].ok
+        assert (workspace / "notes.md").read_text(encoding="utf-8") == (
+            "# Notes\n\nacted\n"
+        )
+
+
 # ── 3: an A, B, A, B cycle ends discovery ───────────────────────────────────
 
 
