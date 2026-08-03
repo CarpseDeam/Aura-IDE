@@ -1,7 +1,7 @@
 ---
 task_kinds: ["architecture", "scene", "godot_scene"]
-path_globs: ["**/*.tscn", "project.godot"]
-triggers: ["godot", "scene tree", "node", "signal", "group", "resource", "autoload", "singleton", "dependency injection"]
+path_globs: []
+triggers: ["scene tree", "node tree", "ownership", "reparent", "restructure", "dependency injection", "wiring", "autoload", "singleton", "reusable", "scene boundary", "hierarchy", "signal", "group", "resource"]
 workspace_markers: ["project.godot"]
 ---
 ### Godot Scene Architecture

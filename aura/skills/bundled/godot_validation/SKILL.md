@@ -1,7 +1,7 @@
 ---
 task_kinds: ["validation", "test", "godot_validation"]
-path_globs: ["**/*.gd", "project.godot"]
-triggers: ["godot validation", "godot test", "headless", "script test", "script error", ".uid", "class registration", "class_name", "import"]
+path_globs: []
+triggers: ["godot validation", "godot test", "headless", "script test", "script error", ".uid", "class registration", "class_name", "import", "verify the project"]
 workspace_markers: ["project.godot"]
 ---
 ### Godot Validation

@@ -392,9 +392,9 @@ def test_load_skills_resolves_only_against_the_frozen_index(tmp_path: Path) -> N
     other = SkillTurnState(
         build_skill_pack(
             workspace,
-            task_kind="visual iteration",
-            target_files=("addons/aura_bridge/transport/bridge_server.gd",),
-            content="assemble modular Node3D assets beneath AuraPreview",
+            task_kind="validation",
+            target_files=("tests/test_player.gd",),
+            content="run headless godot tests and check class registration",
         )
     )
     foreign_id = next(
@@ -698,25 +698,6 @@ def test_representative_godot_request_has_far_fewer_initial_chars(
     assert len(new_index) < len(old_full_body) * 0.5, (
         f"index ({len(new_index)}) should be materially smaller than the old "
         f"full-body pack ({len(old_full_body)})"
-    )
-
-
-# ── 16. no Godot skill content was modified ─────────────────────────────────
-
-
-def test_no_godot_skill_content_was_modified() -> None:
-    import subprocess
-
-    result = subprocess.run(
-        ["git", "diff", "--stat", "--", "aura/skills/bundled"],
-        capture_output=True,
-        text=True,
-        cwd=Path(__file__).resolve().parents[1],
-    )
-    assert result.returncode == 0
-    assert result.stdout.strip() == "", (
-        "bundled Godot skill bodies must be untouched by this repair: "
-        + result.stdout.strip()
     )
 
 

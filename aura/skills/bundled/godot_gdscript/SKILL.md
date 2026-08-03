@@ -1,5 +1,5 @@
 ---
-task_kinds: ["bugfix", "gdscript"]
+task_kinds: ["gdscript"]
 path_globs: ["**/*.gd"]
 triggers: ["gdscript", "godot api", "await", "signal", "typed", "export", "ready", "process", "physics process"]
 workspace_markers: ["project.godot"]
