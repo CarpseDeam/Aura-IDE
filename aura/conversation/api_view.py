@@ -34,9 +34,9 @@ import copy
 import hashlib
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
-from aura.conversation.tools.catalog import MUTATION_TOOL_NAMES
+from aura.conversation.tools.effects import BUILTIN_TOOL_EFFECTS, ToolEffect
 
 # Tools whose results carry source code the model needs in order to act.
 # These get a much higher floor than incidental results before anything is cut.
@@ -68,33 +68,9 @@ _CONTINUE_HINT = (
 )
 _TERMINAL_HINT = "Re-run the command to see the full output."
 
-# Read-only evidence probes. A completed block made up entirely of these is an
-# "observation"; blocks containing anything else (mutations, terminal runs,
-# diagnostics, bookkeeping) are never retired.
-OBSERVATION_TOOLS: frozenset[str] = SOURCE_READ_TOOLS | frozenset({
-    "glob",
-    "list_directory",
-    "code_intel_outline",
-    "code_intel_references",
-    "code_intel_dependents",
-    "code_intel_audit",
-    "git_status",
-    "git_diff",
-    "git_log",
-    "git_show",
-    "git_log_file",
-    "git_branch_list",
-    "git_stash_list",
-    "git_stash_show",
-    "get_workspace_snapshot",
-    "inspect_godot_assets",
-    "inspect_godot_api",
-    "inspect_godot_editor",
-})
-
-# Tools whose results can be huge and are never retired; their *replay* in the
-# outbound view is deterministically bounded (head+tail) so a big output does
-# not sit verbatim in every later request of one turn.
+# Tools whose results can be huge and are bounded on replay (head+tail) when a
+# preserved block carries them, so a big output does not sit verbatim in every
+# later request of one turn.
 TERMINAL_REPLAY_TOOLS: frozenset[str] = frozenset({
     "run_terminal_command",
     "run_and_watch",
@@ -102,21 +78,32 @@ TERMINAL_REPLAY_TOOLS: frozenset[str] = frozenset({
 })
 
 # The recent-evidence allowance: walking backward from the active chain, this
-# many tokens of the working-set budget is spent replaying the most recent
-# completed blocks verbatim; completed observations beyond it become receipts.
-# A fraction of the budget, never a count of calls, files, or rounds.
+# fraction of the working-set budget is spent replaying the most recent
+# completed observation blocks verbatim; completed observations beyond it join
+# the retired-evidence ledger. A token budget derived from the active model's
+# working-set budget, never a count of calls, files, rounds, or time.
 RECENT_EVIDENCE_FRACTION: float = 0.25
-MIN_RECENT_EVIDENCE_TOKENS: int = 8_000
+
+# Total token budget of the retired-evidence ledger: the one deterministic
+# message every retired block folds into. Also a fraction of the working-set
+# budget, so a small context never lets the ledger consume most of it.
+LEDGER_BUDGET_FRACTION: float = 0.15
 
 # Deterministic replay caps for kept non-active results (never-retired blocks).
 REPLAY_SOURCE_CHARS: int = 24_000
 REPLAY_RESULT_CHARS: int = 16_000
 REPLAY_TAIL_FRACTION: float = 0.25  # of the cap kept as the tail of a cut
 
-# Bounds for one evidence receipt.
+# Bounds for one evidence receipt (one ledger entry).
 RECEIPT_MAX_CHARS: int = 1_800
 RECEIPT_PREVIEW_CHARS: int = 300
 RECEIPT_MATCH_PREVIEWS: int = 5
+
+# Compaction caps applied to *older* ledger entries so recent retired evidence
+# keeps its detail while the ledger total stays inside its budget.
+LEDGER_PREVIEW_CHARS: int = 120
+LEDGER_MATCH_PREVIEWS: int = 2
+LEDGER_MAX_PATHS: int = 16
 
 # Marker that identifies a receipt message in the outbound view.
 RECEIPT_MARKER: str = "aura_evidence_receipt"
@@ -143,10 +130,13 @@ class CompactionStats:
     reasoning_chars_replayed: int = 0
     reasoning_chars_dropped: int = 0
     boundary_messages_inserted: int = 0
-    # Lifecycle retirement of completed observation blocks (see
+    # Lifecycle retirement of completed blocks (see
     # ``_retire_completed_observations``).
-    retired_observation_blocks: int = 0
-    receipt_chars_retained: int = 0
+    retired_blocks: int = 0
+    ledger_entries: int = 0
+    ledger_chars_retained: int = 0
+    ledger_dropped_entries: int = 0
+    ledger_budget_tokens: int = 0
     active_chain_chars_retained: int = 0
     recent_evidence_tokens: int = 0
     bounded_replays: int = 0
@@ -667,7 +657,7 @@ def _strip_superseded_reasoning(
             stats.reasoning_chars_dropped += len(rc)
 
 
-# ---- lifecycle retirement of completed observation blocks -------------------
+# ---- lifecycle retirement of completed blocks -------------------------------
 #
 # A long coding turn replays every completed tool block of the current request
 # on every model round until the budget ladder forces a cut. Below the budget
@@ -675,24 +665,35 @@ def _strip_superseded_reasoning(
 # already-consumed evidence. Retirement fixes the growth curve instead of the
 # ceiling: once a newer tool batch has opened, a completed block is either
 # recent enough to be worth replaying verbatim, or old enough that a compact
-# deterministic receipt is the honest representation of it.
+# deterministic evidence receipt is the honest representation of it.
 #
-# The rule, applied to a deep copy inside ``build_api_view`` only:
+# The rule, applied to a deep copy inside ``build_api_view`` only. Block
+# classes come from the authoritative tool-effect model
+# (``aura.conversation.tools.effects``); a call with no known effect never
+# lets its block retire:
 #
 # * the active chain (the newest assistant tool-call block) is never touched —
 #   DeepSeek requires its reasoning and pairing exactly as it is;
-# * working backward from it, completed blocks of the *current real user turn*
-#   stay verbatim while their cumulative replay cost fits the recent-evidence
-#   allowance, a fixed fraction of the model's working-set budget — a token
-#   budget, never a count of calls, files, rounds, or time;
-# * completed blocks made up entirely of read-only observation calls that sit
-#   beyond that allowance are retired: the whole block (assistant call,
-#   reasoning, results) is replaced by one deterministic evidence receipt;
-# * blocks containing any mutation, terminal, diagnostic, or other
-#   non-observation call, and blocks with any failed result, are never retired
-#   — they are preserved regardless of the allowance and only *bounded* on
-#   replay, so failed writes and validation output stay available through the
-#   repair and rerun;
+# * working backward from it, completed observation blocks of the *current
+#   real user turn* stay verbatim while their cumulative replay cost fits the
+#   recent-evidence allowance, a fixed fraction of the model's working-set
+#   budget — a token budget, never a count of calls, files, rounds, or time;
+# * the newest completed command/validation block stays verbatim — the current
+#   terminal output and validation chain the model is working from;
+# * successful mutations stay (proof of an applied mutation), and a failed
+#   block of any class stays while its failure is unresolved — no later
+#   successful call of the same class has touched its paths;
+# * everything that is no longer active retires into the *one* retired-
+#   evidence ledger: observations beyond the allowance, resolved failures
+#   (repaired by a later successful mutation or observation), and superseded
+#   command blocks (an older terminal or validation run). The ledger is a
+#   single deterministic message with a total token budget derived from the
+#   working-set budget; recent retired evidence keeps its detail, older
+#   entries are deterministically trimmed, merged, and finally dropped oldest-
+#   first so the request stays bounded once the frontier fills;
+# * unknown-effect, bookkeeping, and unresolved-failure blocks are preserved
+#   and only *bounded* on replay — the failure, diagnosis, repair, and passing
+#   validation sequence is never lost, however old the failure gets;
 # * canonical history is never touched; this shapes one outbound request.
 
 
@@ -733,8 +734,15 @@ def _args_paths(args: dict[str, Any]) -> list[str]:
     return out
 
 
-def _mutation_paths(working: list[dict[str, Any]]) -> frozenset[str]:
-    """Normalized paths written by mutation calls anywhere in the view."""
+def _mutation_paths(
+    working: list[dict[str, Any]], effect_for: Callable[[str], ToolEffect | None]
+) -> frozenset[str]:
+    """Normalized paths written by mutation calls anywhere in the view.
+
+    Classified through the authoritative effect lookup, never a name list, so
+    a future mutation tool that declares ``mutation`` is covered without
+    touching this module.
+    """
     written: set[str] = set()
     for msg in working:
         if msg.get("role") != "assistant":
@@ -744,7 +752,7 @@ def _mutation_paths(working: list[dict[str, Any]]) -> frozenset[str]:
                 continue
             fn = tc.get("function")
             name = str(fn.get("name")) if isinstance(fn, dict) and fn.get("name") else ""
-            if name not in MUTATION_TOOL_NAMES:
+            if effect_for(name) is not ToolEffect.MUTATION:
                 continue
             args: dict[str, Any] = {}
             if isinstance(fn, dict):
@@ -909,17 +917,163 @@ def _build_evidence_receipt(
     return receipt
 
 
-def _retire_block_to_receipt(
+def _result_failed(msg: dict[str, Any]) -> bool:
+    """Whether one tool result message reports a failure.
+
+    A failed result means the model may still be recovering from it: failed
+    observations, guard rejections, batch rejections, per-path errors, omitted
+    reads, and unparseable payloads all count.
+    """
+    content = msg.get("content")
+    if not isinstance(content, str):
+        return True
+    try:
+        parsed = json.loads(content)
+    except (TypeError, ValueError):
+        return True  # unparseable result is treated as a failure
+    if not isinstance(parsed, dict):
+        return False
+    if parsed.get("ok") is False:
+        return True
+    if parsed.get("recoverable") is True or parsed.get("batch_rejected") is True:
+        return True
+    if parsed.get("status") in ("error", "omitted"):
+        return True
+    files = parsed.get("files")
+    if isinstance(files, dict) and any(
+        isinstance(entry, dict) and entry.get("status") in ("error", "omitted")
+        for entry in files.values()
+    ):
+        return True
+    return False
+
+
+def _block_calls(
+    working: list[dict[str, Any]], start: int, end: int
+) -> list[dict[str, Any]]:
+    """Per-call facts of one completed block: name, args paths, failure state."""
+    calls: list[dict[str, Any]] = []
+    for tc in (working[start].get("tool_calls") or []):
+        if not isinstance(tc, dict):
+            continue
+        fn = tc.get("function")
+        name = str(fn.get("name")) if isinstance(fn, dict) and fn.get("name") else ""
+        args: dict[str, Any] = {}
+        if isinstance(fn, dict):
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except (TypeError, ValueError):
+                args = {}
+        if not isinstance(args, dict):
+            args = {}
+        call_id = tc.get("id")
+        result_msg = next(
+            (
+                m
+                for m in working[start + 1:end]
+                if m.get("role") == "tool" and m.get("tool_call_id") == call_id
+            ),
+            None,
+        )
+        failed = _result_failed(result_msg) if result_msg is not None else True
+        calls.append({
+            "name": name,
+            "paths": _args_paths(args),
+            "failed": failed,
+        })
+    return calls
+
+
+def _known_block_effects(
+    working: list[dict[str, Any]],
+    start: int,
+    end: int,
+    effect_for: Callable[[str], ToolEffect | None],
+) -> tuple[set[ToolEffect], bool]:
+    """Known effects of every call in one block, plus whether all are known.
+
+    A single call with unknown or missing effect metadata makes the whole block
+    unknown: it fails safe and is preserved, never retired.
+    """
+    effects: set[ToolEffect] = set()
+    for tc in (working[start].get("tool_calls") or []):
+        if not isinstance(tc, dict):
+            continue
+        fn = tc.get("function")
+        name = str(fn.get("name")) if isinstance(fn, dict) and fn.get("name") else ""
+        if not name:
+            return set(), False
+        effect = effect_for(name)
+        if effect is None:
+            return set(), False
+        effects.add(effect)
+    return effects, bool(effects)
+
+
+def _later_successful_paths(
+    working: list[dict[str, Any]],
+    block_start: int,
+    effect_for: Callable[[str], ToolEffect | None],
+) -> dict[ToolEffect, set[str]]:
+    """Paths with a later successful call of each effect class, per class.
+
+    Only *successful* later calls repair a failure: a second failed write of
+    the same path is still an unresolved failure.
+    """
+    later: dict[ToolEffect, set[str]] = {}
+    for s, e in _completed_blocks(working):
+        if s <= block_start:
+            continue
+        for call in _block_calls(working, s, e):
+            if call["failed"]:
+                continue
+            effect = effect_for(call["name"])
+            if effect is None:
+                continue
+            later.setdefault(effect, set()).update(call["paths"])
+    return later
+
+
+def _failures_resolved(
+    working: list[dict[str, Any]],
+    block_start: int,
+    calls: list[dict[str, Any]],
+    effect_for: Callable[[str], ToolEffect | None],
+) -> bool:
+    """Whether every failed call of a block has a later successful repair.
+
+    A failed mutation is resolved by a later successful mutation touching the
+    same path; a failed observation by a later successful observation. A failed
+    call with no path to repair against stays unresolved.
+    """
+    later = _later_successful_paths(working, block_start, effect_for)
+    for call in calls:
+        if not call["failed"]:
+            continue
+        paths = call["paths"]
+        if not paths:
+            return False
+        effect = effect_for(call["name"])
+        if effect is None or not set(paths) <= later.get(effect, set()):
+            return False
+    return True
+
+
+def _retire_block_to_ledger(
     working: list[dict[str, Any]],
     start: int,
     end: int,
     names: dict[str, str],
     stale_paths: frozenset[str],
     stats: CompactionStats,
+    retired_spans: list[tuple[int, int]],
+    entries: list[dict[str, Any]],
 ) -> None:
-    """Replace one completed observation block with its evidence receipt."""
+    """Collect one completed block's per-call receipts for the evidence ledger.
+
+    The block itself is removed later, in one pass, by ``_insert_evidence_ledger``.
+    """
     assistant_msg = working[start]
-    receipts: list[dict[str, Any]] = []
     for tc in (assistant_msg.get("tool_calls") or []):
         if not isinstance(tc, dict):
             continue
@@ -932,62 +1086,133 @@ def _retire_block_to_receipt(
             ),
             None,
         )
-        receipts.append(
-            _build_evidence_receipt(
-                tc, result_msg, names.get(str(call_id), ""), stale_paths
-            )
+        entry = _build_evidence_receipt(
+            tc, result_msg, names.get(str(call_id), ""), stale_paths
         )
-    if len(receipts) == 1:
-        payload: Any = receipts[0]
-    else:
-        payload = {RECEIPT_MARKER: True, "calls": receipts}
-    text = json.dumps(payload, sort_keys=True, ensure_ascii=False)
-    if len(text) > RECEIPT_MAX_CHARS:
-        text = json.dumps(
-            _shrink_strings(payload, RECEIPT_PREVIEW_CHARS),
-            sort_keys=True,
-            ensure_ascii=False,
-        )
-    working[start:end] = [{"role": "assistant", "content": text}]
-    stats.retired_observation_blocks += 1
-    stats.receipt_chars_retained += len(text)
+        if _entry_size(entry) > RECEIPT_MAX_CHARS:
+            entry = _shrink_strings(entry, RECEIPT_PREVIEW_CHARS)
+        entries.append(entry)
+    retired_spans.append((start, end))
+    stats.retired_blocks += 1
 
 
-def _block_has_failed_result(
-    working: list[dict[str, Any]], start: int, end: int
-) -> bool:
-    """Whether any tool result of a block reports a failure.
+def _entry_size(entry: dict[str, Any]) -> int:
+    return len(json.dumps(entry, sort_keys=True, ensure_ascii=False))
 
-    A failed result means the model may still be recovering from it, so the
-    whole block stays: failed observations, guard rejections, batch rejections,
-    per-path errors and omitted reads all protect the block.
+
+def _trim_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    """Deterministically compact one ledger entry's bulky fields."""
+    trimmed = dict(entry)
+    matches = trimmed.get("matches")
+    if isinstance(matches, list):
+        trimmed["matches"] = [
+            str(m)[:60] for m in matches[:LEDGER_MATCH_PREVIEWS]
+        ]
+    for key in ("summary", "reason", "search"):
+        value = trimmed.get(key)
+        if isinstance(value, str) and len(value) > LEDGER_PREVIEW_CHARS:
+            trimmed[key] = value[:LEDGER_PREVIEW_CHARS]
+    return trimmed
+
+
+def _merge_same_tool_entries(
+    older: dict[str, Any], newer: dict[str, Any]
+) -> dict[str, Any]:
+    """Deterministically merge two consecutive same-tool entries.
+
+    The newer entry's own fields win; paths, per-path facts, and match counts
+    are unioned so no fact is invented or dropped silently.
     """
-    for i in range(start + 1, end):
-        msg = working[i]
-        if msg.get("role") != "tool":
-            continue
-        content = msg.get("content")
-        if not isinstance(content, str):
-            continue
-        try:
-            parsed = json.loads(content)
-        except (TypeError, ValueError):
-            return True  # unparseable result is treated as a failure
-        if not isinstance(parsed, dict):
-            continue
-        if parsed.get("ok") is False:
-            return True
-        if parsed.get("recoverable") is True or parsed.get("batch_rejected") is True:
-            return True
-        if parsed.get("status") in ("error", "omitted"):
-            return True
-        files = parsed.get("files")
-        if isinstance(files, dict) and any(
-            isinstance(entry, dict) and entry.get("status") in ("error", "omitted")
-            for entry in files.values()
-        ):
-            return True
-    return False
+    merged: dict[str, Any] = dict(newer)
+    merged["merged"] = older.get("merged", 1) + newer.get("merged", 1)
+    paths = list(dict.fromkeys((older.get("paths") or []) + (newer.get("paths") or [])))
+    if paths:
+        merged["paths"] = paths[:LEDGER_MAX_PATHS]
+    files_a, files_b = older.get("files"), newer.get("files")
+    if isinstance(files_a, dict) or isinstance(files_b, dict):
+        files = dict(files_a or {})
+        files.update(files_b or {})  # newer entry wins per path
+        merged["files"] = dict(list(files.items())[:LEDGER_MAX_PATHS])
+    if isinstance(older.get("count"), int) and isinstance(newer.get("count"), int):
+        merged["count"] = older["count"] + newer["count"]
+    return merged
+
+
+def _compact_ledger_entries(
+    entries: list[dict[str, Any]],
+    budget_chars: int,
+    stats: CompactionStats,
+) -> list[dict[str, Any]]:
+    """Deterministically bound the ledger: trim, merge, then drop oldest-first.
+
+    Newest entries keep their detail longest, so recent retired evidence always
+    reads fullest; only once trimming and same-tool merging are exhausted do
+    the oldest entries leave the frontier.
+    """
+    trimmed = list(entries)
+
+    def total() -> int:
+        return sum(_entry_size(e) for e in trimmed)
+
+    # Stage 1: trim bulky fields, oldest entries first, until the budget fits.
+    # Each entry gets one trim pass, so the newest entries keep their detail
+    # as long as possible.
+    i = 0
+    while total() > budget_chars and i < len(trimmed):
+        trimmed[i] = _trim_entry(trimmed[i])
+        i += 1
+
+    # Stage 2: merge consecutive same-tool runs, oldest pairs first.
+    while total() > budget_chars and len(trimmed) > 1:
+        for i in range(len(trimmed) - 1):
+            if trimmed[i].get("tool") == trimmed[i + 1].get("tool"):
+                trimmed[i] = _merge_same_tool_entries(trimmed[i], trimmed[i + 1])
+                del trimmed[i + 1]
+                break
+        else:
+            break  # no adjacent same-tool pair left to merge
+
+    # Stage 3: drop the oldest entries until the frontier fits.
+    while total() > budget_chars and len(trimmed) > 1:
+        trimmed.pop(0)
+        stats.ledger_dropped_entries += 1
+
+    return trimmed
+
+
+def _insert_evidence_ledger(
+    working: list[dict[str, Any]],
+    retired_spans: list[tuple[int, int]],
+    entries: list[dict[str, Any]],
+    budget_chars: int,
+    stats: CompactionStats,
+) -> None:
+    """Fold every retired block of this view into one deterministic ledger.
+
+    One assistant message replaces the retired spans, sitting where the oldest
+    retired block was so the entries (ordered oldest to newest) read in
+    chronological position among the surviving blocks. The retirement walk
+    collects newest-first, so the entries are reversed here.
+    """
+    if not entries:
+        return
+    oldest_first = list(reversed(entries))
+    compacted = _compact_ledger_entries(oldest_first, max(1, budget_chars - 256), stats)
+    if not compacted:
+        return
+    payload: dict[str, Any] = {
+        RECEIPT_MARKER: True,
+        "ledger": True,
+        "count": len(compacted),
+        "entries": compacted,
+    }
+    text = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    insert_at = min(s for s, _ in retired_spans)
+    for start, end in sorted(retired_spans, reverse=True):
+        del working[start:end]
+    working.insert(insert_at, {"role": "assistant", "content": text})
+    stats.ledger_entries = len(compacted)
+    stats.ledger_chars_retained = len(text)
 
 
 def _bound_replayed_results(
@@ -997,14 +1222,15 @@ def _bound_replayed_results(
     names: dict[str, str],
     stats: CompactionStats,
 ) -> None:
-    """Deterministic replay bound for kept non-active results.
+    """Deterministic replay bound for preserved-but-not-verbatim results.
 
-    A block that is never retired (a mutation, a terminal run, a validation
-    failure, a mixed batch) replays on every round of the turn. Its bulk
-    leaves get a bounded, structurally valid representation here — regardless
-    of budget pressure — so a 200K-char test run does not sit verbatim in the
-    request forever. The envelope (paths, statuses, failure class, exit code,
-    continuation guidance) always survives.
+    A block that the lifecycle preserves without retiring (an applied or
+    unresolved-failed mutation, a bookkeeping call, an unknown-effect batch)
+    replays on every round of the turn. Its bulk leaves get a bounded,
+    structurally valid representation here — regardless of budget pressure —
+    so a huge payload does not sit verbatim in the request forever. The
+    envelope (paths, statuses, failure class, exit code, continuation
+    guidance) always survives.
     """
     for i in range(start + 1, end):
         msg = working[i]
@@ -1032,12 +1258,13 @@ def _retire_completed_observations(
     working: list[dict[str, Any]],
     budget_tokens: int,
     names: dict[str, str],
+    effect_for: Callable[[str], ToolEffect | None],
     stats: CompactionStats,
 ) -> None:
-    """Retire older completed observation blocks; keep recent evidence verbatim.
+    """Apply the block lifecycle: retire resolved, superseded, and old evidence.
 
-    See the section docstring for the lifecycle rule. Runs on the deep copy
-    after reasoning shedding, so canonical history is untouched and the
+    See the section docstring for the rule. Runs on the deep copy after
+    reasoning shedding, so canonical history is untouched and the
     completed-step boundary still governs which reasoning may be replayed.
     """
     active = _active_chain_start(working)
@@ -1058,25 +1285,72 @@ def _retire_completed_observations(
     if not blocks:
         return
 
-    allowance = max(
-        MIN_RECENT_EVIDENCE_TOKENS, int(budget_tokens * RECENT_EVIDENCE_FRACTION)
-    )
+    # Budgets derived from the active model's working-set budget — a token
+    # budget, never a count of calls, files, rounds, or time.
+    allowance = int(budget_tokens * RECENT_EVIDENCE_FRACTION)
+    ledger_budget_tokens = int(budget_tokens * LEDGER_BUDGET_FRACTION)
+    ledger_budget_chars = ledger_budget_tokens * 4  # matches estimate_tokens (len/4)
     stats.recent_evidence_tokens = allowance
-    stale_paths = _mutation_paths(working)
+    stats.ledger_budget_tokens = ledger_budget_tokens
+    stale_paths = _mutation_paths(working, effect_for)
+
+    # The newest completed command block is the currently relevant terminal
+    # output and validation chain; every older one is superseded.
+    newest_command_start = -1
+    for s, e in blocks:
+        effects, known = _known_block_effects(working, s, e, effect_for)
+        if known and ToolEffect.COMMAND in effects:
+            newest_command_start = s
+
+    retired_spans: list[tuple[int, int]] = []
+    entries: list[dict[str, Any]] = []
 
     for start, end in reversed(blocks):
-        call_names = [
-            str(tc.get("function", {}).get("name", ""))
-            for tc in (working[start].get("tool_calls") or [])
-            if isinstance(tc, dict) and isinstance(tc.get("function"), dict)
-        ]
-        is_observation = bool(call_names) and all(
-            name in OBSERVATION_TOOLS for name in call_names
-        )
-        if not is_observation or _block_has_failed_result(working, start, end):
-            # Never retired: mutations, terminal/diagnostic runs, bookkeeping,
-            # and failures the turn may still be recovering from. Bounded only.
+        effects, known = _known_block_effects(working, start, end, effect_for)
+        if not known:
+            # A call with unknown or missing effect metadata: fail safe —
+            # preserved and replay-bounded, never retired.
             _bound_replayed_results(working, start, end, names, stats)
+            continue
+        calls = _block_calls(working, start, end)
+        failed = any(call["failed"] for call in calls)
+
+        if ToolEffect.MUTATION in effects:
+            if failed and _failures_resolved(working, start, calls, effect_for):
+                _retire_block_to_ledger(
+                    working, start, end, names, stale_paths, stats,
+                    retired_spans, entries,
+                )
+            else:
+                # Applied mutations and unresolved mutation failures stay —
+                # the proof of the mutation, and the recovery evidence.
+                _bound_replayed_results(working, start, end, names, stats)
+            continue
+
+        if ToolEffect.COMMAND in effects:
+            if start == newest_command_start:
+                continue  # currently relevant terminal output — verbatim
+            _retire_block_to_ledger(
+                working, start, end, names, stale_paths, stats,
+                retired_spans, entries,
+            )
+            continue
+
+        if ToolEffect.BOOKKEEPING in effects:
+            _bound_replayed_results(working, start, end, names, stats)
+            continue
+
+        # Observation-only block.
+        if failed:
+            if _failures_resolved(working, start, calls, effect_for):
+                _retire_block_to_ledger(
+                    working, start, end, names, stale_paths, stats,
+                    retired_spans, entries,
+                )
+            else:
+                # Unresolved failed observation — the model may still be
+                # recovering from it.
+                _bound_replayed_results(working, start, end, names, stats)
             continue
 
         cost = estimate_tokens(working[start:end])
@@ -1084,7 +1358,15 @@ def _retire_completed_observations(
             allowance -= cost
             continue
 
-        _retire_block_to_receipt(working, start, end, names, stale_paths, stats)
+        _retire_block_to_ledger(
+            working, start, end, names, stale_paths, stats,
+            retired_spans, entries,
+        )
+
+    if entries:
+        _insert_evidence_ledger(
+            working, retired_spans, entries, ledger_budget_chars, stats
+        )
 
 
 def _active_chain_chars(working: list[dict[str, Any]]) -> int:
@@ -1107,17 +1389,34 @@ def _active_chain_chars(working: list[dict[str, Any]]) -> int:
     return total
 
 
+def default_effect_lookup(name: str) -> ToolEffect | None:
+    """Known built-in effect classification, or None for any other name.
+
+    Used when the caller has no registry (offline pruning, direct tests).
+    Unknown or undeclared tools fail safe: blocks that call them are preserved,
+    never retired, whatever the name suggests.
+    """
+    return BUILTIN_TOOL_EFFECTS.get(name)
+
+
 def build_api_view(
     system_prompt: str | None,
     messages: list[dict[str, Any]],
     budget_tokens: int,
     keep_last_n_turns: int = 5,
+    effect_for: Callable[[str], ToolEffect | None] | None = None,
 ) -> ApiView:
     """Build the outbound message list without touching `messages`.
 
     `messages` is deep-copied first; the caller's canonical history is never
     modified, whatever the budget forces us to do here.
+
+    `effect_for` is the authoritative tool-effect lookup
+    (``ToolRegistry.declared_effect`` on the send path); it decides which
+    completed blocks may retire. None falls back to ``default_effect_lookup``.
     """
+    if effect_for is None:
+        effect_for = default_effect_lookup
     working = copy.deepcopy(messages)
     stats = CompactionStats(
         budget_tokens=budget_tokens,
@@ -1139,11 +1438,12 @@ def build_api_view(
     _mark_completed_step_boundary(working, stats)
     _strip_superseded_reasoning(working, stats)
 
-    # Lifecycle retirement next: completed observation blocks beyond the
-    # recent-evidence allowance become deterministic receipts, so the request
-    # stops growing with every completed block. Kept blocks are bounded on
-    # replay. The ladder only then handles whatever still does not fit.
-    _retire_completed_observations(working, budget_tokens, names, stats)
+    # Lifecycle retirement next: completed blocks that are resolved,
+    # superseded, or beyond the recent-evidence allowance fold into the one
+    # deterministic evidence ledger, so the request stops growing with every
+    # completed block. Kept blocks are bounded on replay. The ladder only then
+    # handles whatever still does not fit.
+    _retire_completed_observations(working, budget_tokens, names, effect_for, stats)
     stats.active_chain_chars_retained = _active_chain_chars(working)
 
     _compact_to_budget(working, system_prompt, budget_tokens, names, stats, keep_last_n_turns)

@@ -208,6 +208,24 @@ class ToolRegistry(
             return dynamic_effect
         return DEFAULT_EXTENSIBLE_TOOL_EFFECT
 
+    def declared_effect(self, name: str) -> ToolEffect | None:
+        """Declared effect of a *known* tool, or None when nothing declares one.
+
+        Built-in tools are always classified.  Extensible tools contribute only
+        their explicit declaration (``x-aura-effect`` / ``AURA_TOOL_EFFECT``):
+        an undeclared dynamic or MCP tool resolves to None here, never to the
+        consequential default.  Runtime policy keeps the fail-safe default in
+        :meth:`tool_effect`; a caller that decides *retirement* policy uses
+        this so unknown or missing effect metadata is preserved, never treated
+        as an observation.
+        """
+        if name in BUILTIN_TOOL_EFFECTS:
+            return BUILTIN_TOOL_EFFECTS[name]
+        mcp_effect = self._mcp_tools.effect(name)
+        if mcp_effect is not None:
+            return mcp_effect
+        return self._dynamic_tools.effect(name)
+
     def _dynamic_tool_names(self) -> frozenset[str]:
         """Names the workspace's dynamic tool scripts currently claim."""
         return frozenset(self._dynamic_tools.scan())

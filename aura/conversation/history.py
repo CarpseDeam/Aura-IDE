@@ -237,14 +237,23 @@ class History:
 
     # ---- API view -----------------------------------------------------------
 
-    def build_api_payload(self, max_tokens: int | None = None) -> ApiView:
+    def build_api_payload(
+        self,
+        max_tokens: int | None = None,
+        *,
+        effect_for=None,
+    ) -> ApiView:
         """Build the outbound view plus its compaction diagnostics.
 
-        `max_tokens` is the active model's working-set budget. Nothing here
-        mutates `self.messages`.
+        `max_tokens` is the active model's working-set budget. `effect_for` is
+        the authoritative tool-effect lookup that decides which completed
+        blocks may retire (the send path passes the registry's
+        ``declared_effect``). Nothing here mutates `self.messages`.
         """
         budget = max_tokens if max_tokens and max_tokens > 0 else MAX_CONTEXT_TOKENS
-        return build_api_view(self.system_prompt, self.messages, budget)
+        return build_api_view(
+            self.system_prompt, self.messages, budget, effect_for=effect_for
+        )
 
     def for_api(self, max_tokens: int | None = None) -> list[dict[str, Any]]:
         """Build the messages array for the next API call.

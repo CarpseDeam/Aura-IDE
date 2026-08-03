@@ -197,8 +197,11 @@ class _FakeStats:
     reasoning_chars_replayed = 0
     reasoning_chars_dropped = 0
     boundary_messages_inserted = 0
-    retired_observation_blocks = 0
-    receipt_chars_retained = 0
+    retired_blocks = 0
+    ledger_entries = 0
+    ledger_chars_retained = 0
+    ledger_dropped_entries = 0
+    ledger_budget_tokens = 0
     active_chain_chars_retained = 0
     recent_evidence_tokens = 0
     bounded_replays = 0

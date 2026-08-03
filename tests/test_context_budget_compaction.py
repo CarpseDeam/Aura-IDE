@@ -472,9 +472,9 @@ class TestBudgetReachesPruning:
         h.append_user_text("do the thing")
         real_build = h.build_api_payload
 
-        def spy(max_tokens: int | None = None):
+        def spy(max_tokens: int | None = None, **kwargs):
             seen.append(max_tokens)
-            return real_build(max_tokens)
+            return real_build(max_tokens, **kwargs)
 
         h.build_api_payload = spy  # type: ignore[method-assign]
 

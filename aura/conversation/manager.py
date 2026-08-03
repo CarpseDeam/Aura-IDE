@@ -137,8 +137,8 @@ def _log_context_round(
 
     Deliberately a single log record, not a telemetry framework — enough to
     answer "why was this turn's evidence cut?" from a normal log file. The
-    lifecycle fields prove the request plateaued: how many completed
-    observation blocks were retired, how many characters the receipts and the
+    lifecycle fields prove the request plateaued: how many completed blocks
+    retired into the evidence ledger, how many characters the ledger and the
     active chain retain, and how the request grew from the preceding round.
     """
     try:
@@ -165,7 +165,8 @@ def _log_context_round(
         "system_chars=%d tool_schema_chars=%d tool_schema_tokens=%d "
         "request_tokens=%d request_growth_tokens=%s request_headroom=%d "
         "system_fingerprint=%s "
-        "retired_observation_blocks=%d receipt_chars_retained=%d "
+        "retired_blocks=%d ledger_entries=%d ledger_chars_retained=%d "
+        "ledger_dropped_entries=%d ledger_budget_tokens=%d "
         "active_chain_chars_retained=%d recent_evidence_tokens=%d "
         "bounded_replays=%d "
         "source_chars_generated=%d source_chars_retained=%d "
@@ -192,8 +193,11 @@ def _log_context_round(
         growth,
         budget.context_window_tokens - budget.output_reserve_tokens - request_tokens,
         stats.system_prompt_fingerprint,
-        stats.retired_observation_blocks,
-        stats.receipt_chars_retained,
+        stats.retired_blocks,
+        stats.ledger_entries,
+        stats.ledger_chars_retained,
+        stats.ledger_dropped_entries,
+        stats.ledger_budget_tokens,
         stats.active_chain_chars_retained,
         stats.recent_evidence_tokens,
         stats.bounded_replays,
@@ -479,7 +483,10 @@ class ConversationManager:
             # The outbound view is compacted against *this* model's budget;
             # self._history.messages is left exact.
             budget = resolve_model_budget(model)
-            api_view = self._history.build_api_payload(budget.working_set_tokens)
+            api_view = self._history.build_api_payload(
+                budget.working_set_tokens,
+                effect_for=self._tools.declared_effect,
+            )
             try:
                 schema_chars = len(json.dumps(tool_defs, ensure_ascii=False)) if tool_defs else 0
             except (TypeError, ValueError):
