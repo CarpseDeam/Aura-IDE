@@ -59,6 +59,12 @@ from aura.conversation.manager_tool_round import ToolRoundRunner
 from aura.conversation.planner_dispatch_gate import maybe_force_worker_dispatch
 from aura.conversation.planner_refresh import PlannerRefreshState
 from aura.conversation.planner_stream_hygiene import PlannerStreamHygiene
+from aura.conversation.single_trajectory import (
+    RUNAWAY_FAILURE_CLASS,
+    RUNAWAY_FAILURE_MESSAGE,
+    SingleTrajectoryController,
+    TrajectoryDecision,
+)
 from aura.conversation.stream_event_router import StreamEventRouter
 from aura.conversation.task_router import (
     TaskRoute,
@@ -234,7 +240,8 @@ def _log_context_round(
         "system_chars=%d tool_schema_chars=%d tool_schema_tokens=%d "
         "request_tokens=%d request_growth_tokens=%s request_headroom=%d "
         "system_fingerprint=%s "
-        "retired_blocks=%d ledger_entries=%d ledger_chars_retained=%d "
+        "retired_blocks=%d rollover_retired_blocks=%d "
+        "ledger_entries=%d ledger_chars_retained=%d "
         "ledger_dropped_entries=%d ledger_budget_tokens=%d "
         "active_chain_chars_retained=%d recent_evidence_tokens=%d "
         "bounded_replays=%d "
@@ -263,6 +270,7 @@ def _log_context_round(
         budget.context_window_tokens - budget.output_reserve_tokens - request_tokens,
         stats.system_prompt_fingerprint,
         stats.retired_blocks,
+        stats.rollover_retired_blocks,
         stats.ledger_entries,
         stats.ledger_chars_retained,
         stats.ledger_dropped_entries,
@@ -328,6 +336,10 @@ class ConversationManager:
         #: Read once from the turn's authoritative route at the start of send;
         #: completion receipts hold such turns to the truthful-outcome contract.
         self._last_turn_bears_production_action: bool = False
+        #: Whether the most recent turn ended at the remote runaway boundary.
+        #: A harness/runtime failure — never a task blocker, never a request to
+        #: continue. Reset per send.
+        self._last_turn_harness_failure: bool = False
         #: The most recent send's frozen skill turn state (or None when the
         #: send exposed no candidates). Kept so the bridge can surface the
         #: activation ledger after the turn completes.
@@ -362,6 +374,18 @@ class ConversationManager:
     def last_turn_bears_production_action(self) -> bool:
         """Whether the last turn was routed for a production action."""
         return self._last_turn_bears_production_action
+
+    @property
+    def last_turn_harness_failure(self) -> bool:
+        """Whether the last turn hit the remote runaway boundary.
+
+        Classified as a harness/runtime failure and surfaced through the normal
+        ``ApiError`` path, which the production receipt already reports as
+        ``harness_error``.  Deliberately never ``blocked``: nothing external
+        stopped the task, so it must not reach the user as a blocker or as a
+        request to continue.
+        """
+        return self._last_turn_harness_failure
 
     def skill_activation_log(self) -> list[dict]:
         """Structured skill activation ledger of the last completed send.
@@ -478,11 +502,22 @@ class ConversationManager:
           told what remains unproven and called again.
 
         Production SINGLE has no count-based termination: it never ends because
-        the turn performed N model rounds, read N files, inspected N times,
-        consumed N tokens, or spent N seconds.  It ends when the work is done,
-        when a structured blocker or already-satisfied result succeeds, when the
-        user cancels, or when the provider genuinely fails.  ``max_tool_rounds``
-        is honoured only by the legacy Planner/Worker compatibility path.
+        the turn performed N model rounds, read N files, inspected N times, or
+        spent N seconds.  It ends when the work is done, when a structured
+        blocker or already-satisfied result succeeds, when the user cancels, or
+        when the provider genuinely fails.  ``max_tool_rounds`` is honoured only
+        by the legacy Planner/Worker compatibility path.
+
+        What it *does* bound is the internal trajectory, and that is not a
+        termination.  :class:`~aura.conversation.single_trajectory.SingleTrajectoryController`
+        owns one lifecycle per real user turn: when an implementation task
+        consumes a model-budget-relative observation segment without
+        implementation progress, the harness retires the superseded observation
+        trajectory and continues the *same* turn in a fresh internal segment —
+        no user-visible blocker, no completion, no request to continue, no new
+        user turn, no re-routing.  Rollovers are unrationed.  Only the remote
+        runaway ceiling ends a run, and it ends it as a harness failure, never
+        as a task blocker.
 
         `dispatch_cb` is required when the registry is in "planner" mode (the
         only mode that exposes the `dispatch_to_worker` tool). If the tool is
@@ -540,6 +575,7 @@ class ConversationManager:
         self._last_turn_blocked_reason = ""
         self._last_turn_provider_contract_failure = False
         self._last_turn_already_satisfied = False
+        self._last_turn_harness_failure = False
         # The authoritative route (the caller's, or the defensive resolution
         # above) decides whether this turn bore a production action. A
         # read-only registry exposes no mutation tools, so such turns never owe
@@ -556,6 +592,21 @@ class ConversationManager:
                 state.dispatched_target_files = list(worker_dispatch_request.files)
                 state.worker_artifact_id = str(worker_dispatch_request.artifact_id or "")
                 state.worker_artifact_item_id = str(worker_dispatch_request.artifact_item_id or "")
+
+        if state.mode == "single":
+            # One lifecycle owner per real user turn, built before the first
+            # request so its segment allowance is relative to the budget of the
+            # model that is actually answering. The budget for a fixed model is
+            # deterministic, so resolving it once here and once per round below
+            # cannot disagree.
+            state.trajectory = SingleTrajectoryController.for_turn(
+                mode=state.mode,
+                read_only=state.read_only,
+                route=state.task_route,
+                user_request=latest_user_text,
+                budget=resolve_model_budget(model),
+            )
+            state.trajectory.log_snapshot("turn_begin")
 
         prev_request_tokens: int | None = None
 
@@ -581,6 +632,23 @@ class ConversationManager:
                     state.mode, state.rounds_used,
                 )
                 return
+
+            # ── Trajectory lifecycle boundary ────────────────────────────
+            # One place, before another model request is issued, where the
+            # turn's progress is judged. By the time control reaches here the
+            # previous round's authoritative results, applied writes, and
+            # edit-recovery state have all been folded in, so this single
+            # boundary covers every integration point the loop has. A turn that
+            # already reached a truthful terminal outcome is exempt: it owes one
+            # final response, not a trajectory judgement.
+            if state.trajectory is not None and not state.task_completion_context:
+                state.trajectory.note_accepted_tool_calls(state.limits.total_calls)
+                decision = state.trajectory.decide()
+                if decision is TrajectoryDecision.TERMINAL_HARNESS_FAILURE:
+                    self._finish_single_runaway(on_event, state)
+                    return
+                if decision is TrajectoryDecision.INTERNAL_ROLLOVER:
+                    self._roll_over_internal_trajectory(state)
 
             state.limits.begin_model_round()
             if cancel_event.is_set():
@@ -776,11 +844,25 @@ class ConversationManager:
                     # this response with prose instead of an act. That is not a
                     # truthful terminal outcome — no write, no structured
                     # already-satisfied evidence, no blocker — so the turn is
-                    # not allowed to close on it. Append one compact internal
-                    # continuation stating exactly what remains unproven and
-                    # call the model again with the same catalog, the same
-                    # thinking mode, the same history, and every tool result
-                    # gathered so far.
+                    # not allowed to close on it.
+                    #
+                    # ``_UNPROVEN_CONTINUATION`` is the cheap in-segment
+                    # correction: state exactly what remains unproven and call
+                    # the model again with the same catalog, the same thinking
+                    # mode, the same history, and every tool result gathered so
+                    # far. It is no longer the *only* answer to nonconvergence:
+                    # the trajectory owner gets the first say, and a segment
+                    # that has already been steered once rolls over instead of
+                    # steering into the same investigation again.
+                    if state.trajectory is not None:
+                        state.trajectory.note_prose_nonconvergence()
+                        decision = state.trajectory.decide()
+                        if decision is TrajectoryDecision.TERMINAL_HARNESS_FAILURE:
+                            self._finish_single_runaway(on_event, state)
+                            return
+                        if decision is TrajectoryDecision.INTERNAL_ROLLOVER:
+                            self._roll_over_internal_trajectory(state)
+                            continue
                     self._history.append_internal_user_text(_UNPROVEN_CONTINUATION)
                     _log.info(
                         "production_prose_not_terminal rounds_used=%d",
@@ -807,6 +889,15 @@ class ConversationManager:
                 declared_run_command=declared_run_command,
                 tool_defs=tool_defs,
             )
+            # Authoritative results are appended and applied writes and
+            # edit-recovery state are known: fold them into the trajectory
+            # owner. The decision itself is taken at the single boundary at the
+            # top of the loop, before the next request is issued.
+            if state.trajectory is not None:
+                if tool_round.trajectory_facts is not None:
+                    state.trajectory.note_tool_round(tool_round.trajectory_facts)
+                state.trajectory.note_accepted_tool_calls(state.limits.total_calls)
+
             guard = state.pre_edit_guard
             write_applied = bool(guard is not None and guard.write_applied)
 
@@ -845,6 +936,64 @@ class ConversationManager:
                 return
             if tool_round.action == "continue":
                 continue
+
+    def _roll_over_internal_trajectory(self, state: _SendState) -> None:
+        """Start a fresh internal trajectory segment for the same user turn.
+
+        Not a terminal outcome and not user-visible.  Canonical history is
+        preserved exactly — every completed tool result, applied write, failed
+        write, recovery state, validation result, and receipt stays where it is,
+        so cancellation cleanup and tool-call pairing are untouched.  All that
+        is added is one internal continuation capsule, rebuilt deterministically
+        from facts Aura already owns.
+
+        The capsule carries the rollover marker, which is how the one compaction
+        owner (:mod:`aura.conversation.api_view`) knows to retire the superseded
+        detailed observation trajectory into the same evidence ledger it already
+        maintains — so the next request starts a genuinely new segment rather
+        than re-entering the same expanding chain.  There is no second
+        compaction system here: this method compacts nothing.
+
+        The loop then continues with the same model, the same thinking mode, the
+        same stable tool catalog, the same route, and the same task.
+        """
+        trajectory = state.trajectory
+        if trajectory is None:
+            return
+        self._history.append_trajectory_rollover(trajectory.capsule_text())
+        trajectory.begin_new_segment()
+        trajectory.log_snapshot("internal_rollover")
+
+    def _finish_single_runaway(
+        self, on_event: EventCallback, state: _SendState
+    ) -> None:
+        """End the run at the remote runaway boundary as a harness failure.
+
+        Owned by the trajectory lifecycle, not returned as a rejected tool
+        result: the old behaviour left the model with every tool refused while
+        prose endings were also refused, which is a loop with no exit.  Here the
+        run simply ends.
+
+        It is deliberately *not* a blocker, not a completion, and not a request
+        to continue — nothing external stopped the task.  The ``ApiError`` path
+        is the harness/runtime failure channel the production receipt already
+        classifies as ``harness_error``.  Canonical history is left exactly as it
+        is, so every completed read, applied write, command result, and
+        validation result of the turn stays in the transcript and the receipt,
+        with tool-call pairing intact.
+        """
+        trajectory = state.trajectory
+        if trajectory is not None:
+            trajectory.log_snapshot("terminal_harness_failure")
+        self._last_turn_harness_failure = True
+        _log.error(
+            "single_trajectory_runaway failure_class=%s rounds_used=%d "
+            "total_tool_calls=%d",
+            RUNAWAY_FAILURE_CLASS,
+            state.rounds_used,
+            state.limits.total_calls,
+        )
+        on_event(ApiError(status_code=None, message=RUNAWAY_FAILURE_MESSAGE))
 
     def _finish_worker_unrecoverable(
         self,

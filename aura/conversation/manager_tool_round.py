@@ -25,6 +25,7 @@ from aura.conversation.manager_recovery import (
 )
 from aura.conversation.manager_send_state import _SendState
 from aura.conversation.planner_refresh import PlannerRefreshState
+from aura.conversation.single_trajectory import RoundFacts, observation_targets
 from aura.conversation.terminal_tool_round import (
     handle_run_and_watch_round,
     handle_run_terminal_command_round,
@@ -346,12 +347,106 @@ def _combined_post_write_files(
     return merged
 
 
+def _edit_recovery_write_paths(
+    tasks: list[dict[str, Any]],
+    results_by_id: dict[str, dict[str, Any]],
+) -> list[str]:
+    """Paths of mutation attempts whose authoritative result entered edit recovery.
+
+    A write that was attempted and whose authoritative result did *not* prove it
+    applied is concrete edit-recovery state: the model has been handed a real
+    failure it must recover from by re-reading the current bytes and
+    re-proposing.  The trajectory owner counts that as implementation movement,
+    not as more observation — otherwise a turn fighting a genuinely hard edit
+    would be rolled over for making progress.
+
+    Symmetric with :func:`_applied_write_paths` and read from the same
+    authoritative results, so a write is in exactly one of the two lists.
+    """
+    files: list[str] = []
+    seen: set[str] = set()
+    for task in tasks:
+        name = task["name"]
+        if name not in WRITE_TOOLS:
+            continue
+        res = results_by_id.get(task["id"])
+        if res is None:
+            continue
+        applied = (
+            _result_payload_applied(res.get("result_payload"))
+            and _enclosing_result_success(res) is not False
+        )
+        if applied:
+            continue
+        path = _edit_shapes.tool_path(name, task["args"]) or name
+        normalized = str(path).replace("\\", "/")
+        if normalized not in seen:
+            files.append(normalized)
+            seen.add(normalized)
+    return files
+
+
+def _trajectory_facts(
+    *,
+    tasks: list[dict[str, Any]],
+    results_by_id: dict[str, dict[str, Any]],
+    applied_write_paths: list[str],
+    blocker_succeeded: bool,
+    already_satisfied_succeeded: bool,
+) -> RoundFacts:
+    """Project one completed round into the trajectory owner's facts.
+
+    Observation cost is the *actual size of newly accepted observation results*,
+    in the same ``len // 4`` unit the context ladder budgets in — never a count
+    of calls, files, or rounds.  A failed observation contributes no evidence and
+    is therefore not charged; neither is a call that never executed, because a
+    rejected batch returns before this runs.
+    """
+    observation_tokens = 0
+    targets: list[str] = []
+    command_executed = False
+    for task in tasks:
+        res = results_by_id.get(task["id"])
+        if res is None:
+            continue
+        if task["effect"] is ToolEffect.COMMAND:
+            command_executed = True
+            continue
+        if task["effect"] is not ToolEffect.OBSERVATION:
+            continue
+        if _enclosing_result_success(res) is False:
+            continue
+        payload = res.get("result_payload")
+        if isinstance(payload, str):
+            observation_tokens += len(payload) // 4
+        for target in observation_targets(task["name"], task["args"]):
+            if target not in targets:
+                targets.append(target)
+
+    return RoundFacts(
+        observation_tokens=observation_tokens,
+        observation_targets=tuple(targets),
+        applied_write_paths=tuple(applied_write_paths),
+        edit_recovery_paths=tuple(
+            _edit_recovery_write_paths(tasks, results_by_id)
+        ),
+        command_executed=command_executed,
+        blocker_succeeded=blocker_succeeded,
+        already_satisfied_succeeded=already_satisfied_succeeded,
+    )
+
+
 @dataclass(frozen=True)
 class ToolRoundOutcome:
     action: str
     enter_silent_preflight: bool = False
     blocker_succeeded: bool = False
     already_satisfied_succeeded: bool = False
+    #: Authoritative trajectory facts for
+    #: :class:`~aura.conversation.single_trajectory.SingleTrajectoryController`.
+    #: ``None`` when the round ended before any result was authoritative
+    #: (cancellation, a wholly rejected batch), in which case nothing is counted.
+    trajectory_facts: RoundFacts | None = None
 
 
 class ToolRoundRunner:
@@ -757,8 +852,21 @@ class ToolRoundRunner:
         if completed_dispatch_for_final:
             return ToolRoundOutcome(action="return")
         if completed_tool_result_for_final:
+            # The route's requested production action was itself the observation
+            # or command that just succeeded. That is implementation progress by
+            # definition — the work is done — and the turn moves to its final
+            # response rather than to any trajectory judgement.
             state.task_completion_context = True
-            return ToolRoundOutcome(action="continue")
+            return ToolRoundOutcome(
+                action="continue",
+                trajectory_facts=_trajectory_facts(
+                    tasks=tasks,
+                    results_by_id=results_by_id,
+                    applied_write_paths=applied_write_paths,
+                    blocker_succeeded=blocker_succeeded,
+                    already_satisfied_succeeded=already_satisfied_succeeded,
+                ),
+            )
 
         if terminal_dispatch:
             return ToolRoundOutcome(action="return")
@@ -770,6 +878,13 @@ class ToolRoundRunner:
             enter_silent_preflight=enter_silent_preflight,
             blocker_succeeded=blocker_succeeded,
             already_satisfied_succeeded=already_satisfied_succeeded,
+            trajectory_facts=_trajectory_facts(
+                tasks=tasks,
+                results_by_id=results_by_id,
+                applied_write_paths=applied_write_paths,
+                blocker_succeeded=blocker_succeeded,
+                already_satisfied_succeeded=already_satisfied_succeeded,
+            ),
         )
 
 

@@ -126,6 +126,15 @@ LEDGER_MAX_PATHS: int = 16
 # Marker that identifies a receipt message in the outbound view.
 RECEIPT_MARKER: str = "aura_evidence_receipt"
 
+#: Key set on the internal continuation capsule that
+#: :class:`~aura.conversation.single_trajectory.SingleTrajectoryController`
+#: appends when it starts a fresh internal trajectory segment for the same real
+#: user turn.  This module is still the *one* compaction owner: the trajectory
+#: controller never compacts anything itself, it only marks the boundary, and
+#: the retirement pass below reads that marker to force the superseded detailed
+#: observation trajectory into the same single evidence ledger it already owns.
+TRAJECTORY_ROLLOVER_MARKER: str = "aura_trajectory_rollover"
+
 
 @dataclass
 class CompactionStats:
@@ -150,6 +159,11 @@ class CompactionStats:
     # Lifecycle retirement of completed blocks (see
     # ``_retire_completed_observations``).
     retired_blocks: int = 0
+    #: Of ``retired_blocks``, how many retired because they sat before an
+    #: internal trajectory-rollover boundary rather than because they fell
+    #: outside the recent-evidence allowance. Observability for the segment
+    #: boundary; nothing branches on it.
+    rollover_retired_blocks: int = 0
     ledger_entries: int = 0
     ledger_chars_retained: int = 0
     ledger_dropped_entries: int = 0
@@ -483,6 +497,24 @@ def user_message_text(msg: dict[str, Any]) -> str:
 
 def _turn_starts(messages: list[dict[str, Any]]) -> list[int]:
     return [i for i, m in enumerate(messages) if is_real_user_message(m)]
+
+
+def _last_rollover_boundary(
+    messages: list[dict[str, Any]], start: int
+) -> int | None:
+    """Index of the newest internal trajectory-rollover capsule at or after *start*.
+
+    ``None`` when the current real user turn has performed no rollover, which is
+    the ordinary case.  The capsule is an internal user message
+    (:func:`is_real_user_message` is false for it), so it never starts a new
+    turn and never re-routes the request; it only marks where the superseded
+    observation trajectory ends.
+    """
+    boundary: int | None = None
+    for index in range(start, len(messages)):
+        if messages[index].get(TRAJECTORY_ROLLOVER_MARKER):
+            boundary = index
+    return boundary
 
 
 def _compact_range(
@@ -1263,6 +1295,16 @@ def _retire_completed_observations(
     if not blocks:
         return
 
+    # An internal trajectory rollover happened in this turn: every completed
+    # observation block that closed before the capsule is superseded detail, and
+    # retires regardless of the recent-evidence allowance. That is the whole
+    # mechanical content of a segment boundary — the model is not simply placed
+    # back inside the same expanding observation chain. Mutations, unresolved
+    # failures, and the newest command block are untouched by it: the rules
+    # below still decide those, so applied writes, edit-recovery evidence, and
+    # the current validation chain survive a rollover verbatim.
+    rollover_at = _last_rollover_boundary(working, current_start)
+
     # Budgets derived from the active model's working-set budget — a token
     # budget, never a count of calls, files, rounds, or time.
     allowance = int(budget_tokens * RECENT_EVIDENCE_FRACTION)
@@ -1334,6 +1376,16 @@ def _retire_completed_observations(
                 # Unresolved failed observation — the model may still be
                 # recovering from it.
                 _bound_replayed_results(working, start, end, names, stats)
+            continue
+
+        if rollover_at is not None and end <= rollover_at:
+            # Superseded by an internal segment boundary: retired whatever the
+            # allowance would have said.
+            _retire_block_to_ledger(
+                working, start, end, names, stale_paths, stats,
+                retired_spans, entries,
+            )
+            stats.rollover_retired_blocks += 1
             continue
 
         cost = estimate_tokens(working[start:end])
