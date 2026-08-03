@@ -4,15 +4,16 @@ Holds all the mutable variables that track progress, recovery, and validation
 through one invocation of the model/tool loop.  Extracted so that send() starts
 with a compact, readable state setup instead of a wall of local declarations.
 
-This module also owns the **implementation discovery stage** — the per-turn
-authority that bounds how many *ordinary* model requests a production SINGLE
-implementation turn may spend before the first applied write.  See
-:class:`ImplementationStage`.
+This module also owns :func:`implementation_action_pending` — the per-turn fact
+that a production SINGLE turn bears a production action it has not yet
+performed.  It is a *fact about the turn*, not a budget: nothing here counts
+requests, files, tokens, or elapsed time, and nothing here ends discovery.
+Whether discovery has stopped moving is decided entirely by the evidence rules
+in :class:`~aura.conversation.pre_edit_loop_guard.PreEditLoopGuard`.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Any, Callable
 
 from aura.conversation.edit_orchestrator import EditRetryLedger
@@ -27,76 +28,25 @@ from aura.conversation.worker_flow import WorkerFlowHarness
 from aura.conversation.worker_stream_buffer import WorkerStreamBuffer
 
 
-class ImplementationStage(str, Enum):
-    """How many ordinary discovery requests an implementation turn has left.
-
-    :class:`~aura.conversation.pre_edit_loop_guard.PreEditLoopGuard` bounds
-    *repetition* — the same read twice, a round that gathered nothing.  It
-    deliberately never bounds *novelty*: a turn whose every call returns
-    genuinely new evidence is, by the guard's own rule, always still making
-    progress, so ``guard.focused`` never fires and the send loop keeps opening
-    another ordinary reasoning stream.  That is the production loop this stage
-    closes: endless technically-novel discovery.
-
-    The stage is a second, independent authority over the same transition.  An
-    implementation turn gets exactly **two ordinary discovery hops** before the
-    first applied write:
-
-    * :attr:`SURVEY` — the first ordinary request.  Ordinary thinking level,
-      ordinary tool catalog.  It may edit immediately, or batch as many reads,
-      searches, Git inspections, diagnostics, commands, and TODO calls as it
-      likes.
-    * :attr:`FINAL_EVIDENCE` — one more ordinary request, carrying the ephemeral
-      protocol instruction (see
-      :data:`~aura.conversation.focused_action.FINAL_EVIDENCE_INSTRUCTION`).
-      Act now, or batch every remaining exact read in this one response.
-    * :attr:`EXHAUSTED` — ordinary discovery is over.  The next request is the
-      existing focused action request.
-
-    **What consumes a stage.**  Exactly one thing: a structurally valid tool-call
-    round in which at least one tool *actually executed*.  Whether those tools
-    succeeded is irrelevant — a stage is a discovery *hop*, and a hop that ran
-    and failed still spent the model's opportunity to look.  Nothing that failed
-    to execute consumes anything: a preflight / schema / exposure / limit /
-    guard rejection rejects the whole batch before execution, and an API error
-    or cancellation never reaches the tool round at all.
-
-    Existing failure recovery still does its job *inside* the remaining stages —
-    it justifies rereads and corrected commands — but it can no longer add an
-    ordinary stage or postpone the focused transition.  After two executed
-    non-writing rounds the next request is action-only even if both rounds
-    failed; ``report_blocker`` is the truthful answer when the evidence gathered
-    is genuinely insufficient.
-
-    **The accepted tradeoff.**  Unlimited batching *within* a hop, but only two
-    sequential hops.  A task that genuinely needs a third sequential discovery
-    hop — where the file to edit is only identifiable after reading something
-    found in the second hop — will reach focused action under-informed and
-    produce a visible structured blocker.  That is the intended outcome: a
-    blocker the user can see and answer beats a turn that circles silently
-    forever.
-    """
-
-    SURVEY = "survey"
-    FINAL_EVIDENCE = "final_evidence"
-    EXHAUSTED = "exhausted"
-
-
-def implementation_staging_applies(
+def implementation_action_pending(
     *,
     mode: str,
     route: TaskRoute | None,
     guard: PreEditLoopGuard | None,
     read_only: bool,
 ) -> bool:
-    """Whether the discovery stage governs this turn at this moment.
+    """Whether this turn owes a production action it has not yet performed.
 
-    Pure over state the send loop already owns, and deliberately the same four
-    facts the protocol is specified against: production ``single`` mode, a route
-    that bears a production action, no applied write yet, and a registry that is
-    not read-only.  A read-only registry exposes no mutation tools, so there is
-    no action to serialize and nothing to bound; those turns keep their existing
-    unbounded-discovery behaviour exactly.
+    Pure over state the send loop already owns: production ``single`` mode, a
+    route that bears a production action, no applied write yet, and a registry
+    that is not read-only.  A read-only registry exposes no mutation tools, so
+    there is no action owed at all.
+
+    This is a *fact*, not a ceiling.  It answers "is the edit still outstanding"
+    — which is what
+    :func:`~aura.conversation.completion_guard.tool_result_completes_action`
+    needs to refuse to call a probe the completed action of a turn that has not
+    written anything.  It never bounds how much discovery the turn may do.
 
     "Bears a production action" is
     :func:`~aura.conversation.task_router.route_bears_production_action`, the one
@@ -166,16 +116,7 @@ class _SendState:
     """Deterministic repeat-read / stagnant-discovery guard before the first write."""
 
     focused_action: FocusedActionState = field(default_factory=FocusedActionState)
-    """The one action-serialization request this turn may spend."""
-
-    implementation_stage: ImplementationStage = ImplementationStage.SURVEY
-    """How many ordinary discovery requests this implementation turn has left.
-
-    Advanced only by :meth:`consume_implementation_stage`, only when a tool
-    round actually executed.  Meaningless outside a production SINGLE
-    implementation turn — :func:`implementation_staging_applies` gates every
-    read of it.
-    """
+    """The action-serialization request state, including its bounded recovery."""
 
     # --- worker recovery state ---
     worker_flow_last_steering: str = ""
@@ -231,42 +172,15 @@ class _SendState:
             else:
                 self.pre_edit_guard = PreEditLoopGuard()
 
-    # ── Implementation discovery stage ──────────────────────────────────
+    # ── Outstanding production action ───────────────────────────────────
 
-    def implementation_staging_active(self) -> bool:
-        """Whether the discovery stage governs this turn right now.
-
-        Also the answer to "is this an implementation turn that has not yet
-        acted" — which is why
-        :func:`~aura.conversation.completion_guard.tool_result_completes_action`
-        consults it to decide whether a probe can claim the turn completed
-        anything.
-        """
-        return implementation_staging_applies(
+    def implementation_action_pending(self) -> bool:
+        """Whether this turn still owes the production action it was routed for."""
+        return implementation_action_pending(
             mode=self.mode,
             route=self.task_route,
             guard=self.pre_edit_guard,
             read_only=self.read_only,
-        )
-
-    def implementation_stage_exhausted(self) -> bool:
-        """Whether ordinary discovery is spent and the next request must act.
-
-        One half of the focused transition authority:
-        ``focused = stalled_round OR implementation_stage_exhausted``.  The
-        guard's own stall rule remains untouched and still fires on its own
-        terms; this is the independent bound on novelty.
-        """
-        return (
-            self.implementation_stage is ImplementationStage.EXHAUSTED
-            and self.implementation_staging_active()
-        )
-
-    def awaiting_final_evidence_request(self) -> bool:
-        """Whether the next ordinary request is the last one, and must say so."""
-        return (
-            self.implementation_stage is ImplementationStage.FINAL_EVIDENCE
-            and self.implementation_staging_active()
         )
 
     def probes_complete_action(self) -> bool:
@@ -283,40 +197,7 @@ class _SendState:
         vetoes the focused action transition, so one successful ``git_status``
         before the first write bought an unbounded pre-write discovery loop.
         """
-        return not self.implementation_staging_active()
-
-    def consume_implementation_stage(self, *, executed: bool) -> bool:
-        """Spend one ordinary discovery hop; return whether the stage moved.
-
-        Called once per tool round, after that round's results have been folded
-        into history, so the stage advances on a completed hop rather than on an
-        intention to take one.
-
-        ``executed`` must be the honest answer to "did at least one tool in this
-        round actually run", *not* "did the round succeed".  A round whose tools
-        ran and failed consumes its stage: the model still spent a discovery hop,
-        and existing failure recovery gets to use what remains rather than
-        minting a fresh one.  A batch rejected before execution — preflight,
-        schema, exposure, limit, or loop-guard — executed nothing and so consumes
-        nothing, and neither does an API error or a cancellation, which never
-        reach this point.
-
-        An applied write leaves the protocol entirely:
-        :func:`implementation_staging_applies` goes false the moment
-        ``guard.write_applied`` is set, so the stage stops being consulted and
-        every existing post-write path runs unchanged.
-        """
-        if not executed:
-            return False
-        if not self.implementation_staging_active():
-            return False
-        if self.implementation_stage is ImplementationStage.SURVEY:
-            self.implementation_stage = ImplementationStage.FINAL_EVIDENCE
-            return True
-        if self.implementation_stage is ImplementationStage.FINAL_EVIDENCE:
-            self.implementation_stage = ImplementationStage.EXHAUSTED
-            return True
-        return False
+        return not self.implementation_action_pending()
 
     # ── Write-count helpers (honest signals from WorkerFlowHarness) ──
 

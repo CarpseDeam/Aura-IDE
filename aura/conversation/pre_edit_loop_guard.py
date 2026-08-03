@@ -1,6 +1,6 @@
 """Deterministic pre-edit loop guard for the SINGLE production runtime.
 
-Two mechanical signals, both derived from state the send loop already keeps:
+Three mechanical signals, all derived from state the send loop already keeps:
 
 1. **Exact read fingerprints.** Before the first applied write, the same
    read-only tool call with the same arguments is rejected the second time it
@@ -13,28 +13,24 @@ Two mechanical signals, both derived from state the send loop already keeps:
    transition: :attr:`focused` becomes true, and the send loop answers the next
    model request with the action-serialization request — thinking off, mutation
    tools plus ``report_blocker``, exactly one tool call — instead of another
-   ordinary reasoning stream.  There is deliberately no counter of discovery
-   calls and no "how many files should this task need" budget: discovery is
-   never refused by a count.  A turn may survey as long as every call returns
-   genuinely new evidence; the first round that does not is where the focused
-   action protocol takes over.
+   ordinary reasoning stream.
 
-**This guard is no longer the only authority over that transition, and it was
-never sufficient on its own.**  Rule 2 fires on *repetition*, so a turn whose
-every result is technically novel — a different file each round, a search with
-new matches, a fresh diagnostic — is by this guard's own reckoning always still
-progressing, and ``focused`` never becomes true.  That is a real production
-loop, not a hypothetical one.  Bounding it here would mean making novelty itself
-suspect, which would break the honest signal rule 2 depends on.  So the bound
-lives outside instead:
-:class:`~aura.conversation.manager_send_state.ImplementationStage` gives a
-production ``single`` implementation turn exactly two ordinary discovery hops
-before its first applied write, and the send loop enters focused action on
-``guard.focused OR implementation_stage_exhausted``.  Nothing in this module
-changed for that: evidence novelty still closes failure recovery, still resets
-the stall, and is still judged purely by the result.  It simply no longer
-*postpones* action indefinitely, because it is no longer the only thing that can
-end discovery.
+3. **Short repeating cycles.** Rule 2 asks whether *this* round moved; a turn
+   can still circle across rounds — read A, run B, read A, run B — where each
+   round in isolation looks like it did something.  Every round is folded into
+   one signature built from the fingerprints rules 1 and 2 already compute, and
+   an ``A, B, A, B`` repeat of two *different* signatures is the same
+   transition as a stall.  This is pattern equality over existing fingerprints,
+   not a score.
+
+There is deliberately **no counter of discovery calls, files, tokens, or
+elapsed time**, and no "how many files should this task need" budget: discovery
+is never refused by a count, and a turn that keeps returning genuinely new
+evidence may keep surveying across as many ordinary requests as the work needs.
+What ends discovery is evidence of circling, never arithmetic about how long
+looking has taken.  The 300-call emergency brake in
+:mod:`aura.conversation.tool_limits` remains the catastrophic backstop and is
+not workflow control.
 
 Evidence is judged by the *result*, never by the call arguments.  Each
 successful read-only result is folded into a normalized fingerprint: a
@@ -70,6 +66,12 @@ There is deliberately no semantic classification of model output, no
 planner/worker workflow, and no phase state machine here.  The 300-call
 emergency brake in :mod:`aura.conversation.tool_limits` stays the final runaway
 guard; this guard is the ordinary nudge that fires long before it.
+
+The guard also owns the *only* failure-recovery ledger for the pre-write phase.
+The focused action turn reuses it rather than keeping a retry manager of its
+own: a focused mutation that failed distinctly opens the same one recovery
+round any other distinct failure opens (:attr:`recovery_open`), and a repeat of
+a failure fingerprint already seen opens nothing.
 """
 from __future__ import annotations
 
@@ -207,6 +209,10 @@ _FAILURE_IDENTITY_KEYS: tuple[str, ...] = (
     "path",
 )
 
+#: How many round signatures are kept.  A two-step cycle needs four, and the
+#: check never looks further back, so this is bookkeeping depth, not a budget.
+_MAX_ROUND_SIGNATURES: int = 8
+
 DUPLICATE_READ_REASON = "duplicate_read_before_first_edit"
 
 _DUPLICATE_READ_MESSAGE = (
@@ -297,8 +303,12 @@ class PreEditLoopGuard:
 
     Protocol state, not a scoring engine: ``focused`` becomes true the first
     time a round runs tools, sees their results, and neither advanced the turn
-    (an applied write or a successful command) nor gathered new evidence.  That
-    one transition hands the send loop the action-serialization request.  A
+    (an applied write or a successful command) nor gathered new evidence — or
+    the first time the last four rounds form an ``A, B, A, B`` cycle over the
+    same fingerprints.  Either transition hands the send loop the
+    action-serialization request.  Rounds that keep returning genuinely new
+    evidence are never bounded by a count and may continue as long as the work
+    needs them.  A
     distinct failure opens recovery instead: rereads stay allowed while it is
     open and the focused transition waits, so the agent can correct the failing
     step rather than being pushed into a mutation the failure explains.
@@ -318,8 +328,19 @@ class PreEditLoopGuard:
 
     #: Whether the loop has concluded that discovery is over and the next
     #: request must be the focused action request.  Set once, by the first
-    #: stalled round; never reset by later evidence.
+    #: stalled round or the first detected cycle; never reset by later evidence.
     focused: bool = False
+    #: Whether the transition above was reached by cycle detection rather than
+    #: by a stalled round.  Telemetry only; nothing branches on it.
+    cycled: bool = False
+    #: Whether the round that just ended advanced the turn — an applied write, a
+    #: successful command, or genuinely new evidence.  The send loop reads this
+    #: to judge whether a granted recovery round recovered anything.
+    last_round_advanced: bool = False
+    #: One normalized signature per completed round, newest last.  Built from
+    #: the call and result fingerprints the other rules already compute; the
+    #: only consumer is the ``A, B, A, B`` cycle check.
+    round_signatures: list[str] = field(default_factory=list)
     #: Files already surfaced by this turn's discovery, from call arguments and
     #: from result payloads. Narrow reads of these stay allowed.
     candidate_files: set[str] = field(default_factory=set)
@@ -345,6 +366,22 @@ class PreEditLoopGuard:
     _round_new_evidence: bool = False
     _round_observed: bool = False
     _round_fresh_failure: bool = False
+    _round_call_parts: list[str] = field(default_factory=list)
+    _round_result_parts: list[str] = field(default_factory=list)
+
+    # ---- recovery ownership ----------------------------------------------
+
+    @property
+    def recovery_open(self) -> bool:
+        """Whether a distinct failure has bought the next round as recovery.
+
+        The single source of truth for "this failure earns one more ordinary
+        round", shared by the guard's own reread grace and by the focused action
+        turn's bounded mutation recovery.  It is true only after a *distinct*
+        failure fingerprint; a repeat of a failure already seen this turn leaves
+        it false, which is what stops a failure loop from renewing itself.
+        """
+        return self._failure_pending
 
     # ---- effect classification -------------------------------------------
 
@@ -376,9 +413,13 @@ class PreEditLoopGuard:
         self._round_new_evidence = False
         self._round_observed = False
         self._round_fresh_failure = False
+        self._round_call_parts = []
+        self._round_result_parts = []
 
     def end_round(self) -> None:
         recovered = self._round_made_progress or self._round_new_evidence
+        self.last_round_advanced = recovered
+        self._record_round_signature()
         if recovered:
             # The failure is resolved: rereads no longer need grace and the
             # focused transition is unblocked.
@@ -406,6 +447,41 @@ class PreEditLoopGuard:
         # turn nor gathered evidence has stopped moving: hand the send loop the
         # focused action protocol.
         self.focused = True
+
+    # ---- cycle detection --------------------------------------------------
+
+    def _record_round_signature(self) -> None:
+        """Fold the round into one signature and look for an ``A, B, A, B``.
+
+        The signature is built only from fingerprints the guard already
+        computes — the normalized call identities and the normalized result
+        identities — so a round is "the same round" exactly when it made the
+        same calls and got back the same results.  Order within the round is
+        irrelevant, so a re-ordered batch is still recognised.
+
+        The check is pattern equality on the last four signatures: two distinct
+        alternating rounds, repeated once.  Every round in such a cycle can look
+        individually productive to rule 2 — a fresh failure here, a novel-looking
+        result there — which is precisely why the stalled-round rule alone
+        cannot see it.  Nothing is scored, weighted, or thresholded.
+        """
+        signature = json.dumps(
+            {
+                "calls": sorted(self._round_call_parts),
+                "results": sorted(self._round_result_parts),
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        self.round_signatures.append(signature)
+        if len(self.round_signatures) > _MAX_ROUND_SIGNATURES:
+            del self.round_signatures[:-_MAX_ROUND_SIGNATURES]
+        if self.write_applied or len(self.round_signatures) < 4:
+            return
+        first, second, third, fourth = self.round_signatures[-4:]
+        if first == third and second == fourth and first != second:
+            self.cycled = True
+            self.focused = True
 
     # ---- pre-execution gate ----------------------------------------------
 
@@ -459,6 +535,7 @@ class PreEditLoopGuard:
         :meth:`observe_result`.
         """
         self._round_had_tools = True
+        self._round_call_parts.append(read_fingerprint(name, args))
         if self._is_observation(name):
             fingerprint = read_fingerprint(name, args)
             self.seen_reads[fingerprint] = self.seen_reads.get(fingerprint, 0) + 1
@@ -475,8 +552,12 @@ class PreEditLoopGuard:
         """
         self._round_observed = True
         if not ok:
+            self._round_result_parts.append(failure_fingerprint(name, payload))
             self.note_failure(name, payload)
             return
+        self._round_result_parts.append(
+            evidence_fingerprint(name, payload) or f"{name}:<no-payload>"
+        )
         if self._is_mutation(name) and _payload_applied(payload):
             self.write_applied = True
             self._round_made_progress = True

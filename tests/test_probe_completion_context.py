@@ -14,8 +14,8 @@ the turn had already acted and permanently suppressed the transition that would
 have ended it.  The model could then read new files indefinitely.
 
 The fix is at the source — the flag is simply not set by a probe before the
-first applied write — so it holds regardless of any discovery-stage policy
-layered above it.
+first applied write — so it holds regardless of any discovery policy layered
+above it.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ import json
 import pytest
 
 import aura.conversation.manager as manager_module
-import tests.test_implementation_discovery_stage as stage_tests
+import tests.production_loop_harness as harness
 from aura.conversation.completion_guard import (
     ACTION_COMPLETION_TOOL_NAMES,
     TASK_COMPLETION_TOOL_NAMES,
@@ -161,15 +161,12 @@ class TestStateOwnsTheAnswer:
             assert state.probes_complete_action()
 
 
-class TestTheResidualOverride:
-    """What the ``stage_exhausted`` override in ``focused_action`` still covers.
+class TestTheCompletionVeto:
+    """A pending completion response outranks the focused action request.
 
-    With probes fixed at the source, that override is no longer what saves the
-    probe case — either fix closes it alone. It is not dead code, though: a
-    *write* that returns ``ok`` while its payload never says ``applied: True``
-    still sets ``task_completion_context`` without ever setting
-    ``guard.write_applied``. The turn believes it acted, nothing landed, and the
-    veto would otherwise suppress the transition permanently.
+    With probes fixed at the source, the veto is no longer reachable from a
+    ``git_status`` before the first write — which is the whole point: the flag is
+    never set, so there is nothing to veto with.
     """
 
     def _args(self, **over):
@@ -185,30 +182,27 @@ class TestTheResidualOverride:
             guard=guard,
             task_completion_context=False,
             state=FocusedActionState(),
-            stage_exhausted=False,
         )
         base.update(over)
         return base
 
-    def test_a_completion_context_alone_still_vetoes(self) -> None:
+    def test_a_completion_context_vetoes_the_transition(self) -> None:
         args = self._args(task_completion_context=True)
         args["guard"].focused = True
         assert not should_enter_focused_action(**args)
 
-    def test_an_exhausted_stage_overrides_an_unearned_completion(self) -> None:
-        assert should_enter_focused_action(
-            **self._args(task_completion_context=True, stage_exhausted=True)
-        )
+    def test_without_one_the_transition_is_taken(self) -> None:
+        args = self._args()
+        args["guard"].focused = True
+        assert should_enter_focused_action(**args)
 
-    def test_it_can_never_override_a_completion_a_real_write_earned(self) -> None:
-        """``stage_exhausted`` is unreachable once a write applied — by construction."""
-        args = self._args(task_completion_context=True, stage_exhausted=True)
+    def test_an_applied_write_leaves_the_pre_write_protocol(self) -> None:
+        args = self._args()
+        args["guard"].focused = True
         args["guard"].observe_result(
             "write_file", True, json.dumps({"applied": True})
         )
-        assert not should_enter_focused_action(**args), (
-            "an applied write leaves the pre-write protocol entirely"
-        )
+        assert not should_enter_focused_action(**args)
 
 
 class TestThroughTheRealLoop:
@@ -241,16 +235,16 @@ class TestThroughTheRealLoop:
         root.mkdir()
         (root / "a.py").write_text("# a\n", encoding="utf-8")
 
-        backend = stage_tests.ScriptedBackend([
-            stage_tests.tool_round([
+        backend = harness.ScriptedBackend([
+            harness.tool_round([
                 ("p0", "run_diagnostic_command", {"command": "python --version"}),
             ]),
-            stage_tests.final_round("Looked around."),
+            harness.final_round("Looked around."),
         ])
         registry.register(PRODUCTION_STREAM_HOOK, backend.stream)
 
-        stage_tests.run(
-            stage_tests.build_manager(root), stage_tests.Recorder()
+        harness.run(
+            harness.build_manager(root), harness.Recorder()
         )
 
         assert seen, "the spy never saw a tool round"
@@ -269,18 +263,18 @@ class TestThroughTheRealLoop:
         root = tmp_path / "proj"
         root.mkdir()
 
-        backend = stage_tests.ScriptedBackend([
-            stage_tests.tool_round([
+        backend = harness.ScriptedBackend([
+            harness.tool_round([
                 ("p0", "run_diagnostic_command", {"command": "python --version"}),
             ]),
-            stage_tests.final_round("Here is the status."),
+            harness.final_round("Here is the status."),
         ])
         registry.register(PRODUCTION_STREAM_HOOK, backend.stream)
 
-        stage_tests.run(
-            stage_tests.build_manager(root, "Run the version check for me."),
-            stage_tests.Recorder(),
-            route=stage_tests.RESEARCH_ROUTE,
+        harness.run(
+            harness.build_manager(root, "Run the version check for me."),
+            harness.Recorder(),
+            route=harness.RESEARCH_ROUTE,
         )
 
         assert seen[0].task_completion_context, (

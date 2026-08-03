@@ -7,18 +7,13 @@ counters are gone.  Discovery is never refused by a count — a turn may survey
 as long as every call returns genuinely new evidence — and the focused action
 protocol is entered on the first round that stops producing evidence.
 
-**Scope: this module tests the guard in isolation, and the guard alone never
-bounds novelty.**  That is deliberate and it is not the whole system contract.
-Because rule 2 fires on repetition, a turn whose every result is genuinely new
-never stalls *here* — which is precisely how a production implementation turn
-could read different files forever.  The bound on that lives outside this
-module, in
-:class:`~aura.conversation.manager_send_state.ImplementationStage`: a production
-SINGLE implementation turn gets two ordinary discovery hops before its first
-applied write, and the send loop enters focused action on ``guard.focused OR
-implementation_stage_exhausted``.  So "unbounded" below means *this guard does
-not refuse it* — never "the turn may keep asking".  See
-``tests/test_implementation_discovery_stage.py`` for the bound.
+**Scope: this module tests the stall and repeat rules in isolation.**  A turn
+whose every result is genuinely new never stalls, and that is the intended
+contract: needing many sequential requests is not a defect.  Circling is, and
+the guard's other rule — the ``A, B, A, B`` cycle check — is what catches a turn
+that keeps moving without going anywhere.  See
+``tests/test_evidence_driven_discovery.py`` for the cycle rule and for the whole
+loop-level contract.
 
 What is asserted here:
 
@@ -104,8 +99,8 @@ def applied_write(guard: PreEditLoopGuard) -> None:
 class TestDiscoveryIsUnbounded:
     """The guard never refuses a call by a count, and novelty never stalls it.
 
-    These are statements about *this guard*, not about how many requests a turn
-    gets. ``ImplementationStage`` supplies that bound; see the module docstring.
+    Genuinely new evidence may continue across as many requests as the work
+    needs; only repetition ends discovery. See the module docstring.
     """
 
     def test_every_unique_call_is_allowed(self) -> None:

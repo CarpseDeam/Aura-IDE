@@ -474,14 +474,12 @@ class TestBoundedProgressionThroughTheRealLoop:
         assert (project / "notes.md").read_text(encoding="utf-8") == (
             "# Notes\n\nfixed body\n"
         )
-        # Recovery did its job *inside* the two ordinary hops: the distinct
-        # failure opened it, the corrected command ran in the round it granted,
-        # and neither round was blocked or laundered as progress. What recovery
-        # no longer does is mint a third ordinary request — both hops executed,
-        # so the write request is the focused action request. The edit still
-        # lands through it (asserted above), which is the point: the discovery
-        # stage changes which request carries the act, never whether it happens.
-        assert focused_request_indexes(backend) == [2]
+        # Recovery did its job: the distinct failure opened it, the corrected
+        # command ran in the round it granted and succeeded, and that success is
+        # real forward progress. Nothing ever stalled and nothing repeated, so
+        # the turn was never pushed into the focused action request at all — it
+        # simply did the work and edited on an ordinary request.
+        assert focused_request_indexes(backend) == []
 
     def test_the_failures_stay_visible_and_structured(
         self, project, isolated_streams  # noqa: F811

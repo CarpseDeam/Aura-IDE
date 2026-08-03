@@ -37,9 +37,9 @@ def route_bears_production_action(route: TaskRoute | None) -> bool:
     """Whether this route's turn is expected to end in an edit.
 
     The single authority on "does this turn owe the workspace an act", shared by
-    :func:`~aura.conversation.manager_send_state.implementation_staging_applies`
+    :func:`~aura.conversation.manager_send_state.implementation_action_pending`
     and :func:`~aura.conversation.focused_action.should_enter_focused_action` so
-    the two can never disagree about which turns are bounded.
+    the two can never disagree about which turns owe an act.
 
     Two lanes qualify:
 
@@ -48,7 +48,7 @@ def route_bears_production_action(route: TaskRoute | None) -> bool:
       coding request that also needs current external facts.  It is routed to
       the research lane because the *research* has to happen first, not because
       the turn stops there; it still ends in an edit.  Reading only the lane
-      here left every such turn unbounded, which is the whole hybrid loop.
+      here silently exempted every such turn from the focused action protocol.
 
     ``TaskLane.research`` with action ``web_research`` (``ANSWER_ONLY``) does not
     qualify: that turn owes prose, and there is no act to serialize.

@@ -722,16 +722,6 @@ class ToolRoundRunner:
             )
             guard.end_round()
 
-        # One executed discovery hop is spent. Reaching this point *is* the
-        # proof: every batch rejected before execution (preflight, parse,
-        # schema, exposure, limit, loop-guard) returned above, and cancellation
-        # returns above too, so nothing that failed to run can consume a stage.
-        # ``results_by_id`` is the honest "at least one tool actually ran" —
-        # deliberately not "at least one tool succeeded", because a hop that ran
-        # and failed still spent the model's opportunity to look. The guard's
-        # own failure recovery keeps working inside whatever stages remain.
-        state.consume_implementation_stage(executed=bool(results_by_id))
-
         if worker_phase_boundary_info is not None:
             if worker_phase_boundary_info.get("message"):
                 self._history.append_user_text(str(worker_phase_boundary_info["message"]))

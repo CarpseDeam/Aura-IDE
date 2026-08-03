@@ -299,22 +299,10 @@ def test_large_write_arguments_are_not_truncated(tmp_path):
     assert (tmp_path / "big.py").read_text(encoding="utf-8") == body
 
 
-# ── 12: a rejected write ends the turn truthfully ───────────────────────────
+# ── 12: a rejected write gets one recovery round, then ends truthfully ──────
 
 
-def test_rejected_write_ends_truthfully_and_does_not_re_enter(tmp_path):
-    """A rejected focused write does not re-enter, and does not reopen either.
-
-    The focused request is spent and both ordinary discovery hops were spent
-    before it ran, so there is no bounded state left to return to: handing the
-    turn back to the ordinary loop would resume unrestricted pre-write
-    discovery. It ends as failed instead, with the rejection still recorded as
-    an ordinary tool result.
-    """
-    harness = make_harness(
-        tmp_path,
-        [*discovery_round(), WRITE_ROUND],
-    )
+def _send_rejecting(harness) -> None:
     harness.manager.send(
         on_event=harness.events.append,
         approval_cb=harness.reject,
@@ -324,13 +312,69 @@ def test_rejected_write_ends_truthfully_and_does_not_re_enter(tmp_path):
         hook_name=HOOK,
         task_route=IMPLEMENTATION_ROUTE,
     )
+
+
+def test_rejected_write_reopens_exactly_one_ordinary_recovery_round(tmp_path):
+    """The first distinct focused failure is recoverable, and bounded to one round.
+
+    A rejected write is a distinct failure by the guard's own fingerprint, so it
+    buys exactly one ordinary round to correct the approach — not a fall back
+    into unrestricted pre-write discovery. Here that round gathers nothing new,
+    so the turn ends truthfully rather than handing the act back on no new
+    information.
+    """
+    harness = make_harness(
+        tmp_path,
+        [
+            *discovery_round(),
+            WRITE_ROUND,
+            # The one granted recovery round, repeating evidence already seen.
+            assistant(tool_call("d2", "glob", {"pattern": "**/*.py"})),
+            assistant(tool_call("d3", "glob", {"pattern": "**/alpha*.py"})),
+        ],
+    )
+    _send_rejecting(harness)
+
     assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 1\n"
     assert [r.require_tool_call for r in harness.stream.requests] == [
         False,
         False,
         True,
-    ], "no fourth request: the turn ends rather than reopening discovery"
+        False,
+    ], "one ordinary recovery round, and no request after it"
     assert harness.approvals == ["alpha.py"]
+    assert ACTION_FAILED_MESSAGE in "".join(
+        e.text for e in harness.events if isinstance(e, ContentDelta)
+    )
+
+
+def test_a_repeated_rejection_ends_blocked_instead_of_looping(tmp_path):
+    """Recovery is granted once per turn; the same failure never renews it."""
+    harness = make_harness(
+        tmp_path,
+        [
+            *discovery_round(),
+            WRITE_ROUND,
+            # Recovery gathers genuinely new evidence, re-arming the act...
+            assistant(tool_call("d2", "glob", {"pattern": "**/*.md"})),
+            # ...which is rejected identically. No second recovery follows.
+            WRITE_ROUND,
+            assistant(tool_call("d4", "glob", {"pattern": "**/*.txt"})),
+        ],
+    )
+    _send_rejecting(harness)
+
+    assert (tmp_path / "alpha.py").read_text(encoding="utf-8") == "alpha = 1\n"
+    assert [r.require_tool_call for r in harness.stream.requests] == [
+        False,
+        False,
+        True,
+        False,
+        True,
+    ], "at most two focused acts, separated by the one recovery round"
+    assert harness.approvals == ["alpha.py", "alpha.py"], (
+        "non-vacuous: the write tool really ran twice and was really rejected"
+    )
     last_tool_result = json.loads(
         [m for m in harness.manager.history.messages if m.get("role") == "tool"][-1][
             "content"

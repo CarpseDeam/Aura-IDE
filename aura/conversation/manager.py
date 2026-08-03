@@ -50,11 +50,11 @@ from aura.conversation.dispatch import (
     WorkerDispatchResult,
 )
 from aura.conversation.focused_action import (
-    FINAL_EVIDENCE_INSTRUCTION,
     FOCUSED_ACTION_THINKING,
     OUTCOME_ACTION_FAILED,
     OUTCOME_BLOCKER,
     OUTCOME_PROVIDER_CONTRACT_FAILURE,
+    OUTCOME_RECOVERY_OPENED,
     OUTCOME_WRITE,
     REPORT_BLOCKER,
     action_failed_message,
@@ -381,24 +381,12 @@ class ConversationManager:
                 guard=state.pre_edit_guard,
                 task_completion_context=state.task_completion_context,
                 state=focused,
-                stage_exhausted=state.implementation_stage_exhausted(),
             )
             if focused.active and state.read_only:
                 # A read-only registry exposes no mutation tools, so there is
                 # nothing for a focused action request to act on. Do not enter
                 # focused mutation mode under a read-only registry.
                 focused.active = False
-            # The last ordinary request of an implementation turn carries the
-            # ephemeral protocol instruction. It is never the focused request
-            # itself, and it changes nothing about the request's shape: same
-            # thinking level, same full tool catalog, so the model can still
-            # either act now or batch every remaining read in one response.
-            final_evidence_request = (
-                not focused.active
-                and not focused.blocked
-                and not state.task_completion_context
-                and state.awaiting_final_evidence_request()
-            )
             if focused.active:
                 tool_defs = self._tools.focused_action_tool_defs()
                 round_thinking: ThinkingMode = FOCUSED_ACTION_THINKING
@@ -467,26 +455,7 @@ class ConversationManager:
             api_view = self._history.build_api_payload(budget.working_set_tokens)
             _log_context_round(budget, api_view.stats, tool_defs)
 
-            # The final ordinary request carries the protocol instruction as a
-            # request-local system message. ``build_api_payload`` already
-            # returned a freshly rendered list built from a deep copy, so this
-            # append cannot reach canonical history — and because it is appended
-            # here rather than recorded, the next round rebuilds its view from a
-            # history that never saw it. It is a system message, not a user
-            # message, so it opens no turn boundary; it is never emitted as a
-            # ContentDelta, so it never reaches the transcript or the chat.
             request_messages = api_view.messages
-            if final_evidence_request:
-                request_messages = [
-                    *api_view.messages,
-                    {"role": "system", "content": FINAL_EVIDENCE_INSTRUCTION},
-                ]
-                _log.info(
-                    "implementation_final_evidence_request route_lane=%s "
-                    "thinking=%s",
-                    getattr(getattr(state.task_route, "lane", None), "value", ""),
-                    round_thinking,
-                )
 
             # ``require_tool_call`` is only passed when it is actually
             # required, so every other request reaches the backend with the
@@ -705,36 +674,51 @@ class ConversationManager:
                         )
                 if (
                     not focused.blocked
+                    and not write_applied
                     and not cancel_event.is_set()
-                    and state.implementation_stage_exhausted()
+                    and state.implementation_action_pending()
                 ):
-                    # The one act ran and changed nothing — a failed write, a
-                    # rejected write, or an invalid blocker — and both ordinary
-                    # discovery hops were already spent before it ran. Falling
-                    # through here would hand the turn back to the ordinary
-                    # loop with no bound left on it: the stage cannot advance
-                    # past EXHAUSTED and the focused request is spent, so the
-                    # turn would resume unrestricted pre-write discovery. End
-                    # truthfully instead. The guard's own write_applied is the
-                    # gate — a write that landed makes this predicate false, so
-                    # the successful path is untouched.
-                    focused.outcome = OUTCOME_ACTION_FAILED
-                    _log.info(
-                        "focused_action_outcome outcome=%s selected_action=%s "
-                        "write_applied=False selected_thinking=%s "
-                        "focused_action_thinking=%s",
-                        focused.outcome,
-                        focused.selected_action or "<none>",
-                        focused.selected_thinking,
-                        FOCUSED_ACTION_THINKING,
-                    )
-                    content, failure_message = action_failed_message()
-                    self._history.append_assistant(failure_message)
-                    on_event(ContentDelta(text=content))
-                    on_event(
-                        Done(finish_reason="stop", full_message=failure_message)
-                    )
-                    return
+                    # The act ran and changed nothing — a failed write, a
+                    # rejected write, or an invalid blocker. Whether that is
+                    # recoverable is not a new judgement: the guard already
+                    # fingerprinted the failure while folding in this round's
+                    # results, so ``recovery_open`` is the answer. A first
+                    # distinct failure buys exactly one ordinary round and
+                    # re-arms focused action behind it; a repeat, or a turn
+                    # whose one recovery is already spent, ends truthfully
+                    # rather than falling back into an unbounded loop.
+                    guard = state.pre_edit_guard
+                    recoverable = bool(guard is not None and guard.recovery_open)
+                    if recoverable and focused.open_recovery():
+                        focused.outcome = OUTCOME_RECOVERY_OPENED
+                        _log.info(
+                            "focused_action_outcome outcome=%s "
+                            "selected_action=%s write_applied=False "
+                            "recovery_round=1",
+                            focused.outcome,
+                            focused.selected_action or "<none>",
+                        )
+                    else:
+                        focused.outcome = OUTCOME_ACTION_FAILED
+                        _log.info(
+                            "focused_action_outcome outcome=%s "
+                            "selected_action=%s write_applied=False "
+                            "recoverable=%s recovery_used=%s "
+                            "selected_thinking=%s focused_action_thinking=%s",
+                            focused.outcome,
+                            focused.selected_action or "<none>",
+                            recoverable,
+                            focused.recovery_used,
+                            focused.selected_thinking,
+                            FOCUSED_ACTION_THINKING,
+                        )
+                        content, failure_message = action_failed_message()
+                        self._history.append_assistant(failure_message)
+                        on_event(ContentDelta(text=content))
+                        on_event(
+                            Done(finish_reason="stop", full_message=failure_message)
+                        )
+                        return
                 _log.info(
                     "focused_action_outcome outcome=%s selected_action=%s "
                     "write_applied=%s selected_thinking=%s "
@@ -745,6 +729,37 @@ class ConversationManager:
                     focused.selected_thinking,
                     FOCUSED_ACTION_THINKING,
                 )
+            elif focused.awaiting_recovery:
+                # The one granted recovery round has now completed. It is spent
+                # here whatever it produced, so the re-armed focused request can
+                # never be fed by a second recovery round.
+                focused.awaiting_recovery = False
+                recovery_guard = state.pre_edit_guard
+                recovered = bool(
+                    recovery_guard is not None
+                    and (
+                        recovery_guard.write_applied
+                        or recovery_guard.last_round_advanced
+                    )
+                )
+                _log.info(
+                    "focused_action_recovery_round recovered=%s write_applied=%s",
+                    recovered,
+                    bool(recovery_guard is not None and recovery_guard.write_applied),
+                )
+                if not recovered and not cancel_event.is_set():
+                    # Recovery gathered no new evidence and made no progress.
+                    # Handing back the re-armed focused request would ask the
+                    # model to repeat the act that just failed, knowing nothing
+                    # new. End truthfully instead.
+                    focused.outcome = OUTCOME_ACTION_FAILED
+                    content, failure_message = action_failed_message()
+                    self._history.append_assistant(failure_message)
+                    on_event(ContentDelta(text=content))
+                    on_event(
+                        Done(finish_reason="stop", full_message=failure_message)
+                    )
+                    return
             if tool_round.action == "return":
                 return
             if tool_round.action == "continue":
