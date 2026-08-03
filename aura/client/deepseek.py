@@ -12,6 +12,19 @@ Yields events; never raises. The reasoning parameters for one request come from
 
 Anthropic requests are handled by ``aura.client.anthropic_stream``, which uses
 the native adaptive thinking mode.
+
+Two DeepSeek thinking-mode rules are enforced here rather than trusted to
+callers, because this is the one place every DeepSeek request passes through and
+both are rejected with a 400 rather than degraded:
+
+- ``tool_choice="required"`` may not travel with thinking enabled, so a request
+  that requires a tool call is sent as a genuine off-mode request;
+- a thinking-enabled request must replay ``reasoning_content`` on every
+  assistant message after the last user message, so the trailing chain is filled
+  in where Aura honestly produced none (see ``_ensure_reasoning_replay``).
+
+Both are request-local: the user's saved selection is never rewritten, canonical
+history is never touched, and each logs what it changed.
 """
 from __future__ import annotations
 
@@ -64,6 +77,54 @@ RESPONSES_INTER_EVENT_TIMEOUT_SECONDS = 30.0
 # Cancellation poll interval while waiting on the Responses stream queue.
 # Short enough that a cancel during an active search is observed promptly.
 _RESPONSES_POLL_SECONDS = 0.1
+
+#: Stands in for ``reasoning_content`` on an assistant message that genuinely
+#: never had any.  DeepSeek requires the field on every assistant message after
+#: the last ``role=user`` message while thinking is enabled, and rejects the
+#: request outright without it — 400 "The `reasoning_content` in the thinking
+#: mode must be passed back to the API".  Aura produces such messages honestly:
+#: the decision checkpoint and the focused action must run with thinking off, a
+#: dispatched worker's synthetic assistant turn never had reasoning, and a
+#: conversation reloaded from disk or replayed after a provider switch can carry
+#: assistant turns from a model that never emitted any.  The placeholder says
+#: what is true rather than inventing reasoning the model did not do.
+REASONING_REPLAY_PLACEHOLDER = "[No reasoning was recorded for this step.]"
+
+
+def _ensure_reasoning_replay(
+    messages: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    """Return *messages* with the trailing assistant chain safe to replay.
+
+    DeepSeek's thinking-mode rule binds the assistant messages *after* the last
+    ``role=user`` message — the chain it is being asked to continue. Ones before
+    that boundary may omit ``reasoning_content`` freely, which is what lets the
+    outbound view shed superseded reasoning at all, so only the chain is filled
+    in and the token savings elsewhere are kept.
+
+    Request-local and non-destructive: the caller's list and every message it
+    does not have to touch are passed through by reference, and canonical
+    history never sees the placeholder. Returns the list and how many messages
+    were filled in, so the caller can log it.
+    """
+    boundary = -1
+    for index, msg in enumerate(messages):
+        if isinstance(msg, dict) and msg.get("role") == "user":
+            boundary = index
+
+    repaired: list[dict[str, Any]] = list(messages)
+    filled = 0
+    for index in range(boundary + 1, len(repaired)):
+        msg = repaired[index]
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        existing = msg.get("reasoning_content")
+        if isinstance(existing, str) and existing:
+            continue
+        repaired[index] = {**msg, "reasoning_content": REASONING_REPLAY_PLACEHOLDER}
+        filled += 1
+
+    return (repaired if filled else messages), filled
 
 
 class DeepSeekClient:
@@ -199,6 +260,25 @@ class DeepSeekClient:
                 model, thinking, effective_thinking,
                 "tool_choice_required_incompatible_with_thinking",
             )
+
+        # The other half of the same rule, and the reason it bites at all: a
+        # thinking-enabled DeepSeek request must replay ``reasoning_content`` on
+        # every assistant message after the last user message, and Aura honestly
+        # produces messages without it — the two narrowed protocol requests run
+        # with thinking off (above), workers synthesize assistant turns, and a
+        # reloaded conversation can predate the current selection. Filling the
+        # chain here means the mode the user picked is the mode that gets sent,
+        # instead of a 400. Decided from ``effective_thinking``, so a coerced
+        # request stays a genuine off-mode request and pays nothing.
+        if self._provider == "deepseek" and effective_thinking != "off":
+            kwargs["messages"], filled = _ensure_reasoning_replay(messages)
+            if filled:
+                _log.info(
+                    "deepseek_reasoning_replay_filled model=%s thinking=%s "
+                    "messages_filled=%d placeholder_chars=%d",
+                    model, effective_thinking, filled,
+                    len(REASONING_REPLAY_PLACEHOLDER),
+                )
 
         reasoning = resolve_reasoning_request(self._provider, effective_thinking)
         if reasoning.extra_body is not None:
