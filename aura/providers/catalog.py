@@ -255,13 +255,13 @@ PROVIDER_CATALOG: dict[str, dict] = {
         # Ordinary API root — kept intact for model discovery, pricing/catalog
         # work, native Responses web search, and every other non-chat path.
         "base_url": "https://api.deepseek.com",
-        # Chat/tool turns go over DeepSeek's Anthropic-compatible Messages
-        # transport, not OpenAI Chat Completions. DeepSeek continues its own
-        # thinking across a tool round, so the reasoning of the request it is
-        # still executing is replayed as ``thinking`` blocks; the api view has
-        # already dropped everything older than the current real user turn.
-        "chat_protocol": "anthropic_messages",
-        "chat_base_url": "https://api.deepseek.com/anthropic/v1",
+        # Chat/tool turns go over DeepSeek's own OpenAI-compatible Chat
+        # Completions API — POST https://api.deepseek.com/chat/completions,
+        # which is ``base_url`` above, so no chat-only root is needed. DeepSeek
+        # continues its own thinking across a tool round, so prior assistant
+        # ``reasoning_content`` is replayed verbatim from canonical history and
+        # the thinking-mode replay rule is enforced before the request goes out.
+        "chat_protocol": "openai_chat",
         "requires_reasoning_replay": True,
         "env_key": "DEEPSEEK_API_KEY",
         "default_model": "deepseek-v4-flash",
@@ -273,6 +273,9 @@ PROVIDER_CATALOG: dict[str, dict] = {
     "openai": {
         "label": "OpenAI",
         "base_url": "https://api.openai.com/v1",
+        # OpenAI Chat Completions does not accept replayed ``reasoning_content``
+        # and does not need it to continue a turn across a tool round.
+        "requires_reasoning_replay": False,
         "env_key": "OPENAI_API_KEY",
         "default_model": "gpt-5.4-mini",
         "default_thinking": "off",
@@ -283,6 +286,9 @@ PROVIDER_CATALOG: dict[str, dict] = {
     "openrouter": {
         "label": "OpenRouter",
         "base_url": "https://openrouter.ai/api/v1",
+        # Proxied models are reached through OpenAI Chat Completions, which does
+        # not take replayed ``reasoning_content``.
+        "requires_reasoning_replay": False,
         "env_key": "OPENROUTER_API_KEY",
         "default_model": "deepseek/deepseek-v4-flash",
         "default_thinking": "off",

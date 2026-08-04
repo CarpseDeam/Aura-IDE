@@ -11,21 +11,27 @@ Yields events; never raises. The reasoning parameters for one request come from
 - OpenAI etc: reasoning_effort at top level for explicit high/max; omitted for
   ``auto`` so the provider applies its documented default.
 
-DeepSeek production chat/tool turns do NOT use this OpenAI-compatible path
-anymore: DeepSeek's ``chat_protocol`` is ``anthropic_messages``, so the client
-routes them through ``aura.client.anthropic_stream`` over DeepSeek's
-Anthropic-compatible Messages endpoint. That transport does not require prior
-``reasoning_content`` to be replayed, so completed reasoning is shed from the
-outbound copy by the api view while canonical history keeps it exact. The
-transport is chosen from the provider's chat metadata here — never inferred
-from the provider id.
+DeepSeek production chat/tool turns use this OpenAI-compatible path: DeepSeek's
+``chat_protocol`` is ``openai_chat``, so they go to DeepSeek's official Chat
+Completions API — ``POST https://api.deepseek.com/chat/completions`` — with
+``stream=True`` and ``stream_options={"include_usage": True}``.  Native
+Anthropic keeps ``anthropic_messages`` and its own transport.  The transport is
+chosen from the provider's chat metadata here — never inferred from the
+provider id.
 
-One DeepSeek OpenAI-compatible thinking-mode rule is enforced here rather than
-trusted to callers, preserved for any replay-requiring OpenAI-compatible
-transport (it is rejected with a 400 rather than degraded): a thinking-enabled
+Canonical history is already in OpenAI shape (``system``/``user``/
+``assistant``/``tool``, with ``tool_calls`` and ``tool_call_id``), so
+``History.for_api`` output is sent as-is: an assistant message that carried tool
+calls replays its complete ``reasoning_content``, ``content``, and
+``tool_calls``, and each tool result carries the matching ``tool_call_id``.
+
+One DeepSeek thinking-mode rule is enforced here rather than trusted to callers,
+because it is rejected with a 400 rather than degraded: a thinking-enabled
 request must replay ``reasoning_content`` on every assistant message after the
 last user message, so the trailing chain is filled in where Aura honestly
-produced none (see ``_ensure_reasoning_replay``).
+produced none (see ``_ensure_reasoning_replay``).  It is gated on the provider's
+``requires_reasoning_replay`` metadata, not on the provider id, so OpenAI and
+OpenRouter — which do not accept the field — are untouched.
 
 It is request-local: the user's saved selection is never rewritten, canonical
 history is never touched, and it logs what it changed.
@@ -101,6 +107,33 @@ _RESPONSES_POLL_SECONDS = 0.1
 #: assistant turns from a model that never emitted any.  The placeholder says
 #: what is true rather than inventing reasoning the model did not do.
 REASONING_REPLAY_PLACEHOLDER = "[No reasoning was recorded for this step.]"
+
+
+#: Keys that canonical history may legitimately carry but that mean nothing on
+#: the Chat Completions wire.  ``reasoning_signature`` is produced only by the
+#: Anthropic transport; a conversation started on Anthropic and continued on
+#: DeepSeek would otherwise ship it as an unknown field.
+_FOREIGN_MESSAGE_KEYS = ("reasoning_signature",)
+
+
+def _strip_foreign_message_keys(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return *messages* without keys belonging to another wire protocol.
+
+    Request-local and non-destructive, like ``_ensure_reasoning_replay``:
+    messages needing no change are passed through by reference and canonical
+    history is never touched.  Only foreign keys are removed — ``content``,
+    ``reasoning_content``, ``tool_calls``, and ``tool_call_id`` are always kept
+    so an assistant message that carried tool calls replays in full.
+    """
+    out: list[dict[str, Any]] = []
+    for msg in messages:
+        if isinstance(msg, dict) and any(key in msg for key in _FOREIGN_MESSAGE_KEYS):
+            out.append({k: v for k, v in msg.items() if k not in _FOREIGN_MESSAGE_KEYS})
+        else:
+            out.append(msg)
+    return out
 
 
 def _ensure_reasoning_replay(
@@ -243,9 +276,13 @@ class DeepSeekClient:
             )
             return
 
+        # Canonical history is already OpenAI-shaped, so it is sent as-is apart
+        # from keys that belong to the other transport and mean nothing here.
+        outbound = _strip_foreign_message_keys(messages)
+
         kwargs: dict[str, Any] = {
             "model": model,
-            "messages": messages,
+            "messages": outbound,
             "stream": True,
             "stream_options": {"include_usage": True},
         }
@@ -266,8 +303,8 @@ class DeepSeekClient:
         # turns, and a reloaded conversation can predate the current selection.
         # Filling the chain here means the mode the user picked is the mode that
         # gets sent, instead of a 400.
-        if self._provider == "deepseek" and effective_thinking != "off":
-            kwargs["messages"], filled = _ensure_reasoning_replay(messages)
+        if self._requires_reasoning_replay and effective_thinking != "off":
+            kwargs["messages"], filled = _ensure_reasoning_replay(outbound)
             if filled:
                 _log.info(
                     "deepseek_reasoning_replay_filled model=%s thinking=%s "
