@@ -292,7 +292,8 @@ class TestReasoningReplay:
         assert view_with.stats.dropped_blocks == 0
 
         monkeypatch.setattr(
-            api_view_module, "_strip_superseded_reasoning", lambda working, stats: None
+            api_view_module, "_strip_superseded_reasoning",
+            lambda working, stats, strip_all=False: None,
         )
         view_without = build_api_view(h.system_prompt, h.messages, 40_000)
         assert view_without.stats.reasoning_chars_dropped == 0
@@ -769,12 +770,13 @@ class TestUnknownModelFallback:
     def test_known_models_are_not_marked_fallback(self) -> None:
         budget = resolve_model_budget("deepseek-v4-flash")
         assert budget.is_fallback is False
-        assert budget.context_window_tokens == 128_000
+        assert budget.context_window_tokens == 1_000_000
         expected = int(
             (budget.context_window_tokens - budget.output_reserve_tokens)
             * CONTEXT_WORKING_SET_FRACTION
         )
-        assert budget.working_set_tokens == expected
+        assert budget.derived_working_set_tokens == expected
+        assert budget.working_set_tokens == budget.policy_cap_tokens
 
     def test_output_room_is_always_reserved(self) -> None:
         for model in ["deepseek-v4-flash", "claude-sonnet-4-6", "gemini-2.5-pro", "mystery"]:
@@ -817,7 +819,6 @@ class TestLargeCurrentTurnNoLongerCollapses:
             "must not be touched at all"
         )
         assert view.stats.compacted_results == 0
-        assert view.stats.source_result_chars_retained == view.stats.source_result_chars_generated
 
     def test_under_real_pressure_the_loss_is_structural_not_a_prefix(self) -> None:
         h, result = self._history_with_big_current_read()
@@ -834,14 +835,14 @@ class TestLargeCurrentTurnNoLongerCollapses:
             assert entry["path"]
 
     def test_the_old_8000_char_floor_is_no_longer_the_outcome(self) -> None:
-        h, _ = self._history_with_big_current_read()
+        h, result = self._history_with_big_current_read()
         budget = resolve_model_budget("deepseek-v4-flash")
         view = h.build_api_payload(budget.working_set_tokens)
 
-        retained = view.stats.source_result_chars_retained
-        assert retained > 8_000 * 4, (
-            f"current-turn source evidence collapsed to {retained} chars; the "
-            f"budget should have kept all {self.OBSERVED_CHARS}"
+        tool_msg = next(m for m in view.messages if m.get("role") == "tool")
+        assert tool_msg["content"] == result, (
+            f"current-turn source evidence collapsed; the budget should have "
+            f"kept all {self.OBSERVED_CHARS} chars"
         )
 
     def test_estimates_are_consistent_with_the_budget_decision(self) -> None:

@@ -23,7 +23,7 @@ import pytest
 
 from aura.context_gearbox.models import RuntimeRole
 from aura.context_gearbox.runtime import compose_system_prompt
-from aura.conversation.api_view import RECEIPT_MARKER, build_api_view
+from aura.conversation.api_view import build_api_view
 from aura.conversation.tools.registry import ToolRegistry
 from aura.hazard.models import HazardRecord
 from aura.hazard.store import HazardStore
@@ -575,13 +575,6 @@ def test_activated_bodies_are_replayable_and_never_retired(tmp_path: Path) -> No
     assert len(results) == 1, "the activated-skill result must appear exactly once"
     assert skill_body in results[0]["content"]
     assert "aura compacted" not in results[0]["content"]
-
-    # It must not be folded into a retired-evidence receipt.
-    assert all(
-        skill_body not in m.get("content", "")
-        for m in view.messages
-        if m.get("content") and RECEIPT_MARKER in m.get("content", "")
-    )
 
     # Byte-identical across rounds: stable for provider prefix caching.
     view2 = build_api_view("system prompt", messages, budget_tokens=2_000)

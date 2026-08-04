@@ -245,11 +245,6 @@ def _log_context_round(
         "system_chars=%d tool_schema_chars=%d tool_schema_tokens=%d "
         "request_tokens=%d request_growth_tokens=%s request_headroom=%d "
         "system_fingerprint=%s "
-        "retired_blocks=%d ledger_entries=%d ledger_chars_retained=%d "
-        "ledger_dropped_entries=%d ledger_budget_tokens=%d "
-        "active_chain_chars_retained=%d recent_evidence_tokens=%d "
-        "bounded_replays=%d "
-        "source_chars_generated=%d source_chars_retained=%d "
         "compacted_results=%d dropped_blocks=%d repaired=%d "
         "reasoning_chars_replayed=%d reasoning_chars_dropped=%d "
         "over_budget=%s",
@@ -273,16 +268,6 @@ def _log_context_round(
         growth,
         budget.context_window_tokens - budget.output_reserve_tokens - request_tokens,
         stats.system_prompt_fingerprint,
-        stats.retired_blocks,
-        stats.ledger_entries,
-        stats.ledger_chars_retained,
-        stats.ledger_dropped_entries,
-        stats.ledger_budget_tokens,
-        stats.active_chain_chars_retained,
-        stats.recent_evidence_tokens,
-        stats.bounded_replays,
-        stats.source_result_chars_generated,
-        stats.source_result_chars_retained,
         stats.compacted_results,
         stats.dropped_blocks,
         stats.repaired_messages,
@@ -649,7 +634,6 @@ class ConversationManager:
                 replay_policy = True
             api_view = self._history.build_api_payload(
                 budget.working_set_tokens,
-                effect_for=self._tools.declared_effect,
                 requires_reasoning_replay=replay_policy,
             )
             if state.pre_edit_guard is not None:
@@ -657,7 +641,7 @@ class ConversationManager:
                 # result?", taken from the view actually being sent. The guard
                 # rejects a duplicate observation only while the original result
                 # is still materially in front of the model; once compaction has
-                # retired, truncated, bounded, or dropped it, rereading is
+                # truncated or dropped it, rereading is
                 # recovering lost context, not circling.
                 state.pre_edit_guard.note_api_view_residency(
                     api_view.residency.resident_call_ids

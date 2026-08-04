@@ -239,25 +239,21 @@ class History:
         self,
         max_tokens: int | None = None,
         *,
-        effect_for=None,
         requires_reasoning_replay: bool = True,
     ) -> ApiView:
         """Build the outbound view plus its compaction diagnostics.
 
-        `max_tokens` is the active model's working-set budget. `effect_for` is
-        the authoritative tool-effect lookup that decides which completed
-        blocks may retire (the send path passes the registry's
-        ``declared_effect``). `requires_reasoning_replay` is the transport's
-        reasoning-replay policy: when False, ``reasoning_content`` is shed from
-        every prior assistant message in the outbound copy while `self.messages`
-        keeps it exact. Nothing here mutates `self.messages`.
+        `max_tokens` is the active model's working-set budget.
+        `requires_reasoning_replay` is the transport's reasoning-replay policy:
+        when False, ``reasoning_content`` is shed from every prior assistant
+        message in the outbound copy while `self.messages` keeps it exact.
+        Nothing here mutates `self.messages`.
         """
         budget = max_tokens if max_tokens and max_tokens > 0 else MAX_CONTEXT_TOKENS
         return build_api_view(
             self.system_prompt,
             self.messages,
             budget,
-            effect_for=effect_for,
             requires_reasoning_replay=requires_reasoning_replay,
         )
 
