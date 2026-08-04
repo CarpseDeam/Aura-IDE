@@ -241,6 +241,7 @@ def _log_context_round(
         "request_tokens=%d request_growth_tokens=%s request_headroom=%d "
         "system_fingerprint=%s "
         "retired_blocks=%d rollover_retired_blocks=%d "
+        "rollover_preserved_source_blocks=%d "
         "ledger_entries=%d ledger_chars_retained=%d "
         "ledger_dropped_entries=%d ledger_budget_tokens=%d "
         "active_chain_chars_retained=%d recent_evidence_tokens=%d "
@@ -271,6 +272,7 @@ def _log_context_round(
         stats.system_prompt_fingerprint,
         stats.retired_blocks,
         stats.rollover_retired_blocks,
+        stats.rollover_preserved_source_blocks,
         stats.ledger_entries,
         stats.ledger_chars_retained,
         stats.ledger_dropped_entries,
@@ -607,6 +609,14 @@ class ConversationManager:
                 budget=resolve_model_budget(model),
             )
             state.trajectory.log_snapshot("turn_begin")
+            if state.pre_edit_guard is not None:
+                # The one seam. The guard keeps its narrow residency rule and
+                # gains no state; it simply asks the trajectory owner about
+                # calls that rule already cleared, so a deliberately retired
+                # segment's broad survey cannot come back as "new work".
+                state.pre_edit_guard.cross_segment_check = (
+                    state.trajectory.cross_segment_rejection
+                )
 
         prev_request_tokens: int | None = None
 
@@ -633,14 +643,14 @@ class ConversationManager:
                 )
                 return
 
-            # ── Trajectory lifecycle boundary ────────────────────────────
-            # One place, before another model request is issued, where the
-            # turn's progress is judged. By the time control reaches here the
-            # previous round's authoritative results, applied writes, and
-            # edit-recovery state have all been folded in, so this single
-            # boundary covers every integration point the loop has. A turn that
-            # already reached a truthful terminal outcome is exempt: it owes one
-            # final response, not a trajectory judgement.
+            # ── Trajectory lifecycle boundary (cost-free half) ───────────
+            # The two judgements that need no request size: the total runaway
+            # ceiling, and whether Aura's own in-segment steering has stopped
+            # working. The expensive half — repeated request spend — is decided
+            # below, once the outbound view for this request actually exists and
+            # its true cost is known. A turn that already reached a truthful
+            # terminal outcome is exempt: it owes one final response, not a
+            # trajectory judgement.
             if state.trajectory is not None and not state.task_completion_context:
                 state.trajectory.note_accepted_tool_calls(state.limits.total_calls)
                 decision = state.trajectory.decide()
@@ -691,13 +701,45 @@ class ConversationManager:
                 content_gate=state.content_gate,
             )
 
+            # ── Request-spend boundary ───────────────────────────────────
             # The outbound view is compacted against *this* model's budget;
-            # self._history.messages is left exact.
+            # self._history.messages is left exact. Building it yields
+            # ``request_tokens`` — the real cost of the request that is about to
+            # be sent — which is what an internal segment is actually spent on.
+            #
+            # The check has to live here, between building the view and sending
+            # it, because it is the only point where that cost is known and the
+            # request has not been paid for yet. A segment that has stopped
+            # converging therefore never sends one more expensive request
+            # through its stale trajectory: the capsule is appended, a fresh
+            # segment opens, and the loop below rebuilds the view *behind* that
+            # boundary before issuing the request. Control never returns to the
+            # user, and the rebuilt request is the new segment's free first
+            # request, so this cannot iterate more than twice.
             budget = resolve_model_budget(model)
-            api_view = self._history.build_api_payload(
-                budget.working_set_tokens,
-                effect_for=self._tools.declared_effect,
-            )
+            while True:
+                api_view = self._history.build_api_payload(
+                    budget.working_set_tokens,
+                    effect_for=self._tools.declared_effect,
+                )
+                try:
+                    schema_chars = (
+                        len(json.dumps(tool_defs, ensure_ascii=False)) if tool_defs else 0
+                    )
+                except (TypeError, ValueError):
+                    schema_chars = 0
+                request_tokens = api_view.stats.tokens_after + max(schema_chars, 0) // 4
+
+                if state.trajectory is None or state.task_completion_context:
+                    break
+                spend_decision = state.trajectory.charge_model_request(request_tokens)
+                if spend_decision is TrajectoryDecision.TERMINAL_HARNESS_FAILURE:
+                    self._finish_single_runaway(on_event, state)
+                    return
+                if spend_decision is not TrajectoryDecision.INTERNAL_ROLLOVER:
+                    break
+                self._roll_over_internal_trajectory(state)
+
             if state.pre_edit_guard is not None:
                 # The one authoritative answer to "can the model still read that
                 # result?", taken from the view actually being sent. The guard
@@ -708,11 +750,6 @@ class ConversationManager:
                 state.pre_edit_guard.note_api_view_residency(
                     api_view.residency.resident_call_ids
                 )
-            try:
-                schema_chars = len(json.dumps(tool_defs, ensure_ascii=False)) if tool_defs else 0
-            except (TypeError, ValueError):
-                schema_chars = 0
-            request_tokens = api_view.stats.tokens_after + max(schema_chars, 0) // 4
             growth = (
                 None
                 if prev_request_tokens is None
@@ -951,8 +988,12 @@ class ConversationManager:
         owner (:mod:`aura.conversation.api_view`) knows to retire the superseded
         detailed observation trajectory into the same evidence ledger it already
         maintains — so the next request starts a genuinely new segment rather
-        than re-entering the same expanding chain.  There is no second
-        compaction system here: this method compacts nothing.
+        than re-entering the same expanding chain.  That retirement deliberately
+        keeps one bounded actionable source surface verbatim
+        (:data:`~aura.conversation.api_view.ROLLOVER_ACTIONABLE_SOURCE_CHARS`),
+        so the fresh segment can write without re-reading everything first.
+        There is no second compaction system here: this method compacts nothing
+        and parses no source.
 
         The loop then continues with the same model, the same thinking mode, the
         same stable tool catalog, the same route, and the same task.

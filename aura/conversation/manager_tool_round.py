@@ -25,7 +25,12 @@ from aura.conversation.manager_recovery import (
 )
 from aura.conversation.manager_send_state import _SendState
 from aura.conversation.planner_refresh import PlannerRefreshState
-from aura.conversation.single_trajectory import RoundFacts, observation_targets
+from aura.conversation.pre_edit_loop_guard import is_narrow_read, read_fingerprint
+from aura.conversation.single_trajectory import (
+    EditRecoveryEvent,
+    RoundFacts,
+    observation_targets,
+)
 from aura.conversation.terminal_tool_round import (
     handle_run_and_watch_round,
     handle_run_terminal_command_round,
@@ -347,23 +352,111 @@ def _combined_post_write_files(
     return merged
 
 
-def _edit_recovery_write_paths(
+#: The runtime's edit-recovery owners, mapped to the requirement name a
+#: trajectory event reports.  These are the *only* places a concrete recovery
+#: requirement is recorded; a failed write that appears in none of them created
+#: no requirement, and did not move the implementation.
+_RECOVERY_REQUIREMENT_OWNERS: tuple[tuple[str, str], ...] = (
+    ("line_range_reread_required", "line_range_reread"),
+    ("edit_fallback_required", "edit_fallback"),
+    ("syntax_repair_required", "syntax_repair"),
+    ("patch_invalid_syntax_required", "patch_invalid_syntax"),
+    ("syntax_validation_required", "syntax_validation"),
+)
+
+#: Authoritative failure classes that are harness- or user-side refusals rather
+#: than edit failures.  None of them can produce implementation movement even if
+#: some unrelated recovery owner happened to change in the same round: the user
+#: declining an approval, a malformed or unexposed call, a limit rejection, and
+#: an internal harness exception all leave the edit exactly where it was.
+_NON_RECOVERY_FAILURE_CLASSES: frozenset[str] = frozenset({
+    "approval_rejected",
+    "internal_tool_error",
+    "tool_call_malformed",
+    "tool_call_arguments_unparsable",
+    "tool_call_schema_violation",
+    "tool_call_not_exposed",
+    "tool_call_invalid",
+    "tool_call_limit",
+    "tool_unavailable",
+})
+
+
+def _recovery_requirement_snapshot(state: _SendState) -> dict[str, frozenset[str]]:
+    """Normalised paths currently held by each edit-recovery owner.
+
+    Taken before and after the round's calls execute; the difference is the set
+    of requirements this round actually created.  Reads the send state the
+    runtime already keeps — no new bookkeeping, and no inference from tool names.
+    """
+    snapshot: dict[str, frozenset[str]] = {}
+    for attr, _requirement in _RECOVERY_REQUIREMENT_OWNERS:
+        held = getattr(state, attr, None) or ()
+        snapshot[attr] = frozenset(
+            str(path).replace("\\", "/") for path in held
+        )
+    return snapshot
+
+
+def _result_failure_class(res: dict[str, Any]) -> str:
+    """The authoritative failure class recorded on one tool result."""
+    payload = res.get("result_payload")
+    data: Any = payload
+    if isinstance(payload, str):
+        try:
+            data = json.loads(payload)
+        except (TypeError, ValueError):
+            data = None
+    if isinstance(data, dict):
+        failure_class = str(data.get("failure_class") or "").strip()
+        if failure_class:
+            return failure_class
+        error = data.get("error")
+        if isinstance(error, str) and error.strip():
+            return error.strip().splitlines()[0][:120]
+    return "write_failed"
+
+
+def _edit_recovery_events(
     tasks: list[dict[str, Any]],
     results_by_id: dict[str, dict[str, Any]],
-) -> list[str]:
-    """Paths of mutation attempts whose authoritative result entered edit recovery.
+    before: dict[str, frozenset[str]],
+    after: dict[str, frozenset[str]],
+) -> list[EditRecoveryEvent]:
+    """Mutation failures that actually created concrete edit-recovery state.
 
-    A write that was attempted and whose authoritative result did *not* prove it
-    applied is concrete edit-recovery state: the model has been handed a real
-    failure it must recover from by re-reading the current bytes and
-    re-proposing.  The trajectory owner counts that as implementation movement,
-    not as more observation — otherwise a turn fighting a genuinely hard edit
-    would be rolled over for making progress.
+    "Write tool plus not applied" is *not* the test, and inferring recovery from
+    it was wrong: an approval the user declined, a rejected or malformed call, an
+    internal tool exception, an unavailable tool, a batch rejection, and a
+    harness limit rejection are all write results that never applied and never
+    created any recovery requirement either.  Counting them as implementation
+    movement let a turn reset its trajectory budget by failing in ways that
+    changed nothing.
 
-    Symmetric with :func:`_applied_write_paths` and read from the same
-    authoritative results, so a write is in exactly one of the two lists.
+    The authoritative test is a *state delta in the runtime's own recovery
+    owners* (:data:`_RECOVERY_REQUIREMENT_OWNERS`).  A path that one of them
+    started holding during this round is a real requirement the model must now
+    satisfy, and pairing it back to the write whose authoritative failure created
+    it yields the three facts an event must name: the path, the requirement, and
+    the failure.
+
+    Note what this means today: those owners are populated by
+    :func:`~aura.conversation.manager_recovery.update_worker_recovery_state`,
+    which the round applies in worker mode only.  Production SINGLE therefore
+    records no recovery requirement at all, so no failed write there resets the
+    trajectory segment — which is the fail-closed direction, and the correct one.
+    A turn fighting a hard edit is not harmed by that: a rollover retires the
+    *investigation*, never the mutation blocks or the unresolved write failures,
+    so the failed edit and its evidence stay in front of the model.
     """
-    files: list[str] = []
+    created: dict[str, str] = {}
+    for attr, requirement in _RECOVERY_REQUIREMENT_OWNERS:
+        for path in sorted(after.get(attr, frozenset()) - before.get(attr, frozenset())):
+            created.setdefault(path, requirement)
+    if not created:
+        return []
+
+    events: list[EditRecoveryEvent] = []
     seen: set[str] = set()
     for task in tasks:
         name = task["name"]
@@ -378,12 +471,25 @@ def _edit_recovery_write_paths(
         )
         if applied:
             continue
-        path = _edit_shapes.tool_path(name, task["args"]) or name
-        normalized = str(path).replace("\\", "/")
-        if normalized not in seen:
-            files.append(normalized)
-            seen.add(normalized)
-    return files
+        failure_class = _result_failure_class(res)
+        if failure_class in _NON_RECOVERY_FAILURE_CLASSES:
+            continue
+        raw = _edit_shapes.tool_path(name, task["args"])
+        if not raw:
+            continue
+        path = str(raw).replace("\\", "/")
+        requirement = created.get(path)
+        if requirement is None or path in seen:
+            continue
+        seen.add(path)
+        events.append(
+            EditRecoveryEvent(
+                path=path,
+                requirement=requirement,
+                failure_class=failure_class,
+            )
+        )
+    return events
 
 
 def _trajectory_facts(
@@ -391,19 +497,28 @@ def _trajectory_facts(
     tasks: list[dict[str, Any]],
     results_by_id: dict[str, dict[str, Any]],
     applied_write_paths: list[str],
+    stale_paths: list[str],
+    recovery_before: dict[str, frozenset[str]],
+    recovery_after: dict[str, frozenset[str]],
     blocker_succeeded: bool,
     already_satisfied_succeeded: bool,
 ) -> RoundFacts:
     """Project one completed round into the trajectory owner's facts.
 
-    Observation cost is the *actual size of newly accepted observation results*,
-    in the same ``len // 4`` unit the context ladder budgets in — never a count
-    of calls, files, or rounds.  A failed observation contributes no evidence and
-    is therefore not charged; neither is a call that never executed, because a
-    rejected batch returns before this runs.
+    ``observation_tokens`` is the actual size of newly accepted observation
+    results, in the same ``len // 4`` unit the context ladder budgets in.  It is
+    **telemetry**: the segment is spent against repeated model-request cost,
+    which the send loop charges directly, because a hundred tiny reads are
+    expensive in requests and cheap in payload bytes.
+
+    A failed observation contributes nothing — no tokens, and no survey
+    fingerprint, so recovering from a failure is never treated as a resurvey.
+    Neither does a call that never executed, because a rejected batch returns
+    before this runs.
     """
     observation_tokens = 0
     targets: list[str] = []
+    fingerprints: list[str] = []
     command_executed = False
     for task in tasks:
         res = results_by_id.get(task["id"])
@@ -422,13 +537,19 @@ def _trajectory_facts(
         for target in observation_targets(task["name"], task["args"]):
             if target not in targets:
                 targets.append(target)
+        if not is_narrow_read(task["name"], task["args"]):
+            fingerprints.append(read_fingerprint(task["name"], task["args"]))
 
     return RoundFacts(
         observation_tokens=observation_tokens,
         observation_targets=tuple(targets),
+        broad_observation_fingerprints=tuple(fingerprints),
         applied_write_paths=tuple(applied_write_paths),
-        edit_recovery_paths=tuple(
-            _edit_recovery_write_paths(tasks, results_by_id)
+        stale_paths=tuple(stale_paths),
+        edit_recovery_events=tuple(
+            _edit_recovery_events(
+                tasks, results_by_id, recovery_before, recovery_after
+            )
         ),
         command_executed=command_executed,
         blocker_succeeded=blocker_succeeded,
@@ -683,6 +804,12 @@ class ToolRoundRunner:
                 worker_phase_boundary_info = phase_boundary
             return result
 
+        # What the runtime's edit-recovery owners held before any call ran. The
+        # difference after the round is the authoritative record of which failed
+        # writes actually created a concrete recovery requirement — the only
+        # kind of failed write that counts as implementation movement.
+        recovery_before = _recovery_requirement_snapshot(state)
+
         results_to_append: list[dict[str, Any]] = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             futures: dict[concurrent.futures.Future[dict[str, Any]], dict[str, Any]] = {}
@@ -835,13 +962,17 @@ class ToolRoundRunner:
             _combined_post_write_files(planner_stale_read_files, applied_write_paths),
         )
 
+        # Paths a write or a stale-file notice changed this round. The duplicate
+        # guard forgets its fingerprints for them, and so does the trajectory
+        # owner's retained-survey set: bytes that changed are always rereadable.
+        stale_paths = _combined_post_write_files(
+            planner_stale_read_files, applied_write_paths
+        )
+        recovery_after = _recovery_requirement_snapshot(state)
+
         if guard is not None:
             # A stale-file notice makes the named paths worth reading again.
-            guard.note_stale_paths(
-                _combined_post_write_files(
-                    planner_stale_read_files, applied_write_paths
-                )
-            )
+            guard.note_stale_paths(stale_paths)
             guard.end_round()
 
         if worker_phase_boundary_info is not None:
@@ -863,6 +994,9 @@ class ToolRoundRunner:
                     tasks=tasks,
                     results_by_id=results_by_id,
                     applied_write_paths=applied_write_paths,
+                    stale_paths=stale_paths,
+                    recovery_before=recovery_before,
+                    recovery_after=recovery_after,
                     blocker_succeeded=blocker_succeeded,
                     already_satisfied_succeeded=already_satisfied_succeeded,
                 ),
@@ -882,6 +1016,9 @@ class ToolRoundRunner:
                 tasks=tasks,
                 results_by_id=results_by_id,
                 applied_write_paths=applied_write_paths,
+                stale_paths=stale_paths,
+                recovery_before=recovery_before,
+                recovery_after=recovery_after,
                 blocker_succeeded=blocker_succeeded,
                 already_satisfied_succeeded=already_satisfied_succeeded,
             ),
