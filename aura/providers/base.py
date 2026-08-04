@@ -26,11 +26,11 @@ class ModelInfo:
     output_per_m_usd: float
     cache_hit_per_m_usd: float
     supports_vision: bool = False
-    # Context metadata used to derive the per-request working-set budget.
-    # 0 means "unknown" — callers fall back to the conservative defaults in
-    # aura.conversation.context_budget rather than assuming a large window.
-    # Both default to 0 so ModelInfo(**cached_dict) keeps working for caches
-    # written before these fields existed.
+    # Real model capacity, as the provider advertises it. Reporting metadata
+    # only — nothing on the send path budgets, prunes, or compacts against it.
+    # 0 means "unknown" (dynamically discovered or unlisted models). Both
+    # default to 0 so ModelInfo(**cached_dict) keeps working for caches written
+    # before these fields existed.
     context_window_tokens: int = 0
     max_output_tokens: int = 0
 
@@ -56,11 +56,12 @@ class ProviderSpec:
     # ``requires_reasoning_replay`` says whether this transport needs prior
     # assistant reasoning re-encoded into the request to continue its thinking
     # across a tool round — true for DeepSeek (both transports) and native
-    # Anthropic. It decides the *wire encoding* only. Which reasoning still
-    # exists to encode is decided once, for every provider, in
-    # ``aura.conversation.api_view``: the current real user turn keeps its
-    # reasoning, completed turns shed theirs, and canonical history keeps
-    # everything exact either way.
+    # Anthropic. It decides the *wire encoding* only, never what exists to
+    # encode: canonical history keeps every assistant message's reasoning and
+    # signature, ``History.for_api`` replays all of it unchanged, and the client
+    # layer renders that same canonical reasoning into whatever the wire format
+    # wants — provider-native ``reasoning_content``, an explicit DeepSeek Off
+    # marker, or reconstructed Anthropic ``thinking`` blocks.
     chat_protocol: str = "openai_chat"
     chat_base_url: str | None = None
     requires_reasoning_replay: bool = True

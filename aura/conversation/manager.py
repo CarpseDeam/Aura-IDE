@@ -43,7 +43,6 @@ from aura.conversation.completion_guard import (
     assistant_message_text,
     is_repetitive_completion_final,
 )
-from aura.conversation.context_budget import resolve_model_budget
 from aura.conversation.dispatch import (
     DispatchCallback,
     WorkerDispatchRequest,
@@ -203,77 +202,6 @@ def _repairable_tool_call_block(tool_calls: Any) -> bool:
         if not isinstance(call_id, str) or not call_id:
             return False
     return True
-
-
-def _log_context_round(
-    budget,
-    stats,
-    tool_defs: list[dict[str, Any]] | None,
-    *,
-    request_growth_tokens: int | None = None,
-) -> None:
-    """One line per model round describing where the context budget went.
-
-    Deliberately a single log record, not a telemetry framework — enough to
-    answer "why was this turn's evidence cut?" from a normal log file. The
-    lifecycle fields prove the request plateaued: how many completed blocks
-    retired into the evidence ledger, how many characters the ledger and the
-    active chain retain, and how the request grew from the preceding round.
-    """
-    try:
-        tool_schema_chars = len(json.dumps(tool_defs, ensure_ascii=False)) if tool_defs else 0
-    except (TypeError, ValueError):
-        tool_schema_chars = -1
-
-    # Tool schemas ride outside the working-set budget — they are passed to the
-    # provider separately and never pruned. Report them in the same unit as the
-    # budget, plus the total, so the log answers "how big was the request?"
-    # rather than only "how big was the part we budgeted?".
-    tool_schema_tokens = max(tool_schema_chars, 0) // 4
-    request_tokens = stats.tokens_after + tool_schema_tokens
-    growth = (
-        "na"
-        if request_growth_tokens is None
-        else str(request_growth_tokens)
-    )
-
-    _log.info(
-        "context_round model=%s provider=%s window=%d reserve=%d derived_budget=%d "
-        "policy_cap=%s budget=%d capped_by_policy=%s budget_source=%s "
-        "tokens_before=%d tokens_after=%d messages_before=%d messages_after=%d "
-        "system_chars=%d tool_schema_chars=%d tool_schema_tokens=%d "
-        "request_tokens=%d request_growth_tokens=%s request_headroom=%d "
-        "system_fingerprint=%s "
-        "compacted_results=%d dropped_blocks=%d repaired=%d "
-        "reasoning_chars_replayed=%d reasoning_chars_dropped=%d "
-        "over_budget=%s",
-        budget.model_id,
-        budget.provider_id,
-        budget.context_window_tokens,
-        budget.output_reserve_tokens,
-        budget.derived_working_set_tokens,
-        "none" if budget.policy_cap_tokens is None else budget.policy_cap_tokens,
-        budget.working_set_tokens,
-        budget.capped_by_policy,
-        "fallback" if budget.is_fallback else "catalog",
-        stats.tokens_before,
-        stats.tokens_after,
-        stats.messages_before,
-        stats.messages_after,
-        stats.system_prompt_chars,
-        tool_schema_chars,
-        tool_schema_tokens,
-        request_tokens,
-        growth,
-        budget.context_window_tokens - budget.output_reserve_tokens - request_tokens,
-        stats.system_prompt_fingerprint,
-        stats.compacted_results,
-        stats.dropped_blocks,
-        stats.repaired_messages,
-        stats.reasoning_chars_replayed,
-        stats.reasoning_chars_dropped,
-        stats.over_budget,
-    )
 
 
 class ConversationManager:
@@ -552,8 +480,6 @@ class ConversationManager:
                 state.worker_artifact_id = str(worker_dispatch_request.artifact_id or "")
                 state.worker_artifact_item_id = str(worker_dispatch_request.artifact_item_id or "")
 
-        prev_request_tokens: int | None = None
-
         while True:
             if (
                 state.mode in {"planner", "single"}
@@ -618,42 +544,12 @@ class ConversationManager:
                 content_gate=state.content_gate,
             )
 
-            # The outbound view is compacted against *this* model's budget;
-            # self._history.messages is left exact. The current real user turn
-            # keeps its reasoning in that view — it is the working state of the
-            # request still being executed — and completed turns shed theirs.
-            # How the wire protocol carries it is the client layer's decision.
-            budget = resolve_model_budget(model)
-            api_view = self._history.build_api_payload(budget.working_set_tokens)
-            if state.pre_edit_guard is not None:
-                # The one authoritative answer to "can the model still read that
-                # result?", taken from the view actually being sent. The guard
-                # rejects a duplicate observation only while the original result
-                # is still materially in front of the model; once compaction has
-                # truncated or dropped it, rereading is
-                # recovering lost context, not circling.
-                state.pre_edit_guard.note_api_view_residency(
-                    api_view.residency.resident_call_ids
-                )
-            try:
-                schema_chars = len(json.dumps(tool_defs, ensure_ascii=False)) if tool_defs else 0
-            except (TypeError, ValueError):
-                schema_chars = 0
-            request_tokens = api_view.stats.tokens_after + max(schema_chars, 0) // 4
-            growth = (
-                None
-                if prev_request_tokens is None
-                else request_tokens - prev_request_tokens
-            )
-            prev_request_tokens = request_tokens
-            _log_context_round(
-                budget,
-                api_view.stats,
-                tool_defs,
-                request_growth_tokens=growth,
-            )
-
-            request_messages = api_view.messages
+            # The request is canonical history, unchanged: system prompt, every
+            # stored message, every assistant message's reasoning and signature.
+            # Nothing is compacted, pruned, or shed, so the round's own plan and
+            # reasoning are still there on the next round. How the wire protocol
+            # encodes that reasoning is the client layer's decision.
+            request_messages = self._history.for_api()
 
             for ev in model_streams.trigger(
                 hook_name,

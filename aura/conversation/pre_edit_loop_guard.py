@@ -6,22 +6,13 @@ loop cannot tolerate — re-reading the exact same thing whose result is still i
 front of the model — without pretending to judge how much looking is enough.
 
 The rule: the same read-only tool call with the same arguments is rejected the
-second time it is issued — *while its first result is still materially in the
-model's request*.  That qualifier is the
-whole rule.  The rejection's justification is "the result is already in the
-conversation above", and compaction can make that false: a read retired into an
-evidence receipt, truncated to a floor, bounded on replay, folded into a
-summary, or dropped from the working set is no longer answerable at the range
-and detail it originally had.  Rejecting the reread anyway would tell the model
-to use something it could no longer see, which is the one instruction it cannot
-follow.
-
-So the guard does not decide this from canonical history, which always remains
-exact.  It reads :class:`~aura.conversation.api_view.ResultResidency` — the
-authoritative record of what survived byte-identically into the request that is
-actually being sent — and rejects only when the original result is still there.
-There is no second compaction system and no prediction of what compaction might
-do: the answer comes from the view the ladder already built.
+second time it is issued.  The rejection's justification is "the result is
+already in the conversation above", and it is now unconditionally true — the
+request *is* canonical history, appended to and never compacted, pruned, or
+rewritten, so a result that was returned this turn is still in front of the
+model verbatim.  The guard needs no residency model, no report from a view
+builder, and no prediction of what compaction might do, because nothing removes
+a result from the request.
 
 **Failures are truth, and truth is rereadable.**  A failed tool result opens a
 one-round reread grace: after a failed read, a failed write, a rejected patch,
@@ -174,8 +165,7 @@ _DUPLICATE_READ_MESSAGE = (
     "still in the conversation above. Reading it again returns the same bytes "
     "and adds no evidence. Use what you already have and make the edit. "
     "Rereads after a failed tool call, a stale-file notice, or a pending "
-    "edit-recovery step are allowed and are not blocked by this guard, and so "
-    "is rereading something whose earlier result is no longer in front of you."
+    "edit-recovery step are allowed and are not blocked by this guard."
 )
 
 
@@ -263,8 +253,8 @@ class PreEditLoopGuard:
 
     * has an applied mutation landed yet (``write_applied``), which the
       completion contract reads to know whether the turn still owes its edit;
-    * is this exact observation call a wasteful repeat of a result still in the
-      request (``check``).
+    * is this exact observation call a wasteful repeat of a result already in
+      the request (``check``).
 
     A distinct failed tool result opens one round of reread grace so the model
     can look again at whatever the failure contradicts.
@@ -281,21 +271,6 @@ class PreEditLoopGuard:
     seen_evidence: set[str] = field(default_factory=set)
     write_applied: bool = False
     blocked_calls: int = 0
-    #: How many rereads were allowed because the original result had left the
-    #: outbound view. Telemetry only; nothing branches on it.
-    rereads_allowed_after_compaction: int = 0
-
-    #: Tool-call ids per read fingerprint, oldest first. The link between "this
-    #: exact call was made before" and "is that call's result still in the
-    #: request", which is what residency is keyed on.
-    read_call_ids: dict[str, list[str]] = field(default_factory=dict)
-    #: Ids whose original result survived byte-identically into the outbound
-    #: view built for the request now being sent.
-    _resident_call_ids: frozenset[str] = frozenset()
-    #: Whether any outbound view has been reported yet. Before the first one the
-    #: guard has no residency evidence, so it keeps its historical behaviour
-    #: rather than guessing that a result has gone.
-    _residency_known: bool = False
 
     #: Failure shapes already seen this turn. Reporting only.
     seen_failures: set[str] = field(default_factory=set)
@@ -309,42 +284,6 @@ class PreEditLoopGuard:
     #: The snapshot of the grace at the start of the current round — the round
     #: that follows a failure is the one that gets to reread.
     _reread_grace_active: bool = False
-
-    # ---- outbound API-view residency -------------------------------------
-
-    def note_api_view_residency(self, resident_call_ids: Any) -> None:
-        """Record which results survived into the request about to be sent.
-
-        Called by the send loop with
-        :attr:`~aura.conversation.api_view.ResultResidency.resident_call_ids`
-        from the view it just built, every round.  This is the guard's only
-        source of truth about what the model can still see, and it is a report
-        of what compaction *did*, never a prediction of what it might do.
-        """
-        self._resident_call_ids = frozenset(
-            str(call_id) for call_id in (resident_call_ids or ()) if call_id
-        )
-        self._residency_known = True
-
-    def is_rereadable(self, fingerprint: str) -> bool:
-        """Whether this exact observation may be issued again.
-
-        True when the turn has recorded call ids for the fingerprint and *none*
-        of them is still resident in the outbound view — the result has been
-        retired into a receipt, truncated, replay-bounded, summarised, or
-        dropped, so the model genuinely cannot answer from it any more.
-
-        Fail-closed everywhere else.  Before any view has been reported, and for
-        a fingerprint whose calls were recorded without ids, the guard has no
-        evidence that anything left the request, so the duplicate stays
-        rejectable exactly as it was.
-        """
-        if not self._residency_known:
-            return False
-        call_ids = self.read_call_ids.get(fingerprint) or []
-        if not call_ids:
-            return False
-        return not any(call_id in self._resident_call_ids for call_id in call_ids)
 
     # ---- effect classification -------------------------------------------
 
@@ -395,8 +334,8 @@ class PreEditLoopGuard:
         ``None`` means the call may run.  Exactly one rejection is possible, and
         it is recoverable — never terminal:
 
-        * an unjustified exact repeat read whose original result is still in the
-          request.
+        * an unjustified exact repeat read, whose original result is still in
+          the request because history is append-only.
 
         Broad discovery is never refused by a count; a turn that keeps returning
         genuinely new evidence is allowed to keep surveying for as long as the
@@ -412,12 +351,6 @@ class PreEditLoopGuard:
         fingerprint = read_fingerprint(name, args)
         previous = self.seen_reads.get(fingerprint, 0)
         if previous >= 1:
-            if self.is_rereadable(fingerprint):
-                # The original result is no longer materially in the outbound
-                # view. "You already have this" would be false, so the reread is
-                # the model recovering context it lost, not circling.
-                self.rereads_allowed_after_compaction += 1
-                return None
             self.blocked_calls += 1
             return {
                 "ok": False,
@@ -430,25 +363,17 @@ class PreEditLoopGuard:
             }
         return None
 
-    def record(self, name: str, args: Any, call_id: str = "") -> None:
-        """Record one accepted tool call for this round.
+    def record(self, name: str, args: Any) -> None:
+        """Record one accepted observation call by its exact fingerprint.
 
         Deliberately records no progress.  Intent is not evidence: a command
         that is about to fail, or never starts, must not reset any boundary
         before anyone has seen its result.
-
-        ``call_id`` is the provider's tool-call id, which is what the outbound
-        view keys residency on.  It is optional so that direct unit tests and
-        replayed transcripts still work; without it the call's result is simply
-        never known to have left the request, and the duplicate rule stays as
-        strict as it was.
         """
         if not self._is_observation(name):
             return
         fingerprint = read_fingerprint(name, args)
         self.seen_reads[fingerprint] = self.seen_reads.get(fingerprint, 0) + 1
-        if call_id:
-            self.read_call_ids.setdefault(fingerprint, []).append(str(call_id))
 
     # ---- result accounting -----------------------------------------------
 
@@ -499,7 +424,6 @@ class PreEditLoopGuard:
             probe = fingerprint.replace("\\\\", "/").replace("\\", "/")
             if any(path and path in probe for path in normalized):
                 del self.seen_reads[fingerprint]
-                self.read_call_ids.pop(fingerprint, None)
 
 
 def _decode_payload(payload: Any) -> Any:

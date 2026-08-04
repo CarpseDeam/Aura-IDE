@@ -1,22 +1,24 @@
-"""Conversation history — canonical truth, plus a transport-replay policy.
+"""Conversation history — the append-only transcript that is also the request.
 
-FIRST RULE — `messages` is canonical.
+ONE RULE — `messages` is canonical, and canonical history is what gets sent.
 
-`History.append_assistant(...)` ALWAYS stores the full assistant message,
-including its `reasoning_content`. The stored messages stay exact and durable
-so the transcript, the GUI, persistence, and usage evidence always see what
-really happened. Canonical history is never edited to fit a request.
+`History.append_assistant(...)` always stores the full assistant message,
+including its ``reasoning_content`` and the provider's ``reasoning_signature``.
+The stored messages stay exact and durable so the transcript, the GUI,
+persistence, and usage evidence always see what really happened.
 
-SECOND RULE — the outbound copy replays the reasoning of the *current* real
-user turn and sheds the reasoning of turns the user has moved past.
+`for_api()` is not a policy layer. It prepends the system message, deep-copies
+the stored messages so a caller cannot mutate the log through the request, and
+removes the one key that is local bookkeeping rather than wire content
+(``aura_internal``). Nothing else is added, dropped, shortened, summarised, or
+reordered: the request is the transcript. There is no compaction ladder, no
+token budget, no reasoning stripping, and no residency model — a round's own
+plan and reasoning survive to the next round because nothing removes them.
 
-Reasoning produced while the model is executing the request it is still working
-on is that request's working state; the next round needs it to continue instead
-of re-deriving its plan. Reasoning from a finished request is dead weight that
-would be replayed on every later round. The boundary is Aura's latest genuine
-user message (`is_real_user_message`), so Aura's own internal continuation
-messages never split a live turn. See `aura.conversation.api_view`; how a given
-wire protocol carries that reasoning is decided in the client layer.
+How a given wire protocol *encodes* replayed reasoning — provider-native
+``reasoning_content``, an explicit DeepSeek Off marker, or reconstructed
+Anthropic ``thinking`` blocks — is decided in the client layer, from this
+unchanged canonical history.
 """
 from __future__ import annotations
 
@@ -24,29 +26,96 @@ import copy
 from dataclasses import dataclass, field
 from typing import Any
 
-from aura.config import MAX_CONTEXT_TOKENS
-from aura.conversation.api_view import (
-    SOURCE_READ_TOOLS,
-    ApiView,
-    build_api_view,
-    compact_result_content,
-    estimate_message_tokens,
-    estimate_tokens,
-    is_real_user_message,
-    repair_tool_call_blocks,
-    user_message_text,
-)
+__all__ = ["History", "is_real_user_message", "user_message_text"]
 
-__all__ = ["History", "SOURCE_READ_TOOLS"]
+
+def is_real_user_message(msg: dict[str, Any]) -> bool:
+    """True only for a user message that actually starts a new request.
+
+    Aura injects its own ``role="user"`` messages (steering nudges, recovery
+    notices, loop guards) marked ``aura_internal``. They belong in the request —
+    the model must see them — but they are *not* new user requests, so a rewind
+    never stops at one.
+    """
+    return (
+        msg.get("role") == "user"
+        and not msg.get("aura_internal")
+    )
+
+
+def user_message_text(msg: dict[str, Any]) -> str:
+    """Plain text of a user message, flattening multimodal text parts."""
+    content = msg.get("content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            part.get("text", "")
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    return ""
+
+
+def repair_tool_call_blocks(messages: list[dict[str, Any]]) -> int:
+    """Remove tool-call blocks that cannot be replayed. Mutates `messages`.
+
+    Chat APIs require every assistant message carrying ``tool_calls`` to be
+    followed by tool messages for exactly those ids. An interrupted turn can
+    leave a call with no result — that block poisons every later request until
+    it is gone. Returns the number of messages removed.
+
+    This is a structural repair of the stored log, run on rewind and cancel. It
+    is the only edit history ever makes to itself, and it exists because such a
+    block is not replayable at all, not because it is large.
+    """
+    removed = 0
+    i = 0
+    while i < len(messages):
+        msg = messages[i]
+
+        if msg.get("role") == "tool":
+            del messages[i]
+            removed += 1
+            continue
+
+        if msg.get("role") != "assistant" or not msg.get("tool_calls"):
+            i += 1
+            continue
+
+        tool_calls = msg.get("tool_calls") or []
+        expected_ids = [
+            tc.get("id") for tc in tool_calls if isinstance(tc, dict) and tc.get("id")
+        ]
+        expected = set(expected_ids)
+        seen: set[str] = set()
+        valid_block = bool(expected) and len(expected) == len(expected_ids)
+
+        j = i + 1
+        while j < len(messages) and messages[j].get("role") == "tool":
+            tool_call_id = messages[j].get("tool_call_id")
+            if tool_call_id not in expected or tool_call_id in seen:
+                valid_block = False
+            else:
+                seen.add(tool_call_id)
+            j += 1
+
+        if valid_block and seen == expected:
+            i = j
+            continue
+
+        removed += j - i
+        del messages[i:j]
+
+    return removed
 
 
 @dataclass
 class History:
     """Internal conversation log. Source of truth for the GUI and the API.
 
-    Internal entries are exact dicts ready to send. The only transformation the
-    API needs is in for_api(), which compacts a deep copy per the transport's
-    reasoning-replay policy and never edits the stored log.
+    Internal entries are exact dicts ready to send. ``for_api()`` returns them
+    as they are, with the system message in front.
     """
 
     system_prompt: str | None = None
@@ -72,9 +141,8 @@ class History:
         self.messages.append({"role": "user", "content": parts})
 
     def append_assistant(self, full_message: dict[str, Any]) -> None:
-        """Append the *complete* assistant message — keep reasoning_content in
-        storage even if the current transport does not replay it; the outbound
-        copy decides what to send."""
+        """Append the *complete* assistant message — content, tool calls,
+        reasoning and its signature. All of it is replayed on the next round."""
         self.messages.append(copy.deepcopy(full_message))
 
     def append_tool_result(self, tool_call_id: str, content: str) -> None:
@@ -98,12 +166,7 @@ class History:
         self.messages.pop()
 
     def repair_incomplete_tool_calls(self) -> int:
-        """Remove tool-call blocks that cannot be replayed to chat APIs.
-
-        This is a durable structural repair of the stored log, used on rewind.
-        The API view runs the same repair on its own copy, so a request is
-        never poisoned even when the canonical log is left untouched.
-        """
+        """Remove tool-call blocks that cannot be replayed to chat APIs."""
         return repair_tool_call_blocks(self.messages)
 
     def latest_real_user_index(self) -> int | None:
@@ -140,119 +203,23 @@ class History:
         self.truncate_after(index + 1)
         return True
 
-    # ---- token estimation ---------------------------------------------------
+    # ---- the provider request -----------------------------------------------
 
-    def estimate_tokens(self) -> int:
-        """Rough token count for the full history (system + all messages).
+    def for_api(self) -> list[dict[str, Any]]:
+        """Return the messages array for the next API call.
 
-        Approximation: len(text) / 4. Good enough for budget decisions;
-        DeepSeek's tokenizer is BPE-based but the ratio is close enough.
+        The system message (if any) first, then a deep copy of every stored
+        message with the local ``aura_internal`` marker removed. Everything
+        else — content, tool calls, tool results, reasoning content, reasoning
+        signatures — is passed through exactly as stored.
         """
-        return estimate_tokens(self.messages, self.system_prompt)
-
-    def _msg_token_estimate(self, msg: dict) -> int:
-        """Estimate tokens for a single message dict."""
-        return estimate_message_tokens(msg)
-
-    def _turn_indices(self) -> list[int]:
-        """Return the message indices where each user-turn begins."""
-        return [i for i, m in enumerate(self.messages) if m.get("role") == "user"]
-
-    def _get_tool_name_for_result(self, msg_idx: int) -> str | None:
-        """Return the tool name for the tool-result message at msg_idx.
-
-        Scans backwards to find the assistant message whose tool_calls contains
-        a call matching the tool_call_id of the result.
-        """
-        target_id = self.messages[msg_idx].get("tool_call_id")
-        if not target_id:
-            return None
-        for i in range(msg_idx - 1, -1, -1):
-            msg = self.messages[i]
-            if msg.get("role") == "assistant":
-                for tc in (msg.get("tool_calls") or []):
-                    if tc.get("id") == target_id:
-                        fn = tc.get("function")
-                        return fn.get("name") if isinstance(fn, dict) else None
-        return None
-
-    def prune_for_context(
-        self,
-        max_tokens: int = MAX_CONTEXT_TOKENS,
-        keep_last_n_turns: int = 5,
-        max_tool_result_chars: int = 500,
-    ) -> None:
-        """Destructively shrink the stored log to fit `max_tokens`.
-
-        NOT on the send path — `for_api()` compacts a copy instead. This remains
-        for callers that genuinely want the stored log reduced (offline tools,
-        smoke scripts). It reuses the structure-preserving compaction, so tool
-        results stay valid JSON here too.
-        """
-        if self.estimate_tokens() <= max_tokens:
-            return
-
-        view = build_api_view(
-            self.system_prompt,
-            self.messages,
-            max_tokens,
-            keep_last_n_turns=keep_last_n_turns,
-        )
-        self.messages = [
-            m for m in view.messages if m.get("role") != "system"
-        ]
-
-    def _truncate_tool_results_in_range(
-        self,
-        start: int,
-        end: int,
-        max_chars: int,
-        source_tool_min_chars: int = 0,
-    ) -> None:
-        """Compact tool-result messages in messages[start:end] to max_chars.
-
-        Structure-preserving: a JSON result stays valid JSON. Results from
-        SOURCE_READ_TOOLS keep the higher `source_tool_min_chars` allowance.
-        """
-        for i in range(start, min(end, len(self.messages))):
-            msg = self.messages[i]
-            if msg.get("role") != "tool":
-                continue
-            content = msg.get("content", "")
-            if not isinstance(content, str):
-                continue
-
-            tool_name = self._get_tool_name_for_result(i)
-            allowance = max_chars
-            if source_tool_min_chars > max_chars and tool_name in SOURCE_READ_TOOLS:
-                allowance = source_tool_min_chars
-
-            new_content, changed = compact_result_content(content, allowance, tool_name)
-            if changed:
-                msg["content"] = new_content
-
-    # ---- API view -----------------------------------------------------------
-
-    def build_api_payload(self, max_tokens: int | None = None) -> ApiView:
-        """Build the outbound view plus its compaction diagnostics.
-
-        `max_tokens` is the active model's working-set budget. Nothing here
-        mutates `self.messages`.
-        """
-        budget = max_tokens if max_tokens and max_tokens > 0 else MAX_CONTEXT_TOKENS
-        return build_api_view(self.system_prompt, self.messages, budget)
-
-    def for_api(self, max_tokens: int | None = None) -> list[dict[str, Any]]:
-        """Build the messages array for the next API call.
-
-        Rules:
-        - Always include system message (if set) first.
-        - Assistant reasoning from the current real user turn is replayed;
-          reasoning from turns the user has moved past is shed from the copy.
-        - User and tool messages are passed through verbatim.
-        - Stored history is never modified.
-        """
-        return self.build_api_payload(max_tokens).messages
+        out: list[dict[str, Any]] = []
+        if self.system_prompt:
+            out.append({"role": "system", "content": self.system_prompt})
+        for msg in copy.deepcopy(self.messages):
+            msg.pop("aura_internal", None)
+            out.append(msg)
+        return out
 
     # ---- introspection ------------------------------------------------------
 

@@ -321,52 +321,13 @@ MAX_READ_BYTES = 200 * 1024
 MAX_GLOB_RESULTS = 200
 TRUNCATE_TOOL_RESULT_CHARS = 500
 
-# ---- context-window budgeting ---------------------------------------------
-#
-# The working set is the token budget for everything we *send* (system prompt,
-# tool schemas, and history). It is deliberately a fraction of what remains
-# after reserving room for the model's own output — filling the advertised
-# window is what turns a long coding turn into a token furnace.
-#
-#   working_set = (context_window - output_reserve) * CONTEXT_WORKING_SET_FRACTION
-#
-# Unknown / dynamically discovered models fall back to a small window rather
-# than optimistically assuming a large one.
-
-CONTEXT_WORKING_SET_FRACTION: float = 0.60
-FALLBACK_CONTEXT_WINDOW_TOKENS: int = 64_000
-FALLBACK_MAX_OUTPUT_TOKENS: int = 8_192
-# Never reserve less than this for the response, even if a model advertises a
-# tiny max_output_tokens.
-MIN_OUTPUT_RESERVE_TOKENS: int = 4_096
-# Never shrink the working set below this — below it, no coding turn can work.
-MIN_WORKING_SET_TOKENS: int = 8_000
-
-# ---- product working-set cap policy ---------------------------------------
-#
-# THIS IS NOT MODEL METADATA. The catalog states what a model can physically
-# hold; this states what Aura is willing to *spend* on an ordinary coding
-# request. The two are resolved independently and then combined as
-#
-#   effective_working_set = min(model_derived_working_set, policy_cap)
-#
-# Correcting a model's advertised window must never silently multiply the cost
-# of a normal turn, and a cap must never be smuggled into the catalog as a fake
-# window. Providers absent from this map are uncapped and keep their existing
-# purely model-derived behaviour.
-#
-# DeepSeek advertises a 1M window. 72_000 is deliberately set to the working
-# set ordinary coding requests already ran with, so correcting the metadata
-# changes capability reporting without changing spend. Raise it deliberately.
-DEEPSEEK_WORKING_SET_CAP_TOKENS: int = 72_000
-
-PROVIDER_WORKING_SET_CAP_TOKENS: dict[str, int] = {
-    "deepseek": DEEPSEEK_WORKING_SET_CAP_TOKENS,
-}
-
-# Legacy hard cap. Retained so existing callers keep a sane default; the
-# production send path now passes a per-model budget instead.
-MAX_CONTEXT_TOKENS = 60_000
+# There is no context-window budgeting here, and no working-set cap policy.
+# The send path replays canonical history unchanged (see
+# ``aura.conversation.history.History.for_api``), so nothing resolves a
+# per-request token budget to shape it against. Real model capacity metadata
+# — context window and max output tokens — stays in the provider catalog
+# (``aura.providers.base.ModelInfo``), where it describes the model rather
+# than governing what Aura sends.
 
 SKIP_DIRS = {
     "__pycache__",

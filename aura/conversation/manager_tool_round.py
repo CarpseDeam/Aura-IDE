@@ -522,11 +522,7 @@ class ToolRoundRunner:
         for task in tasks:
             state.limits.record(task["name"])
             if guard is not None:
-                # The call id is what the outbound API view keys result
-                # residency on, so the guard can tell a duplicate read whose
-                # result is still in front of the model from one whose result
-                # compaction has already retired.
-                guard.record(task["name"], task["args"], task["id"])
+                guard.record(task["name"], task["args"])
             if state.worker_flow is not None:
                 state.worker_flow.observe_tool_call(task["name"], task["args"])
 
