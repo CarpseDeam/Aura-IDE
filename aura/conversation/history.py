@@ -1,22 +1,24 @@
-"""Conversation history with the DeepSeek thinking-mode replay rule.
+"""Conversation history — canonical truth, plus a transport-replay policy.
 
-THE TRAP — single point of truth.
+FIRST RULE — `messages` is canonical.
 
-The API requires that `reasoning_content` be passed back on ALL assistant
-messages that contain it, whether or not `tool_calls` is present.  Omitting it
-can result in:
-    400 — "The reasoning_content in the thinking mode must be passed back to the API."
+`History.append_assistant(...)` ALWAYS stores the full assistant message,
+including its `reasoning_content`. The stored messages stay exact and durable
+so the transcript, the GUI, persistence, and usage evidence always see what
+really happened. Canonical history is never edited to fit a request.
 
-`History.append_assistant(...)` ALWAYS stores the full message (including
-reasoning_content). `History.for_api()` is the only place that decides what to
-send — and the rule is: never strip `reasoning_content`.
+SECOND RULE — whether `reasoning_content` is replayed outbound is a transport
+policy, decided by the caller, not a universal rule.
 
-SECOND RULE — `messages` is canonical.
-
-Fitting a context window is a property of one outbound request, not of the
-conversation. `for_api()` / `build_api_payload()` compact a deep copy (see
-`aura.conversation.api_view`); the stored messages stay exact and durable so
-the transcript, the GUI, and any later turn still see what really happened.
+The old DeepSeek OpenAI-compatible transport required `reasoning_content` to be
+passed back on ALL assistant messages that contain it, whether or not
+`tool_calls` is present; omitting it was rejected with a 400. That transport
+(and native Anthropic, which replays thinking blocks) still sends reasoning in
+the outbound copy. DeepSeek over the Anthropic Messages transport does NOT
+require replay, so its outbound copy sheds `reasoning_content` from every prior
+assistant message while canonical history keeps it exact. The decision is
+threaded in as ``requires_reasoning_replay`` through ``build_api_payload`` /
+``for_api`` into ``build_api_view`` (see `aura.conversation.api_view`).
 """
 from __future__ import annotations
 
@@ -45,8 +47,8 @@ class History:
     """Internal conversation log. Source of truth for the GUI and the API.
 
     Internal entries are exact dicts ready to send. The only transformation the
-    API needs is in for_api(), which always preserves reasoning_content on
-    assistant messages and never edits the stored log.
+    API needs is in for_api(), which compacts a deep copy per the transport's
+    reasoning-replay policy and never edits the stored log.
     """
 
     system_prompt: str | None = None
@@ -73,7 +75,8 @@ class History:
 
     def append_assistant(self, full_message: dict[str, Any]) -> None:
         """Append the *complete* assistant message — keep reasoning_content in
-        storage even if not currently relevant; for_api() decides what to send."""
+        storage even if the current transport does not replay it; the outbound
+        copy decides what to send."""
         self.messages.append(copy.deepcopy(full_message))
 
     def append_tool_result(self, tool_call_id: str, content: str) -> None:
@@ -237,30 +240,47 @@ class History:
         max_tokens: int | None = None,
         *,
         effect_for=None,
+        requires_reasoning_replay: bool = True,
     ) -> ApiView:
         """Build the outbound view plus its compaction diagnostics.
 
         `max_tokens` is the active model's working-set budget. `effect_for` is
         the authoritative tool-effect lookup that decides which completed
         blocks may retire (the send path passes the registry's
-        ``declared_effect``). Nothing here mutates `self.messages`.
+        ``declared_effect``). `requires_reasoning_replay` is the transport's
+        reasoning-replay policy: when False, ``reasoning_content`` is shed from
+        every prior assistant message in the outbound copy while `self.messages`
+        keeps it exact. Nothing here mutates `self.messages`.
         """
         budget = max_tokens if max_tokens and max_tokens > 0 else MAX_CONTEXT_TOKENS
         return build_api_view(
-            self.system_prompt, self.messages, budget, effect_for=effect_for
+            self.system_prompt,
+            self.messages,
+            budget,
+            effect_for=effect_for,
+            requires_reasoning_replay=requires_reasoning_replay,
         )
 
-    def for_api(self, max_tokens: int | None = None) -> list[dict[str, Any]]:
+    def for_api(
+        self,
+        max_tokens: int | None = None,
+        *,
+        requires_reasoning_replay: bool = True,
+    ) -> list[dict[str, Any]]:
         """Build the messages array for the next API call.
 
         Rules:
         - Always include system message (if set) first.
-        - For assistant messages: always keep reasoning_content if present,
-          regardless of whether tool_calls exists.
+        - Assistant reasoning follows the transport's replay policy: when
+          ``requires_reasoning_replay`` is True, keep reasoning_content if
+          present regardless of whether tool_calls exists; when False, shed it
+          from every prior assistant message in the copy.
         - User and tool messages are passed through verbatim.
         - Stored history is never modified.
         """
-        return self.build_api_payload(max_tokens).messages
+        return self.build_api_payload(
+            max_tokens, requires_reasoning_replay=requires_reasoning_replay
+        ).messages
 
     # ---- introspection ------------------------------------------------------
 

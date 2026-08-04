@@ -252,7 +252,16 @@ GOOGLE_CLOUD_PRICING: dict[str, dict[str, float]] = {
 PROVIDER_CATALOG: dict[str, dict] = {
     "deepseek": {
         "label": "DeepSeek",
+        # Ordinary API root — kept intact for model discovery, pricing/catalog
+        # work, native Responses web search, and every other non-chat path.
         "base_url": "https://api.deepseek.com",
+        # Chat/tool turns go over DeepSeek's Anthropic-compatible Messages
+        # transport, not OpenAI Chat Completions. That transport does not
+        # require prior ``reasoning_content`` to be replayed, so Aura stops
+        # feeding the model its earlier planning trajectory on every round.
+        "chat_protocol": "anthropic_messages",
+        "chat_base_url": "https://api.deepseek.com/anthropic/v1",
+        "requires_reasoning_replay": False,
         "env_key": "DEEPSEEK_API_KEY",
         "default_model": "deepseek-v4-flash",
         "default_thinking": "auto",
@@ -283,6 +292,10 @@ PROVIDER_CATALOG: dict[str, dict] = {
     "anthropic": {
         "label": "Anthropic",
         "base_url": "https://api.anthropic.com/v1",
+        # Native Anthropic Messages transport; prior thinking blocks must be
+        # replayed for extended thinking, so ``requires_reasoning_replay``
+        # keeps its default of True and behavior is unchanged.
+        "chat_protocol": "anthropic_messages",
         "env_key": "ANTHROPIC_API_KEY",
         "default_model": "claude-sonnet-4-6",
         "default_thinking": "high",

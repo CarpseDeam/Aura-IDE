@@ -46,6 +46,21 @@ class ProviderSpec:
     models: dict[str, ModelInfo]
     pricing: dict[str, dict[str, float]]
     kind: ProviderKind = "api_key"
+    # Chat transport metadata. ``chat_protocol`` names the wire protocol used
+    # for chat/tool turns — ``"openai_chat"`` (OpenAI-compatible Chat
+    # Completions) or ``"anthropic_messages"`` (Anthropic Messages). It is read
+    # once by the provider client; no call site infers it from the provider id.
+    # ``chat_base_url`` overrides the API root used *only* for chat requests
+    # (falls back to ``base_url``), so non-chat paths — model discovery,
+    # pricing, native Responses web search — keep using the ordinary base URL.
+    # ``requires_reasoning_replay`` is the outbound reasoning-replay policy: a
+    # transport that demands prior assistant ``reasoning_content`` be replayed
+    # in every request (DeepSeek OpenAI chat, native Anthropic thinking) keeps
+    # it in the outbound API copy; one that does not (DeepSeek over Anthropic
+    # Messages) sheds it from the copy while canonical history keeps it exact.
+    chat_protocol: str = "openai_chat"
+    chat_base_url: str | None = None
+    requires_reasoning_replay: bool = True
 
 
 class Event:

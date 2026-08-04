@@ -1,11 +1,21 @@
-"""Anthropic/Claude streaming adapter — separate from the OpenAI-compatible client."""
+"""Anthropic/Claude streaming adapter — separate from the OpenAI-compatible client.
+
+Also serves any provider that speaks the Anthropic Messages wire protocol over
+its own transport — currently DeepSeek, whose Anthropic-compatible endpoint does
+not require prior reasoning to be replayed. Provider-specific behavior lives in
+one profile object (:class:`AnthropicThinkingProfile`), chosen by a single
+seam (:func:`anthropic_thinking_profile`), so the stream loop itself has no
+``provider == ...`` branches.
+"""
 from __future__ import annotations
 
 import json
 import logging
 import threading
 from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -27,12 +37,15 @@ from aura.client.reasoning import (
     EFFORT_OMITTED_PROVIDER_DEFAULT,
 )
 from aura.config import ThinkingMode
+from aura.providers.registry import provider_registry
 
 _log = logging.getLogger(__name__)
 
 
 def _to_anthropic_messages(
     messages: list[dict[str, Any]],
+    *,
+    reconstruct_thinking: bool = True,
 ) -> tuple[str | None, list[dict[str, Any]]]:
     system_parts: list[str] = []
     converted: list[dict[str, Any]] = []
@@ -62,10 +75,15 @@ def _to_anthropic_messages(
             continue
 
         content_blocks: list[dict[str, Any]] = []
-        
-        # 1. Handle Thinking (Reasoning)
+
+        # 1. Handle Thinking (Reasoning). Native Anthropic must replay prior
+        #    thinking blocks to continue extended thinking. DeepSeek over the
+        #    Anthropic transport does NOT reconstruct thinking blocks from
+        #    ``reasoning_content``: the api view deliberately omitted that
+        #    reasoning from the outbound copy, and re-injecting it here would
+        #    undo the omission. No placeholder thinking blocks are ever added.
         rc = msg.get("reasoning_content")
-        if rc and isinstance(rc, str):
+        if reconstruct_thinking and rc and isinstance(rc, str):
             content_blocks.append({"type": "thinking", "thinking": rc})
 
         # 2. Handle Content (Text/Images)
@@ -205,6 +223,109 @@ def _anthropic_thinking_config(model: str, thinking: ThinkingMode) -> dict[str, 
     }
 
 
+#: Fallback output budget when a DeepSeek model is not in the provider catalog.
+_DEEPSEEK_ANTHROPIC_MAX_TOKENS_FALLBACK: int = 32_000
+
+
+def _catalog_output_cap(model: str) -> int:
+    """Declared ``max_output_tokens`` for *model* across the catalog, or 0."""
+    for spec in provider_registry.all().values():
+        info = spec.models.get(model)
+        if info is not None and info.max_output_tokens:
+            return info.max_output_tokens
+    return 0
+
+
+def _deepseek_anthropic_max_tokens(model: str, thinking: ThinkingMode) -> int:
+    """Output budget for a DeepSeek request over the Anthropic transport.
+
+    Anthropic Messages requires an explicit ``max_tokens``. DeepSeek's models
+    natively support a 384k-token output window (catalog ``max_output_tokens``);
+    that declared capacity is sent so a coding agent has room for tool calls and
+    edits. Unknown models fall back to a generous constant rather than a
+    Claude-style per-mode cap.
+    """
+    cap = _catalog_output_cap(model)
+    return cap if cap > 0 else _DEEPSEEK_ANTHROPIC_MAX_TOKENS_FALLBACK
+
+
+def _deepseek_anthropic_thinking_config(model: str, thinking: ThinkingMode) -> dict[str, Any]:
+    """DeepSeek thinking over the Anthropic Messages transport.
+
+    DeepSeek ignores ``budget_tokens``, so it is never sent. ``auto`` enables
+    thinking and omits ``output_config`` so DeepSeek applies its native effort
+    choice; explicit ``high``/``max`` send that effort verbatim. ``off`` sends
+    no thinking configuration at all (the caller handles temperature then).
+    """
+    if thinking == "off":
+        return {}
+    config: dict[str, Any] = {"thinking": {"type": "enabled"}}
+    if thinking in {"high", "max"}:
+        config["output_config"] = {"effort": thinking}
+    return config
+
+
+def _deepseek_anthropic_effort_policy(model: str, thinking: ThinkingMode) -> str:
+    """Why the effort was sent or omitted, for the DeepSeek Anthropic log line."""
+    if thinking == "off":
+        return EFFORT_OMITTED_DISABLED
+    if thinking != "auto":
+        return EFFORT_EXPLICIT
+    return EFFORT_OMITTED_PROVIDER_AUTO
+
+
+@dataclass(frozen=True)
+class AnthropicThinkingProfile:
+    """Provider-aware thinking policy for the Anthropic Messages transport.
+
+    One object owns how a provider maps the user's ``off · auto · high · max``
+    onto the Anthropic ``thinking`` / ``output_config`` fields, what output
+    budget to allow, and whether prior assistant ``reasoning_content`` in the
+    outbound view is reconstructed as ``thinking`` blocks.
+
+    There is deliberately no task scoring, failure counting, or escalation here:
+    ``auto`` means the provider's native choice, and the user's explicit
+    high/max selection is always stated verbatim.
+    """
+
+    provider: str
+    #: Whether assistant ``reasoning_content`` in the outbound copy is
+    #: reconstructed as Anthropic ``thinking`` blocks. Native Anthropic must
+    #: replay prior thinking blocks to continue extended thinking; DeepSeek
+    #: over the Anthropic transport must not rebuild blocks from reasoning the
+    #: api view deliberately omitted.
+    reconstruct_thinking: bool
+
+    def max_tokens(self, model: str, thinking: ThinkingMode) -> int:
+        if self.provider == "anthropic":
+            return _anthropic_max_tokens(model, thinking)
+        return _deepseek_anthropic_max_tokens(model, thinking)
+
+    def thinking_config(self, model: str, thinking: ThinkingMode) -> dict[str, Any]:
+        if self.provider == "anthropic":
+            return _anthropic_thinking_config(model, thinking)
+        return _deepseek_anthropic_thinking_config(model, thinking)
+
+    def effort_policy(self, model: str, thinking: ThinkingMode) -> str:
+        if self.provider == "anthropic":
+            return _anthropic_effort_policy(model, thinking)
+        return _deepseek_anthropic_effort_policy(model, thinking)
+
+
+def anthropic_thinking_profile(provider: str) -> AnthropicThinkingProfile:
+    """The one decision seam: pick an Anthropic Messages thinking profile.
+
+    Native Anthropic keeps its Claude-specific adaptive/budget thinking and its
+    required thinking-block reconstruction. Every other Anthropic Messages
+    provider (DeepSeek) uses its native thinking over the Anthropic transport
+    and must not reconstruct thinking blocks from reasoning the api view
+    deliberately omitted.
+    """
+    if provider == "anthropic":
+        return AnthropicThinkingProfile(provider=provider, reconstruct_thinking=True)
+    return AnthropicThinkingProfile(provider=provider, reconstruct_thinking=False)
+
+
 def _iter_anthropic_sse(response: httpx.Response) -> Iterator[dict[str, Any]]:
     data_lines: list[str] = []
     for line in response.iter_lines():
@@ -255,12 +376,17 @@ def _stream_anthropic(
     cancel_event: threading.Event | None,
     temperature: float,
     require_tool_call: bool = False,
+    provider: str = "anthropic",
+    requires_reasoning_replay: bool = True,
 ) -> Iterator[Event]:
-    system, anthropic_messages = _to_anthropic_messages(messages)
+    profile = anthropic_thinking_profile(provider)
+    system, anthropic_messages = _to_anthropic_messages(
+        messages, reconstruct_thinking=profile.reconstruct_thinking
+    )
     body: dict[str, Any] = {
         "model": model,
         "messages": anthropic_messages,
-        "max_tokens": _anthropic_max_tokens(model, thinking),
+        "max_tokens": profile.max_tokens(model, thinking),
         "stream": True,
     }
     if system:
@@ -280,18 +406,21 @@ def _stream_anthropic(
     if thinking == "off":
         body["temperature"] = temperature
     else:
-        body.update(_anthropic_thinking_config(model, thinking))
+        body.update(profile.thinking_config(model, thinking))
 
     _log.info(
-        "provider_stream_start provider=anthropic model=%s thinking=%s "
-        "tool_choice=%s "
-        "reasoning_effort=%s effort_sent=%s effort_policy=%s",
+        "provider_stream_start provider=%s chat_protocol=anthropic_messages "
+        "chat_endpoint_host=%s model=%s thinking=%s replay_required=%s "
+        "tool_choice=%s reasoning_effort=%s effort_sent=%s effort_policy=%s",
+        provider,
+        urlparse(base_url).hostname,
         model,
         thinking,
+        requires_reasoning_replay,
         json.dumps(body["tool_choice"]) if "tool_choice" in body else "<none>",
         body.get("output_config", {}).get("effort", "<omitted>"),
         "output_config" in body,
-        _anthropic_effort_policy(model, thinking),
+        profile.effort_policy(model, thinking),
     )
 
     headers = {

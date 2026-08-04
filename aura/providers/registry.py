@@ -33,6 +33,9 @@ class ProviderRegistry:
                 models=raw["models"],
                 pricing=raw["pricing"],
                 kind=raw.get("kind", "api_key"),
+                chat_protocol=raw.get("chat_protocol", "openai_chat"),
+                chat_base_url=raw.get("chat_base_url"),
+                requires_reasoning_replay=raw.get("requires_reasoning_replay", True),
             )
 
     def ids(self) -> list[str]:

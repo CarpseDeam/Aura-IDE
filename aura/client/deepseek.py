@@ -4,18 +4,25 @@ Yields events; never raises. The reasoning parameters for one request come from
 :func:`aura.client.reasoning.resolve_reasoning_request`, which maps the user's
 ``off · auto · high · max`` selection onto:
 
-- DeepSeek:   extra_body={"thinking":...}, plus reasoning_effort only when the
-              user explicitly chose high/max — ``auto`` enables thinking and
-              omits reasoning_effort so DeepSeek makes its own native choice.
+- DeepSeek OpenAI-compatible chat: extra_body={"thinking":...}, plus
+  reasoning_effort only when the user explicitly chose high/max — ``auto``
+  enables thinking and omits reasoning_effort so DeepSeek makes its own native
+  choice.
 - OpenAI etc: reasoning_effort at top level for explicit high/max; omitted for
-              ``auto`` so the provider applies its documented default.
+  ``auto`` so the provider applies its documented default.
 
-Anthropic requests are handled by ``aura.client.anthropic_stream``, which uses
-the native adaptive thinking mode.
+DeepSeek production chat/tool turns do NOT use this OpenAI-compatible path
+anymore: DeepSeek's ``chat_protocol`` is ``anthropic_messages``, so the client
+routes them through ``aura.client.anthropic_stream`` over DeepSeek's
+Anthropic-compatible Messages endpoint. That transport does not require prior
+``reasoning_content`` to be replayed, so completed reasoning is shed from the
+outbound copy by the api view while canonical history keeps it exact. The
+transport is chosen from the provider's chat metadata here — never inferred
+from the provider id.
 
-Two DeepSeek thinking-mode rules are enforced here rather than trusted to
-callers, because this is the one place every DeepSeek request passes through and
-both are rejected with a 400 rather than degraded:
+Two DeepSeek OpenAI-compatible thinking-mode rules are enforced here rather than
+trusted to callers, preserved for any replay-requiring OpenAI-compatible
+transport (both are rejected with a 400 rather than degraded):
 
 - ``tool_choice="required"`` may not travel with thinking enabled, so a request
   that requires a tool call is sent as a genuine off-mode request;
@@ -151,7 +158,16 @@ class DeepSeekClient:
         cfg = get_provider(provider)
         key = api_key if api_key is not None else resolve_api_key(provider)
         self._api_key = key
+        # Ordinary API root — used for model discovery, pricing/catalog work,
+        # native Responses web search, and every non-chat path.
         self._base_url = cfg.base_url.rstrip("/")
+        # Chat transport metadata, read once here. The chat protocol decides
+        # the wire transport for chat/tool turns; the chat API root overrides
+        # ``base_url`` for chat only. Nothing else infers the protocol from the
+        # provider id.
+        self._chat_protocol = cfg.chat_protocol
+        self._chat_base_url = (cfg.chat_base_url or cfg.base_url).rstrip("/")
+        self._requires_reasoning_replay = bool(cfg.requires_reasoning_replay)
         # Use a generous timeout with read=None to avoid [WinError 10054] / ReadError
         # during long thinking/streaming sessions. The OpenAI client will manage
         # its own connection pool.
@@ -210,10 +226,16 @@ class DeepSeekClient:
         temperature: float = 0.7,
         require_tool_call: bool = False,
     ) -> Iterator[Event]:
-        if self._provider == "anthropic":
+        # Chat transport is a provider-metadata property, not a provider-name
+        # check. DeepSeek (and native Anthropic) speak Anthropic Messages;
+        # OpenAI, OpenRouter, and any other ``openai_chat`` provider fall
+        # through to the OpenAI-compatible path below. There is no silent
+        # fallback: if the Anthropic endpoint fails, the real provider error is
+        # surfaced by the adapter, never replaced with a Chat Completions retry.
+        if self._chat_protocol == "anthropic_messages":
             yield from _stream_anthropic(
                 api_key=self._api_key,
-                base_url=self._base_url,
+                base_url=self._chat_base_url,
                 messages=messages,
                 tools=tools,
                 model=model,
@@ -221,6 +243,8 @@ class DeepSeekClient:
                 cancel_event=cancel_event,
                 temperature=temperature,
                 require_tool_call=require_tool_call,
+                provider=self._provider,
+                requires_reasoning_replay=self._requires_reasoning_replay,
             )
             return
 
@@ -297,19 +321,23 @@ class DeepSeekClient:
             kwargs["temperature"] = temperature
 
         _log.info(
-            "provider_stream_start provider=%s model=%s thinking=%s "
+            "provider_stream_start provider=%s chat_protocol=%s "
+            "chat_endpoint_host=%s model=%s thinking=%s "
             "requested_thinking=%s effective_thinking=%s "
+            "replay_required=%s "
             "tool_choice=%s parallel_tool_calls=%s "
             "reasoning_effort=%s effort_sent=%s effort_policy=%s "
-            "base_url_host=%s timeout_connect=%s timeout_read=%s",
-            self._provider, model, effective_thinking,
+            "timeout_connect=%s timeout_read=%s",
+            self._provider, self._chat_protocol,
+            urlparse(self._base_url).hostname,
+            model, effective_thinking,
             thinking, effective_thinking,
+            self._requires_reasoning_replay,
             kwargs.get("tool_choice", "<none>"),
             kwargs.get("parallel_tool_calls", "<default>"),
             reasoning.reasoning_effort or "<omitted>",
             reasoning.effort_sent,
             reasoning.effort_policy,
-            urlparse(self._base_url).hostname,
             self._timeout.connect, self._timeout.read,
         )
         try:
@@ -742,6 +770,7 @@ class DeepSeekClient:
 # Backward-compat re-exports (Anthropic streaming helpers moved to their own module)
 # ---------------------------------------------------------------------------
 from aura.client.anthropic_stream import (  # noqa: E402, F401
+    AnthropicThinkingProfile,
     _anthropic_max_tokens,
     _anthropic_thinking_config,
     _finalize_anthropic_tool_call,
@@ -750,4 +779,5 @@ from aura.client.anthropic_stream import (  # noqa: E402, F401
     _stream_anthropic,
     _to_anthropic_messages,
     _to_anthropic_tools,
+    anthropic_thinking_profile,
 )
