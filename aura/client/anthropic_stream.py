@@ -485,12 +485,26 @@ def _stream_anthropic(
                         block = event.get("content_block") or {}
                         if block.get("type") == "tool_use":
                             index = int(event.get("index", 0))
+                            block_input = block.get("input")
                             tool_calls[index] = {
                                 "id": block.get("id", ""),
                                 "type": "function",
                                 "function": {
                                     "name": block.get("name", ""),
-                                    "arguments": json.dumps(block.get("input") or {}),
+                                    # The block's ``input`` at start is the
+                                    # partial JSON object parsed so far —
+                                    # ``{}`` on a streamed call, whose real
+                                    # arguments arrive as ``input_json_delta``
+                                    # fragments appended below. Seed only a
+                                    # non-empty input (a server that sends the
+                                    # full input up front); never seed "{}" or
+                                    # the fragments would be appended onto it
+                                    # and the result would not parse.
+                                    "arguments": (
+                                        json.dumps(block_input)
+                                        if block_input
+                                        else ""
+                                    ),
                                 },
                             }
                             seen_tool_starts.add(index)
