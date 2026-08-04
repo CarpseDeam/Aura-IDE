@@ -36,7 +36,6 @@ class MainWindowSignalWiring:
         w._toolbar.new_conversation_requested.connect(w._on_new_conversation)
         w._toolbar.open_conversation_requested.connect(w._on_open_conversation)
         w._toolbar.read_only_toggled.connect(w._on_read_only_toggled)
-        w._toolbar.auto_dispatch_toggled.connect(w._settings_controller.on_auto_dispatch_toggled)
         w._toolbar.auto_approve_toggled.connect(w._settings_controller.on_auto_approve_toggled)
         w._toolbar.auto_summon_drones_toggled.connect(w._settings_controller.on_auto_summon_drones_toggled)
         w._toolbar.update_requested.connect(w._on_open_update)
@@ -52,8 +51,6 @@ class MainWindowSignalWiring:
         w._left_pane.new_project_requested.connect(w._workspace_controller.on_create_new_project)
         w._left_pane.planner_model_changed.connect(lambda: w._refresh_status_bar())
         w._left_pane.planner_thinking_changed.connect(lambda: w._refresh_status_bar())
-        w._left_pane.worker_model_changed.connect(w._on_sidebar_worker_model_changed)
-        w._left_pane.worker_thinking_changed.connect(w._on_sidebar_worker_thinking_changed)
         w._left_pane.drone_selected.connect(lambda folder: w._drone_controller.on_drone_folder_selected(folder.name))
         w._left_pane.new_drone_requested.connect(w._drone_controller.on_create_drone)
 

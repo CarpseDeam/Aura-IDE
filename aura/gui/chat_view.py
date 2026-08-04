@@ -18,20 +18,14 @@ from aura.conversation.chat_transcript import (
     error_item,
     planner_item,
     user_item,
-    worker_complete_item,
 )
 from aura.gui.cards._helpers import _fade_in_widget
 from aura.gui.cards.assistant_card import AssistantCard
 from aura.gui.cards.code_writer_card import CodeWriterCard
 from aura.gui.cards.diff_card import DiffCard
 from aura.gui.cards.error_card import ErrorCard
-from aura.gui.cards.mismatch_resolution_card import MismatchResolutionCard
-from aura.gui.cards.plan_writer_card import PlanWriterCard
-from aura.gui.cards.spec_card import SpecCard
 from aura.gui.cards.terminal_card import TerminalCard
 from aura.gui.cards.user_card import UserCard
-from aura.gui.cards.work_artifact_card import WorkArtifactCard
-from aura.gui.cards.worker_summary_card import WorkerSummaryCard
 from aura.gui.controllers import ToolStreamController
 from aura.gui.theme import (
     ACCENT,
@@ -39,49 +33,6 @@ from aura.gui.theme import (
     FG_ITALIC,
 )
 from aura.gui.widgets.aura_glow import AuraWidget
-
-_DISPATCH_COMPLETE_STATUSES = {"completed", "completed_with_caveats"}
-
-
-def _is_terminal_worker_success(
-    data: dict,
-    *,
-    event_ok: bool,
-    needs_followup: bool,
-    status: str | None,
-) -> bool:
-    payload_ok = bool(data.get("ok", event_ok)) if isinstance(data, dict) else event_ok
-    return bool(
-        payload_ok
-        and not needs_followup
-    )
-
-
-def _should_close_dispatch_assistant(
-    data: dict,
-    *,
-    event_ok: bool,
-    needs_followup: bool,
-    status: str | None,
-    dispatch_not_started: bool,
-) -> bool:
-    if dispatch_not_started:
-        return True
-    if status is not None and status not in _DISPATCH_COMPLETE_STATUSES:
-        return False
-    if bool(data.get("recoverable") or data.get("phase_boundary")):
-        return False
-    extras = data.get("extras", {})
-    if not isinstance(extras, dict):
-        extras = {}
-    if (
-        extras.get("failure_constraint")
-        or extras.get("dispatch_spec_rejected")
-        or extras.get("mismatch_kind")
-        or extras.get("mismatch_question")
-    ):
-        return False
-    return False
 
 
 class ChatView(QScrollArea):
@@ -115,8 +66,6 @@ class ChatView(QScrollArea):
         self._latest_user_card: UserCard | None = None
         # Map tool_call_id -> the assistant card that owns it (for routing diff-after).
         self._tool_owner: dict[str, AssistantCard] = {}
-        # Map dispatch tool_call_id -> SpecCard.
-        self._spec_cards: dict[str, SpecCard] = {}
         # Map tool_call_id -> TerminalCard.
         self._terminal_cards: dict[str, TerminalCard] = {}
         # Map tool_call_id -> ToolStreamController.
@@ -131,15 +80,10 @@ class ChatView(QScrollArea):
         self._empty_hint: QLabel | None = None
         self._scroll_anim: QPropertyAnimation | None = None
         self._programmatic_scroll_depth = 0
-        self._plan_writer_cards: dict[str, PlanWriterCard] = {}
-        self._worker_summary_cards: dict[str, WorkerSummaryCard] = {}
-        self._artifact_cards: dict[str, WorkArtifactCard] = {}
-        self._worker_summary_disabled: bool = False
         self._chat_items: list[dict] = []
         self._record_transcript: bool = True
         self._current_assistant_transcript_parts: list[str] = []
         self._current_assistant_transcript_recorded: bool = False
-        self._mismatch_resolution_cards: dict[str, MismatchResolutionCard] = {}
         self._compact_tools: bool = False
         self._compact_tool_names: dict[str, str] = {}
         self._is_bulk_updating: bool = False
@@ -311,13 +255,9 @@ class ChatView(QScrollArea):
         self._current_aura = None
         self._latest_user_card = None
         self._tool_owner.clear()
-        self._spec_cards.clear()
-        self._plan_writer_cards.clear()
-        self._worker_summary_cards.clear()
         self._chat_items.clear()
         self._current_assistant_transcript_parts.clear()
         self._current_assistant_transcript_recorded = False
-        self._mismatch_resolution_cards.clear()
         self._terminal_cards.clear()
         self._controllers.clear()
         self._clear_code_card_routes()
@@ -437,35 +377,6 @@ class ChatView(QScrollArea):
         self._pending_code_content.clear()
         self._pending_code_results.clear()
 
-    def _remove_plan_writer_card(self, tool_call_id: str) -> None:
-        """Remove and delete the PlanWriterCard associated with *tool_call_id*."""
-        card = self._plan_writer_cards.pop(tool_call_id, None)
-        if card is None:
-            return
-        parent = card.parentWidget()
-        if parent is not None:
-            layout = parent.layout()
-            if layout is not None:
-                layout.removeWidget(card)
-        card.setParent(None)
-        card.deleteLater()
-        self._scroll_to_bottom()
-
-    def get_plan_writer_card(self, tool_call_id: str):
-        """Return the PlanWriterCard for *tool_call_id*, or None."""
-        return self._plan_writer_cards.get(tool_call_id)
-
-    def _remove_terminal_plan_cards(self) -> None:
-        """Remove any PlanWriterCard in terminal state (done/failed) to prevent
-        orphaned cards from accumulating when the planner retries."""
-        for tid, card in list(self._plan_writer_cards.items()):
-            if card._state in (PlanWriterCard.STATE_DONE, PlanWriterCard.STATE_FAILED):
-                self._remove_plan_writer_card(tid)
-
-    def prepare_spec_card(self, tool_call_id: str) -> None:
-        """Remove transient plan-writing UI before showing an active spec card."""
-        self._remove_plan_writer_card(tool_call_id)
-
     def _code_card_key(self, path: str) -> str:
         return path.strip()
 
@@ -520,15 +431,6 @@ class ChatView(QScrollArea):
             self._pending_code_results[tool_call_id] = ok
             return
         card.set_result(ok)
-
-    def _cleanup_failed_code_cards(self, tool_call_id: str) -> None:
-        """Remove any failed CodeWriterCards from the correct assistant's tool cluster."""
-        ac = self._tool_owner.get(tool_call_id)
-        if ac is None:
-            ac = self._current_assistant
-        if ac is None:
-            return
-        self._remove_failed_write_cards_from_assistant(ac)
 
     def _remove_failed_write_cards_from_assistant(self, ac: AssistantCard) -> None:
         """Remove failed CodeWriterCards from an assistant card's tool cluster.
@@ -607,46 +509,9 @@ class ChatView(QScrollArea):
         if self._current_aura is not None:
             self._current_aura.set_glow_state("coding")
 
-        if name in ("dispatch_to_worker",):
-            # Reuse existing controller if this ID was already started (uncommon but possible in replay/retry)
-            controller = self._controllers.get(tool_call_id)
-            if controller is None:
-                controller = ToolStreamController(name, parent=self)
-                self._controllers[tool_call_id] = controller
-
-            ac = self.current_assistant()
-
-            # Remove any terminal-state plan cards left from prior retries
-            self._remove_terminal_plan_cards()
-
-            # Idempotent plan card creation — if a card already exists for this
-            # tool_call_id do not create a second one or re-wire signals.
-            existing_card = self._plan_writer_cards.get(tool_call_id)
-            if existing_card is not None:
-                self._tool_owner[tool_call_id] = ac
-                if not ac._tool_cluster.isVisible():
-                    ac._tool_cluster.setVisible(True)
-                self._scroll_to_bottom()
-                return
-
-            card = PlanWriterCard(parent=self)
-            self._plan_writer_cards[tool_call_id] = card
-            if not ac._tool_cluster.isVisible():
-                ac._tool_cluster.setVisible(True)
-            ac._tool_cluster_layout.addWidget(card)
-            self._tool_owner[tool_call_id] = ac
-
-            # Wire plan writer signals
-            controller.goal_updated.connect(card.set_goal)
-            controller.content_updated.connect(card.update_spec)
-            controller.state_changed.connect(lambda s: card.set_result(s == "done"))
-            controller.result_finalized_text.connect(
-                lambda text, c=controller, card=card: card.set_result(c._state == "done", text)
-            )
-        else:
-            ac = self.current_assistant()
-            ac.notify_compact_tool_start(name)
-            self._compact_tool_names[tool_call_id] = name
+        ac = self.current_assistant()
+        ac.notify_compact_tool_start(name)
+        self._compact_tool_names[tool_call_id] = name
 
         self._scroll_to_bottom()
 
@@ -667,84 +532,9 @@ class ChatView(QScrollArea):
 
         controller = self._controllers.pop(tool_call_id, None)
         if controller:
-            if controller.tool_name == "dispatch_to_worker":
-                needs_followup = False
-                status = None
-                dispatch_not_started = False
-                approval_timeout = False
-                cancelled = False
-                should_close_for_continuation = False
-                try:
-                    data = json.loads(result_text)
-                    extras = data.get("extras", {})
-                    if not isinstance(extras, dict):
-                        extras = {}
-                    dispatch_not_started = bool(
-                        data.get("dispatch_not_started")
-                        or data.get("dispatch_spec_rejected")
-                        or extras.get("dispatch_not_started")
-                        or extras.get("dispatch_spec_rejected")
-                    )
-                    if dispatch_not_started:
-                        approval_timeout = extras.get("dispatch_approval_timeout", False)
-                        cancelled = extras.get("dispatch_cancelled", False)
-                    else:
-                        needs_followup = bool(data.get("needs_followup", False))
-                        status = data.get("status")
-                    if _is_terminal_worker_success(
-                        data,
-                        event_ok=ok,
-                        needs_followup=needs_followup,
-                        status=status,
-                    ):
-                        for key in (
-                            "mismatch_kind",
-                            "mismatch_question",
-                            "failure_constraint",
-                            "dispatch_spec_rejected",
-                        ):
-                            extras.pop(key, None)
-                    should_close_for_continuation = _should_close_dispatch_assistant(
-                        data,
-                        event_ok=ok,
-                        needs_followup=needs_followup,
-                        status=status,
-                        dispatch_not_started=dispatch_not_started,
-                    )
-                except Exception:
-                    pass
-
-                # Finalize controller FIRST (updates planner/spec UI above)
-                controller.finalize(ok, result_text)
-
-                # THEN update spec card for not-started scenarios (stale/cancelled/expired).
-                # Completed dispatches get one deduped final summary card so
-                # live UI and persisted replay show the same terminal state.
-                if dispatch_not_started:
-                    spec_card = self.get_spec_card(tool_call_id)
-                    if spec_card:
-                        if approval_timeout:
-                            spec_card.mark_dispatch_expired()
-                        elif cancelled:
-                            spec_card.mark_cancelled()
-                        else:
-                            spec_card.mark_stale()
-
-                # Clean up any stale CodeWriterCards left in the tool cluster.
-                # Worker write events go to the playground, not the main chat.
-                # If a CodeWriterCard somehow ended up in the tool cluster in
-                # Failed state, remove it so it doesn't appear as the final item.
-                self._cleanup_failed_code_cards(tool_call_id)
-
-                # Close only for terminal dispatch states. Recoverable Worker
-                # failures continue in the existing assistant surface.
-                if should_close_for_continuation:
-                    self.close_current_assistant_for_continuation()
-
-            else:
-                controller.finalize(ok, result_text)
-                if controller.tool_name == "run_terminal_command" or controller.tool_name == "run_and_watch":
-                    self._terminal_cards.pop(tool_call_id, None)
+            controller.finalize(ok, result_text)
+            if controller.tool_name == "run_terminal_command" or controller.tool_name == "run_and_watch":
+                self._terminal_cards.pop(tool_call_id, None)
 
             self._scroll_to_bottom()
 
@@ -833,18 +623,6 @@ class ChatView(QScrollArea):
         if self._current_aura is not None:
             self._current_aura.stop_aura()
 
-    def hold_aura_coding(self) -> None:
-        """Keep the current aura alive in coding state (for dispatch transitions)."""
-        if self._current_aura is not None:
-            self._current_aura.set_glow_state("coding")
-
-    def begin_planner_resolution_aura(self) -> None:
-        """Start or restart the Planner resolution aura (thinking glow)."""
-        if self._current_aura is not None:
-            self._current_aura.set_glow_state("thinking")
-        else:
-            self.begin_assistant()
-
     def assistant_done(self) -> None:
         ac = self._current_assistant
         if ac is None:
@@ -880,178 +658,6 @@ class ChatView(QScrollArea):
             ac.finalize_content()
             self._scroll_to_bottom()
 
-    def close_current_assistant_for_continuation(self) -> None:
-        """Finalize the current assistant turn so the next Planner
-        continuation opens a fresh card instead of appending to the
-        existing dispatch/assistant card.
-        """
-        if self._current_assistant is None:
-            return
-        self._record_current_assistant_transcript()
-        # Finalize current assistant content
-        self._current_assistant.finalize_content()
-        # Remove failed write cards from that assistant
-        self._remove_failed_write_cards_from_assistant(self._current_assistant)
-        # Stop the current Aura glow if present
-        if self._current_aura is not None:
-            self._current_aura.stop_aura()
-        # Clear references so current_assistant() creates a new card
-        self._current_assistant = None
-        self._current_aura = None
-        # Do NOT delete the existing card — it stays visible
-        # Do NOT clear _tool_owner, _spec_cards, _controllers, or worker summary maps
-
-    # ---- spec card / worker dispatch ------------------------------------
-
-    def add_spec_card(
-        self,
-        tool_call_id: str,
-        goal: str,
-        files: list[str],
-        spec: str,
-        acceptance: str,
-        summary: str = "",
-    ) -> SpecCard:
-        # Remove the in-flight plan writer card for this call ID (baton pass).
-        self._remove_plan_writer_card(tool_call_id)
-
-        existing = self._spec_cards.get(tool_call_id)
-        if existing is not None:
-            existing.update_spec(goal, files, spec, acceptance, summary)
-            self._scroll_after_bottom_layout_change()
-            return existing
-        card = SpecCard(
-            tool_call_id,
-            goal,
-            files,
-            spec,
-            acceptance,
-            summary=summary,
-            parent=self,
-        )
-        ac = self.current_assistant()
-        ac.add_footer_widget(card)
-        self._spec_cards[tool_call_id] = card
-        self._scroll_after_bottom_layout_change()
-        return card
-
-    def remap_spec_card(self, old_id: str, new_id: str) -> None:
-        """Re-map a spec card from old_id to new_id without removing it.
-
-        Used during internal dispatch continuation so the existing visible
-        card is preserved across retries with different tool_call_ids.
-        """
-        card = self._spec_cards.pop(old_id, None)
-        if card is not None:
-            self._spec_cards[new_id] = card
-
-    def get_spec_card(self, tool_call_id: str) -> SpecCard | None:
-        return self._spec_cards.get(tool_call_id)
-
-    def remove_spec_card(self, tool_call_id: str) -> None:
-        card = self._spec_cards.pop(tool_call_id, None)
-        if card is None:
-            return
-        parent = card.parentWidget()
-        if parent is not None:
-            layout = parent.layout()
-            if layout is not None:
-                layout.removeWidget(card)
-        card.setParent(None)
-        card.deleteLater()
-        self._scroll_after_bottom_layout_change()
-
-    # ── artifact card ─────────────────────────────────────────────────
-
-    def add_or_update_artifact_card(self, projection) -> WorkArtifactCard | None:
-        """Create or update a WorkArtifactCard from a projection.  Returns the card."""
-        from aura.work_artifact.projection import WorkArtifactProjection
-
-        if not isinstance(projection, WorkArtifactProjection):
-            return None
-        tool_call_id = projection.artifact_id
-        existing = self._artifact_cards.get(tool_call_id)
-        if existing is not None:
-            existing.update_projection(projection)
-            self._scroll_after_bottom_layout_change()
-            return existing
-
-        card = WorkArtifactCard(projection, parent=self)
-        self._artifact_cards[tool_call_id] = card
-        self._add_card(card)
-        return card
-
-    def get_artifact_card(self, tool_call_id: str) -> WorkArtifactCard | None:
-        """Return the WorkArtifactCard for *tool_call_id*, or None."""
-        return self._artifact_cards.get(tool_call_id)
-
-    def remove_artifact_card(self, tool_call_id: str) -> None:
-        """Remove and delete the WorkArtifactCard for *tool_call_id*."""
-        card = self._artifact_cards.pop(tool_call_id, None)
-        if card is None:
-            return
-        parent = card.parentWidget()
-        if parent is not None:
-            layout = parent.layout()
-            if layout is not None:
-                layout.removeWidget(card)
-        card.setParent(None)
-        card.deleteLater()
-
-    @property
-    def worker_summary_disabled(self) -> bool:
-        return self._worker_summary_disabled
-
-    @worker_summary_disabled.setter
-    def worker_summary_disabled(self, value: bool) -> None:
-        self._worker_summary_disabled = value
-
-    def add_worker_summary(
-        self, tool_call_id: str, goal: str, ok: bool, summary: str,
-        needs_followup: bool = False, status: str | None = None,
-        is_internal: bool = False,
-        visible: bool = False,
-        persist: bool = True,
-    ) -> None:
-        """Record a worker completion, creating visible UI only when explicit."""
-        if self._worker_summary_disabled:
-            self._remove_plan_writer_card(tool_call_id)
-            return
-        self._remove_plan_writer_card(tool_call_id)
-        if self._record_transcript and persist:
-            self._chat_items.append(
-                worker_complete_item(
-                    tool_call_id=tool_call_id,
-                    goal=goal,
-                    summary=summary,
-                    status=status,
-                    ok=ok,
-                    needs_followup=needs_followup,
-                )
-            )
-        if not visible:
-            return
-        existing = self._worker_summary_cards.get(tool_call_id)
-        if existing is not None:
-            existing.update_summary(
-                goal,
-                ok,
-                summary,
-                needs_followup=needs_followup,
-                status=status,
-                is_internal=is_internal,
-            )
-            self._scroll_after_bottom_layout_change()
-            return
-        card = WorkerSummaryCard(
-            tool_call_id, goal, ok, summary,
-            needs_followup=needs_followup, parent=self,
-            status=status,
-            is_internal=is_internal,
-        )
-        self._worker_summary_cards[tool_call_id] = card
-        self._add_card(card)
-
     def _record_current_assistant_transcript(self) -> None:
         if not self._record_transcript:
             return
@@ -1062,23 +668,3 @@ class ChatView(QScrollArea):
             return
         self._chat_items.append(planner_item(text))
         self._current_assistant_transcript_recorded = True
-
-    def add_mismatch_resolution_card(
-        self, tool_call_id: str, kind: str = "", question: str = "",
-        is_internal: bool = False,
-    ) -> MismatchResolutionCard:
-        """Add or update a mismatch resolution card for the given tool call."""
-        existing = self._mismatch_resolution_cards.get(tool_call_id)
-        if existing is not None:
-            existing.update_mismatch(kind, question)
-            return existing
-        card = MismatchResolutionCard(tool_call_id, kind, question, parent=self, is_internal=is_internal)
-        self._mismatch_resolution_cards[tool_call_id] = card
-        self._add_card(card)
-        return card
-
-    def mark_mismatch_resolved(self, tool_call_id: str) -> None:
-        """Mark a mismatch resolution card as resolved."""
-        card = self._mismatch_resolution_cards.get(tool_call_id)
-        if card is not None:
-            card.mark_resolved()

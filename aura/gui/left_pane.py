@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
 
 from aura.config import (
     DEFAULT_PLANNER_THINKING,
-    DEFAULT_WORKER_THINKING,
     ModelInfo,
     ProviderId,
     ThinkingMode,
@@ -321,8 +320,6 @@ class LeftPane(QFrame):
     new_project_requested = Signal()
     planner_model_changed = Signal(str)
     planner_thinking_changed = Signal(str)
-    worker_model_changed = Signal(str)
-    worker_thinking_changed = Signal(str)
     drone_selected = Signal(Path)
     new_drone_requested = Signal()
 
@@ -429,41 +426,7 @@ class LeftPane(QFrame):
         planner_think_row.addWidget(self._planner_thinking_combo, 1)
         footer_layout.addLayout(planner_think_row)
 
-        # Legacy Worker model/thinking controls. Normal coding runs one
-        # production model, so these stay constructed (persistence and old
-        # conversation records still reference them) but are never shown.
-        worker_model_row = QHBoxLayout()
-        worker_model_row.setSpacing(4)
-        self._worker_model_label = QLabel("Worker:")
-        self._worker_model_label.setStyleSheet(f"color: {FG_DIM};")
-        worker_model_row.addWidget(self._worker_model_label)
-        self._worker_model_combo = NoWheelComboBox()
-        self._worker_model_combo.currentIndexChanged.connect(
-            lambda: self.worker_model_changed.emit(self.current_worker_model())
-        )
-        worker_model_row.addWidget(self._worker_model_combo, 1)
-        footer_layout.addLayout(worker_model_row)
-
-        # Worker thinking
-        worker_think_row = QHBoxLayout()
-        worker_think_row.setSpacing(4)
-        self._worker_thinking_label = QLabel("Thinking:")
-        self._worker_thinking_label.setStyleSheet(f"color: {FG_DIM};")
-        worker_think_row.addWidget(self._worker_thinking_label)
-        self._worker_thinking_combo = NoWheelComboBox()
-        _populate_thinking_combo(self._worker_thinking_combo)
-        _select_thinking(self._worker_thinking_combo, DEFAULT_WORKER_THINKING)
-        self._worker_thinking_combo.currentIndexChanged.connect(
-            lambda: self.worker_thinking_changed.emit(self.current_worker_thinking())
-        )
-        worker_think_row.addWidget(self._worker_thinking_combo, 1)
-        footer_layout.addLayout(worker_think_row)
-
         layout.addWidget(self._model_config_footer)
-
-        # Production single-agent mode is the normal product: hide the legacy
-        # Worker role controls.
-        self.set_planner_worker_mode(False)
 
         self.update_workspace_label(workspace_root)
 
@@ -489,37 +452,20 @@ class LeftPane(QFrame):
 
     def populate_models(
         self,
-        planner_provider: ProviderId,
-        worker_provider: ProviderId | None = None,
+        provider: ProviderId,
     ) -> None:
-        """Populate the production model list (and the hidden legacy worker list)."""
-        if worker_provider is None:
-            worker_provider = planner_provider
-        # Production
+        """Populate the production model list."""
         self._planner_model_combo.blockSignals(True)
         self._planner_model_combo.clear()
-        for mid, info in _models_with_default(planner_provider).items():
+        for mid, info in _models_with_default(provider).items():
             self._planner_model_combo.addItem(info.label, mid)
         self._planner_model_combo.blockSignals(False)
-
-        # Worker
-        self._worker_model_combo.blockSignals(True)
-        self._worker_model_combo.clear()
-        for mid, info in _models_with_default(worker_provider).items():
-            self._worker_model_combo.addItem(info.label, mid)
-        self._worker_model_combo.blockSignals(False)
 
     def current_planner_model(self) -> str:
         return self._planner_model_combo.currentData()
 
     def current_planner_thinking(self) -> ThinkingMode:
         return self._planner_thinking_combo.currentData()
-
-    def current_worker_model(self) -> str:
-        return self._worker_model_combo.currentData()
-
-    def current_worker_thinking(self) -> ThinkingMode:
-        return self._worker_thinking_combo.currentData()
 
     def set_planner_model(self, model: str) -> None:
         idx = self._planner_model_combo.findData(model)
@@ -528,20 +474,6 @@ class LeftPane(QFrame):
 
     def set_planner_thinking(self, thinking: ThinkingMode) -> None:
         _select_thinking(self._planner_thinking_combo, thinking)
-
-    def set_worker_model(self, model: str) -> None:
-        idx = self._worker_model_combo.findData(model)
-        if idx >= 0:
-            self._worker_model_combo.setCurrentIndex(idx)
-
-    def set_worker_thinking(self, thinking: ThinkingMode) -> None:
-        _select_thinking(self._worker_thinking_combo, thinking)
-
-    def set_planner_worker_mode(self, enabled: bool) -> None:
-        self._worker_model_label.setVisible(enabled)
-        self._worker_model_combo.setVisible(enabled)
-        self._worker_thinking_label.setVisible(enabled)
-        self._worker_thinking_combo.setVisible(enabled)
 
     def _clear_projects_layout(self) -> None:
         while self._projects_layout.count():

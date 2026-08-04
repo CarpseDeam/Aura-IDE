@@ -6,7 +6,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from aura.conversation.dispatch import WorkerDispatchResult
 from aura.conversation.tool_limits import WRITE_TOOLS
 
 COMPLETION_PHRASE_MARKERS = (
@@ -124,18 +123,3 @@ def text_overlap_ratio(left: str, right: str) -> float:
     if not left_words or not right_words:
         return 0.0
     return len(left_words & right_words) / max(len(left_words), len(right_words))
-
-
-def worker_dispatch_is_terminal(result: WorkerDispatchResult | None) -> bool:
-    """Return True if the Worker dispatch result is terminal — the Planner should not continue.
-
-    A dispatch result ends the campaign unless it is a genuine phase-boundary
-    checkpoint.
-    """
-    if result is None:
-        return False
-
-    if result.phase_boundary:
-        return False
-
-    return True

@@ -269,7 +269,6 @@ class SendHandler(QObject):
         self._bridge.send(
             model=model,
             thinking=thinking,
-            max_tool_rounds=self._settings.max_tool_rounds,
             route=route,
         )
         return True
@@ -537,7 +536,6 @@ class SendHandler(QObject):
         self._bridge.send(
             model=model,
             thinking=thinking,
-            max_tool_rounds=self._settings.max_tool_rounds,
             route=route,
         )
 

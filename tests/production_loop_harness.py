@@ -266,7 +266,6 @@ def run(
     *,
     route: TaskRoute | None = IMPLEMENTATION_ROUTE,
     approval_cb=approve_all,
-    max_tool_rounds: int = 20,
     thinking: str = SELECTED_THINKING,
 ) -> None:
     manager.send(
@@ -275,8 +274,6 @@ def run(
         cancel_event=threading.Event(),
         model="scripted-production-model",
         thinking=thinking,
-        hook_name=PRODUCTION_STREAM_HOOK,
-        max_tool_rounds=max_tool_rounds,
         task_route=route,
     )
 

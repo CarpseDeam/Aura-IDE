@@ -5,9 +5,6 @@ from aura.conversation.tools._types import (
     RegistryMode,
     ToolExecResult,
 )
-from aura.conversation.tools._schemas import (
-    DISPATCH_TOOL_DEF,
-)
 
 
 def __getattr__(name: str):
@@ -23,5 +20,4 @@ __all__ = [
     "ApprovalRequest",
     "RegistryMode",
     "ToolExecResult",
-    "DISPATCH_TOOL_DEF",
 ]

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from typing import Any
 
 from PySide6.QtCore import QObject, Signal
@@ -16,10 +15,6 @@ class ToolStreamController(QObject):
 
     # Emitted once when "path" is found in partial or full JSON
     path_resolved = Signal(str)
-    # Emitted whenever "goal" is found or grows (streaming)
-    goal_updated = Signal(str)
-    # Emitted once when "goal" is found (for dispatch_to_worker)
-    goal_resolved = Signal(str)
     # Emitted once when "command" is found (for run_terminal_command)
     command_resolved = Signal(str)
     # Emitted whenever the "content" or "new_str" field grows
@@ -38,11 +33,8 @@ class ToolStreamController(QObject):
         self._tool_name = tool_name
         self._buffer = ""
         self._path: str | None = None
-        self._goal: str | None = None
         self._command: str | None = None
         self._last_content: str = ""
-        self._last_goal_stream: str = ""
-        self._last_content_emit_time: float = 0.0
         self._state = "running"
 
         # Regex for early extraction from partial JSON
@@ -52,10 +44,6 @@ class ToolStreamController(QObject):
     @property
     def tool_name(self) -> str:
         return self._tool_name
-
-    @property
-    def goal(self) -> str | None:
-        return self._goal
 
     @property
     def buffer(self) -> str:
@@ -94,13 +82,6 @@ class ToolStreamController(QObject):
                 self._path = path
                 self.path_resolved.emit(path)
 
-            # Update goal if we haven't already
-            goal = parsed.get("goal")
-            if goal and goal != self._goal:
-                self._goal = goal
-                self.goal_resolved.emit(goal)
-                self.goal_updated.emit(goal)
-
             # Update command if we haven't already
             cmd = parsed.get("command")
             if cmd and cmd != self._command:
@@ -131,28 +112,12 @@ class ToolStreamController(QObject):
                     )
             elif self._tool_name == "edit_symbol":
                 content = parsed.get("new_definition", "") or parsed.get("content", "")
-            elif self._tool_name == "dispatch_to_worker":
-                content = parsed.get("spec", "") or parsed.get("content", "")
             if content and content != self._last_content:
                 self._last_content = content
-                if self._tool_name == "dispatch_to_worker":
-                    now = time.monotonic()
-                    if now - self._last_content_emit_time >= 0.08:
-                        self._last_content_emit_time = now
-                        self.content_updated.emit(content)
-                else:
-                    self.content_updated.emit(content)
+                self.content_updated.emit(content)
         except json.JSONDecodeError:
             # Buffer is still incomplete JSON — emit raw buffer for now
             self.args_updated.emit(self._buffer)
-            
-            # Streaming goal updates (for dispatch_to_worker)
-            if self._goal is None:
-                goal_key = "goal"
-                goal = self._extract_partial_string(goal_key)
-                if goal and goal != self._last_goal_stream:
-                    self._last_goal_stream = goal
-                    self.goal_updated.emit(goal)
 
             # Fallback extraction for streaming content
             key = None
@@ -166,19 +131,11 @@ class ToolStreamController(QObject):
                 key = "new_definition"
             elif self._tool_name == "edit_symbol":
                 key = "new_definition"
-            elif self._tool_name == "dispatch_to_worker":
-                key = "spec"
             if key:
                 content = self._extract_partial_string(key)
                 if content is not None and content != self._last_content:
                     self._last_content = content
-                    if self._tool_name == "dispatch_to_worker":
-                        now = time.monotonic()
-                        if now - self._last_content_emit_time >= 0.08:
-                            self._last_content_emit_time = now
-                            self.content_updated.emit(content)
-                    else:
-                        self.content_updated.emit(content)
+                    self.content_updated.emit(content)
 
     def _extract_partial_string(self, key: str) -> str | None:
         """Surgically extract a JSON string value from the buffer, handling escapes."""

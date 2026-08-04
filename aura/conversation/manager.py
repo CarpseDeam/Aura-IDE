@@ -7,11 +7,10 @@ Cancellation: a threading.Event the GUI sets when Stop is clicked. We check
 it between rounds and propagate it into client.stream() so the OpenAI iterator
 short-circuits mid-chunk.
 
-Roles: a manager instance is either a planner, a worker, or "single" (legacy
-single-model chat). The role is implicit in the ToolRegistry's mode plus the
-History's system prompt — the manager itself only branches when it sees a
-`dispatch_to_worker` tool call: that path is intercepted and routed through
-the supplied DispatchCallback rather than the registry.
+Production SINGLE is the only role: one continuous model owns the whole turn.
+The loop has one shape — model response, append the complete assistant
+response, execute every emitted tool call, append every paired result, then
+continue or finish truthfully. There is no role router inside the loop.
 """
 from __future__ import annotations
 
@@ -35,18 +34,12 @@ from aura.client import (
     ToolCallStart,
     ToolResult,
     Usage,
-    WorkerDispatchRequested,
 )
 from aura.config import ModelId, ThinkingMode
 from aura.context_gearbox.models import RuntimeRole
 from aura.conversation.completion_guard import (
     assistant_message_text,
     is_repetitive_completion_final,
-)
-from aura.conversation.dispatch import (
-    DispatchCallback,
-    WorkerDispatchRequest,
-    WorkerDispatchResult,
 )
 from aura.conversation._report_tools import (
     REPORT_ALREADY_SATISFIED,
@@ -55,9 +48,7 @@ from aura.conversation._report_tools import (
 from aura.conversation.history import History
 from aura.conversation.manager_send_state import _SendState
 from aura.conversation.manager_tool_round import ToolRoundRunner
-from aura.conversation.planner_dispatch_gate import maybe_force_worker_dispatch
 from aura.conversation.planner_refresh import PlannerRefreshState
-from aura.conversation.planner_stream_hygiene import PlannerStreamHygiene
 from aura.conversation.stream_event_router import StreamEventRouter
 from aura.conversation.task_router import (
     TaskRoute,
@@ -72,30 +63,21 @@ from aura.conversation.tools._types import (
     ApprovalRequest,
 )
 from aura.conversation.tools.registry import ToolRegistry
-from aura.conversation.worker_finalization_gate import (
-    handle_worker_candidate_finalization,
-)
-from aura.conversation.worker_finish import (
-    build_worker_unrecoverable_message,
-)
-from aura.conversation.workflow_state import WorkflowStatus
 from aura.events import EventBus
 from aura.lifecycle import LifecycleHooks
 from aura.model_streams import PRODUCTION_STREAM_HOOK, model_streams
 from aura.research.policy import NO_RESEARCH, decide_research_policy
 from aura.skills.turn_state import SkillTurnState
-from aura.work_artifact.model import ValidationCommandSpec
+from aura.conversation.validation_orchestrator import ValidationCommandSpec
 
 EventCallback = Callable[[Event], None]
 
+_PRODUCTION_STREAM_LABEL = "production_stream"
+
 
 def _stream_log_label(hook_name: str) -> str:
-    """Return a short log label for the active model-generation hook."""
-    if "planner" in hook_name:
-        return "planner_stream"
-    if "worker" in hook_name:
-        return "worker_stream"
-    return "production_stream"
+    """Return the log label for the active model-generation hook."""
+    return _PRODUCTION_STREAM_LABEL
 
 
 def _blocker_reason_from_call(full_message: dict[str, Any]) -> str:
@@ -344,7 +326,7 @@ class ConversationManager:
 
         This is the canonical configuration call for the production
         single-agent path.  Mid-turn context refreshes recompose against
-        *role* and this turn's terrain, so nothing Planner-specific leaks into
+        *role* and this turn's terrain, so nothing role-specific leaks into
         production execution and the turn's skills are not dropped mid-run.
         """
         self._planner_refresh.configure(
@@ -357,26 +339,13 @@ class ConversationManager:
             target_files=target_files,
         )
 
-    def configure_for_planner(self, base_prompt: str, workspace_root: Path) -> None:
-        """Compatibility alias for the historical Planner path."""
-        self.configure_runtime_context(
-            base_prompt, workspace_root, RuntimeRole.PLANNER
-        )
-
     def send(        self,
         on_event: EventCallback,
         approval_cb: ApprovalCallback,
         cancel_event: threading.Event,
         model: ModelId,
         thinking: ThinkingMode,
-        dispatch_cb: DispatchCallback | None = None,
-        workflow_state_cb: Callable[[str, str, str, WorkflowStatus], None] | None = None,
-        worker_dispatch_request: WorkerDispatchRequest | None = None,
-        dispatch_tool_call_id: str = "",
-        loaded_target_files: list[str] | None = None,
         temperature: float = 0.7,
-        max_tool_rounds: int | None = None,
-        hook_name: str = PRODUCTION_STREAM_HOOK,
         explicit_validation_commands: list[ValidationCommandSpec] | None = None,
         declared_run_command: str | None = None,
         task_route: TaskRoute | None = None,
@@ -404,27 +373,17 @@ class ConversationManager:
         the turn performed N model rounds, read N files, inspected N times,
         consumed N tokens, or spent N seconds.  It ends when the work is done,
         when a structured blocker or already-satisfied result succeeds, when the
-        user cancels, or when the provider genuinely fails.  ``max_tool_rounds``
-        is honoured only by the legacy Planner/Worker compatibility path.
-
-        `dispatch_cb` is required when the registry is in "planner" mode (the
-        only mode that exposes the `dispatch_to_worker` tool). If the tool is
-        called and `dispatch_cb` is None, the call returns an error result so
-        the planner can recover rather than blocking forever.
+        user cancels, or when the provider genuinely fails.
 
         `task_route` is the deterministic ``TaskRoute`` the send layer already
         selected for this turn. It is read, never recomputed; the completion
         contract reads it to know whether the turn owed a production action.
 
-        `hook_name` controls which hook to trigger for model generation.
-        Normal production coding uses `generate_production_code` (the default).
-        The historical Planner/Worker dispatch path uses
-        `generate_planner_code` / `generate_worker_code`; those remain as
-        unreachable compatibility scaffolding.
+        ``hook_name`` is always the production hook: model generation uses
+        ``generate_production_code`` exclusively.
         """
-        mode = getattr(self._tools, "mode", "single")
         latest_user_text = _latest_user_text(self._history)
-        if task_route is None and mode == "single":
+        if task_route is None:
             # A production send with no route is not an unbounded turn. The
             # completion contract reads the route, so a caller that omits one
             # would silently change which turns owe a production action — the
@@ -440,7 +399,7 @@ class ConversationManager:
                 task_route.action,
             )
         state = _SendState(
-            mode=mode,
+            mode="single",
             research_policy=decide_research_policy(latest_user_text),
             task_route=task_route,
             tool_effect=self._tools.tool_effect,
@@ -451,10 +410,9 @@ class ConversationManager:
         # every round of the turn sees the identical catalog and the provider's
         # cached request prefix survives. A turn that needs no external facts
         # never sees the tool at all.
-        if state.mode == "single":
-            self._tools.set_web_search_enabled(
-                getattr(state.research_policy, "route", NO_RESEARCH) != NO_RESEARCH
-            )
+        self._tools.set_web_search_enabled(
+            getattr(state.research_policy, "route", NO_RESEARCH) != NO_RESEARCH
+        )
         # Freeze this real user turn's skill candidates once, so load_skills
         # resolves against the same deterministic selection that produced the
         # initial skill index — never a recomputation per round.
@@ -473,35 +431,15 @@ class ConversationManager:
             not state.read_only
             and route_bears_production_action(state.task_route)
         )
-        if state.mode == "worker":
-            state.loaded_target_files = list(loaded_target_files or [])
-            if worker_dispatch_request is not None:
-                state.dispatched_target_files = list(worker_dispatch_request.files)
-                state.worker_artifact_id = str(worker_dispatch_request.artifact_id or "")
-                state.worker_artifact_item_id = str(worker_dispatch_request.artifact_item_id or "")
 
         while True:
             if (
-                state.mode in {"planner", "single"}
-                and state.task_completion_context
+                state.task_completion_context
                 and state.final_messages_after_completion >= 1
             ):
                 return
 
             state.rounds_used += 1
-            if (
-                state.mode != "single"
-                and max_tool_rounds is not None
-                and state.rounds_used > max_tool_rounds
-            ):
-                # Legacy Planner/Worker compatibility only. Production SINGLE
-                # never ends a live implementation task on a round count: a
-                # turn ends on an outcome, not on arithmetic.
-                _log.info(
-                    "legacy_round_ceiling_stop mode=%s rounds_used=%d",
-                    state.mode, state.rounds_used,
-                )
-                return
 
             state.limits.begin_model_round()
             if cancel_event.is_set():
@@ -519,28 +457,18 @@ class ConversationManager:
             tool_defs = self._tools.tool_defs()
             round_thinking: ThinkingMode = thinking
 
-            if state.stream_buffer is not None:
-                state.stream_buffer.begin_round()
             if state.content_gate is not None:
                 state.content_gate.begin_round()
 
-            label = _stream_log_label(hook_name)
+            label = _stream_log_label(PRODUCTION_STREAM_HOOK)
             _log.info(
                 "%s_start model=%s thinking=%s hook_name=%s",
-                label, model, round_thinking, hook_name,
+                label, model, round_thinking, PRODUCTION_STREAM_HOOK,
             )
             _first_event = True
-            planner_hygiene = (
-                PlannerStreamHygiene()
-                if state.mode == "planner" and "planner" in hook_name
-                else None
-            )
 
             router = StreamEventRouter(
-                planner_hygiene=planner_hygiene,
                 on_event=on_event,
-                mode=state.mode,
-                stream_buffer=state.stream_buffer,
                 content_gate=state.content_gate,
             )
 
@@ -552,7 +480,7 @@ class ConversationManager:
             request_messages = self._history.for_api()
 
             for ev in model_streams.trigger(
-                hook_name,
+                PRODUCTION_STREAM_HOOK,
                 messages=request_messages,
                 tools=tool_defs,
                 model=model,
@@ -615,11 +543,8 @@ class ConversationManager:
 
             tool_calls = full_message.get("tool_calls") or []
 
-            if state.worker_flow is not None:
-                state.worker_flow.observe_assistant_message(full_message)
             if (
                 not tool_calls
-                and state.mode in {"planner", "single"}
                 and state.task_completion_context
             ):
                 content_text = assistant_message_text(full_message)
@@ -636,31 +561,8 @@ class ConversationManager:
                 return
 
             if not tool_calls:
-                if state.mode == "planner":
-                    dispatch_gate = maybe_force_worker_dispatch(
-                        latest_user_text=_latest_user_text(self._history),
-                        candidate_message=full_message,
-                        planner_tool_calls_seen=state.limits.total_calls,
-                        dispatch_calls_seen=state.limits.dispatch_calls,
-                        already_steered=state.planner_dispatch_gate_steered,
-                    )
-                    if dispatch_gate.should_continue:
-                        self._history.append_internal_user_text(
-                            dispatch_gate.steering_message
-                        )
-                        state.planner_dispatch_gate_steered = True
-                        continue
-                if state.mode == "worker":
-                    handle_worker_candidate_finalization(
-                        state=state,
-                        full_message=full_message,
-                        history=self._history,
-                        on_event=on_event,
-                    )
-                    return
                 if (
-                    state.mode == "single"
-                    and not state.read_only
+                    not state.read_only
                     and state.implementation_action_pending()
                 ):
                     if state.limits.total_calls >= MAX_TOOL_CALLS_BY_MODE["single"]:
@@ -691,8 +593,7 @@ class ConversationManager:
                 return
 
             if (
-                state.mode == "single"
-                and tool_calls
+                tool_calls
                 and state.limits.total_calls + len(tool_calls)
                 > MAX_TOOL_CALLS_BY_MODE["single"]
             ):
@@ -706,8 +607,6 @@ class ConversationManager:
                 return
 
             self._history.append_assistant(full_message)
-            if state.stream_buffer is not None:
-                state.stream_buffer.discard()
 
             tool_round = self._tool_round_runner.run(
                 tool_calls=tool_calls,
@@ -715,8 +614,6 @@ class ConversationManager:
                 on_event=on_event,
                 approval_cb=approval_cb,
                 cancel_event=cancel_event,
-                dispatch_cb=dispatch_cb,
-                workflow_state_cb=workflow_state_cb,
                 cleanup_cancelled=self._cleanup_cancelled,
                 explicit_validation_commands=explicit_validation_commands,
                 declared_run_command=declared_run_command,
@@ -760,23 +657,6 @@ class ConversationManager:
                 return
             if tool_round.action == "continue":
                 continue
-
-    def _finish_worker_unrecoverable(
-        self,
-        on_event: EventCallback,
-        *,
-        failure_class: str,
-        error: str,
-        details: dict[str, Any] | None = None,
-    ) -> None:
-        content, full_message = build_worker_unrecoverable_message(
-            failure_class=failure_class,
-            error=error,
-            details=details,
-        )
-        self._history.append_assistant(full_message)
-        on_event(ContentDelta(text=content))
-        on_event(Done(finish_reason="stop", full_message=full_message))
 
     def _terminate_single_runaway(
         self,
@@ -901,8 +781,7 @@ def _latest_user_text(history: History) -> str:
 
     Aura's own steering messages are ``role="user"`` but carry
     ``aura_internal``; letting one stand in here would decide research policy
-    and the planner dispatch gate from Aura's words rather than the user's.
-    ``History`` owns that distinction.
+    from Aura's words rather than the user's. ``History`` owns that distinction.
     """
     return history.latest_real_user_text() or ""
 
@@ -923,9 +802,5 @@ __all__ = [
     "Done",
     "ApiError",
     "ToolResult",
-    "WorkerDispatchRequested",
     "TerminalOutput",
-    "DispatchCallback",
-    "WorkerDispatchRequest",
-    "WorkerDispatchResult",
 ]

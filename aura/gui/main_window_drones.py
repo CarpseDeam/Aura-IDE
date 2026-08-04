@@ -358,14 +358,13 @@ class MainWindowDroneController(QObject):
         runner = DroneRunner(
             workspace_root=self._window._workspace_root,
             drone=run_drone,
-            provider_id=self._window._settings.worker_provider,
-            model=self._window.current_worker_model(),
+            provider_id=self._window._settings.provider,
+            model=self._window.current_model(),
             auto_approve=self._window._settings.auto_approve,
             harness_bridge=HarnessLapBridge(
                 workspace_root=self._window._workspace_root,
-                provider=self._window._settings.planner_provider or self._window._settings.worker_provider,
-                planner_provider=self._window._settings.planner_provider,
-                planner_system_prompt="",
+                provider=self._window._settings.provider,
+                system_prompt=self._window._settings.system_prompt,
             ),
             parent=None,
         )

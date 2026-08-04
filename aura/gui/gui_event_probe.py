@@ -218,11 +218,6 @@ def install_gui_event_probe(window: QWidget, bridge: QObject) -> GuiEventProbe |
     _connect_if_present(bridge, "workerActivityUpdated", probe.on_worker_activity)
     _connect_if_present(bridge, "workerTodoUpdated", probe.on_worker_todo)
     _connect_if_present(bridge, "workerUsage", probe.on_worker_usage)
-    _connect_if_present(bridge, "workflowStateChanged", lambda state: probe.mark(
-        "workflow_state_changed",
-        tool_call_id=getattr(state, "tool_call_id", ""),
-        status=str(getattr(getattr(state, "status", ""), "value", getattr(state, "status", ""))),
-    ))
     return probe
 
 

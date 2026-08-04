@@ -7,77 +7,13 @@ from pathlib import Path
 from typing import Any
 
 from aura.context_gearbox.models import ContextLedgerEntry, ContextSource, RuntimeRole
-from aura.repo_map import generate_repo_map, generate_repo_summary
+from aura.repo_map import generate_repo_summary
 from aura.skills.text import SkillPack, build_skill_pack
 
 CORE_KERNEL_TEXT = """Core kernel:
 - Work inside the selected workspace.
 - Do not make claims about repository contents you have not verified.
 - Keep the response and any changes scoped to the user's request."""
-
-PLANNER_DISPATCH_CONTRACT = """### planner_dispatch_contract
-- Use dispatch_to_worker for code or file implementation.
-- Do not call write tools directly.
-- Dispatch only when the goal, files or scope, acceptance, and non-goals are clear enough for Worker execution.
-- Broad, multi-file, high-risk, or multi-stage work must be one visible Work Artifact with independently reviewable items.
-- Each Work Artifact item must be bounded and independently executable.
-- Include clear files, scope, acceptance, validation, and non-goals where knowable.
-- Do not dispatch vague "fix everything" tasks.
-- Ask the user only for genuinely user-owned decisions.
-- Preserve existing architecture and avoid unnecessary scope expansion.
-- Fill structured contract fields when knowable: expected_public_symbols, expected_dataclass_fields, forbidden_calls, forbidden_public_methods, and non_goals."""
-
-WEB_RESEARCH_RULES = """### web_research_rules
-- Use the web_search tool for latest/current facts, external docs/API examples, pricing, versions/releases/changelogs, schedules, current people/roles, error lookup, URLs, and external references.
-- Do not use web research for local repo, file, workspace, git, or ordinary coding tasks unless the user explicitly needs current external facts.
-- Pure research answers must use the sourced research result and must not dispatch Worker.
-- For hybrid research-plus-code, Planner should research first and dispatch Worker only after findings create a concrete code objective with target files and acceptance.
-- Keep chat output compact and sourced; keep raw metadata in tool logs."""
-
-WORKER_EXECUTION_CONTRACT = """### worker_execution_contract
-- Implement only the dispatched spec.
-- Worker receives one reviewed Work Artifact item at a time; do not plan or schedule next items.
-- Do not ask the user to resolve implementation ambiguity; use repository facts, recover internally, or return a blocker.
-- Inspect live files with tools before editing.
-- Use patch_file for existing-file edits unless full replacement is explicitly justified.
-- Keep changes inside assigned files and scope unless the spec explicitly allows expansion.
-- Do not fabricate files, APIs, validation results, or receipts.
-- If required context or files are missing, stop and return a clear blocker with the next useful action."""
-
-# The legacy Worker harness preloads target-file bodies into context and its
-# edit gates treat them as read evidence. Production SINGLE sends a compact
-# manifest instead, and states the read rule in the manifest block itself.
-_TARGET_FILES_PRELOADED_LINE = (
-    "The current contents of your target files are already in context; "
-    "do not re-read them without a named reason."
-)
-
-CODE_QUALITY_CONTRACT = f"""### code_quality_contract
-- Code must compile or parse when applicable.
-- Do not leave placeholders, stubs, incomplete implementations, or fake fallbacks.
-- Preserve public behavior unless the spec requires a change.
-- {_TARGET_FILES_PRELOADED_LINE}
-- Use the real imports, types, and helpers that already exist. Never invent an API, re-declare a constant, or re-implement a helper the codebase already provides.
-- Write code that reads like its neighbours: match local naming, typing, comment density, and idiom.
-- Matching local style is not the same as copying local structure. Do not extend god files, copy ceremony, or reproduce over-engineering. Put each change where responsibility belongs and leave the code better-shaped than you found it.
-- Prefer narrow edits over broad rewrites, but a narrow edit in the wrong place is not correct — split or relocate when the right home does not exist.
-- Do not swallow errors silently."""
-
-VALIDATION_SELECTION_CONTRACT = """### validation_selection_contract
-- Validate the changed surface when practical.
-- Use the check this repository actually runs; discover it rather than assuming pytest or py_compile.
-- Compile touched Python files when Python changed.
-- Run focused tests for touched behavior when available.
-- Use broader tests only for shared infrastructure, integration seams, or high-risk changes.
-- Prefer fast deterministic checks over slow unrelated suites.
-- Do not run irrelevant expensive tests as ritual validation."""
-
-RECEIPT_CONTRACT = """### receipt_contract
-- List changed files.
-- Summarize what changed.
-- List validation run and result.
-- Separate verified results from assumptions: say "verified by <command>" or say "not verified".
-- State blockers or skipped validation honestly, and never claim checks that were not run."""
 
 GUI_RULES = """### gui_rules
 - Preserve existing signal wiring and data flow.
@@ -109,23 +45,11 @@ BUILD_PIPELINE_RULES = """### build_pipeline_rules
 - Validate compile assumptions before packaging assumptions.
 - Preserve bundled resource handling."""
 
-_CONTRACT_TEXT: dict[str, str] = {
-    "planner_dispatch_contract": PLANNER_DISPATCH_CONTRACT,
-    "worker_execution_contract": WORKER_EXECUTION_CONTRACT,
-    "code_quality_contract": CODE_QUALITY_CONTRACT,
-    "validation_selection_contract": VALIDATION_SELECTION_CONTRACT,
-    "receipt_contract": RECEIPT_CONTRACT,
-}
-
 _SCOPED_PACK_TEXT: dict[str, str] = {
     "gui_rules": GUI_RULES,
     "drone_rules": DRONE_RULES,
     "provider_rules": PROVIDER_RULES,
     "build_pipeline_rules": BUILD_PIPELINE_RULES,
-}
-
-_PLANNER_RESEARCH_PACK_TEXT: dict[str, str] = {
-    "web_research_rules": WEB_RESEARCH_RULES,
 }
 
 #: Context that exists only while the capability naming it is live.  Keyed by
@@ -155,14 +79,12 @@ _TARGET_FILES_TOTAL_CAP = 256_000
 _TARGET_FILE_TRUNCATION_MARKER = "[truncated — read the rest with tools if needed]"
 _TARGET_FILES_TOTAL_CAP_MARKER = "[target file contents total cap reached; omitted files: {files}]"
 
-
 @dataclass(frozen=True)
 class _ScopedPackRule:
     scope_name: str
     path_prefixes: tuple[str, ...]
     path_globs: tuple[str, ...]
     task_hints: tuple[str, ...]
-
 
 _SCOPED_PACK_RULES: dict[str, _ScopedPackRule] = {
     "gui_rules": _ScopedPackRule(
@@ -275,110 +197,67 @@ CONTEXT_SOURCES: tuple[ContextSource, ...] = (
     ContextSource(
         source_id="core_kernel",
         kind="kernel",
-        roles=(RuntimeRole.PLANNER, RuntimeRole.WORKER, RuntimeRole.SINGLE),
+        roles=(RuntimeRole.SINGLE,),
         reason="baseline runtime posture",
     ),
     ContextSource(
         source_id="project_rules",
         kind="workspace_file",
-        roles=(RuntimeRole.PLANNER, RuntimeRole.WORKER, RuntimeRole.SINGLE),
+        roles=(RuntimeRole.SINGLE,),
         reason="explicit project rules file",
     ),
     ContextSource(
         source_id="repo_map",
         kind="workspace_structure",
-        roles=(RuntimeRole.PLANNER, RuntimeRole.WORKER, RuntimeRole.SINGLE),
+        roles=(RuntimeRole.SINGLE,),
         reason="repository structure overview",
     ),
     ContextSource(
         source_id="target_file_contents",
         kind="workspace_files",
-        roles=(RuntimeRole.WORKER, RuntimeRole.SINGLE),
-        reason="edit-surface files (Worker preloads bodies; SINGLE sends a compact manifest)",
-    ),
-    ContextSource(
-        source_id="planner_dispatch_contract",
-        kind="quality_contract",
-        roles=(RuntimeRole.PLANNER,),
-        reason="planner coding-harness dispatch quality contract",
-    ),
-    ContextSource(
-        source_id="web_research_rules",
-        kind="planner_research_pack",
-        roles=(RuntimeRole.PLANNER,),
-        reason="turn is shaped as external web research",
-    ),
-    ContextSource(
-        source_id="worker_execution_contract",
-        kind="quality_contract",
-        roles=(RuntimeRole.WORKER,),
-        reason="worker coding-harness execution quality contract",
-    ),
-    # The three generic coding contracts are Worker-only. Production SINGLE's
-    # capsule states code shape, focused validation, and receipt honesty once,
-    # as part of the one authoritative contract; injecting these alongside it
-    # restated the same rules under a second owner.
-    ContextSource(
-        source_id="code_quality_contract",
-        kind="quality_contract",
-        roles=(RuntimeRole.WORKER,),
-        reason="coding quality contract for implementation work",
-        origin_paths=("aura/context_gearbox/sources.py",),
-    ),
-    ContextSource(
-        source_id="validation_selection_contract",
-        kind="quality_contract",
-        roles=(RuntimeRole.WORKER,),
-        reason="focused validation selection contract",
-    ),
-    ContextSource(
-        source_id="receipt_contract",
-        kind="quality_contract",
-        roles=(RuntimeRole.WORKER,),
-        reason="compact final receipt contract",
+        roles=(RuntimeRole.SINGLE,),
+        reason="edit-surface files (compact manifest of the files this step touches)",
     ),
     ContextSource(
         source_id="gui_rules",
         kind="scoped_coding_pack",
-        roles=(RuntimeRole.WORKER, RuntimeRole.SINGLE),
+        roles=(RuntimeRole.SINGLE,),
         reason="target files or task kind match GUI scope",
     ),
     ContextSource(
         source_id="drone_rules",
         kind="scoped_coding_pack",
-        roles=(RuntimeRole.WORKER, RuntimeRole.SINGLE),
+        roles=(RuntimeRole.SINGLE,),
         reason="target files or task kind match drone scope",
     ),
     ContextSource(
         source_id="provider_rules",
         kind="scoped_coding_pack",
-        roles=(RuntimeRole.WORKER, RuntimeRole.SINGLE),
+        roles=(RuntimeRole.SINGLE,),
         reason="target files or task kind match provider scope",
     ),
     ContextSource(
         source_id="build_pipeline_rules",
         kind="scoped_coding_pack",
-        roles=(RuntimeRole.WORKER, RuntimeRole.SINGLE),
+        roles=(RuntimeRole.SINGLE,),
         reason="target files or task kind match build scope",
     ),
     ContextSource(
         source_id="windows_computer_use",
         kind="capability_pack",
-        roles=(RuntimeRole.PLANNER, RuntimeRole.WORKER, RuntimeRole.SINGLE),
+        roles=(RuntimeRole.SINGLE,),
         reason="Windows UI Automation tools are connected for this request",
     ),
     ContextSource(
         source_id="skill_pack",
         kind="skill_pack",
-        roles=(RuntimeRole.PLANNER, RuntimeRole.WORKER, RuntimeRole.SINGLE),
+        roles=(RuntimeRole.SINGLE,),
         reason="terrain-selected skills for this context",
     ),
 )
 
-
 def iter_registered_sources() -> tuple[ContextSource, ...]:
     return CONTEXT_SOURCES
-
 
 def collect_source_text(
     source: ContextSource,
@@ -504,7 +383,6 @@ def collect_source_text(
             error=f"{type(exc).__name__}: {exc}",
         ), []
 
-
 def _load_source_text(
     source: ContextSource,
     workspace_root: Path | None,
@@ -521,15 +399,10 @@ def _load_source_text(
         return "", f"not scoped to {role.value} role"
     if source.kind == "capability_pack":
         return _load_capability_pack(source, active_capabilities)
-    if source.kind == "quality_contract":
-        return _load_quality_contract(source)
-    if source.kind == "planner_research_pack":
-        return _load_planner_research_pack(source, role, task_kind)
     if source.kind == "scoped_coding_pack":
         return _load_scoped_coding_pack(
             source,
             workspace_root,
-            role,
             task_kind,
             target_files,
         )
@@ -558,94 +431,17 @@ def _load_source_text(
             return "", "project_rules.md is empty"
         return "### Project Rules\n" + rules, source.reason
     if source.source_id == "repo_map":
-        if role == RuntimeRole.SINGLE:
-            # Production SINGLE gets the bounded directory index. The full
-            # per-file outline was the single largest block in every turn and
-            # truncated arbitrarily; structure detail loads through the search
-            # and read tools instead.
-            summary = generate_repo_summary(workspace_root, force=force)
-            if not summary:
-                return "", "no indexed source files"
-            return summary, "bounded repository directory index"
-        repo_map = generate_repo_map(workspace_root, force=force)
-        if not repo_map:
-            return "", "repo map unavailable"
-        if "No Python/TypeScript files found." in repo_map:
-            return "", "no Python/TypeScript files found"
-        return repo_map, source.reason
+        # Production SINGLE gets the bounded directory index. The full
+        # per-file outline was the single largest block in every turn and
+        # truncated arbitrarily; structure detail loads through the search
+        # and read tools instead.
+        summary = generate_repo_summary(workspace_root, force=force)
+        if not summary:
+            return "", "no indexed source files"
+        return summary, "bounded repository directory index"
     if source.source_id == "target_file_contents":
-        return _load_target_file_contents(workspace_root, target_files, role)
-    return "", "unknown context source"
-
-
-def _load_target_file_contents(
-    workspace_root: Path | None,
-    target_files: tuple[str, ...] | None,
-    role: RuntimeRole,
-) -> tuple[str, str]:
-    if workspace_root is None:
-        return "", "no workspace root"
-    if not target_files:
-        return "", "no target files"
-
-    if role == RuntimeRole.SINGLE:
         return _load_target_file_manifest(workspace_root, target_files)
-
-    blocks: list[str] = []
-    omitted_files: list[str] = []
-    loaded_chars = 0
-
-    for index, raw_path in enumerate(target_files):
-        resolved = _resolve_target_file_path(workspace_root, raw_path)
-        if resolved is None:
-            continue
-        path, relpath = resolved
-        if not path.is_file():
-            continue
-        if loaded_chars >= _TARGET_FILES_TOTAL_CAP:
-            omitted_files.extend(
-                _remaining_target_file_labels(workspace_root, target_files[index:])
-            )
-            break
-
-        try:
-            contents = path.read_text(encoding="utf-8")
-        except (OSError, PermissionError, UnicodeError):
-            continue
-
-        remaining = _TARGET_FILES_TOTAL_CAP - loaded_chars
-        file_text = contents[: min(len(contents), _TARGET_FILE_CHAR_CAP, remaining)]
-        loaded_chars += len(file_text)
-
-        marker_lines: list[str] = []
-        if len(contents) > len(file_text):
-            if len(file_text) >= _TARGET_FILE_CHAR_CAP:
-                marker_lines.append(_TARGET_FILE_TRUNCATION_MARKER)
-            elif loaded_chars >= _TARGET_FILES_TOTAL_CAP:
-                marker_lines.append(
-                    "[truncated because target file contents total cap was reached; read the rest with tools if needed]"
-                )
-
-        block_text = file_text
-        if marker_lines:
-            block_text = block_text.rstrip("\n") + "\n" + "\n".join(marker_lines)
-        fence = _fence_for_target_file_block(block_text)
-        closing_separator = "" if block_text.endswith("\n") else "\n"
-        blocks.append(f"### Target file: {relpath}\n{fence}\n{block_text}{closing_separator}{fence}")
-
-        if loaded_chars >= _TARGET_FILES_TOTAL_CAP:
-            omitted_files.extend(
-                _remaining_target_file_labels(workspace_root, target_files[index + 1 :])
-            )
-            break
-
-    if omitted_files:
-        blocks.append(_TARGET_FILES_TOTAL_CAP_MARKER.format(files=", ".join(omitted_files)))
-
-    if not blocks:
-        return "", "no readable target files"
-    return "\n\n".join(blocks), "live contents of the files this step edits"
-
+    return "", "unknown context source"
 
 def _load_target_file_manifest(
     workspace_root: Path,
@@ -678,7 +474,6 @@ def _load_target_file_manifest(
     lines.extend(f"- {relpath}" for relpath in resolved)
     return "\n".join(lines), "manifest of target files; contents load through read tools"
 
-
 def loaded_target_files(
     workspace_root: Path | None,
     target_files: tuple[str, ...] | None,
@@ -707,7 +502,6 @@ def loaded_target_files(
         loaded.append(relpath)
     return loaded
 
-
 def _resolve_target_file_path(
     workspace_root: Path,
     raw_path: str,
@@ -729,7 +523,6 @@ def _resolve_target_file_path(
         return None
     return resolved, relpath
 
-
 def _fence_for_target_file_block(contents: str) -> str:
     longest_run = 0
     current_run = 0
@@ -740,7 +533,6 @@ def _fence_for_target_file_block(contents: str) -> str:
         else:
             current_run = 0
     return "`" * max(3, longest_run + 1)
-
 
 def _remaining_target_file_labels(
     workspace_root: Path,
@@ -756,14 +548,6 @@ def _remaining_target_file_labels(
             labels.append(relpath)
     return labels
 
-
-def _load_quality_contract(source: ContextSource) -> tuple[str, str]:
-    text = _CONTRACT_TEXT.get(source.source_id, "")
-    if not text:
-        return "", "unknown quality contract"
-    return text, source.reason
-
-
 def _load_capability_pack(
     source: ContextSource,
     active_capabilities: frozenset[str] | None,
@@ -776,26 +560,9 @@ def _load_capability_pack(
         return "", "capability is not connected for this request"
     return text, source.reason
 
-
-def _load_planner_research_pack(
-    source: ContextSource,
-    role: RuntimeRole,
-    task_kind: str | None,
-) -> tuple[str, str]:
-    text = _PLANNER_RESEARCH_PACK_TEXT.get(source.source_id, "")
-    if not text:
-        return "", "unknown planner research pack"
-    if role != RuntimeRole.PLANNER:
-        return "", f"not scoped to {role.value} role"
-    if not _task_kind_is_research_shaped(task_kind):
-        return "", "turn is not research-shaped"
-    return text, source.reason
-
-
 def _load_scoped_coding_pack(
     source: ContextSource,
     workspace_root: Path | None,
-    role: RuntimeRole,
     task_kind: str | None,
     target_files: tuple[str, ...] | None,
 ) -> tuple[str, str]:
@@ -804,7 +571,7 @@ def _load_scoped_coding_pack(
     if not text or rule is None:
         return "", "unknown scoped coding pack"
     normalized_targets = _normalize_target_file_paths(target_files, workspace_root)
-    if role == RuntimeRole.SINGLE and not _single_scoped_pack_applies(
+    if not _single_scoped_pack_applies(
         task_kind,
         normalized_targets,
     ):
@@ -812,7 +579,6 @@ def _load_scoped_coding_pack(
     if not _scoped_pack_matches(rule, normalized_targets, task_kind):
         return "", f"target files do not match {rule.scope_name} scope"
     return text, source.reason
-
 
 def _load_skill_pack(
     workspace_root: Path | None,
@@ -834,7 +600,6 @@ def _load_skill_pack(
         return pack.text, "terrain-selected skills for this context", pack
     return "", "no skills matched for this terrain", pack
 
-
 def _single_scoped_pack_applies(
     task_kind: str | None,
     normalized_targets: tuple[str, ...],
@@ -849,7 +614,6 @@ def _single_scoped_pack_applies(
         return True
     return _task_kind_matches_any_scoped_hint(task_kind)
 
-
 def _scoped_pack_matches(
     rule: _ScopedPackRule,
     normalized_targets: tuple[str, ...],
@@ -858,7 +622,6 @@ def _scoped_pack_matches(
     if any(_path_matches_rule(path, rule) for path in normalized_targets):
         return True
     return _task_kind_has_any_hint(task_kind, rule.task_hints)
-
 
 def _normalize_target_file_paths(
     target_files: tuple[str, ...] | None,
@@ -881,7 +644,6 @@ def _normalize_target_file_paths(
             normalized.append(path)
     return tuple(normalized)
 
-
 def _source_origin_matches_target_file(
     source: ContextSource,
     role: RuntimeRole,
@@ -889,8 +651,6 @@ def _source_origin_matches_target_file(
     workspace_root: Path | None,
 ) -> bool:
     if role not in source.roles:
-        return False
-    if role not in {RuntimeRole.WORKER, RuntimeRole.SINGLE}:
         return False
     if not source.origin_paths or not target_files:
         return False
@@ -900,13 +660,11 @@ def _source_origin_matches_target_file(
     normalized_origins = set(_normalize_target_file_paths(source.origin_paths, workspace_root))
     return bool(normalized_targets & normalized_origins)
 
-
 def _normalize_path_string(value: Any) -> str:
     text = str(value or "").strip().replace("\\", "/").lower()
     while "//" in text:
         text = text.replace("//", "/")
     return text
-
 
 def _path_matches_rule(path: str, rule: _ScopedPackRule) -> bool:
     return _path_matches_prefixes(path, rule.path_prefixes) or _path_matches_globs(
@@ -914,21 +672,17 @@ def _path_matches_rule(path: str, rule: _ScopedPackRule) -> bool:
         rule.path_globs,
     )
 
-
 def _path_matches_prefixes(path: str, prefixes: tuple[str, ...]) -> bool:
     return any(path.startswith(prefix) for prefix in prefixes)
 
-
 def _path_matches_globs(path: str, patterns: tuple[str, ...]) -> bool:
     return any(fnmatchcase(path, pattern) for pattern in patterns)
-
 
 def _task_kind_matches_any_scoped_hint(task_kind: str | None) -> bool:
     return any(
         _task_kind_has_any_hint(task_kind, rule.task_hints)
         for rule in _SCOPED_PACK_RULES.values()
     )
-
 
 def _task_kind_has_any_hint(task_kind: str | None, hints: tuple[str, ...]) -> bool:
     normalized = _normalize_task_kind(task_kind)
@@ -941,24 +695,11 @@ def _task_kind_has_any_hint(task_kind: str | None, hints: tuple[str, ...]) -> bo
         if hint
     )
 
-
 def _is_coding_task_kind(task_kind: str | None) -> bool:
     return _normalize_task_kind(task_kind) in _CODING_TASK_KINDS
 
-
 def _is_validation_task_kind(task_kind: str | None) -> bool:
     return _normalize_task_kind(task_kind) == "validation"
-
-
-def _task_kind_is_research_shaped(task_kind: str | None) -> bool:
-    normalized = _normalize_task_kind(task_kind)
-    return normalized in {
-        "answer only",
-        "research",
-        "web research",
-        "research then worker",
-    }
-
 
 def _normalize_task_kind(value: Any) -> str:
     return " ".join(

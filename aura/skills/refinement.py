@@ -155,9 +155,9 @@ def _call_reflector(
         try:
             settings = load_settings()
             if provider is None:
-                provider = settings.planner_provider
+                provider = settings.provider
             if model is None:
-                model = settings.default_planner_model
+                model = settings.default_model
         except Exception:
             _log.debug("Failed to resolve provider/model from settings", exc_info=True)
             return None

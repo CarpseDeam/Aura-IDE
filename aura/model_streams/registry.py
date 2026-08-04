@@ -1,8 +1,8 @@
 """Model stream registry for registering and triggering agent backends.
 
 This provides the central pub-sub registry that maps named model-generation
-streams (e.g. ``generate_planner_code``, ``generate_worker_code``) to their
-backend handlers.  Each stream name can have at most one registered handler.
+streams (e.g. ``generate_production_code``) to their backend handlers.  Each
+stream name can have at most one registered handler.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ class ModelStreamRegistry:
         """Register a callable for the given stream name.
 
         Args:
-            name: Stream identifier (e.g. ``'generate_worker_code'``).
+            name: Stream identifier (e.g. ``'generate_production_code'``).
             handler: A callable that will receive ``**kwargs`` from
                 :meth:`trigger`.
 

@@ -1,8 +1,8 @@
 """Emergency tool-call guardrails for conversation passes.
 
-Normal control flow is handled by loop detection and planner recovery. This
-module only keeps a high runaway guard so a broken model/tool loop cannot run
-forever.
+Normal control flow is handled by loop detection and the completion contract.
+This module only keeps a high runaway guard so a broken model/tool loop cannot
+run forever.
 """
 from __future__ import annotations
 
@@ -22,21 +22,9 @@ WRITE_TOOLS = {
     "install_godot_editor_bridge",
 }
 TERMINAL_TOOLS = {"run_terminal_command", "run_and_watch"}
-DISPATCH_TOOLS = {"dispatch_to_worker"}
-PLANNER_CONTEXT_TOOLS = {
-    "read_file",
-    "read_files",
-    "list_directory",
-    "glob",
-    "grep_search",
-    "find_usages",
-    "search_codebase",
-}
 
-# High emergency brakes, not workflow budgets.
+# High emergency brake, not a workflow budget.
 MAX_TOOL_CALLS_BY_MODE: dict[RegistryMode, int] = {
-    "planner": 300,
-    "worker": 300,
     "single": 300,
 }
 
@@ -49,13 +37,9 @@ class ToolLimitState:
     total_calls: int = 0
     terminal_calls: int = 0
     write_calls: int = 0
-    dispatch_calls: int = 0
-    planner_context_calls: int = 0
-    round_dispatch_calls: int = 0
 
     def begin_model_round(self) -> None:
         """Reset per-round telemetry counters."""
-        self.round_dispatch_calls = 0
 
     def check(self, tool_name: str) -> tuple[bool, dict[str, Any]]:
         """Return whether *tool_name* may run plus a JSON-ready reason payload.
@@ -64,15 +48,12 @@ class ToolLimitState:
         """
         max_total = MAX_TOOL_CALLS_BY_MODE.get(self.mode, MAX_TOOL_CALLS_BY_MODE["single"])
         if self.total_calls + 1 > max_total:
-            phase_boundary = self.mode == "worker"
             return False, self._payload(
                 tool_name=tool_name,
                 reason=f"{self.mode}_emergency_tool_call_limit_reached",
                 limit_name="total_calls",
                 limit=max_total,
                 current=self.total_calls,
-                recoverable=phase_boundary,
-                phase_boundary=phase_boundary,
             )
 
         return True, {}
@@ -84,11 +65,6 @@ class ToolLimitState:
             self.terminal_calls += 1
         if tool_name in WRITE_TOOLS:
             self.write_calls += 1
-        if tool_name in DISPATCH_TOOLS:
-            self.dispatch_calls += 1
-            self.round_dispatch_calls += 1
-        if self.mode == "planner" and tool_name in PLANNER_CONTEXT_TOOLS:
-            self.planner_context_calls += 1
 
     def _payload(
         self,
@@ -104,14 +80,8 @@ class ToolLimitState:
     ) -> dict[str, Any]:
         if message is None:
             message = (
-                "Emergency tool-call guard reached for this worker pass. Do not call more "
-                "tools. Summarize completed work, modified files, validation status, "
-                "blockers, and remaining work so the planner can adjust."
-                if phase_boundary
-                else (
-                    "Emergency guard reached. Summarize completed work, current "
-                    "blockers, and the safest next step to continue."
-                )
+                "Emergency guard reached. Summarize completed work, current "
+                "blockers, and the safest next step to continue."
             )
         return {
             "ok": False,
@@ -133,9 +103,6 @@ class ToolLimitState:
             "total_calls": self.total_calls,
             "terminal_calls": self.terminal_calls,
             "write_calls": self.write_calls,
-            "dispatch_calls": self.dispatch_calls,
-            "planner_context_calls": self.planner_context_calls,
-            "round_dispatch_calls": self.round_dispatch_calls,
         }
 
 
@@ -145,9 +112,7 @@ def limit_reached_payload(info: dict[str, Any]) -> str:
 
 
 __all__ = [
-    "DISPATCH_TOOLS",
     "MAX_TOOL_CALLS_BY_MODE",
-    "PLANNER_CONTEXT_TOOLS",
     "RegistryMode",
     "TERMINAL_TOOLS",
     "ToolLimitState",

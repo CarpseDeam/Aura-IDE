@@ -252,55 +252,16 @@ class WriteHandlersMixin:
     def _handle_write_file(self, args, approval_cb, reject_all) -> ToolExecResult:
         if self._read_only:
             return ToolExecResult(ok=False, payload=_mark_not_applied({"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled.", "failure_class": "read_only"}))
-        if self._mode == "planner":
-            return ToolExecResult(
-                ok=False,
-                payload=_mark_not_applied({
-                    "ok": False,
-                    "error": (
-                        "Planner cannot write directly. "
-                        "You must use the 'dispatch_to_worker' tool to specify code changes. "
-                        "Include your intended edits in the 'spec' field of the dispatch."
-                    ),
-                    "failure_class": "internal_error",
-                }),
-            )
         return self._handle_write("write_file", args, approval_cb, reject_all)
 
     def _handle_delete_file(self, args, approval_cb, reject_all) -> ToolExecResult:
         if self._read_only:
             return ToolExecResult(ok=False, payload=_mark_delete_not_applied({"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled.", "failure_class": "read_only"}))
-        if self._mode == "planner":
-            return ToolExecResult(
-                ok=False,
-                payload=_mark_delete_not_applied({
-                    "ok": False,
-                    "error": (
-                        "Planner cannot write directly. "
-                        "You must use the 'dispatch_to_worker' tool to specify code changes. "
-                        "Include your intended deletion in the 'spec' field of the dispatch."
-                    ),
-                    "failure_class": "internal_error",
-                }),
-            )
         return self._handle_delete(args, approval_cb, reject_all)
 
     def _handle_patch_file(self, args, approval_cb, reject_all) -> ToolExecResult:
         if self._read_only:
             return ToolExecResult(ok=False, payload=_mark_not_applied({"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled.", "failure_class": "read_only"}))
-        if self._mode == "planner":
-            return ToolExecResult(
-                ok=False,
-                payload=_mark_not_applied({
-                    "ok": False,
-                    "error": (
-                        "Planner cannot write directly. "
-                        "You must use the 'dispatch_to_worker' tool to specify code changes. "
-                        "Include your intended edits in the 'spec' field of the dispatch."
-                    ),
-                    "failure_class": "internal_error",
-                }),
-            )
         return self._handle_write("patch_file", args, approval_cb, reject_all)
 
     def _handle_delete(
@@ -626,34 +587,6 @@ class WriteHandlersMixin:
                         "is_new_file": is_new_file,
                         "diagnostic_scratch": True,
                     },
-                )
-            replacement_reason = args.get("replacement_reason")
-            if (
-                self._mode == "worker"
-                and target.exists()
-                and not (
-                    args.get("full_replace_existing") is True
-                    and isinstance(replacement_reason, str)
-                    and replacement_reason.strip()
-                )
-            ):
-                return ToolExecResult(
-                    ok=False,
-                    payload=_mark_not_applied({
-                        "ok": False,
-                        "path": rel_path,
-                        "rel_path": rel_path,
-                        "error": (
-                            "write_file on an existing file in Worker mode requires "
-                            "full_replace_existing=true and a non-empty replacement_reason."
-                        ),
-                        "failure_class": "write_file_existing_file_requires_patch",
-                        "suggested_next_tool": "patch_file",
-                        "suggested_next_action": (
-                            "Use patch_file for existing-file edits. Only use write_file on an existing file "
-                            "when the task explicitly requires a full-file replacement and full_replace_existing is true."
-                        ),
-                    }, "write_file_existing_file_requires_patch"),
                 )
             proposal = _reg.propose_write(self._root, target, content)
             if not proposal.get("ok", False):

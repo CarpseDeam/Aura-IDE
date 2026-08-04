@@ -6,8 +6,6 @@ from enum import Enum
 
 
 class RuntimeRole(str, Enum):
-    PLANNER = "planner"
-    WORKER = "worker"
     SINGLE = "single"
 
     @classmethod
@@ -15,8 +13,10 @@ class RuntimeRole(str, Enum):
         if isinstance(value, cls):
             return value
         normalized = str(value or "").strip().lower()
-        if normalized in {"all", "default"}:
-            normalized = cls.PLANNER.value
+        # "all", "default", and the retired Planner/Worker names all resolve to
+        # the one production role — old prompts and configs never fail to load.
+        if normalized in {"all", "default", "planner", "worker"}:
+            normalized = cls.SINGLE.value
         return cls(normalized)
 
 

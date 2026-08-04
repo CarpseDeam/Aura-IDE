@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from aura.lifecycle.context import HookContext
 from aura.lifecycle.decisions import GateDecision
-from aura.lifecycle.builtin_worker_gates import register_builtin_worker_gates
 from aura.lifecycle.event_adapter import attach_lifecycle_notify
 from aura.lifecycle.gates import GateHookRegistry
 from aura.lifecycle.handlers import HandlerRecord
@@ -31,5 +30,4 @@ __all__ = [
     "LifecycleHooks",
     "NotifyHookRegistry",
     "attach_lifecycle_notify",
-    "register_builtin_worker_gates",
 ]

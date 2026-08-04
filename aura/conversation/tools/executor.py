@@ -9,19 +9,6 @@ from aura.conversation.tools.consequential import is_consequential
 from aura.conversation.tools.dynamic import execute_dynamic_tool
 from aura.conversation.tools.effects import ToolEffect
 
-_PLANNER_FORBIDDEN_WRITE_TOOLS = frozenset({
-    "apply_edit_transaction",
-    "delete_file",
-    "edit_file",
-    "edit_symbol",
-    "edit_godot_scene",
-    "edit_godot_editor",
-    "edit_godot_asset_preview",
-    "install_godot_editor_bridge",
-    "patch_file",
-    "write_file",
-})
-
 
 class ToolExecutor:
     """Dispatches tool execution across static handlers, MCP, and dynamic tools."""
@@ -65,12 +52,6 @@ class ToolExecutor:
         4. Unknown tool error
         """
         try:
-            if (
-                getattr(self._owner, "mode", "") == "planner"
-                and name in _PLANNER_FORBIDDEN_WRITE_TOOLS
-            ):
-                return _planner_write_tool_correction(name)
-
             from aura.conversation.tools.registry import TOOL_HANDLERS
 
             # 1. Static dispatch via TOOL_HANDLERS
@@ -183,34 +164,3 @@ class ToolExecutor:
                 },
                 extras={"internal_tool_error": True},
             )
-
-
-def _planner_write_tool_correction(name: str) -> ToolExecResult:
-    failure_constraint = (
-        "CONSTRAINT FOR NEXT DISPATCH ATTEMPT: Planner cannot edit files or "
-        f"call {name}. Do not call edit/write tools. Use dispatch_to_worker "
-        "as the implementation deliverable. For multi-part work, include a "
-        "work_artifact_payload in the dispatch_to_worker call to define "
-        "multiple related items for sequential implementation."
-    )
-    payload = {
-        "ok": False,
-        "error": (
-            f"{name} is not available in Planner mode. Planner never edits "
-            "files directly; use dispatch_to_worker for implementation."
-        ),
-        "failure_class": "planner_tool_unavailable",
-        "planner_tool_unavailable": True,
-        "suggested_next_tool": "dispatch_to_worker",
-        "failure_constraint": failure_constraint,
-    }
-    return ToolExecResult(
-        ok=False,
-        payload=payload,
-        extras={
-            "planner_tool_unavailable": True,
-            "internal_planner_handoff": True,
-            "failure_constraint": failure_constraint,
-            "suggested_next_tool": "dispatch_to_worker",
-        },
-    )

@@ -580,9 +580,9 @@ class CompanionManager(QObject):
         self._state.pending_chat_id = chat_id
         self._state.pending_chat_phone_id = sender_phone_id
         self._bridge.history.append_user_text(text)
-        model = resolve_role_default_model(self._settings.planner_provider, "planner")
-        thinking = self._settings.default_planner_thinking
-        self._bridge.send(model=model, thinking=thinking, max_tool_rounds=self._settings.max_tool_rounds)
+        model = resolve_role_default_model(self._settings.provider, "production")
+        thinking = self._settings.default_thinking
+        self._bridge.send(model=model, thinking=thinking)
 
     def _handle_chat_cancel(self, msg: dict) -> None:
         if self._bridge and self._bridge.is_running():

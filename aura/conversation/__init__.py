@@ -1,30 +1,9 @@
 """Conversation history and the tool-loop manager."""
 
-from aura.conversation.dispatch import (
-    DispatchCallback,
-    ExplicitSpecContract,
-    WorkerDispatchRequest,
-    WorkerDispatchResult,
-    WorkerMismatch,
-    WorkerTaskSpec,
-    infer_outcome_status,
-    normalize_worker_task,
-)
-from aura.conversation.dispatch_plan import (
-    DispatchValidationResult,
-    validate_dispatch_request,
-)
 from aura.conversation.history import History
-from aura.conversation.task_shape import TaskShape, infer_task_shape
 from aura.conversation.worker_outcome import (
     WorkerOutcomeStatus,
     normalize_outcome_status,
-)
-from aura.conversation.workflow_state import (
-    ValidationCommandRun,
-    ValidationStatus,
-    WorkflowState,
-    WorkflowStatus,
 )
 
 
@@ -39,22 +18,6 @@ def __getattr__(name: str):
 __all__ = [
     "History",
     "ConversationManager",
-    "ExplicitSpecContract",
-    "WorkerDispatchRequest",
-    "WorkerDispatchResult",
-    "WorkerMismatch",
     "WorkerOutcomeStatus",
-    "WorkerTaskSpec",
-    "DispatchValidationResult",
-    "validate_dispatch_request",
-    "TaskShape",
-    "DispatchCallback",
-    "infer_task_shape",
-    "infer_outcome_status",
     "normalize_outcome_status",
-    "normalize_worker_task",
-    "ValidationCommandRun",
-    "ValidationStatus",
-    "WorkflowState",
-    "WorkflowStatus",
 ]

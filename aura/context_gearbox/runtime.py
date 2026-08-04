@@ -25,31 +25,11 @@ FULL_REPLACEMENT_MARKER = "{AURA_REPLACE_CANONICAL_PROMPT}"
 
 CUSTOM_PROMPT_HEADER = "### Custom Instructions"
 
-_RESPONSE_DISCIPLINE = """Response discipline:
-- Lead with the answer, decision, or next action.
-- Default to concise, useful replies.
-- Avoid essays, tutorials, and multi-section breakdowns unless the user asks for depth.
-- Normal chat should usually be 1-4 short paragraphs or up to 5 bullets.
-- Give full detail when the user asks or when missing detail would make the answer unsafe or unusable."""
-
-
-def _response_discipline_for(runtime_role: RuntimeRole) -> str:
-    """Response discipline is Planner/Worker context only.
-
-    The production SINGLE capsule already owns what its output should look
-    like, in terms of the work rather than of chat length. Injecting a second
-    style block beside it gave the same concept two owners, which is exactly
-    the duplication the compact contract exists to remove.
-    """
-    return "" if runtime_role == RuntimeRole.SINGLE else _RESPONSE_DISCIPLINE
-
-
-def _canonical_blocks(runtime_role: RuntimeRole, context_text: str) -> list[str]:
+def _canonical_blocks(context_text: str) -> list[str]:
     """The blocks canonical composition owns, in prompt order."""
     return [
         context_text,
-        _response_discipline_for(runtime_role),
-        _role_prompt_text(runtime_role),
+        _role_prompt_text(RuntimeRole.SINGLE),
     ]
 
 
@@ -62,12 +42,10 @@ def _role_prompt_text(runtime_role: RuntimeRole) -> str:
 
 def default_role_prompt(role: RuntimeRole | str) -> str:
     runtime_role = RuntimeRole.from_value(role)
-    blocks = _canonical_blocks(runtime_role, CONTEXT_PLACEHOLDER)
+    blocks = _canonical_blocks(CONTEXT_PLACEHOLDER)
     return "\n\n".join(block for block in blocks if block)
 
 
-PLANNER_SYSTEM_PROMPT = default_role_prompt(RuntimeRole.PLANNER)
-WORKER_SYSTEM_PROMPT = default_role_prompt(RuntimeRole.WORKER)
 SINGLE_SYSTEM_PROMPT = default_role_prompt(RuntimeRole.SINGLE)
 
 
@@ -362,7 +340,7 @@ def _compose_canonical_prompt(
     custom: str,
 ) -> str:
     """Build canonical context + role prompt, then append custom extras."""
-    blocks = _canonical_blocks(runtime_role, context_text)
+    blocks = _canonical_blocks(context_text)
     parts = [block.strip() for block in blocks if block and block.strip()]
     extension = _custom_prompt_extension(custom, blocks)
     if extension:
@@ -489,7 +467,7 @@ def diagnose_custom_prompt(
         appended = custom.replace(FULL_REPLACEMENT_MARKER, "").strip()
         repeated: tuple[str, ...] = ()
     else:
-        canonical_blocks = _canonical_blocks(runtime_role, CONTEXT_PLACEHOLDER)
+        canonical_blocks = _canonical_blocks(CONTEXT_PLACEHOLDER)
         appended = _custom_prompt_extension(custom, canonical_blocks)
         repeated = _repeated_canonical_concepts(appended)
 
@@ -540,9 +518,6 @@ def format_prompt_composition(composed: ComposedContext) -> str:
             continue
         parts.append(f"{entry.source_id}={entry.char_count:,}")
 
-    discipline = _response_discipline_for(composed.role)
-    if discipline:
-        parts.append(f"response_discipline={len(discipline):,}")
     parts.append(f"role_capsule={len(_role_prompt_text(composed.role)):,}")
 
     return (

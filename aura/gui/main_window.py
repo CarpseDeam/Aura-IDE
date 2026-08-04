@@ -108,19 +108,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             provider=self._settings.provider,
         )
         self._bridge.set_production_provider(self._settings.provider)
-        self._bridge.set_worker_provider(self._settings.worker_provider)
         self._bridge.set_workspace_root(self._workspace_root)
         self._enter_production_mode()
-        self._bridge.set_worker_model(self._settings.default_worker_model)
-        self._bridge.set_worker_thinking(self._settings.default_worker_thinking)
         self._bridge.set_temperature(self._settings.temperature)
-        self._bridge.set_worker_temperature(self._settings.worker_temperature)
-        self._bridge.set_custom_system_prompts(
-            self._settings.system_prompt,
-            self._settings.planner_system_prompt,
-            self._settings.worker_system_prompt,
-        )
-        self._bridge.set_auto_dispatch(self._settings.auto_dispatch)
+        self._bridge.set_system_prompt(self._settings.system_prompt)
         self._bridge.set_auto_approve(self._settings.auto_approve)
         # Restores a connection the user already turned on. Disabled is the
         # default and does nothing at all — no process, no download, no
@@ -258,9 +249,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # Apply the production model / thinking from settings.
         self.set_model(self._settings.default_model)
         self.set_thinking(self._settings.default_thinking)
-        self.set_worker_model(self._settings.default_worker_model)
-        self.set_worker_thinking(self._settings.default_worker_thinking)
-        self._set_sidebar_planner_worker_mode(False)
         center_layout.addWidget(self._input)
 
         # Show appropriate initial page
@@ -474,34 +462,11 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     def current_thinking(self) -> ThinkingMode:
         return self._left_pane.current_planner_thinking()
 
-    def current_worker_model(self) -> str:
-        return self._left_pane.current_worker_model()
-
-    def current_worker_thinking(self) -> ThinkingMode:
-        return self._left_pane.current_worker_thinking()
-
     def set_model(self, model: str) -> None:
         self._left_pane.set_planner_model(model)
 
     def set_thinking(self, thinking: ThinkingMode) -> None:
         self._left_pane.set_planner_thinking(thinking)
-
-    def set_worker_model(self, model: str) -> None:
-        self._left_pane.set_worker_model(model)
-
-    def set_worker_thinking(self, thinking: ThinkingMode) -> None:
-        self._left_pane.set_worker_thinking(thinking)
-
-    def _on_sidebar_worker_model_changed(self, model: str) -> None:
-        self._bridge.set_worker_model(model)
-        self._refresh_status_bar()
-
-    def _on_sidebar_worker_thinking_changed(self, thinking: str) -> None:
-        self._bridge.set_worker_thinking(thinking)  # type: ignore[arg-type]
-        self._refresh_status_bar()
-
-    def _set_sidebar_planner_worker_mode(self, enabled: bool) -> None:
-        self._left_pane.set_planner_worker_mode(enabled)
 
     # ----- status bar -----------------------------------------------------
 
@@ -638,11 +603,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if hasattr(self, "_chat"):
             self._chat.set_compact_tools(True)
 
-    def _apply_planner_worker_mode_to_bridge(self, enabled: bool) -> None:
-        """Compatibility shim — normal startup always enters production mode."""
-        self._enter_production_mode()
-
-
     def _on_started(self) -> None:
         self._final_stream_message = {}
         self._input.set_execution_active(True)
@@ -690,11 +650,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             workspace_root=self._workspace_root,
             model=self.current_model(),
             thinking=self.current_thinking(),
-            worker_model=self.current_worker_model(),
-            worker_thinking=self.current_worker_thinking(),
             provider=self._settings.provider,
-            planner_provider=self._settings.planner_provider,
-            worker_provider=self._settings.worker_provider,
         )
 
     def _on_stream_done(self, finish_reason: str, full_message: dict) -> None:
@@ -704,16 +660,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if tool_calls:
             # Finalize markdown but keep the aura pulsing.
             self._chat.finalize_markdown_only()
-            # If any call is a dispatch, transition to "coding" (cyan)
-            has_dispatch = any(
-                tc.get("function", {}).get("name") in ("dispatch_to_worker",)
-                for tc in tool_calls
-            )
-            if has_dispatch:
-                self._chat.hold_aura_coding()
-
-            # Note: For non-dispatch tool calls, we keep the current aura state
-            # (which is usually already "coding" if a tool call was emitted).
+            # Note: we keep the current aura state (which is usually already
+            # "coding" if a tool call was emitted).
         else:
             # No tool calls — this is the final turn.
             self._chat.assistant_done()
@@ -759,12 +707,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                             self._playground.open_file(Path(self._workspace_root) / p)
             except Exception:
                 pass
-
-        # Terminal dispatches don't trigger _on_stream_done, so we must auto-save here
-        # to ensure the worker's result is persisted before the app is closed.
-        if name in ("dispatch_to_worker",):
-            self._auto_save_conversation()
-            self._drone_controller.refresh_drone_context()
 
     def _prepare_answer_only_research_ui(self) -> None:
         """Hide work surfaces before a pure answer-only research turn."""

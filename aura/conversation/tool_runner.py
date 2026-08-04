@@ -11,18 +11,10 @@ from typing import Any, Callable
 from aura.client import (
     TerminalOutput,
     ToolResult,
-    WorkerDispatchRequested,
 )
 from aura.config import load_settings, redact_secrets
 from aura.conversation.command_normalizer import normalize_command
-from aura.conversation.dispatch import (
-    DispatchCallback,
-    WorkerDispatchRequest,
-    WorkerDispatchResult,
-)
-from aura.conversation.dispatch_contract import enrich_worker_dispatch_contract
 from aura.conversation.history import History
-from aura.conversation.terminal_policy import worker_terminal_command_allowed
 from aura.conversation.tool_runner_terminal_policy import (
     matches_explicit_validation,
     resolve_terminal_timeout,
@@ -37,22 +29,19 @@ from aura.conversation.validation_orchestrator import (
     looks_like_validation_command,
     parse_validation_command,
 )
-from aura.conversation.worker_outcome import WorkerOutcomeStatus
 from aura.project_env import (
-    build_project_command,
     build_project_command_rewrite,
-    project_environment_missing_payload,
     resolve_workspace_cwd,
     workspace_relative_cwd,
 )
 from aura.sandbox import SandboxExecutor, SandboxResult, WatchResult
-from aura.work_artifact.model import ValidationCommandSpec
+from aura.conversation.validation_orchestrator import ValidationCommandSpec
 
 _log = logging.getLogger(__name__)
 
 
 class ToolRunner:
-    """Owns execution of dispatch and terminal tools."""
+    """Owns execution of terminal tools for production SINGLE."""
 
     def __init__(
         self,
@@ -65,147 +54,12 @@ class ToolRunner:
     def set_workspace_root(self, root: Path) -> None:
         self._workspace_root = root
 
-    def handle_dispatch(
-        self,
-        tool_call_id: str,
-        args: dict[str, Any],
-        on_event: Any,
-        dispatch_cb: DispatchCallback | None,
-        workflow_state_cb: Callable[[str, str, str, Any], None] | None = None,
-        planner_dispatch_attempt: int = 1,
-        previous_dispatch_tool_call_id: str = "",
-    ) -> WorkerDispatchResult | None:
-        req = WorkerDispatchRequest.from_dict(args)
-        req = enrich_worker_dispatch_contract(req)
-
-        # ── Work Artifact handling ───────────────────────────────────────────
-        raw_artifact = args.get("work_artifact") if isinstance(args.get("work_artifact"), dict) else None
-
-        if raw_artifact:
-            # Multi-item artifact from Planner
-            items_raw = raw_artifact.get("items") if isinstance(raw_artifact.get("items"), list) else []
-            
-            _log.info(
-                "WorkArtifact parsed tool_call_id=%s item_count=%d",
-                tool_call_id,
-                len(items_raw),
-            )
-            
-            # Attach the raw payload so DispatchProxy can create the full artifact
-            req.work_artifact_payload = raw_artifact
-            req.artifact_id = tool_call_id
-
-        first_dispatch_in_turn = planner_dispatch_attempt <= 1
-        chained_later_dispatch = not first_dispatch_in_turn
-        _log.info(
-            (
-                "planner_dispatch_entry tool_call_id=%s "
-                "dispatch_attempt=%s first_dispatch_in_turn=%s "
-                "chained_later_dispatch=%s previous_dispatch_tool_call_id=%s"
-            ),
-            tool_call_id,
-            planner_dispatch_attempt,
-            first_dispatch_in_turn,
-            chained_later_dispatch,
-            previous_dispatch_tool_call_id,
-        )
-        if previous_dispatch_tool_call_id:
-            result = _dispatch_chained_rejection(
-                req,
-                tool_call_id=tool_call_id,
-                previous_tool_call_id=previous_dispatch_tool_call_id,
-            )
-            payload = json.dumps(result.to_tool_payload(), ensure_ascii=False)
-            self._history.append_tool_result(tool_call_id, payload)
-            on_event(
-                ToolResult(
-                    tool_call_id=tool_call_id,
-                    name="dispatch_to_worker",
-                    ok=False,
-                    result=payload,
-                    extras={
-                        "dispatch": True,
-                        "recoverable": True,
-                        "summary": result.summary,
-                        **result.extras,
-                    },
-                )
-            )
-            return result
-
-        if dispatch_cb is None:
-            err = (
-                "dispatch_to_worker is not enabled for this manager - "
-                "planner/worker mode is off."
-            )
-            payload = json.dumps({"ok": False, "error": err})
-            self._history.append_tool_result(tool_call_id, payload)
-            on_event(
-                ToolResult(
-                    tool_call_id=tool_call_id,
-                    name="dispatch_to_worker",
-                    ok=False,
-                    result=payload,
-                )
-            )
-            return None
-
-        on_event(
-            WorkerDispatchRequested(
-                tool_call_id=tool_call_id,
-                goal=req.goal,
-                files=list(req.files),
-                spec=req.spec,
-                acceptance=req.acceptance,
-                summary=req.summary,
-            )
-        )
-        try:
-            result = dispatch_cb(tool_call_id, req)
-        except Exception as exc:
-            result = WorkerDispatchResult(
-                ok=False,
-                summary="Harness error due to an internal Worker dispatch exception.",
-                cancelled=False,
-                recoverable=False,
-                extras={
-                    "worker_internal_error": True,
-                    "error_type": type(exc).__name__,
-                    "internal_error": redact_secrets(f"{type(exc).__name__}: {exc}"),
-                },
-            )
-
-        payload = json.dumps(result.to_tool_payload(), ensure_ascii=False)
-        self._history.append_tool_result(tool_call_id, payload)
-        event_extras = {
-            "dispatch": True,
-            "cancelled": result.cancelled,
-            "summary": result.summary,
-            "recoverable": result.recoverable,
-            "phase_boundary": result.phase_boundary,
-            "needs_followup": result.needs_followup,
-            "followup_reason": result.followup_reason,
-        }
-        event_extras.update(result.extras)
-        event_ok = result.ok or bool(result.recoverable and not result.cancelled)
-        on_event(
-            ToolResult(
-                tool_call_id=tool_call_id,
-                name="dispatch_to_worker",
-                ok=event_ok,
-                result=payload,
-                extras=event_extras,
-            )
-        )
-        return result
-
     def handle_terminal_command(
         self,
         tool_call_id: str,
         args: dict[str, Any],
         on_event: Any,
         cancel_event: threading.Event,
-        mode: str,
         explicit_validation_commands: list[ValidationCommandSpec] | None = None,
     ) -> dict[str, Any] | None:
         command = args.get("command", "")
@@ -231,12 +85,12 @@ class ToolRunner:
             validation_command = ValidationCommand(
                 raw_text=requested_command,
                 command=requested_command,
-                source="worker_command" if mode == "worker" else "single_command",
+                source="single_command",
             )
         else:
             validation_command = parse_validation_command(
                 requested_command,
-                source="worker_command" if mode == "worker" else "single_command",
+                source="single_command",
             )
         requested_cwd = str(args.get("cwd") or args.get("working_directory") or "").strip()
         try:
@@ -289,37 +143,6 @@ class ToolRunner:
                 normalized=validation_command.normalized or bool(relative_cwd),
             )
 
-        if mode == "worker" and validation_command.malformed:
-            run_result = classify_validation_run(
-                validation_command,
-                exit_code=None,
-                output="Validation text was not a runnable command.",
-                ok=False,
-            )
-            payload_dict = {
-                "ok": False,
-                "exit_code": None,
-                "output": run_result.output,
-                "command": "",
-                "requested_command": requested_command,
-                "original_command": requested_command,
-                "cwd": relative_cwd,
-                "working_directory": relative_cwd,
-                "failure_class": MALFORMED_VALIDATION_COMMAND,
-            }
-            payload_dict.update(run_result.metadata())
-            payload = json.dumps(payload_dict, ensure_ascii=False)
-            self._history.append_tool_result(tool_call_id, payload)
-            on_event(
-                ToolResult(
-                    tool_call_id=tool_call_id,
-                    name="run_terminal_command",
-                    ok=False,
-                    result=payload,
-                )
-            )
-            return {"_terminal_payload": payload_dict}
-
         command = validation_command.command or requested_command
 
         # Normalize for shell-dialect validation (reject bare cd, export)
@@ -368,89 +191,18 @@ class ToolRunner:
         if normalized.normalization_reason:
             command = normalized.command
 
-        if mode == "worker":
-            explicit = matches_explicit_validation(
-                str(command),
-                explicit_validation_commands,
-                cwd=relative_cwd,
-            )
-            # Ad-hoc validation fallback: when no explicit command list is
-            # present no explicit match exists, classify known Worker
-            # validation-command shapes so they still count as validation.
-            is_ad_hoc_validation = (
-                not explicit
-                and looks_like_validation_command(str(command))
-            ) if mode == "worker" else False
-            decision = worker_terminal_command_allowed(
-                str(command),
-                explicit_validation_commands=explicit_validation_commands,
-                workspace_root=self._workspace_root,
-            )
-            if not decision.allowed:
-                blocked_payload = decision.to_blocked_payload(str(command))
-                payload = json.dumps(blocked_payload, ensure_ascii=False)
-                self._history.append_tool_result(tool_call_id, payload)
-                on_event(
-                    ToolResult(
-                        tool_call_id=tool_call_id,
-                        name="run_terminal_command",
-                        ok=False,
-                        result=payload,
-                    )
-                )
-                return {
-                    "recoverable": True,
-                    "phase_boundary": False,
-                    "reason": decision.failure_class,
-                    "_terminal_payload": blocked_payload,
-                }
-
-            command_plan = build_project_command(
-                resolved_cwd,
-                str(command),
-                explicit=explicit,
-            )
-            if command_plan.missing_tool:
-                blocked_payload = project_environment_missing_payload(
-                    str(command),
-                    command_plan.missing_tool,
-                    explicit=explicit,
-                    failure_class=command_plan.failure_class or "project_environment_missing_tool",
-                    toolchain=command_plan.toolchain,
-                )
-                payload = json.dumps(blocked_payload, ensure_ascii=False)
-                self._history.append_tool_result(tool_call_id, payload)
-                on_event(
-                    ToolResult(
-                        tool_call_id=tool_call_id,
-                        name="run_terminal_command",
-                        ok=False,
-                        result=payload,
-                    )
-                )
-                return {
-                    "recoverable": True,
-                    "phase_boundary": False,
-                    "reason": command_plan.failure_class or "project_environment_missing_tool",
-                    "_terminal_payload": blocked_payload,
-                }
-            command = command_plan.command
-            original_command = command_plan.original_command or requested_command
-        else:
-            command_plan = build_project_command_rewrite(
-                resolved_cwd,
-                str(command),
-            )
-            command = command_plan.command
-            original_command = command_plan.original_command or requested_command
-            # Production single-agent mode owns its own validation, so its
-            # terminal results must carry the same validation classification
-            # the Worker path produced. Without this, a genuinely passing
-            # validation has no pass label and cannot be reported as proof.
-            explicit = False
-            is_ad_hoc_validation = (
-                mode == "single" and looks_like_validation_command(str(command))
-            )
+        command_plan = build_project_command_rewrite(
+            resolved_cwd,
+            str(command),
+        )
+        command = command_plan.command
+        original_command = command_plan.original_command or requested_command
+        # Production single-agent mode owns its own validation, so its
+        # terminal results carry the same validation classification the Worker
+        # path produced. Without this, a genuinely passing validation has no
+        # pass label and cannot be reported as proof.
+        explicit = False
+        is_ad_hoc_validation = looks_like_validation_command(str(command))
 
         timeout = resolve_terminal_timeout(
             command,
@@ -520,11 +272,10 @@ class ToolRunner:
             payload_dict.update(validation_command.metadata())
         # In the structured validation-commands world, we first check
         # explicit spec matches; if none match, the ad-hoc
-        # ``looks_like_validation_command`` fallback ensures Worker
-        # validation commands like ``python -m py_compile`` still count.
+        # ``looks_like_validation_command`` fallback ensures validation
+        # commands like ``python -m py_compile`` still count.
         should_classify_validation = (
-            mode in ("worker", "single")
-            and (explicit or validation_command.normalized or is_ad_hoc_validation)
+            explicit or validation_command.normalized or is_ad_hoc_validation
         )
         if should_classify_validation:
             run_result = classify_validation_run(
@@ -535,7 +286,7 @@ class ToolRunner:
                 failure_class=result.failure_class or "",
             )
             payload_dict.update(run_result.metadata())
-            # Compute contextual command outcome so that Workers see
+            # Compute contextual command outcome so that the run sees
             # a classification that accounts for command role (e.g.
             # "passed" for validation commands that exit 0 despite
             # intermediate traceback output in a fallback branch).
@@ -687,61 +438,3 @@ class ToolRunner:
         )
 
         return {"_terminal_payload": payload_dict}
-
-
-def _dispatch_chained_rejection(
-    req: WorkerDispatchRequest,
-    *,
-    tool_call_id: str,
-    previous_tool_call_id: str,
-) -> WorkerDispatchResult:
-    failure_constraint = _dispatch_chained_constraint(
-        previous_tool_call_id=previous_tool_call_id,
-    )
-    summary = (
-        "The Worker was not started because Planner already dispatched a Worker "
-        "in this user turn. Planner must include all required work in "
-        "the original dispatch_to_worker work_artifact on retry or in a new user turn."
-    )
-    return WorkerDispatchResult(
-        ok=False,
-        summary=summary,
-        needs_followup=True,
-        recoverable=True,
-        status=WorkerOutcomeStatus.needs_followup.value,
-        extras={
-            "dispatch_not_started": True,
-            "planner_dispatch_chain_rejected": True,
-            "planner_resolution_needed": True,
-            "internal_planner_handoff": True,
-            "user_visible_blocker": False,
-            "failure_class": "planner_dispatch_already_used",
-            "failure_constraint": failure_constraint,
-            "tool_call_id": tool_call_id,
-            "previous_dispatch_tool_call_id": previous_tool_call_id,
-            "requested_goal": req.goal,
-            "requested_files": list(req.files),
-        },
-    )
-
-
-def _dispatch_chained_constraint(
-    *,
-    previous_tool_call_id: str,
-) -> str:
-    return "\n".join(
-        [
-            "CONSTRAINT FOR NEXT PLANNER ATTEMPT:",
-            (
-                "This planner turn already used dispatch_to_worker with "
-                f"tool_call_id={previous_tool_call_id}."
-            ),
-            "Do not issue a second dispatch_to_worker call in the same user turn.",
-            (
-                "For multi-part work, include all required items in the "
-                "original dispatch_to_worker work_artifact."
-            ),
-            "Items are bounded internal execution units and Aura executes them internally.",
-            "Do not call edit/write tools.",
-        ]
-    )

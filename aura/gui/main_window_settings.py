@@ -72,43 +72,21 @@ class MainWindowSettingsController(QObject):
         window._worker_handler.update_settings(settings)
         window._toolbar.update_settings(settings)
 
-        window._left_pane.populate_models(
-            settings.provider,
-            settings.worker_provider,
-        )
+        window._left_pane.populate_models(settings.provider)
         window._bridge.set_production_provider(settings.provider)
-        window._bridge.set_worker_provider(settings.worker_provider)
 
         window.set_model(settings.default_model)
         window.set_thinking(settings.default_thinking)
-        window.set_worker_model(settings.default_worker_model)
-        window.set_worker_thinking(settings.default_worker_thinking)
-        window._set_sidebar_planner_worker_mode(False)
         window._enter_production_mode()
-        window._bridge.set_worker_model(settings.default_worker_model)
-        window._bridge.set_worker_thinking(settings.default_worker_thinking)
         window._bridge.set_temperature(settings.temperature)
-        window._bridge.set_worker_temperature(settings.worker_temperature)
-        window._bridge.set_custom_system_prompts(
-            settings.system_prompt,
-            settings.planner_system_prompt,
-            settings.worker_system_prompt,
-        )
-        window._bridge.set_auto_dispatch(settings.auto_dispatch)
+        window._bridge.set_system_prompt(settings.system_prompt)
         window._bridge.set_auto_approve(settings.auto_approve)
         # Returns immediately: connecting (and, the first time, installing)
         # happens on the manager's worker thread.
         window._bridge.apply_windows_computer_use(settings)
-        window._toolbar.set_auto_dispatch(settings.auto_dispatch)
         window._toolbar.set_auto_approve(settings.auto_approve)
         window._toolbar.set_auto_summon_drones(settings.auto_summon_drones)
         window._refresh_status_bar()
-
-    def on_auto_dispatch_toggled(self, checked: bool) -> None:
-        self._window._settings.auto_dispatch = checked
-        self._window._bridge.set_auto_dispatch(checked)
-        self._window._toolbar.refresh_auto_toggle_tooltips()
-        save_settings(self._window._settings)
 
     def on_auto_approve_toggled(self, checked: bool) -> None:
         self._window._settings.auto_approve = checked

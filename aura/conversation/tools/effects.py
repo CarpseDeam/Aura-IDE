@@ -123,7 +123,6 @@ BUILTIN_TOOL_EFFECTS: dict[str, ToolEffect] = {
     "update_worker_todo": ToolEffect.BOOKKEEPING,
     "report_blocker": ToolEffect.BOOKKEEPING,
     "report_already_satisfied": ToolEffect.BOOKKEEPING,
-    "dispatch_to_worker": ToolEffect.BOOKKEEPING,
     "summon_drone": ToolEffect.BOOKKEEPING,
     "register_drone_folder": ToolEffect.BOOKKEEPING,
     "save_to_project_memory": ToolEffect.BOOKKEEPING,

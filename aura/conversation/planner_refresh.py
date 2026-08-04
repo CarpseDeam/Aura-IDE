@@ -5,42 +5,8 @@ from pathlib import Path
 from typing import Callable
 
 from aura.context_gearbox.models import RuntimeRole
-from aura.context_gearbox.runtime import context_gearbox_metadata, compose_system_prompt
 
 logger = logging.getLogger(__name__)
-
-
-def stale_read_notice(modified_files: list[str]) -> str:
-    """Return a planner stale-read invalidation notice.
-
-    Inlines path normalization (backslash→slash, strip "./", collapse "//",
-    dedup) formerly provided by manager's _unique_worker_paths / _normalize_worker_path.
-    """
-    unique: list[str] = []
-    seen: set[str] = set()
-    for path in modified_files:
-        normalized = str(path).replace("\\", "/")
-        if normalized.startswith("./"):
-            normalized = normalized[2:]
-        while "//" in normalized:
-            normalized = normalized.replace("//", "/")
-        normalized = normalized.strip()
-        if not normalized or normalized in seen:
-            continue
-        unique.append(normalized)
-        seen.add(normalized)
-
-    bullet_list = "\n".join(f"- {p}" for p in unique)
-    return (
-        "Planner stale-read invalidation:\n"
-        "The Worker modified these files:\n"
-        f"{bullet_list}\n\n"
-        "Any prior Planner reads of those paths are stale. "
-        "Re-read the modified files before planning, dispatching, or reasoning "
-        "about further edits involving them. "
-        "If the Worker completed successfully, summarize or finish normally; "
-        "do not redispatch because of this notice unless the user asks for more."
-    )
 
 
 class PlannerRefreshState:
@@ -61,9 +27,9 @@ class PlannerRefreshState:
         self._capabilities_provider = capabilities_provider
         self._base_system_prompt: str | None = None
         self._workspace_root: Path | None = None
-        # SINGLE is the normal product; the legacy Planner path opts in through
-        # ``configure_for_planner``. An unconfigured manager must never append
-        # Planner notices to a production turn.
+        # SINGLE is the normal product; the legacy Planner path opted in through
+        # ``configure_for_planner`` and is gone. An unconfigured manager never
+        # appends notices to a production turn.
         self._role: RuntimeRole = RuntimeRole.SINGLE
         self._model: str | None = None
         self._task_kind: str | None = None
@@ -74,7 +40,7 @@ class PlannerRefreshState:
         self,
         base_prompt: str,
         workspace_root: Path,
-        role: RuntimeRole | str = RuntimeRole.PLANNER,
+        role: RuntimeRole | str = RuntimeRole.SINGLE,
         *,
         model: str | None = None,
         task_kind: str | None = None,
@@ -128,104 +94,3 @@ class PlannerRefreshState:
             # confirmed must not claim tools are available.
             logger.warning("Could not read active capabilities", exc_info=True)
             return frozenset()
-
-    def refresh_tier1_after_writes(
-        self,
-        history,
-        target_files: tuple[str, ...] | list[str] = (),
-    ) -> None:
-        """Rebuild Tier 1 context with force-refreshed repo map and update system prompt.
-
-        Called after file writes land. Forces repo map regeneration so the next
-        model round sees updated code structure. Composes against the configured
-        runtime role, so the production single-agent path never re-injects a
-        Planner posture. Does nothing if configure was not called.
-
-        Production ``SINGLE`` freezes instead: the Tier-1 system prompt selected
-        at the start of the real user turn stays in place for every round of
-        that turn, so the request prefix does not churn mid-turn after each
-        applied write. Post-write correctness is preserved by the existing
-        machinery — the tool round clears stale read fingerprints
-        (``PreEditLoopGuard.note_stale_paths``), write results and hashes are
-        in history, and the next real user turn recomposes Tier 1 normally
-        (``qt_bridge._prepare_turn_context``). The legacy ``PLANNER`` path
-        recomposes as before.
-        """
-        if self._base_system_prompt is None or self._workspace_root is None:
-            return
-        if self._role == RuntimeRole.SINGLE:
-            logger.info(
-                "single_context_refresh_frozen writes=%d",
-                len(tuple(target_files or ())),
-            )
-            return
-        known_targets = tuple(dict.fromkeys((*self._target_files, *tuple(target_files or ()))))
-        try:
-            composed = compose_system_prompt(
-                self._role,
-                self._base_system_prompt,
-                self._workspace_root,
-                force=True,
-                model=self._model,
-                task_kind=self._task_kind,
-                target_files=known_targets,
-                content=self._content,
-                active_capabilities=self._active_capabilities(),
-            )
-            metadata = context_gearbox_metadata(
-                composed.ledger, workspace_root=self._workspace_root,
-            )
-            logger.info(
-                "%s_context_refresh_summary %s",
-                self._role.value,
-                metadata["summary"]["display"],
-            )
-            history.set_system(composed.system_prompt)
-        except Exception:
-            logger.warning(
-                "Failed to refresh Tier 1 context after writes", exc_info=True
-            )
-
-    def handle_post_write_notices(
-        self, history, modified_files: list[str]
-    ) -> None:
-        """Handle all post-write context updates, owned by the active role.
-
-        Production ``SINGLE`` keeps the Tier-1 prefix frozen: the system prompt
-        selected at the start of the real user turn is not rebuilt after an
-        applied write, and no ``Planner stale-read invalidation`` message and
-        no dependency notice are appended, so the turn keeps exactly one user
-        boundary — the real request. Nothing here touches the pre-edit guard
-        or edit-recovery state; those live in the tool round and are unchanged.
-        The next real user turn recomposes Tier 1 normally.
-
-        Legacy ``PLANNER`` keeps the historical notices: the stale-read
-        invalidation user message, then the Tier 1 refresh, then the dependent
-        planner notice.
-
-        1. If modified_files is empty, return.
-        2. Refresh Tier 1 context.
-        3. (PLANNER only) Append stale-read notice.
-        4. (PLANNER only) Append dependent planner notice (force_graph=True).
-        """
-        if not modified_files:
-            return
-
-        # Files the run just wrote are the target files we now know about.
-        if self._role == RuntimeRole.SINGLE:
-            self.refresh_tier1_after_writes(history, tuple(modified_files))
-            return
-
-        history.append_user_text(stale_read_notice(modified_files))
-        self.refresh_tier1_after_writes(history, tuple(modified_files))
-
-        if self._workspace_root is not None:
-            from aura.dependency_context import build_dependent_planner_notice
-
-            notice = build_dependent_planner_notice(
-                self._workspace_root,
-                modified_files,
-                force_graph=True,
-            )
-            if notice:
-                history.append_user_text(notice)

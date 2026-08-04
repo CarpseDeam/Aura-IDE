@@ -22,18 +22,6 @@ class GodotSceneHandlersMixin:
                     }
                 ),
             )
-        if self._mode == "planner":
-            return ToolExecResult(
-                ok=False,
-                payload=_mark_not_applied(
-                    {
-                        "ok": False,
-                        "error": "Planner cannot edit scenes directly; dispatch the scene changes to a Worker.",
-                        "failure_class": "planner_write_forbidden",
-                    }
-                ),
-            )
-
         path_arg = args.get("path", "")
         target = self._resolve_in_root(path_arg)
         if target.suffix.lower() != ".tscn":

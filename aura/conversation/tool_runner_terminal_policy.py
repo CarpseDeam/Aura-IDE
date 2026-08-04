@@ -5,7 +5,7 @@ import re
 from typing import Any
 
 from aura.conversation.validation_orchestrator import parse_validation_command
-from aura.work_artifact.model import ValidationCommandSpec
+from aura.conversation.validation_orchestrator import ValidationCommandSpec
 
 
 DEFAULT_TERMINAL_TIMEOUT_SECONDS = 300

@@ -167,11 +167,7 @@ class ConversationPersistence(QObject):
         workspace_root,
         model,
         thinking,
-        worker_model,
-        worker_thinking,
         provider,
-        planner_provider,
-        worker_provider,
     ) -> None:
         """Save the current conversation in a background thread (fire-and-forget).
 
@@ -187,7 +183,6 @@ class ConversationPersistence(QObject):
 
         # Deep copy data for thread safety
         history_copy = copy.deepcopy(self._bridge.history)
-        dispatch_records_copy = list(self._bridge.dispatch_records)
         chat_items_copy = clone_chat_items(getattr(self._chat, "chat_items", []))
         existing_path = self._current_conversation_path
 
@@ -199,8 +194,6 @@ class ConversationPersistence(QObject):
             if not safe_is_relative_to(existing_path, conversations_dir(workspace_root)):
                 existing_path = None
 
-        pwm = self._bridge.planner_worker_mode
-
         def _run_save() -> None:
             try:
                 path = save_conversation(
@@ -209,16 +202,8 @@ class ConversationPersistence(QObject):
                     model=model,
                     thinking=thinking,
                     existing_path=existing_path,
-                    planner_worker_mode=pwm,
-                    planner_model=model,
-                    worker_model=worker_model,
-                    planner_thinking=thinking,
-                    worker_thinking=worker_thinking,
-                    worker_dispatches=dispatch_records_copy,
                     chat_items=chat_items_copy,
                     provider=provider,
-                    planner_provider=planner_provider,
-                    worker_provider=worker_provider,
                 )
                 self._update_project_thread(workspace_root, path, history_copy)
                 self.save_succeeded.emit(path, generation)
@@ -336,10 +321,9 @@ class ConversationPersistence(QObject):
             loaded.path,
         )
         self._active_replay_id += 1
-        # Old conversations may carry planner_worker_mode=True and dispatch
-        # records. They load safely, but the live session always resumes in
-        # production single-agent mode.
-        legacy_pwm = loaded.planner_worker_mode
+        # Old conversations may carry legacy Planner/Worker metadata. They load
+        # safely, but the live session always resumes in production single-agent
+        # mode with the single-model fields only.
         from aura.prompts import SINGLE_SYSTEM_PROMPT
         default_prompt = SINGLE_SYSTEM_PROMPT
 
@@ -349,46 +333,23 @@ class ConversationPersistence(QObject):
         self._bridge.history.messages = list(loaded.history.messages)
         self._current_conversation_path = loaded.path
 
-        # Propagate custom prompts to bridge for future mode switches
-        self._bridge.set_custom_system_prompts(
-            self._settings.system_prompt,
-            self._settings.planner_system_prompt,
-            self._settings.worker_system_prompt,
-        )
+        # Propagate the custom production prompt.
+        self._bridge.set_system_prompt(self._settings.system_prompt)
         self._bridge.set_temperature(self._settings.temperature)
-        self._bridge.set_worker_temperature(self._settings.worker_temperature)
 
-        # Update settings to match loaded conversation
+        # Update settings to match the loaded conversation.
         self._settings.provider = loaded.provider
-        self._settings.planner_provider = loaded.planner_provider
-        self._settings.worker_provider = loaded.worker_provider
 
-        # Restore providers to bridge and sidebar. The production provider is
-        # the generic one; legacy role providers are restored for compatibility.
+        # Restore the production provider to bridge and sidebar.
         self._bridge.set_production_provider(loaded.provider)
-        self._bridge.set_worker_provider(loaded.worker_provider)
-        self._left_pane.populate_models(loaded.provider, loaded.worker_provider)
+        self._left_pane.populate_models(loaded.provider)
 
         # Always resume in production single-agent mode.
         self._bridge.set_production_mode()
-        # Old dispatch records are retained so historical records keep loading.
-        self._bridge.set_dispatch_records(loaded.worker_dispatches)
-        # Prefer the conversation's production model; fall back to the legacy
-        # planner selection for records written before the migration.
-        production_model = loaded.model or (loaded.planner_model if legacy_pwm else "")
-        production_thinking = loaded.thinking or (
-            loaded.planner_thinking if legacy_pwm else ""
-        )
-        if production_model:
-            self._left_pane.set_production_model(production_model)
-        if production_thinking:
-            self._left_pane.set_production_thinking(production_thinking)
-        self._left_pane.set_worker_model(loaded.worker_model)
-        self._left_pane.set_worker_thinking(loaded.worker_thinking)
-        self._bridge.set_worker_model(loaded.worker_model)
-        self._bridge.set_worker_thinking(loaded.worker_thinking)
-
-        self._left_pane.set_planner_worker_mode(False)
+        if loaded.model:
+            self._left_pane.set_production_model(loaded.model)
+        if loaded.thinking:
+            self._left_pane.set_production_thinking(loaded.thinking)
         self._chat.reset()
         self._playground.clear()
         self._bridge.clear_pre_worker_snapshot()

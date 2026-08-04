@@ -125,13 +125,6 @@ def handle_conversation_create(msg: dict, ctx: CommandContext) -> None:
             thinking=settings.default_thinking,
             title="New chat",
             provider=settings.provider,
-            planner_provider=settings.planner_provider,
-            worker_provider=settings.worker_provider,
-            planner_model=settings.default_planner_model,
-            planner_thinking=settings.default_planner_thinking,
-            worker_model=settings.default_worker_model,
-            worker_thinking=settings.default_worker_thinking,
-            planner_worker_mode=settings.planner_worker_mode,
         )
 
         thread = store.create_thread(project, title="New chat")

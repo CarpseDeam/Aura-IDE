@@ -3,36 +3,61 @@ from __future__ import annotations
 import logging
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QEventLoop, QObject, QThread, Signal, Slot
 
 from aura.backends import APIAgentBackend
 from aura.bridge.approval_proxy import _ApprovalProxy
-from aura.bridge.dispatch import _DispatchProxy
 from aura.bridge.lap_result import LapResult
-from aura.config import redact_secrets
+from aura.bridge.production_execution import ProductionExecutionSession
+from aura.bridge.production_receipt import (
+    STATUS_BLOCKED,
+    STATUS_CANCELLED,
+    STATUS_COMPLETED,
+    STATUS_COMPLETED_UNVERIFIED,
+    STATUS_HARNESS_ERROR,
+    STATUS_NO_AUTHORITATIVE_CHANGE,
+    STATUS_PROVIDER_CONTRACT_FAILURE,
+    STATUS_VALIDATION_FAILED,
+    ProductionReceipt,
+)
+from aura.config import DEFAULT_THINKING, redact_secrets
 from aura.conversation import ConversationManager, History
+from aura.conversation.worker_outcome import WorkerOutcomeStatus
+from aura.context_gearbox.runtime import SINGLE_SYSTEM_PROMPT
 from aura.conversation.tools import ToolRegistry
 from aura.git_ops import changes_since, snapshot
-from aura.model_streams import model_streams
-from aura.models import DEFAULT_PLANNER_THINKING
+from aura.model_streams import PRODUCTION_STREAM_HOOK, model_streams
 from aura.prompts import (
-    PLANNER_SYSTEM_PROMPT,
     build_tier1_context,
     inject_tier1_context,
 )
 from aura.settings import resolve_role_default_model
 
-if TYPE_CHECKING:
-    pass
-
 logger = logging.getLogger(__name__)
 
 
+# Map a production receipt status onto the WorkerOutcomeStatus vocabulary the
+# Drone harness-lap consumers understand. Only the truly-successful receipts
+# map to success; every failure class maps to a real failure status.
+_RECEIPT_STATUS_TO_WORKER: dict[str, str] = {
+    STATUS_COMPLETED: WorkerOutcomeStatus.completed.value,
+    STATUS_COMPLETED_UNVERIFIED: WorkerOutcomeStatus.completed.value,
+    STATUS_VALIDATION_FAILED: WorkerOutcomeStatus.validation_failed.value,
+    STATUS_CANCELLED: WorkerOutcomeStatus.cancelled.value,
+    STATUS_BLOCKED: WorkerOutcomeStatus.harness_error.value,
+    STATUS_HARNESS_ERROR: WorkerOutcomeStatus.harness_error.value,
+    STATUS_PROVIDER_CONTRACT_FAILURE: WorkerOutcomeStatus.harness_error.value,
+    STATUS_NO_AUTHORITATIVE_CHANGE: WorkerOutcomeStatus.harness_error.value,
+}
+
+
 class _LapWorker(QObject):
-    """Worker thread object that runs the planner conversation loop.
-    Simplified for headless operation — no GUI signal forwarding.
+    """Worker thread object that runs one production single-agent lap.
+
+    Simplified for headless operation — no GUI signal forwarding. The lap runs
+    the ordinary production SINGLE loop against ``PRODUCTION_STREAM_HOOK`` and
+    collects the run's structured receipt via ``ProductionExecutionSession``.
     """
 
     finished = Signal()
@@ -41,7 +66,7 @@ class _LapWorker(QObject):
         self,
         manager: ConversationManager,
         approval_proxy: _ApprovalProxy,
-        dispatch_proxy: _DispatchProxy | None,
+        production_session: ProductionExecutionSession,
         cancel_event: threading.Event,
         model: str,
         thinking: str,
@@ -51,31 +76,37 @@ class _LapWorker(QObject):
         super().__init__()
         self._manager = manager
         self._approval_proxy = approval_proxy
-        self._dispatch_proxy = dispatch_proxy
+        self._production_session = production_session
         self._cancel = cancel_event
         self._model = model
         self._thinking = thinking
         self._temperature = temperature
         self._workspace_root = workspace_root
+        self._blocked_reason: str = ""
+        self._provider_contract_failure: bool = False
+        self._already_satisfied: bool = False
+        self._bears_production_action: bool = False
+        self._receipt: ProductionReceipt | None = None
 
     @Slot()
     def run(self) -> None:
         try:
-            dispatch_cb = (
-                self._dispatch_proxy.request_dispatch
-                if self._dispatch_proxy is not None
-                else None
-            )
+            self._production_session.begin(model=str(self._model))
             self._manager.send(
-                on_event=lambda ev: None,
+                on_event=self._on_event,
                 approval_cb=self._approval_proxy.request_approval,
                 cancel_event=self._cancel,
                 model=self._model,
                 thinking=self._thinking,
-                dispatch_cb=dispatch_cb,
                 temperature=self._temperature,
-                hook_name="generate_planner_code",
-                max_tool_rounds=None,
+            )
+            self._blocked_reason = self._manager.last_turn_blocked_reason
+            self._provider_contract_failure = (
+                self._manager.last_turn_provider_contract_failure
+            )
+            self._already_satisfied = self._manager.last_turn_already_satisfied
+            self._bears_production_action = (
+                self._manager.last_turn_bears_production_action
             )
         except Exception as exc:
             logger.error(
@@ -84,14 +115,26 @@ class _LapWorker(QObject):
         finally:
             if self._cancel.is_set():
                 self._manager.history.pop_if_empty_assistant_message()
+            try:
+                self._receipt = self._production_session.finish(
+                    blocked_reason=self._blocked_reason,
+                    provider_contract_failure=self._provider_contract_failure,
+                    already_satisfied=self._already_satisfied,
+                    bears_production_action=self._bears_production_action,
+                )
+            except Exception:
+                logger.exception("Harness lap failed to build production receipt")
             self.finished.emit()
+
+    def _on_event(self, ev) -> None:
+        self._production_session.handle_event(ev)
 
 
 class HarnessLapBridge(QObject):
     """Headless, self-contained runner for unattended Drone harness laps.
 
-    Owns its own History, ToolRegistry, ConversationManager, API backends
-    (planner + worker), approval proxy, and dispatch proxy. Does NOT connect
+    Owns its own History, ToolRegistry, ConversationManager, one production
+    backend, approval proxy, and production execution session. Does NOT connect
     to any GUI signals. Manages global hook registration only during each lap.
     """
 
@@ -100,32 +143,26 @@ class HarnessLapBridge(QObject):
         workspace_root: Path,
         *,
         provider: str = "deepseek",
-        planner_provider: str | None = None,
-        planner_system_prompt: str = "",
+        system_prompt: str = "",
     ) -> None:
         super().__init__()
         self._workspace_root = workspace_root
         self._provider: str = provider
-        self._planner_provider = planner_provider
-        self._planner_system_prompt = planner_system_prompt
+        self._system_prompt = system_prompt
 
         self._history = History()
         self._registry = ToolRegistry(
             workspace_root=workspace_root,
-            mode="planner",
+            mode="single",
         )
         self._manager = ConversationManager(self._history, self._registry)
 
-        self._planner_backend = APIAgentBackend(provider=planner_provider or provider)
-        self._worker_backend = APIAgentBackend(provider=provider)
+        self._production_backend = APIAgentBackend(provider=provider)
 
         self._approval_proxy = _ApprovalProxy(parent_widget=None)
-        self._dispatch_proxy = _DispatchProxy(
-            parent_widget=None,
-            registry_factory=self._make_worker_registry,
+        self._production_session = ProductionExecutionSession(
             approval_proxy=self._approval_proxy,
-            workspace_root=workspace_root,
-            provider=provider,
+            parent=self,
         )
 
         # Build tier1 context once; reused across laps.
@@ -133,48 +170,37 @@ class HarnessLapBridge(QObject):
             build_tier1_context(workspace_root) if workspace_root is not None else ""
         )
 
-    def _make_worker_registry(self, mode: str) -> ToolRegistry:
-        worker_reg = ToolRegistry(
-            workspace_root=self._registry.workspace_root,
-            read_only=self._registry.read_only,
-            mode="worker" if mode == "worker" else "single",
-        )
-        return worker_reg
-
     def run_one_lap(self, want: str) -> LapResult:
-        """Execute one unattended planner -> worker lap.
+        """Execute one unattended production single-agent lap.
 
-        Saves and restores global hook registrations around the lap to avoid
+        Saves and restores global hook registration around the lap to avoid
         interfering with any visible ConversationBridge.
         """
         workspace_root = self._workspace_root
 
-        # Save existing hook handlers
-        saved_planner = model_streams.get_handler("generate_planner_code")
-        saved_worker = model_streams.get_handler("generate_worker_code")
-        model_streams.unregister("generate_planner_code")
-        model_streams.unregister("generate_worker_code")
-        model_streams.register("generate_planner_code", self._planner_backend.stream)
-        model_streams.register("generate_worker_code", self._worker_backend.stream)
+        # Save existing hook handler
+        saved_production = model_streams.get_handler(PRODUCTION_STREAM_HOOK)
+        model_streams.unregister(PRODUCTION_STREAM_HOOK)
+        model_streams.register(PRODUCTION_STREAM_HOOK, self._production_backend.stream)
 
         old_approve_all = self._approval_proxy._approve_all_session
         old_registry_mode = self._registry.mode
 
         try:
             self._approval_proxy.set_approve_all_session(True)
-            self._registry.set_mode("planner")
+            self._registry.set_mode("single")
 
             # Reset and seed history
             self._history.messages.clear()
-            self._dispatch_proxy.clear_records()
+            self._production_session.clear()
             self._history.append_user_text(want)
 
             base_prompt = (
-                self._planner_system_prompt
-                if self._planner_system_prompt
-                else PLANNER_SYSTEM_PROMPT
+                self._system_prompt
+                if self._system_prompt
+                else SINGLE_SYSTEM_PROMPT
             )
-            self._manager.configure_for_planner(
+            self._manager.configure_runtime_context(
                 base_prompt=base_prompt,
                 workspace_root=workspace_root,
             )
@@ -185,26 +211,16 @@ class HarnessLapBridge(QObject):
             # Git snapshot before lap
             pre_sha = snapshot(workspace_root) if workspace_root is not None else None
 
-            planner_provider = self._planner_provider or self._provider
-            model = resolve_role_default_model(planner_provider, "planner")
-            thinking = DEFAULT_PLANNER_THINKING
+            model = resolve_role_default_model(self._provider, "production")
+            thinking = DEFAULT_THINKING
 
             cancel = threading.Event()
-
-            # Auto-dispatch: connect showSpecCard to user_dispatched
-            self._dispatch_proxy.showSpecCard.connect(
-                lambda tool_id, goal, files, spec, acceptance, summary: (
-                    self._dispatch_proxy.user_dispatched(
-                        tool_id, goal, list(files), spec, acceptance, summary
-                    )
-                )
-            )
 
             thread = QThread()
             worker = _LapWorker(
                 manager=self._manager,
                 approval_proxy=self._approval_proxy,
-                dispatch_proxy=self._dispatch_proxy,
+                production_session=self._production_session,
                 cancel_event=cancel,
                 model=model,
                 thinking=thinking,
@@ -224,108 +240,38 @@ class HarnessLapBridge(QObject):
             thread.deleteLater()
             worker.deleteLater()
 
-            self._dispatch_proxy.showSpecCard.disconnect()
-
-            # Collect worker dispatch metadata
+            # Collect production receipt metadata
             worker_ok = True
             worker_status = "completed"
             worker_errors: list[str] = []
             validation_results: list[dict] = []
-            try:
-                from aura.conversation.worker_outcome import WorkerOutcomeStatus
-
-                _SEVERITY = {
-                    WorkerOutcomeStatus.completed.value: 0,
-                    WorkerOutcomeStatus.completed_with_caveats.value: 1,
-                    WorkerOutcomeStatus.validation_failed.value: 3,
-                    WorkerOutcomeStatus.edit_mechanics_blocked.value: 4,
-                    WorkerOutcomeStatus.harness_error.value: 5,
-                }
-
-                def _sev(s: str) -> int:
-                    return _SEVERITY.get(s, -1)
-
-                for record in self._dispatch_proxy.records():
-                    meta = self._dispatch_proxy.result_metadata(
-                        record.tool_call_id
-                    )
-                    if not meta:
-                        continue
-                    extras = meta.get("extras", {}) or {}
-                    errs = extras.get("errors") or []
-                    if errs:
-                        worker_errors.extend(str(e) for e in errs)
-                    vr = extras.get("validation_results") or []
-                    if vr:
-                        validation_results.extend(vr)
-
-                    candidate: str | None = None
-                    if extras.get("internal_error"):
-                        candidate = WorkerOutcomeStatus.harness_error.value
-                        if not worker_errors:
-                            worker_errors.append(
-                                str(extras["internal_error"])
-                            )
-                    elif extras.get("unrecovered_not_applied_writes"):
-                        candidate = (
-                            WorkerOutcomeStatus.edit_mechanics_blocked.value
-                        )
-                        if not worker_errors:
-                            worker_errors.append(
-                                "Unrecovered write failures"
-                            )
-                    else:
-                        if vr and any(
-                            r.get("exit_code") not in (0, None)
-                            for r in vr
-                        ):
-                            candidate = (
-                                WorkerOutcomeStatus.validation_failed.value
-                            )
-                            if not worker_errors:
-                                worker_errors.append(
-                                    "Validation command failed"
-                                )
-                        elif any(
-                            "Validation command failed" in str(e)
-                            for e in errs
-                        ):
-                            candidate = (
-                                WorkerOutcomeStatus.validation_failed.value
-                            )
-                            if not worker_errors:
-                                worker_errors.append(
-                                    "Validation command failed"
-                                )
-                        elif extras.get("validation_not_run") and meta.get(
-                            "modified_files"
-                        ):
-                            candidate = (
-                                WorkerOutcomeStatus.validation_failed.value
-                            )
-                            if not worker_errors:
-                                worker_errors.append(
-                                    "Validation not run after writes"
-                                )
-                        elif extras.get("needs_followup"):
-                            candidate = (
-                                WorkerOutcomeStatus.harness_error.value
-                            )
-                            if not worker_errors:
-                                worker_errors.append(
-                                    "Worker reported needs_followup"
-                                )
-
-                    if candidate is not None and _sev(candidate) > _sev(
-                        worker_status
-                    ):
-                        worker_status = candidate
-                        worker_ok = False
-            except Exception:
-                logger.warning(
-                    "Failed to collect worker dispatch metadata",
-                    exc_info=True,
+            if worker._receipt is not None:
+                metadata = worker._receipt.metadata
+                worker_status = _RECEIPT_STATUS_TO_WORKER.get(
+                    worker._receipt.status, WorkerOutcomeStatus.harness_error.value
                 )
+                worker_ok = worker._receipt.ok
+                worker_errors = [
+                    str(message) for message in metadata.get("api_errors") or []
+                ]
+                if worker._receipt.status == STATUS_BLOCKED:
+                    blocked = metadata.get("blocked_reason")
+                    if blocked:
+                        worker_errors.append(f"Blocked: {blocked}")
+                for record in metadata.get("not_applied_writes") or []:
+                    worker_errors.append(f"Write not applied: {record}")
+                if worker._receipt.status == STATUS_PROVIDER_CONTRACT_FAILURE:
+                    worker_errors.append("Provider was unusable for the lap turn.")
+                validation_results = [
+                    {
+                        "command": str(item.get("command", "")),
+                        "attempts": int(item.get("attempts", 0)),
+                        "passed": bool(item.get("passed", False)),
+                        "repaired": bool(item.get("repaired", False)),
+                        "exit_code": item.get("exit_code"),
+                    }
+                    for item in metadata.get("validation") or []
+                ]
 
             # Detect git changes
             has_work = False
@@ -364,10 +310,7 @@ class HarnessLapBridge(QObject):
             self._approval_proxy._approve_all_session = old_approve_all
             self._registry.set_mode(old_registry_mode)
 
-            # Restore hook handlers
-            model_streams.unregister("generate_planner_code")
-            model_streams.unregister("generate_worker_code")
-            if saved_planner:
-                model_streams.register("generate_planner_code", saved_planner)
-            if saved_worker:
-                model_streams.register("generate_worker_code", saved_worker)
+            # Restore hook handler
+            model_streams.unregister(PRODUCTION_STREAM_HOOK)
+            if saved_production:
+                model_streams.register(PRODUCTION_STREAM_HOOK, saved_production)

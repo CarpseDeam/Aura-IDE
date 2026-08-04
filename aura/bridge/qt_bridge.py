@@ -9,17 +9,15 @@ Normal Aura coding is one continuous production run:
       → validation rerun → one factual completion receipt
 
 - send() spawns a QThread that runs ConversationManager.send against the
-  role-neutral `generate_production_code` hook.
+  `generate_production_code` hook.
 - Every event is projected into the workspace through
   ``ProductionExecutionSession`` under one stable run id.
 - The approval callback is bridged via QMetaObject.invokeMethod with
   Qt.BlockingQueuedConnection — the worker thread blocks until the user clicks
   in the modal dialog on the main thread.
 
-Planner / worker dispatch (`_DispatchProxy`, SpecCard, Worker capsules) remains
-as unreachable compatibility scaffolding for old persisted conversations. The
-normal application path never constructs a SpecCard, never calls
-``dispatch_to_worker``, and never triggers the Planner or Worker stream hooks.
+There is exactly one backend, one provider, one system prompt, one model, one
+thinking choice, and one ``PRODUCTION_STREAM_HOOK``.
 """
 from __future__ import annotations
 
@@ -36,30 +34,16 @@ from PySide6.QtCore import (
     Slot,
 )
 
-if TYPE_CHECKING:
-    from aura.conversation.persistence import WorkerDispatchRecord
-
 from aura.backends import (
     APIAgentBackend,
 )
 from aura.bridge.approval_proxy import _ApprovalProxy
-from aura.bridge.dispatch import _DispatchProxy
 from aura.bridge.production_execution import ProductionExecutionSession
 from aura.client import (
-    AgentProcessFinished,
-    AgentProcessOutput,
-    AgentProcessStarted,
     ApiError,
     ContentDelta,
     Done,
     Event,
-    ReasoningDelta,
-    TerminalOutput,
-    ToolCallArgsDelta,
-    ToolCallEnd,
-    ToolCallStart,
-    ToolResult,
-    WorkerDispatchRequested,
 )
 from aura.config import (
     ModelId,
@@ -84,9 +68,7 @@ from aura.conversation.tools import (
     ToolRegistry,
 )
 from aura.model_streams import (
-    PLANNER_STREAM_HOOK,
     PRODUCTION_STREAM_HOOK,
-    WORKER_STREAM_HOOK,
     model_streams,
 )
 from aura.research.policy import NO_RESEARCH, decide_research_policy
@@ -106,7 +88,6 @@ class _Worker(QObject):
     apiError = Signal(int, str)
     streamDone = Signal(str, dict)
     toolResultEmitted = Signal(str, str, bool, str, dict)
-    workerDispatchRequested = Signal(str, str, list, str, str, str)
     terminalOutput = Signal(str, str)  # (tool_call_id, text)
     agentProcessStarted = Signal(str, str, str)  # process_id, label, command
     agentProcessOutput = Signal(str, str)  # process_id, text
@@ -117,27 +98,23 @@ class _Worker(QObject):
         self,
         manager: ConversationManager,
         approval_proxy: "_ApprovalProxy",
-        dispatch_proxy: "_DispatchProxy | None",
         cancel_event: threading.Event,
         model: ModelId,
         thinking: ThinkingMode,
         temperature: float = 0.7,
         workspace_root: Path | None = None,
         production_session: "ProductionExecutionSession | None" = None,
-        hook_name: str = PRODUCTION_STREAM_HOOK,
         task_route: TaskRoute | None = None,
     ) -> None:
         super().__init__()
         self._manager = manager
         self._approval_proxy = approval_proxy
-        self._dispatch_proxy = dispatch_proxy
         self._cancel = cancel_event
         self._model = model
         self._thinking = thinking
         self._temperature = temperature
         self._workspace_root = workspace_root
         self._production_session = production_session
-        self._hook_name = hook_name
         self._task_route = task_route
         self._blocked_reason: str = ""
         self._provider_contract_failure: bool = False
@@ -147,26 +124,13 @@ class _Worker(QObject):
     @Slot()
     def run(self) -> None:
         try:
-            dispatch_cb = (
-                self._dispatch_proxy.request_dispatch
-                if self._dispatch_proxy is not None
-                else None
-            )
-            workflow_state_cb = (
-                self._dispatch_proxy._workflow_state_callback
-                if self._dispatch_proxy is not None
-                else None
-            )
             self._manager.send(
                 on_event=self._on_event,
                 approval_cb=self._approval_proxy.request_approval,
                 cancel_event=self._cancel,
                 model=self._model,
                 thinking=self._thinking,
-                dispatch_cb=dispatch_cb,
-                workflow_state_cb=workflow_state_cb,
                 temperature=self._temperature,
-                hook_name=self._hook_name,
                 task_route=self._task_route,
             )
             self._blocked_reason = self._manager.last_turn_blocked_reason
@@ -194,7 +158,6 @@ class _Worker(QObject):
             session.handle_event(ev)
             self._emit_chat_facts(ev)
             return
-        self._emit_all(ev)
 
     def _emit_chat_facts(self, ev: Event) -> None:
         """Emit the event set the chat and persistence layers own.
@@ -218,46 +181,6 @@ class _Worker(QObject):
                 redact_secrets(ev.message)
             )
 
-    def _emit_all(self, ev: Event) -> None:
-        if isinstance(ev, ReasoningDelta):
-            self.reasoningDelta.emit(ev.text)
-        elif isinstance(ev, ContentDelta):
-            self.contentDelta.emit(ev.text)
-        elif isinstance(ev, ToolCallStart):
-            self.toolCallStart.emit(ev.index, ev.id, ev.name)
-        elif isinstance(ev, ToolCallArgsDelta):
-            self.toolCallArgs.emit(ev.index, ev.args_chunk)
-        elif isinstance(ev, ToolCallEnd):
-            self.toolCallEnd.emit(ev.index)
-        elif isinstance(ev, ApiError):
-            from aura.config import redact_secrets
-            self.apiError.emit(
-                ev.status_code if ev.status_code is not None else -1,
-                redact_secrets(ev.message)
-            )
-        elif isinstance(ev, Done):
-            if ev.full_message:
-                self.streamDone.emit(ev.finish_reason or "", ev.full_message)
-        elif isinstance(ev, ToolResult):
-            self.toolResultEmitted.emit(ev.tool_call_id, ev.name, ev.ok, ev.result, ev.extras or {})
-        elif isinstance(ev, WorkerDispatchRequested):
-            self.workerDispatchRequested.emit(
-                ev.tool_call_id,
-                ev.goal,
-                list(ev.files),
-                ev.spec,
-                ev.acceptance,
-                ev.summary,
-            )
-        elif isinstance(ev, TerminalOutput):
-            self.terminalOutput.emit(ev.tool_call_id, ev.text)
-        elif isinstance(ev, AgentProcessStarted):
-            self.agentProcessStarted.emit(ev.process_id, ev.label, ev.command)
-        elif isinstance(ev, AgentProcessOutput):
-            self.agentProcessOutput.emit(ev.process_id, ev.text)
-        elif isinstance(ev, AgentProcessFinished):
-            self.agentProcessFinished.emit(ev.process_id, ev.exit_code)
-
 
 class ConversationBridge(QObject):
     """Public Qt-facing facade for one running conversation."""
@@ -275,9 +198,9 @@ class ConversationBridge(QObject):
     started = Signal()
     finished = Signal()
 
-    # Planner / worker signals (re-exposed from the dispatch proxy so the GUI
-    # binds to a single object).
-    workerDispatchRequested = Signal(str, str, list, str, str, str)
+    # Workspace projection signals (worker* names are compatibility aliases —
+    # the production execution session re-emits these so the existing
+    # WorkerEventHandler / AuraPlayground projection binds unchanged).
     workerStarted = Signal(str)
     workerFinished = Signal(str, bool, str, bool, str)
     workerCancelled = Signal(str)
@@ -292,12 +215,10 @@ class ConversationBridge(QObject):
     workerUsage = Signal(str, str, int, int, int, int)
     workerActivityUpdated = Signal(str, list)  # Activity entries (append-only execution heartbeat)
     workerTodoUpdated = Signal(str, list)  # Full Worker TODO snapshot
-    workflowStateChanged = Signal(object)  # WorkflowState snapshot
     workerTerminalOutput = Signal(str, str, str)  # parent_tool_id, worker_tool_id, text
     workerAgentProcessStarted = Signal(str, str, str, str)
     workerAgentProcessOutput = Signal(str, str, str)
     workerAgentProcessFinished = Signal(str, str, object)
-    artifactProjectionUpdated = Signal(object)  # WorkArtifactProjection
 
     # Terminal output (single mode)
     terminalOutput = Signal(str, str)  # tool_call_id, text
@@ -312,21 +233,11 @@ class ConversationBridge(QObject):
     ) -> None:
         super().__init__()
         self._provider = provider
-        self._planner_provider = provider
-        self._worker_provider = provider
 
         # The one active production backend. Normal coding always runs here.
         self._production_backend = APIAgentBackend(provider=provider)
         model_streams.unregister(PRODUCTION_STREAM_HOOK)
         model_streams.register(PRODUCTION_STREAM_HOOK, self._production_backend.stream)
-
-        # Legacy Planner/Worker backends — unreachable compatibility scaffolding.
-        self._planner_backend = APIAgentBackend(provider=provider)
-        self._worker_backend = APIAgentBackend(provider=provider)
-        model_streams.unregister(PLANNER_STREAM_HOOK)
-        model_streams.register(PLANNER_STREAM_HOOK, self._planner_backend.stream)
-        model_streams.unregister(WORKER_STREAM_HOOK)
-        model_streams.register(WORKER_STREAM_HOOK, self._worker_backend.stream)
 
         self._history = History()
         self._registry = ToolRegistry(workspace_root=_dummy_root(), mode="single")
@@ -346,15 +257,6 @@ class ConversationBridge(QObject):
             parent=self,
         )
 
-        # Dispatch proxy (used only when planner_worker_mode is on).
-        self._dispatch_proxy = _DispatchProxy(
-            parent_widget=parent_widget,
-            registry_factory=self._make_worker_registry,
-            approval_proxy=self._approval_proxy,
-            workspace_root=self._registry.workspace_root,
-            provider=provider,
-        )
-
         self._cancel: threading.Event = threading.Event()
         self._thread: QThread | None = None
         self._worker: _Worker | None = None
@@ -363,43 +265,17 @@ class ConversationBridge(QObject):
         self._last_proposed_tool_call_id: str | None = None
         self._active_model: str = ""
 
-        self._planner_worker_mode: bool = False  # configured by main_window
         self._temperature: float = 0.7
         self._single_system_prompt: str = ""
-        self._planner_system_prompt: str = ""
         self._tier1_context: str = ""
         self._context_gearbox_metadata: dict = {}
         self._custom_prompt_diagnostics = diagnose_custom_prompt(RuntimeRole.SINGLE, "")
-        self._auto_dispatch: bool = False
         self._pre_worker_sha: str | None = None
         self._active_prompt_mode: str | None = None
         self._turn_task_route: TaskRoute | None = None
         self._turn_task_kind: str | None = None
         self._turn_content: str = ""
         self._turn_target_files: tuple[str, ...] = ()
-
-        # Re-emit dispatch proxy signals on the bridge so the GUI binds once.
-        self._dispatch_proxy.showSpecCard.connect(self.workerDispatchRequested)
-        self._dispatch_proxy.workerStarted.connect(self.workerStarted)
-        self._dispatch_proxy.workerFinished.connect(self.workerFinished)
-        self._dispatch_proxy.workerCancelled.connect(self.workerCancelled)
-        self._dispatch_proxy.workerReasoningDelta.connect(self.workerReasoningDelta)
-        self._dispatch_proxy.workerContentDelta.connect(self.workerContentDelta)
-        self._dispatch_proxy.workerToolCallStart.connect(self.workerToolCallStart)
-        self._dispatch_proxy.workerToolCallArgs.connect(self.workerToolCallArgs)
-        self._dispatch_proxy.workerToolCallEnd.connect(self.workerToolCallEnd)
-        self._dispatch_proxy.workerToolResult.connect(self.workerToolResult)
-        self._dispatch_proxy.workerDiffDecided.connect(self.workerDiffDecided)
-        self._dispatch_proxy.workerApiError.connect(self.workerApiError)
-        self._dispatch_proxy.workerUsage.connect(self.workerUsage)
-        self._dispatch_proxy.workerActivityUpdated.connect(self.workerActivityUpdated)
-        self._dispatch_proxy.workerTodoUpdated.connect(self.workerTodoUpdated)
-        self._dispatch_proxy.workflowStateChanged.connect(self.workflowStateChanged)
-        self._dispatch_proxy.workerTerminalOutput.connect(self.workerTerminalOutput)
-        self._dispatch_proxy.workerAgentProcessStarted.connect(self.workerAgentProcessStarted)
-        self._dispatch_proxy.workerAgentProcessOutput.connect(self.workerAgentProcessOutput)
-        self._dispatch_proxy.workerAgentProcessFinished.connect(self.workerAgentProcessFinished)
-        self._dispatch_proxy.artifactProjectionUpdated.connect(self.artifactProjectionUpdated)
 
         # Re-emit production session signals on the same bridge signals so the
         # polished workspace projection binds once and stays role-neutral.
@@ -434,24 +310,6 @@ class ConversationBridge(QObject):
         return self._registry
 
     @property
-    def planner_worker_mode(self) -> bool:
-        return self._planner_worker_mode
-
-    @property
-    def auto_dispatch(self) -> bool:
-        return self._auto_dispatch
-
-    @property
-    def dispatch_records(self) -> "list[WorkerDispatchRecord]":
-        return self._dispatch_proxy.records()
-
-    def set_dispatch_records(self, records: list[WorkerDispatchRecord]) -> None:
-        self._dispatch_proxy.set_records(records)
-
-    def clear_dispatch_records(self) -> None:
-        self._dispatch_proxy.clear_records()
-
-    @property
     def production_session(self) -> ProductionExecutionSession:
         """The active production execution owner (run identity + ledger)."""
         return self._production_session
@@ -461,15 +319,8 @@ class ConversationBridge(QObject):
         return self._production_session.run_id
 
     def execution_result_metadata(self, run_id: str) -> dict:
-        """Role-neutral result metadata accessor for the active execution.
-
-        Production runs answer from the production session. Legacy dispatch
-        metadata is delegated only for old, unreachable dispatch paths.
-        """
-        metadata = self._production_session.result_metadata(run_id)
-        if metadata:
-            return metadata
-        return self._dispatch_proxy.result_metadata(run_id)
+        """Role-neutral result metadata accessor for the active execution."""
+        return self._production_session.result_metadata(run_id)
 
     def worker_result_metadata(self, tool_call_id: str) -> dict:
         """Compatibility alias for ``execution_result_metadata``."""
@@ -484,7 +335,6 @@ class ConversationBridge(QObject):
             self._context_gearbox_metadata = {}
             return
         self._registry.set_workspace_root(root)
-        self._dispatch_proxy.set_workspace_root(root)
         self._manager.set_workspace_root(root)
         self.refresh_tier1_context()
 
@@ -492,8 +342,9 @@ class ConversationBridge(QObject):
         self._registry.set_read_only(value)
 
     def set_system_prompt(self, prompt: str) -> None:
-        role = self._active_runtime_role()
-        composed = self._compose_prompt(role, prompt)
+        """Store the custom production system prompt and reapply composition."""
+        self._single_system_prompt = prompt or ""
+        composed = self._compose_prompt(self._active_runtime_role(), self._single_system_prompt)
         self._history.set_system(composed.system_prompt)
 
     def refresh_tier1_context(self, force_repo_map: bool = False) -> None:
@@ -501,54 +352,22 @@ class ConversationBridge(QObject):
         role = self._active_runtime_role()
         composed = self._compose_prompt(
             role,
-            self._custom_prompt_for_role(role),
+            self._single_system_prompt,
             force_repo_map=force_repo_map,
         )
         self._history.set_system(composed.system_prompt)
 
     def set_production_mode(self) -> None:
         """Put the bridge in production single-agent mode (the normal product)."""
-        self.set_planner_worker_mode(False)
-
-    def set_planner_worker_mode(self, enabled: bool) -> None:
-        """Compatibility entry point.
-
-        Normal Aura coding is always production single-agent mode. A request to
-        enable Planner/Worker dispatch is logged and ignored: the registry mode
-        and runtime role stay ``single``, so the dispatch path is unreachable.
-        """
-        if enabled:
-            _log.info(
-                "planner_worker_mode requested but ignored — "
-                "production single-agent mode is the normal product"
-            )
-        self._planner_worker_mode = False
         mode_key = "single"
         self._registry.set_mode(mode_key)
         role = self._active_runtime_role()
-        composed = self._compose_prompt(role, self._custom_prompt_for_role(role))
+        composed = self._compose_prompt(role, self._single_system_prompt)
         self._history.set_system(composed.system_prompt)
         self._active_prompt_mode = mode_key
 
     def set_temperature(self, temperature: float) -> None:
         self._temperature = temperature
-
-    def set_custom_system_prompts(self, single: str, planner: str, worker: str) -> None:
-        self._single_system_prompt = single
-        self._planner_system_prompt = planner
-        self._dispatch_proxy.set_worker_system_prompt(worker)
-        role = self._active_runtime_role()
-        composed = self._compose_prompt(role, self._custom_prompt_for_role(role))
-        self._history.set_system(composed.system_prompt)
-
-    def set_worker_model(self, model: ModelId) -> None:
-        self._dispatch_proxy.set_worker_model(model)
-
-    def set_worker_thinking(self, thinking: ThinkingMode) -> None:
-        self._dispatch_proxy.set_worker_thinking(thinking)
-
-    def set_worker_temperature(self, temperature: float) -> None:
-        self._dispatch_proxy.set_worker_temperature(temperature)
 
     @property
     def windows_computer_use(self) -> WindowsComputerUseManager:
@@ -566,23 +385,12 @@ class ConversationBridge(QObject):
         """Disconnect the Windows MCP server and close its process."""
         self._windows_computer_use.shutdown()
 
-    def set_auto_dispatch(self, enabled: bool) -> None:
-        self._auto_dispatch = enabled
-
     def set_auto_approve(self, enabled: bool) -> None:
         self._approval_proxy.set_approve_all_session(enabled)
-        self._dispatch_proxy.set_auto_approve(enabled)
 
     def _active_runtime_role(self) -> RuntimeRole:
         """Normal coding always runs the production single-agent role."""
         return RuntimeRole.SINGLE
-
-    def _custom_prompt_for_role(self, role: RuntimeRole) -> str:
-        if role == RuntimeRole.PLANNER:
-            return self._planner_system_prompt
-        if role == RuntimeRole.SINGLE:
-            return self._single_system_prompt
-        return ""
 
     def _compose_prompt(
         self,
@@ -617,7 +425,6 @@ class ConversationBridge(QObject):
         )
         _log.info("%s", format_prompt_composition(composed))
         self._tier1_context = composed.context_text
-        self._dispatch_proxy.set_tier1_context(self._tier1_context)
         return composed
 
     def set_production_provider(self, provider: ProviderId) -> None:
@@ -630,29 +437,9 @@ class ConversationBridge(QObject):
         model_streams.unregister(PRODUCTION_STREAM_HOOK)
         model_streams.register(PRODUCTION_STREAM_HOOK, self._production_backend.stream)
 
-    def set_planner_provider(self, provider: ProviderId) -> None:
-        """Compatibility alias — updates the production provider.
-
-        Also refreshes the legacy Planner backend so old, unreachable dispatch
-        paths stay coherent if they are ever exercised.
-        """
-        self._planner_provider = provider
-        self.set_production_provider(provider)
-        self._planner_backend = APIAgentBackend(provider=provider)
-        model_streams.unregister(PLANNER_STREAM_HOOK)
-        model_streams.register(PLANNER_STREAM_HOOK, self._planner_backend.stream)
-
-    def set_worker_provider(self, provider: ProviderId) -> None:
-        """Update the legacy Worker provider and its (unreachable) backend hook."""
-        self._worker_provider = provider
-        self._worker_backend = APIAgentBackend(provider=provider)
-        model_streams.unregister(WORKER_STREAM_HOOK)
-        model_streams.register(WORKER_STREAM_HOOK, self._worker_backend.stream)
-
     def set_provider(self, provider: ProviderId) -> None:
-        """Update the production provider (and legacy role backends)."""
-        self.set_planner_provider(provider)
-        self.set_worker_provider(provider)
+        """Update the production provider."""
+        self.set_production_provider(provider)
 
     def check_backend_auth(self, backend_name: str) -> bool:
         """Check if the named backend is authenticated.
@@ -671,7 +458,6 @@ class ConversationBridge(QObject):
         self._index_to_id.clear()
         self._index_to_name.clear()
         self._production_session.clear()
-        self._dispatch_proxy.clear_records()
         # We do NOT reset _approve_all_session here, as it is managed by the
         # persistent toolbar toggle.
 
@@ -692,47 +478,16 @@ class ConversationBridge(QObject):
     def clear_pre_worker_snapshot(self) -> None:
         self._pre_worker_sha = None
 
-    # ---- worker registry factory -----------------------------------------
-
-    def _make_worker_registry(self, mode: str) -> ToolRegistry:
-        worker_reg = ToolRegistry(
-            workspace_root=self._registry.workspace_root,
-            read_only=self._registry.read_only,
-            mode="worker" if mode == "worker" else "single",
-        )
-        return worker_reg
-
-    # ---- dispatch button-pressed handlers (GUI -> bridge) -----------------
-
-    def user_dispatched(
-        self,
-        tool_call_id: str,
-        goal: str,
-        files: list[str],
-        spec: str,
-        acceptance: str,
-        summary: str,
-    ) -> bool:
-        return self._dispatch_proxy.user_dispatched(tool_call_id, goal, files, spec, acceptance, summary)
-
-    def user_cancelled_dispatch(self, tool_call_id: str) -> bool:
-        return self._dispatch_proxy.user_cancelled(tool_call_id)
-
     # ---- send / cancel ----------------------------------------------------
 
     def send(
         self,
         model: ModelId,
         thinking: ThinkingMode,
-        max_tool_rounds: int | None = None,
         *,
         route: TaskRoute | None = None,
     ) -> None:
         """Run one production turn over the existing conversation.
-
-        ``max_tool_rounds`` is *not* a production ceiling. Production SINGLE
-        never ends a live task on a round count; the setting is relayed only to
-        the legacy Planner/Worker dispatch path, which still honours it.
 
         ``route`` is the deterministic ``TaskRoute`` selected at send time and
         is the authority for this turn's task kind. Callers that genuinely do
@@ -759,7 +514,6 @@ class ConversationBridge(QObject):
         self._cancel = threading.Event()
         self._index_to_id.clear()
         self._index_to_name.clear()
-        self._dispatch_proxy.set_max_tool_rounds(max_tool_rounds)
         if self._registry.workspace_root is not None:
             base_prompt = (
                 self._single_system_prompt
@@ -783,14 +537,12 @@ class ConversationBridge(QObject):
         self._worker = _Worker(
             manager=self._manager,
             approval_proxy=self._approval_proxy,
-            dispatch_proxy=None,
             cancel_event=self._cancel,
             model=model,
             thinking=thinking,
             temperature=self._temperature,
             workspace_root=self._registry.workspace_root,
             production_session=self._production_session,
-            hook_name=PRODUCTION_STREAM_HOOK,
             task_route=self._turn_task_route,
         )
         self._worker.moveToThread(self._thread)
@@ -803,7 +555,6 @@ class ConversationBridge(QObject):
         self._worker.apiError.connect(self.apiError)
         self._worker.streamDone.connect(self.streamDone)
         self._worker.toolResultEmitted.connect(self._on_tool_result)
-        self._worker.workerDispatchRequested.connect(self._on_worker_dispatch_requested)
         self._worker.terminalOutput.connect(self.terminalOutput)
         self._worker.agentProcessStarted.connect(self.agentProcessStarted)
         self._worker.agentProcessOutput.connect(self.agentProcessOutput)
@@ -820,7 +571,6 @@ class ConversationBridge(QObject):
         self._cancel.set()
         self._production_session.note_cancelled()
         self._approval_proxy.cancel_active_dialog()
-        self._dispatch_proxy.cancel_all_pending()
 
     # ---- private slots ----------------------------------------------------
 
@@ -860,21 +610,6 @@ class ConversationBridge(QObject):
                     bool(ev["is_new_file"]),
                 )
         self.toolResult.emit(tool_id, name, ok, result, extras)
-
-    @Slot(str, str, list, str, str, str)
-    def _on_worker_dispatch_requested(
-        self,
-        tool_call_id: str,
-        goal: str,
-        files: list,
-        spec: str,
-        acceptance: str,
-        summary: str,
-    ) -> None:
-        # The proxy's showSpecCard is the GUI's source of truth for spec
-        # cards — the manager event arrives milliseconds earlier on the same
-        # thread, so we just no-op here.
-        return
 
     @Slot()
     def _on_finished(self) -> None:
@@ -948,7 +683,7 @@ class ConversationBridge(QObject):
         if self._registry.workspace_root is None:
             return
         role = self._active_runtime_role()
-        composed = self._compose_prompt(role, self._custom_prompt_for_role(role))
+        composed = self._compose_prompt(role, self._single_system_prompt)
         self._history.set_system(composed.system_prompt)
         _log.info(
             "context_gearbox_turn_summary %s",

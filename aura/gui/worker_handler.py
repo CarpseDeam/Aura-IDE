@@ -1,11 +1,10 @@
 """Worker lifecycle event handler — receives bridge worker signals and
 forwards them to chat/playground UI components.
 
-Owns its own session usage tracking dict and emits signals so that
-MainWindow can react to state changes (status bar refresh, input streaming).
-
-WorkflowState is owned by the backend _DispatchProxy. This handler only
-stores and forwards the latest canonical snapshot via _on_workflow_state_changed.
+The ``worker*`` signal names are compatibility aliases for the production
+execution session's workspace projection. This handler owns the session usage
+tracking dict and emits signals so that MainWindow can react to state changes
+(status bar refresh, input streaming).
 """
 
 from __future__ import annotations
@@ -20,8 +19,6 @@ from aura.config import redact_secrets
 
 _log = logging.getLogger(__name__)
 
-from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
-from aura.gui.dispatch_ui_lifecycle import DispatchUiLifecycle
 from aura.gui.worker_finish_presenter import WorkerFinishPresenter
 from aura.gui.worker_tool_event_router import WorkerToolEventRouter
 
@@ -76,15 +73,6 @@ class WorkerEventHandler(QObject):
         self._active_worker_tool_call_id: str | None = None
         self._pending_worker_finish: _PendingWorkerFinish | None = None
         self._pending_worker_finish_generation = 0
-        # WorkflowState snapshot — stored from backend emissions only, never
-        # constructed or mutated here.
-        self._active_workflow: WorkflowState | None = None
-        self._dispatch_ui = DispatchUiLifecycle(
-            bridge=bridge,
-            chat=chat,
-            parent_widget=parent,
-            active_workflow=lambda: self._active_workflow,
-        )
         self._finish_presenter = WorkerFinishPresenter(chat, playground)
         self._tool_router = WorkerToolEventRouter(playground=playground, chat=chat)
 
@@ -94,11 +82,6 @@ class WorkerEventHandler(QObject):
     def session_usage(self) -> dict[str, dict[str, int]]:
         """Read-only access to the per-model usage accumulator."""
         return self._session_usage
-
-    @property
-    def active_workflow(self) -> WorkflowState | None:
-        """Last canonical snapshot from the backend _DispatchProxy."""
-        return self._active_workflow
 
     # ---- public methods --------------------------------------------------------
 
@@ -116,7 +99,6 @@ class WorkerEventHandler(QObject):
 
         Also connects ``bridge.terminalOutput`` for single-mode terminal output.
         """
-        self._bridge.workerDispatchRequested.connect(self._on_worker_dispatch_requested)
         self._bridge.workerStarted.connect(self._on_worker_started)
         self._bridge.workerFinished.connect(self._on_worker_finished)
         self._bridge.workerCancelled.connect(self._on_worker_cancelled)
@@ -136,10 +118,6 @@ class WorkerEventHandler(QObject):
         self._bridge.workerAgentProcessOutput.connect(self._tool_router.on_worker_agent_process_output)
         self._bridge.workerAgentProcessFinished.connect(self._tool_router.on_worker_agent_process_finished)
         self._bridge.terminalOutput.connect(self._tool_router.on_terminal_output)
-        # Backend-owned canonical WorkflowState snapshots.
-        self._bridge.workflowStateChanged.connect(self._on_workflow_state_changed)
-        # WorkArtifact projection updates.
-        self._bridge.artifactProjectionUpdated.connect(self._on_artifact_projection_updated)
 
     # ---- production-run helpers ------------------------------------------------
 
@@ -159,77 +137,12 @@ class WorkerEventHandler(QObject):
         if callable(show):
             show("Working in the workspace")
 
-    # ---- canonical WorkflowState snapshot from backend -------------------------
-
-    def _on_workflow_state_changed(self, state: WorkflowState) -> None:
-        """Store and forward a canonical WorkflowState snapshot from the backend."""
-        _log.debug(
-            "_on_workflow_state_changed tool_call_id=%s status=%s",
-            state.tool_call_id, state.status.value if state.status else "?",
-        )
-        self._active_workflow = state
-        # Forward to the spec card for rendering.
-        card = self._dispatch_ui.get_spec_card(state.tool_call_id)
-        if card is not None and hasattr(card, "update_workflow_state"):
-            card.update_workflow_state(state)
-        # Forward to the plan writer card only while the backend says the
-        # dispatch is still in the pre-worker review state.
-        if state.status == WorkflowStatus.plan_ready:
-            plan_card = getattr(self._chat, "get_plan_writer_card", lambda tid: None)(state.tool_call_id)
-            if plan_card is not None and hasattr(plan_card, "update_workflow_state"):
-                plan_card.update_workflow_state(state)
-
-    # ---- dispatch slots --------------------------------------------------------
-
-    def _on_worker_dispatch_requested(
-        self,
-        tool_call_id: str,
-        goal: str,
-        files: list,
-        spec: str,
-        acceptance: str,
-        summary: str,
-    ) -> None:
-        """Route Planner dispatch requests through auto or manual review."""
-        if self._finish_presenter.resolve_active_mismatch():
-            self._chat.stop_current_aura()
-
-        file_list = list(files)
-
-        if self._bridge.auto_dispatch:
-            _log.info(
-                "dispatch_auto_accepted tool_call_id=%s goal=%s",
-                tool_call_id, goal[:120],
-            )
-            self._dispatch_ui.begin_auto_dispatch(tool_call_id)
-            # Backend _DispatchProxy owns the plan_ready/dispatched snapshot.
-            self._bridge.user_dispatched(tool_call_id, goal, file_list, spec, acceptance, summary)
-            self._chat.scroll_to_bottom(force=True)
-            return
-
-        _log.info(
-            "dispatch_card_shown tool_call_id=%s goal=%s",
-            tool_call_id, goal[:120],
-        )
-        self._dispatch_ui.begin_visible_dispatch(tool_call_id)
-        # Backend _DispatchProxy owns the plan_ready snapshot (emitted inside
-        # request_dispatch after showSpecCard).  No WorkflowState construction here.
-        self._dispatch_ui.show_spec_card(
-            tool_call_id=tool_call_id,
-            goal=goal,
-            file_list=file_list,
-            spec=spec,
-            acceptance=acceptance,
-            summary=summary,
-        )
-
     # ---- worker lifecycle slots ------------------------------------------------
 
     def _on_worker_started(self, tool_call_id: str) -> None:
-        """Stop the planner aura, remove the plan writer card, and start the
-        playground's assistant aura.
+        """Keep the chat aura alive and point the user at the workspace.
 
-        DispatchProxy emits one workerStarted signal per dispatch.
+        The production execution session emits one workerStarted per run.
         """
         pending_finish = self._pending_worker_finish
         if (
@@ -256,7 +169,7 @@ class WorkerEventHandler(QObject):
                 and self._pending_worker_finish.tool_call_id == tool_call_id
             ):
                 _log.info(
-                    "worker_finish_cancelled_for_continuing_campaign tool_call_id=%s",
+                    "worker_finish_cancelled_for_continuing_run tool_call_id=%s",
                     tool_call_id,
                 )
                 self._pending_worker_finish = None
@@ -264,7 +177,6 @@ class WorkerEventHandler(QObject):
                 "DIAGNOSTIC worker_started_duplicate_ignored — skipping begin_assistant tool_call_id=%s",
                 tool_call_id,
             )
-            self._dispatch_ui.mark_worker_started(tool_call_id)
             self.worker_running_changed.emit(True)
             return
 
@@ -273,26 +185,14 @@ class WorkerEventHandler(QObject):
             tool_call_id,
         )
         self._active_worker_tool_call_id = tool_call_id
-        if self._is_production_run(tool_call_id):
-            # Direct production execution: the run is still in flight, so keep
-            # the chat aura alive and point the user at the workspace instead
-            # of duplicating the transcript into the chat.
-            self._mark_chat_working_in_workspace()
-        else:
-            self._chat.stop_current_aura()
-        # Remove any remaining PlanWriterCard — once the Worker is running,
-        # the plan-writing UI is replaced by the Worker Log.  This covers
-        # both the auto-dispatch path (no spec card) and the visible-dispatch
-        # path where the card was already removed by prepare_spec_card
-        # (the call is idempotent).
-        self._chat._remove_plan_writer_card(tool_call_id)
+        # Direct production execution: the run is still in flight, so keep the
+        # chat aura alive and point the user at the workspace instead of
+        # duplicating the transcript into the chat.
+        self._mark_chat_working_in_workspace()
         self._playground.set_glow_state("coding")
         self._playground.begin_assistant()
         self.worker_started.emit()
 
-        self._dispatch_ui.mark_worker_started(tool_call_id)
-        # The backend _DispatchProxy emitted the dispatched status in
-        # request_dispatch before WorkArtifactController is used.  No transition needed.
         self.worker_running_changed.emit(True)
 
     def _on_worker_finished(
@@ -303,9 +203,10 @@ class WorkerEventHandler(QObject):
         needs_followup: bool | None = None,
         status: str | None = None,
     ) -> None:
-        """Forward worker finished to playground and update spec card.
+        """Forward worker finished to playground.
 
-        DispatchProxy emits one workerFinished signal per dispatch.
+        The production execution session emits one workerFinished signal per
+        run.
         """
         _log.info(
             "worker_finished tool_call_id=%s status=%s",
@@ -364,55 +265,33 @@ class WorkerEventHandler(QObject):
         status: str | None,
     ) -> None:
         metadata = self._worker_result_metadata(tool_call_id)
-        active_workflow = (
-            self._active_workflow
-            if self._active_workflow is not None
-            and self._active_workflow.tool_call_id == tool_call_id
-            else None
-        )
-        presentation = self._finish_presenter.present(
+        self._finish_presenter.present(
             tool_call_id=tool_call_id,
             ok=ok,
             summary=summary,
             needs_followup=needs_followup,
             status=status,
             metadata=metadata,
-            active_workflow=active_workflow,
-            spec_card=self._dispatch_ui.get_spec_card(tool_call_id),
         )
-        outcome = presentation.outcome
-        # The backend _DispatchProxy emits the finished WorkflowState snapshot
-        # in request_dispatch after WorkArtifactController is used.  No finish() call here.
-        if outcome.should_clear_dispatch_card:
-            self._dispatch_ui.clear_active_spec_card(tool_call_id)
         if self._active_worker_tool_call_id == tool_call_id:
             self._active_worker_tool_call_id = None
         self.worker_running_changed.emit(False)
 
     def _worker_result_metadata(self, tool_call_id: str) -> dict:
-        """Read run metadata through the bridge's role-neutral accessor.
-
-        Falls back to the legacy dispatch-specific accessor so old, unreachable
-        Planner paths keep working.
-        """
-        for name in ("execution_result_metadata", "worker_result_metadata"):
-            getter = getattr(self._bridge, name, None)
-            if not callable(getter):
-                continue
-            metadata = getter(tool_call_id)
-            if isinstance(metadata, dict):
-                return metadata
-        return {}
+        """Read run metadata through the bridge's role-neutral accessor."""
+        getter = getattr(self._bridge, "execution_result_metadata", None)
+        if not callable(getter):
+            return {}
+        metadata = getter(tool_call_id)
+        return metadata if isinstance(metadata, dict) else {}
 
     def _on_worker_cancelled(self, tool_call_id: str) -> None:
-        """Stop worker aura and forward cancel to playground/spec card."""
+        """Stop worker aura and forward cancel to playground."""
 
         self._clear_pending_worker_finish(tool_call_id)
         self._playground.stop_aura()
         self._playground.worker_cancelled()
 
-        # Backend _DispatchProxy owns the cancelled snapshot.
-        self._dispatch_ui.mark_worker_cancelled(tool_call_id)
         if self._active_worker_tool_call_id == tool_call_id:
             self._active_worker_tool_call_id = None
         self.worker_running_changed.emit(False)
@@ -488,15 +367,3 @@ class WorkerEventHandler(QObject):
             tool_call_id, len(items),
         )
         self._playground.update_worker_todo(items, tool_call_id)
-
-    def _on_artifact_projection_updated(self, projection) -> None:
-        """Receive WorkArtifact projection updates and render/update the artifact card."""
-        from aura.work_artifact.projection import WorkArtifactProjection
-
-        if not isinstance(projection, WorkArtifactProjection):
-            return
-        _log.debug(
-            "_on_artifact_projection_updated artifact_id=%s items=%d",
-            projection.artifact_id, len(projection.items),
-        )
-        card = self._chat.add_or_update_artifact_card(projection)

@@ -46,16 +46,6 @@ from aura.conversation.tools.grep import grep_files  # noqa: F401
 from aura.conversation.tools.mcp_registry import MCPToolRegistry
 from aura.conversation.tools.task_context import TaskContextHandlersMixin
 
-try:
-    from aura.conversation.dispatch import ExplicitSpecContract
-except ImportError:
-    ExplicitSpecContract = None
-
-try:
-    from aura.conversation.task_shape import TaskShape
-except ImportError:
-    TaskShape = None
-
 TOOL_HANDLERS: dict[str, Any] = {}
 
 
@@ -99,8 +89,6 @@ class ToolRegistry(
         # snapshotted.
         self._mcp_tools.reserved_names = self._dynamic_tool_names
         self._dynamic_tools.reserved_names = self._mcp_tools.registered_names
-        self._contract: ExplicitSpecContract | None = None
-        self._task_shape: TaskShape | None = None
         # The turn's cancel event, supplied per execute() call by the tool
         # round. The registry never creates one — it only relays the caller's.
         self._cancel_event: threading.Event | None = None
@@ -279,12 +267,6 @@ class ToolRegistry(
         """
         return self._mcp_tools.disconnect_server(server_command)
 
-    def set_contract(self, contract: ExplicitSpecContract | None) -> None:
-        self._contract = contract
-
-    def get_contract(self) -> ExplicitSpecContract | None:
-        return self._contract
-
     def set_restore_point_manager(
         self, mgr: Any | None,
     ) -> None:
@@ -299,12 +281,6 @@ class ToolRegistry(
     def get_restore_point_manager(self) -> Any | None:
         """Return the current RestorePointManager, or None."""
         return getattr(self, "_restore_point_manager", None)
-
-    def set_task_shape(self, task_shape: TaskShape | None) -> None:
-        self._task_shape = task_shape
-
-    def get_task_shape(self) -> TaskShape | None:
-        return getattr(self, "_task_shape", None)
 
     def _resolve_in_root(self, raw: str) -> Path:
         if raw is None:

@@ -15,11 +15,7 @@ from aura.companion.defaults import (
 )
 from aura.models import (
     DEFAULT_MODEL,
-    DEFAULT_PLANNER_MODEL,
-    DEFAULT_PLANNER_THINKING,
     DEFAULT_THINKING,
-    DEFAULT_WORKER_MODEL,
-    DEFAULT_WORKER_THINKING,
     ProviderId,
     ThinkingMode,
 )
@@ -47,13 +43,13 @@ _WEB_DEFAULT_VARIANTS = frozenset({
 
 DEFAULT_PROVIDER: ProviderId = "deepseek"
 DEFAULT_SANDBOX_MODE: str = "host"
-def resolve_role_default_model(provider_id: ProviderId | None, role: str) -> str:
-    """Return the default model for a given provider + role combo.
 
-    ``production`` is the normal product role and uses the provider's
-    configured default model. DeepSeek keeps role-specific defaults for the
-    legacy worker/planner roles. All other providers use their configured
-    default_model from the registry.
+
+def resolve_role_default_model(provider_id: ProviderId | None, role: str) -> str:
+    """Return the default model for a given provider.
+
+    ``role`` is retained for compatibility; production is the only role and it
+    uses the provider's configured default model.
     """
     from aura.providers.registry import provider_registry
 
@@ -61,14 +57,6 @@ def resolve_role_default_model(provider_id: ProviderId | None, role: str) -> str
         return DEFAULT_MODEL
 
     cfg = provider_registry.get(provider_id)
-    if role == "worker" and provider_id == "deepseek":
-        from aura.providers.catalog import DEFAULT_WORKER_MODEL
-
-        return DEFAULT_WORKER_MODEL
-    if role == "planner" and provider_id == "deepseek":
-        from aura.providers.catalog import DEFAULT_PLANNER_MODEL
-
-        return DEFAULT_PLANNER_MODEL
     return cfg.default_model
 
 
@@ -77,31 +65,14 @@ logger = logging.getLogger(__name__)
 @dataclass
 class AppSettings:
     provider: ProviderId = DEFAULT_PROVIDER
-    planner_provider: ProviderId = DEFAULT_PROVIDER
-    worker_provider: ProviderId = DEFAULT_PROVIDER
-    planner_backend: str = "default_api"
-    worker_backend: str = "default_api"
     default_model: str = DEFAULT_MODEL
     default_thinking: ThinkingMode = DEFAULT_THINKING
     restore_last_conversation: bool = True
-    # Legacy Planner/Worker dispatch toggle. Retained for backward compatibility
-    # with old persisted configs; normal startup always runs production
-    # single-agent mode regardless of this value.
-    planner_worker_mode: bool = False
-    default_planner_model: str = DEFAULT_PLANNER_MODEL
-    default_worker_model: str = DEFAULT_WORKER_MODEL
-    default_planner_thinking: ThinkingMode = DEFAULT_PLANNER_THINKING
-    default_worker_thinking: ThinkingMode = DEFAULT_WORKER_THINKING
     temperature: float = 0.7
-    worker_temperature: float = 0.1
     system_prompt: str = ""
-    planner_system_prompt: str = ""
-    worker_system_prompt: str = ""
-    auto_dispatch: bool = False
     auto_approve: bool = False
     auto_summon_drones: bool = False
     sandbox_mode: str = DEFAULT_SANDBOX_MODE
-    max_tool_rounds: int = 48
     terminal_window_geometry: str = ""
     drone_reports_window_geometry: str = ""
     drone_workbay_window_geometry: str = ""
@@ -130,11 +101,6 @@ class AppSettings:
     @classmethod
     def from_dict(cls, data: dict) -> "AppSettings":
         s = cls()
-        # Rounds
-        if "max_tool_rounds" in data:
-            raw = data["max_tool_rounds"]
-            if isinstance(raw, int):
-                s.max_tool_rounds = max(1, raw)
         # Flags
         if isinstance(data.get("first_launch_done"), bool):
             s.first_launch_done = data["first_launch_done"]
@@ -159,53 +125,20 @@ class AppSettings:
             s.playground_vertical_splitter_sizes = raw_vertical
         # Provider
         s.provider = _provider_from_data(data, "provider", s.provider)
-        s.planner_provider = _provider_from_data(
-            data, "planner_provider", s.planner_provider
-        )
-        s.worker_provider = _provider_from_data(
-            data, "worker_provider", s.worker_provider
-        )
-        # Backends
-        if isinstance(data.get("planner_backend"), str):
-            s.planner_backend = data["planner_backend"]
-        if isinstance(data.get("worker_backend"), str):
-            s.worker_backend = data["worker_backend"]
         # Models
         s.default_model = _model_from_data(data, "default_model", s.provider)
         if isinstance(data.get("default_thinking"), str) and data["default_thinking"] in _THINKING_VALUES:
             s.default_thinking = data["default_thinking"]  # type: ignore[assignment]
         if isinstance(data.get("restore_last_conversation"), bool):
             s.restore_last_conversation = data["restore_last_conversation"]
-        if isinstance(data.get("planner_worker_mode"), bool):
-            s.planner_worker_mode = data["planner_worker_mode"]
-        s.default_planner_model = _model_from_data(
-            data, "default_planner_model", s.planner_provider
-        )
-        s.default_worker_model = _model_from_data(
-            data, "default_worker_model", s.worker_provider
-        )
-        if isinstance(data.get("default_planner_thinking"), str) and data["default_planner_thinking"] in _THINKING_VALUES:
-            s.default_planner_thinking = data["default_planner_thinking"]  # type: ignore[assignment]
-        if isinstance(data.get("default_worker_thinking"), str) and data["default_worker_thinking"] in _THINKING_VALUES:
-            s.default_worker_thinking = data["default_worker_thinking"]  # type: ignore[assignment]
         # Temperature
         if "temperature" in data:
             raw = data["temperature"]
             if isinstance(raw, (int, float)):
                 s.temperature = max(0.0, min(2.0, float(raw)))
-        if "worker_temperature" in data:
-            raw = data["worker_temperature"]
-            if isinstance(raw, (int, float)):
-                s.worker_temperature = max(0.0, min(2.0, float(raw)))
-        # System prompts
+        # System prompt
         if isinstance(data.get("system_prompt"), str):
             s.system_prompt = data["system_prompt"]
-        if isinstance(data.get("planner_system_prompt"), str):
-            s.planner_system_prompt = data["planner_system_prompt"]
-        if isinstance(data.get("worker_system_prompt"), str):
-            s.worker_system_prompt = data["worker_system_prompt"]
-        if isinstance(data.get("auto_dispatch"), bool):
-            s.auto_dispatch = data["auto_dispatch"]
         if isinstance(data.get("auto_approve"), bool):
             s.auto_approve = data["auto_approve"]
         if isinstance(data.get("auto_summon_drones"), bool):
@@ -249,9 +182,10 @@ class AppSettings:
             s.onboarding_checklist = data["onboarding_checklist"]
         if isinstance(data.get("onboarding_version"), int):
             s.onboarding_version = data["onboarding_version"]
-        # Production settings migration — the generic fields are the source of
-        # truth for normal coding. Legacy Planner/Worker fields are preserved
-        # above and are never destroyed here.
+        # One-way production settings migration — the generic fields are the
+        # source of truth. Older configs whose meaningful values only exist in
+        # the legacy Planner fields may supply fallbacks here; those legacy
+        # keys are never retained or written again.
         _migrate_production_settings(s, data)
         return s
 
@@ -297,11 +231,10 @@ def _migrate_production_settings(s: "AppSettings", data: dict[str, Any]) -> None
     1. Valid generic production values (``provider``, ``default_model``,
        ``default_thinking``, ``temperature``).
     2. For older configurations whose meaningful values only exist in the
-       Planner fields, migrate those into the production settings.
+       legacy Planner fields, migrate those into the production settings.
     3. Safe provider/model defaults.
 
-    Legacy Planner and Worker fields are left untouched so old configurations
-    keep round-tripping.
+    Legacy Planner/Worker keys are never retained or written again.
     """
     # --- provider -------------------------------------------------------
     provider = _valid_provider(data.get("provider"))
@@ -330,7 +263,7 @@ def _migrate_production_settings(s: "AppSettings", data: dict[str, Any]) -> None
                 "falling back to the provider default",
                 provider,
             )
-        model = resolve_role_default_model(provider, "production")
+        model = provider_registry.get(provider).default_model
     s.default_model = model
 
     # --- thinking -------------------------------------------------------
@@ -346,8 +279,8 @@ def _migrate_production_settings(s: "AppSettings", data: dict[str, Any]) -> None
         s.default_thinking = thinking
 
     # Temperature is already a generic field and was parsed above; nothing to
-    # migrate. planner_worker_mode is loaded verbatim and never forced — normal
-    # startup enters production single-agent mode regardless of its value.
+    # migrate. planner_worker_mode is no longer read — normal startup runs
+    # production single-agent mode regardless of any legacy value.
 
 
 def _provider_from_data(
@@ -400,12 +333,8 @@ def _model_from_data(data: dict[str, Any], key: str, provider: ProviderId) -> st
             provider_cfg.default_model,
         )
 
-    # Role-specific fallbacks for DeepSeek.
-    if key == "default_worker_model" and provider == "deepseek":
-        return DEFAULT_WORKER_MODEL
-    if key == "default_planner_model" and provider == "deepseek":
-        return DEFAULT_PLANNER_MODEL
     return provider_cfg.default_model
+
 
 def settings_path() -> Path:
     return config_dir() / "config.json"

@@ -41,9 +41,6 @@ class AutomationPage(QWidget):
         )
         form.addRow("", self._restore_chk)
 
-        # Auto-dispatch only applies to the legacy Planner→Worker handoff, which
-        # is not part of the normal product. The setting is preserved for
-        # backward compatibility but is no longer exposed.
         self._auto_approve_chk = GlassSwitch(
             "Auto-approve: Apply file edits without diff approval",
             self._settings.auto_approve,
@@ -56,20 +53,10 @@ class AutomationPage(QWidget):
         )
         form.addRow("", self._auto_summon_drones_chk)
 
-        self._max_rounds_spin = QSpinBox()
-        self._max_rounds_spin.setRange(1, 500)
-        self._max_rounds_spin.setToolTip(
-            "Maximum number of tool-call rounds allowed in a single user turn."
-        )
-        self._max_rounds_spin.setValue(self._settings.max_tool_rounds)
-        form.addRow("Max tool rounds:", self._max_rounds_spin)
-
         layout.addLayout(form)
         layout.addStretch()
 
     def collect_settings(self, settings: AppSettings) -> None:
         settings.restore_last_conversation = self._restore_chk.isChecked()
-        # settings.auto_dispatch is intentionally left untouched (legacy field).
         settings.auto_approve = self._auto_approve_chk.isChecked()
         settings.auto_summon_drones = self._auto_summon_drones_chk.isChecked()
-        settings.max_tool_rounds = self._max_rounds_spin.value()

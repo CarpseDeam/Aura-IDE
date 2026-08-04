@@ -154,9 +154,6 @@ class GodotEditorHandlersMixin:
         if self._read_only:
             error = "Read-Only Mode is enabled — live Godot editor changes are disabled."
             failure_class = "read_only"
-        elif self._mode == "planner":
-            error = "Planner cannot change the Godot editor directly; dispatch this work to a Worker."
-            failure_class = "planner_write_forbidden"
         else:
             return None
         return ToolExecResult(

@@ -56,6 +56,53 @@ TERMINAL_EXECUTION_FAILED = "execution_failed"
 
 
 @dataclass(frozen=True)
+class ValidationCommandSpec:
+    """Structured validation command entry declared at planning time.
+
+    Replaces free-text command parsing with structured fields declared
+    up front.  A malformed entry (empty ``command``) fails at review, not at
+    runtime.
+
+    Attributes:
+        command: The exact shell command to execute.
+        cwd: Optional working directory relative to repo root.
+        expected_outcome: Optional description of the expected pass/fail signal.
+    """
+    command: str
+    cwd: str = ""
+    expected_outcome: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {"command": self.command}
+        if self.cwd:
+            d["cwd"] = self.cwd
+        if self.expected_outcome:
+            d["expected_outcome"] = self.expected_outcome
+        return d
+
+    @classmethod
+    def from_dict(cls, raw: Any) -> ValidationCommandSpec:
+        """Deserialize from a dict or legacy flat string."""
+        if isinstance(raw, str):
+            return cls(command=raw)
+        if not isinstance(raw, dict):
+            return cls(command="")
+        return cls(
+            command=str(raw.get("command", "")),
+            cwd=str(raw.get("cwd", "")),
+            expected_outcome=str(raw.get("expected_outcome", "")),
+        )
+
+    @property
+    def valid(self) -> bool:
+        """A spec is valid when it has a non-empty command."""
+        return bool(self.command.strip())
+
+    @property
+    def has_cwd(self) -> bool:
+        return bool(self.cwd.strip())
+
+
 class ValidationCommand:
     raw_text: str
     command: str

@@ -322,5 +322,3 @@ class ModelsPage(QWidget):
         if thinking:
             settings.default_thinking = thinking
         settings.temperature = self._temperature_spin.value()
-        # Normal startup always enters production single-agent mode.
-        settings.planner_worker_mode = False

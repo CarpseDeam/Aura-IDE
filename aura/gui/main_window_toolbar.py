@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from aura.config import media_path
-from aura.gui.theme import LABEL_APPROVE, LABEL_DISPATCH, LABEL_DRONES, LABEL_READ_ONLY
+from aura.gui.theme import LABEL_APPROVE, LABEL_DRONES, LABEL_READ_ONLY
 from aura.gui.widgets.glass_switch import GlassSwitch
 
 
@@ -28,7 +28,6 @@ class MainWindowToolbar(QToolBar):
     new_conversation_requested = Signal()
     open_conversation_requested = Signal()
     read_only_toggled = Signal(bool)
-    auto_dispatch_toggled = Signal(bool)
     auto_approve_toggled = Signal(bool)
     auto_summon_drones_toggled = Signal(bool)
     update_requested = Signal()
@@ -74,13 +73,6 @@ class MainWindowToolbar(QToolBar):
         self.addWidget(_toolbar_separator())
 
         # Group 3: auto toggles
-        # Auto-dispatch only means anything for the legacy Planner→Worker
-        # handoff, which is not part of the normal product. The control is kept
-        # (so settings and signal wiring keep working) but never shown.
-        self._auto_dispatch_switch = GlassSwitch("Dispatch", self._settings.auto_dispatch, vertical=True, accent_color=LABEL_DISPATCH)
-        self._auto_dispatch_switch.toggled.connect(self.auto_dispatch_toggled.emit)
-        self._auto_dispatch_switch.hide()
-
         self._auto_approve_switch = GlassSwitch("Approve", self._settings.auto_approve, vertical=True, accent_color=LABEL_APPROVE)
         self._auto_approve_switch.toggled.connect(self.auto_approve_toggled.emit)
         self.addWidget(self._auto_approve_switch)
@@ -175,13 +167,8 @@ class MainWindowToolbar(QToolBar):
     def update_settings(self, settings) -> None:
         """Use the latest settings object and refresh setting-backed controls."""
         self._settings = settings
-        self.set_auto_dispatch(settings.auto_dispatch)
         self.set_auto_approve(settings.auto_approve)
         self.set_auto_summon_drones(getattr(settings, "auto_summon_drones", False))
-        self.refresh_auto_toggle_tooltips()
-
-    def set_auto_dispatch(self, checked: bool) -> None:
-        self._auto_dispatch_switch.setChecked(checked)
         self.refresh_auto_toggle_tooltips()
 
     def set_auto_approve(self, checked: bool) -> None:
@@ -193,9 +180,6 @@ class MainWindowToolbar(QToolBar):
         self.refresh_auto_toggle_tooltips()
 
     def refresh_auto_toggle_tooltips(self) -> None:
-        self._auto_dispatch_switch.setToolTip(
-            "Auto-dispatch: when ON, the planner sends tasks to the worker automatically. When OFF, the planner asks before dispatching."
-        )
         self._auto_approve_switch.setToolTip(
             "Auto-approve: when ON, file diffs are applied without confirmation. When OFF, you review and approve each change."
         )
