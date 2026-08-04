@@ -277,22 +277,6 @@ class PreEditLoopGuard:
         default=_default_effect_lookup, repr=False, compare=False
     )
 
-    #: The one integration seam for a decision the guard cannot make itself.
-    #:
-    #: The guard's rule is residency: "is that exact result still in front of
-    #: the model".  A *deliberate* internal trajectory rollover breaks that
-    #: rule's premise — the result left the request because Aura retired a
-    #: non-converging investigation on purpose, not because natural compaction
-    #: needed the room — and only
-    #: :class:`~aura.conversation.single_trajectory.SingleTrajectoryController`
-    #: knows a segment boundary happened.  So the owner supplies a callable that
-    #: returns a rejection payload, or ``None``, and the guard simply asks it
-    #: for calls its own rule already cleared.  Nothing about segments,
-    #: rollovers, workflow phases, or progress is stored or decided here.
-    cross_segment_check: Callable[[str, Any], dict[str, Any] | None] | None = field(
-        default=None, repr=False, compare=False
-    )
-
     seen_reads: dict[str, int] = field(default_factory=dict)
     seen_evidence: set[str] = field(default_factory=set)
     write_applied: bool = False
@@ -408,13 +392,11 @@ class PreEditLoopGuard:
     ) -> dict[str, Any] | None:
         """Return a rejection payload for a call this turn should not make.
 
-        ``None`` means the call may run.  Two rejections are possible, and both
-        are recoverable — never terminal:
+        ``None`` means the call may run.  Exactly one rejection is possible, and
+        it is recoverable — never terminal:
 
         * an unjustified exact repeat read whose original result is still in the
-          request;
-        * whatever :attr:`cross_segment_check` refuses, when a trajectory owner
-          has wired that seam in.
+          request.
 
         Broad discovery is never refused by a count; a turn that keeps returning
         genuinely new evidence is allowed to keep surveying for as long as the
@@ -424,41 +406,29 @@ class PreEditLoopGuard:
             return None
         if self._reread_grace_active or recovery_pending:
             # A distinct failure, a stale-file notice, or a pending edit-recovery
-            # step already told the model to read again. Neither boundary applies,
-            # and neither does the cross-segment seam.
+            # step already told the model to read again. Neither boundary applies.
             return None
 
         fingerprint = read_fingerprint(name, args)
         previous = self.seen_reads.get(fingerprint, 0)
         if previous >= 1:
-            if not self.is_rereadable(fingerprint):
-                self.blocked_calls += 1
-                return {
-                    "ok": False,
-                    "loop_guard": True,
-                    "recoverable": True,
-                    "reason": DUPLICATE_READ_REASON,
-                    "tool": name,
-                    "previous_calls": previous,
-                    "message": _DUPLICATE_READ_MESSAGE,
-                }
-            # The original result is no longer materially in the outbound view.
-            # "You already have this" would be false, so as far as *this* rule is
-            # concerned the reread is the model recovering context it lost.
-            self.rereads_allowed_after_compaction += 1
-        return self._cross_segment_rejection(name, args)
-
-    def _cross_segment_rejection(
-        self, name: str, args: Any
-    ) -> dict[str, Any] | None:
-        """Ask the wired-in trajectory owner about a call this rule cleared."""
-        if self.cross_segment_check is None:
-            return None
-        rejection = self.cross_segment_check(name, args)
-        if rejection is None:
-            return None
-        self.blocked_calls += 1
-        return rejection
+            if self.is_rereadable(fingerprint):
+                # The original result is no longer materially in the outbound
+                # view. "You already have this" would be false, so the reread is
+                # the model recovering context it lost, not circling.
+                self.rereads_allowed_after_compaction += 1
+                return None
+            self.blocked_calls += 1
+            return {
+                "ok": False,
+                "loop_guard": True,
+                "recoverable": True,
+                "reason": DUPLICATE_READ_REASON,
+                "tool": name,
+                "previous_calls": previous,
+                "message": _DUPLICATE_READ_MESSAGE,
+            }
+        return None
 
     def record(self, name: str, args: Any, call_id: str = "") -> None:
         """Record one accepted tool call for this round.

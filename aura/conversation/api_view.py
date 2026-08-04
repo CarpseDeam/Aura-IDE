@@ -126,34 +126,6 @@ LEDGER_MAX_PATHS: int = 16
 # Marker that identifies a receipt message in the outbound view.
 RECEIPT_MARKER: str = "aura_evidence_receipt"
 
-#: Key set on the internal continuation capsule that
-#: :class:`~aura.conversation.single_trajectory.SingleTrajectoryController`
-#: appends when it starts a fresh internal trajectory segment for the same real
-#: user turn.  This module is still the *one* compaction owner: the trajectory
-#: controller never compacts anything itself, it only marks the boundary, and
-#: the retirement pass below reads that marker to force the superseded detailed
-#: observation trajectory into the same single evidence ledger it already owns.
-TRAJECTORY_ROLLOVER_MARKER: str = "aura_trajectory_rollover"
-
-#: The execution tail a rollover preserves: the newest completed observation
-#: block before the boundary whose successful source-read results fit inside the
-#: *smallest* current-turn source floor is kept verbatim, and everything older
-#: retires.
-#:
-#: Retiring the entire investigation was correct about the investigation and
-#: wrong about the edit.  A fresh segment that holds target names, receipts, and
-#: recovery facts but not one byte of current source cannot safely write
-#: anything, so its first act is to re-read — which is the wandering this whole
-#: mechanism exists to stop.  One bounded actionable surface is therefore kept:
-#: enough to make a single edit, far too little to resume the survey.  It is
-#: kept *byte-identically*, so it stays resident in
-#: :class:`ResultResidency` and ``PreEditLoopGuard`` still rejects an immediate
-#: identical reread of it.
-#:
-#: Deliberately the smallest existing floor rather than a new number: the ladder
-#: below already treats that as the least source the current turn can act on.
-ROLLOVER_ACTIONABLE_SOURCE_CHARS: int = min(CURRENT_TURN_SOURCE_FLOORS)
-
 
 @dataclass
 class CompactionStats:
@@ -178,15 +150,6 @@ class CompactionStats:
     # Lifecycle retirement of completed blocks (see
     # ``_retire_completed_observations``).
     retired_blocks: int = 0
-    #: Of ``retired_blocks``, how many retired because they sat before an
-    #: internal trajectory-rollover boundary rather than because they fell
-    #: outside the recent-evidence allowance. Observability for the segment
-    #: boundary; nothing branches on it.
-    rollover_retired_blocks: int = 0
-    #: Whether a rollover boundary kept one bounded actionable source surface
-    #: verbatim so the fresh segment can edit without re-reading first. At most
-    #: one per boundary; observability only.
-    rollover_preserved_source_blocks: int = 0
     ledger_entries: int = 0
     ledger_chars_retained: int = 0
     ledger_dropped_entries: int = 0
@@ -474,35 +437,6 @@ def _is_source_result(msg: dict[str, Any], names: dict[str, str]) -> bool:
     return names.get(msg.get("tool_call_id", "")) in SOURCE_READ_TOOLS
 
 
-def _actionable_source_chars(
-    working: list[dict[str, Any]],
-    start: int,
-    end: int,
-    names: dict[str, str],
-) -> int | None:
-    """Chars of successful source-read results in one completed block.
-
-    ``None`` when the block carries no successful source read at all — it is
-    then not an actionable edit surface and a rollover has no reason to keep it.
-    A failed read is not a surface either, and is excluded from the total so a
-    block cannot be disqualified by the size of an error payload.
-    """
-    total = 0
-    found = False
-    for i in range(start, min(end, len(working))):
-        msg = working[i]
-        if msg.get("role") != "tool" or not _is_source_result(msg, names):
-            continue
-        if _result_failed(msg):
-            continue
-        content = msg.get("content")
-        if not isinstance(content, str):
-            continue
-        found = True
-        total += len(content)
-    return total if found else None
-
-
 def _source_result_chars(messages: list[dict[str, Any]], names: dict[str, str]) -> int:
     total = 0
     for msg in messages:
@@ -549,24 +483,6 @@ def user_message_text(msg: dict[str, Any]) -> str:
 
 def _turn_starts(messages: list[dict[str, Any]]) -> list[int]:
     return [i for i, m in enumerate(messages) if is_real_user_message(m)]
-
-
-def _last_rollover_boundary(
-    messages: list[dict[str, Any]], start: int
-) -> int | None:
-    """Index of the newest internal trajectory-rollover capsule at or after *start*.
-
-    ``None`` when the current real user turn has performed no rollover, which is
-    the ordinary case.  The capsule is an internal user message
-    (:func:`is_real_user_message` is false for it), so it never starts a new
-    turn and never re-routes the request; it only marks where the superseded
-    observation trajectory ends.
-    """
-    boundary: int | None = None
-    for index in range(start, len(messages)):
-        if messages[index].get(TRAJECTORY_ROLLOVER_MARKER):
-            boundary = index
-    return boundary
 
 
 def _compact_range(
@@ -1347,19 +1263,6 @@ def _retire_completed_observations(
     if not blocks:
         return
 
-    # An internal trajectory rollover happened in this turn: every completed
-    # observation block that closed before the capsule is superseded detail, and
-    # retires regardless of the recent-evidence allowance — except for the one
-    # bounded actionable source surface described at
-    # ``ROLLOVER_ACTIONABLE_SOURCE_CHARS``. That is the whole mechanical content
-    # of a segment boundary — the model is not placed back inside the same
-    # expanding observation chain, and it is not stripped of the bytes it needs
-    # to write. Mutations, unresolved failures, and the newest command block are
-    # untouched by it: the rules below still decide those, so applied writes,
-    # edit-recovery evidence, and the current validation chain survive a
-    # rollover verbatim.
-    rollover_at = _last_rollover_boundary(working, current_start)
-
     # Budgets derived from the active model's working-set budget — a token
     # budget, never a count of calls, files, rounds, or time.
     allowance = int(budget_tokens * RECENT_EVIDENCE_FRACTION)
@@ -1379,9 +1282,6 @@ def _retire_completed_observations(
 
     retired_spans: list[tuple[int, int]] = []
     entries: list[dict[str, Any]] = []
-    #: Whether this rollover boundary has already kept its one bounded
-    #: actionable source surface. At most one, and only the newest.
-    preserved_actionable_source = False
 
     for start, end in reversed(blocks):
         if _block_is_pinned(working, start):
@@ -1434,36 +1334,6 @@ def _retire_completed_observations(
                 # Unresolved failed observation — the model may still be
                 # recovering from it.
                 _bound_replayed_results(working, start, end, names, stats)
-            continue
-
-        if rollover_at is not None and end <= rollover_at:
-            # Superseded by an internal segment boundary: retired whatever the
-            # allowance would have said — with exactly one exception.
-            #
-            # Blocks are walked newest-first, so the first pre-boundary block
-            # whose successful source reads fit the smallest current-turn source
-            # floor is the *newest* bounded actionable surface, and it stays
-            # verbatim. That is what lets the fresh segment edit instead of
-            # re-reading everything, and because it is untouched it remains
-            # resident, so the duplicate guard still refuses an immediate
-            # identical reread of it. Everything else — broad searches,
-            # listings, outlines, unrelated files, superseded reads, and any
-            # source surface too large to be one edit target — retires into the
-            # same single evidence ledger.
-            if (
-                not preserved_actionable_source
-                and (chars := _actionable_source_chars(working, start, end, names))
-                is not None
-                and chars <= ROLLOVER_ACTIONABLE_SOURCE_CHARS
-            ):
-                preserved_actionable_source = True
-                stats.rollover_preserved_source_blocks += 1
-                continue
-            _retire_block_to_ledger(
-                working, start, end, names, stale_paths, stats,
-                retired_spans, entries,
-            )
-            stats.rollover_retired_blocks += 1
             continue
 
         cost = estimate_tokens(working[start:end])

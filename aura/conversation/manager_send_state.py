@@ -19,7 +19,6 @@ from typing import Any, Callable
 from aura.conversation.edit_orchestrator import EditRetryLedger
 from aura.conversation.pre_edit_loop_guard import PreEditLoopGuard
 from aura.conversation.single_content_gate import SingleContentGate
-from aura.conversation.single_trajectory import SingleTrajectoryController
 from aura.conversation.task_router import TaskRoute, route_bears_production_action
 from aura.conversation.tool_limits import ToolLimitState
 from aura.conversation.tools.effects import ToolEffect
@@ -115,15 +114,6 @@ class _SendState:
 
     pre_edit_guard: PreEditLoopGuard | None = field(init=False)
     """Deterministic duplicate-observation guard for the production turn."""
-
-    trajectory: SingleTrajectoryController | None = None
-    """The production SINGLE trajectory lifecycle owner for this real user turn.
-
-    Wired in by the send loop once the active model's budget is resolved, so the
-    segment allowance is model-budget-relative.  It owns trajectory progress,
-    internal rollover, and final runaway classification — and nothing else.  It
-    is deliberately *not* the duplicate gate (:class:`PreEditLoopGuard` stays the
-    narrow exact-duplicate rule) and deliberately not a scheduler."""
 
     # --- worker recovery state ---
     worker_flow_last_steering: str = ""

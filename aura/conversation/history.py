@@ -27,7 +27,6 @@ from typing import Any
 from aura.config import MAX_CONTEXT_TOKENS
 from aura.conversation.api_view import (
     SOURCE_READ_TOOLS,
-    TRAJECTORY_ROLLOVER_MARKER,
     ApiView,
     build_api_view,
     compact_result_content,
@@ -38,7 +37,7 @@ from aura.conversation.api_view import (
     user_message_text,
 )
 
-__all__ = ["History", "SOURCE_READ_TOOLS", "TRAJECTORY_ROLLOVER_MARKER"]
+__all__ = ["History", "SOURCE_READ_TOOLS"]
 
 
 @dataclass
@@ -63,23 +62,6 @@ class History:
 
     def append_internal_user_text(self, text: str) -> None:
         self.messages.append({"role": "user", "content": text, "aura_internal": True})
-
-    def append_trajectory_rollover(self, text: str) -> None:
-        """Append the internal continuation capsule that opens a new segment.
-
-        An internal message, so it is never a real user turn: routing, research
-        policy, rewind, and the transcript all keep reading the user's own
-        request. The extra marker is what
-        :func:`aura.conversation.api_view.build_api_view` reads to retire the
-        superseded observation trajectory — the capsule states the boundary,
-        the one compaction owner acts on it.
-        """
-        self.messages.append({
-            "role": "user",
-            "content": text,
-            "aura_internal": True,
-            TRAJECTORY_ROLLOVER_MARKER: True,
-        })
 
     def append_user_multimodal(
         self, parts: list[dict[str, Any]]
