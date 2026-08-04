@@ -50,28 +50,42 @@ def _to_anthropic_messages(
     system_parts: list[str] = []
     converted: list[dict[str, Any]] = []
 
-    for msg in messages:
+    index = 0
+    while index < len(messages):
+        msg = messages[index]
         role = msg.get("role")
         if role == "system":
             content = msg.get("content")
             if isinstance(content, str) and content:
                 system_parts.append(content)
+            index += 1
             continue
         if role == "tool":
-            converted.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": str(msg.get("tool_call_id", "")),
-                            "content": str(msg.get("content") or ""),
-                        }
-                    ],
-                }
-            )
+            # Every consecutive tool result goes into ONE user message: the
+            # wire format requires each ``tool_use`` to be answered by a
+            # ``tool_result`` in the immediately following message, and Aura
+            # stores each result as its own ``role=tool`` message (two calls
+            # in one turn → two tool messages). One user message per tool
+            # message would leave every ``tool_use`` after the first
+            # unanswered in the next message, and the provider rejects the
+            # request for that (400).
+            tool_results: list[dict[str, Any]] = []
+            while (
+                index < len(messages) and messages[index].get("role") == "tool"
+            ):
+                tool_msg = messages[index]
+                tool_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": str(tool_msg.get("tool_call_id", "")),
+                        "content": str(tool_msg.get("content") or ""),
+                    }
+                )
+                index += 1
+            converted.append({"role": "user", "content": tool_results})
             continue
         if role not in ("user", "assistant"):
+            index += 1
             continue
 
         content_blocks: list[dict[str, Any]] = []
@@ -145,6 +159,7 @@ def _to_anthropic_messages(
         if not content_blocks:
             content_blocks.append({"type": "text", "text": ""})
         converted.append({"role": role, "content": content_blocks})
+        index += 1
 
     return ("\n\n".join(system_parts) if system_parts else None), converted
 
