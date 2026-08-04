@@ -140,7 +140,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         # Left pane: workspace label + change root + tree + model config.
         self._left_pane = LeftPane(self._workspace_root, parent=self)
-        self._left_pane.populate_models(self._settings.provider, self._settings.worker_provider)
+        self._left_pane.populate_models(self._settings.provider)
         self._workspace_controller = MainWindowWorkspaceController(self)
         self._main_splitter.addWidget(self._left_pane)
 

@@ -555,7 +555,7 @@ class TestModelConfigPersistence:
         mock_store.load_project.return_value = project
 
         # Populate models
-        pane.populate_models(ProviderId("openai"), ProviderId("openai"))
+        pane.populate_models(ProviderId("openai"))
 
         # Set specific values
         planner_combo = pane._planner_model_combo
@@ -569,7 +569,7 @@ class TestModelConfigPersistence:
             assert pane.current_planner_model() == planner_model_before
 
     def test_thinking_combo_preserved_after_refresh(self, pane, mock_store):
-        """Thinking mode dropdowns are untouched by refresh_projects."""
+        """The thinking mode dropdown is untouched by refresh_projects."""
         root = Path("/tmp/test-workspace")
         project = _make_project("p1", "Test", root)
         mock_store.list_projects.return_value = [project]
@@ -577,9 +577,7 @@ class TestModelConfigPersistence:
         mock_store.load_project.return_value = project
 
         pane.set_planner_thinking("max")
-        pane.set_worker_thinking("off")
 
         pane.refresh_projects(root)
 
         assert pane.current_planner_thinking() == "max"
-        assert pane.current_worker_thinking() == "off"
