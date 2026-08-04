@@ -383,10 +383,14 @@ def _merge_anthropic_usage(target: dict[str, int], raw: Any) -> None:
     cache_read = int(raw.get("cache_read_input_tokens") or 0)
     cache_creation = int(raw.get("cache_creation_input_tokens") or 0)
     output_tokens = int(raw.get("output_tokens") or 0)
-    if input_tokens:
-        target["prompt_tokens"] = input_tokens
+    # Anthropic reports `input_tokens` as the ordinary uncached input only.
+    # `cache_read_input_tokens` is served from cache (a hit); newly cached input
+    # in `cache_creation_input_tokens` was still processed this turn (a miss).
+    # The three are disjoint, so total prompt input is their sum.
+    if input_tokens or cache_read or cache_creation:
         target["cache_hit_tokens"] = cache_read
-        target["cache_miss_tokens"] = max(0, input_tokens - cache_read) + cache_creation
+        target["cache_miss_tokens"] = input_tokens + cache_creation
+        target["prompt_tokens"] = input_tokens + cache_read + cache_creation
     if output_tokens:
         target["completion_tokens"] = output_tokens
 
