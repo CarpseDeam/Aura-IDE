@@ -83,7 +83,6 @@ from aura.conversation.workflow_state import WorkflowStatus
 from aura.events import EventBus
 from aura.lifecycle import LifecycleHooks
 from aura.model_streams import PRODUCTION_STREAM_HOOK, model_streams
-from aura.providers.registry import provider_registry
 from aura.research.policy import NO_RESEARCH, decide_research_policy
 from aura.skills.turn_state import SkillTurnState
 from aura.work_artifact.model import ValidationCommandSpec
@@ -620,22 +619,12 @@ class ConversationManager:
             )
 
             # The outbound view is compacted against *this* model's budget;
-            # self._history.messages is left exact. Whether the outbound copy
-            # replays prior assistant reasoning is a transport property read
-            # from the resolved provider's chat metadata — never inferred from
-            # the provider id here.
+            # self._history.messages is left exact. The current real user turn
+            # keeps its reasoning in that view — it is the working state of the
+            # request still being executed — and completed turns shed theirs.
+            # How the wire protocol carries it is the client layer's decision.
             budget = resolve_model_budget(model)
-            if provider_registry.has(budget.provider_id):
-                replay_policy = provider_registry.get(
-                    budget.provider_id
-                ).requires_reasoning_replay
-            else:
-                # Unknown provider: preserve the historical replay behavior.
-                replay_policy = True
-            api_view = self._history.build_api_payload(
-                budget.working_set_tokens,
-                requires_reasoning_replay=replay_policy,
-            )
+            api_view = self._history.build_api_payload(budget.working_set_tokens)
             if state.pre_edit_guard is not None:
                 # The one authoritative answer to "can the model still read that
                 # result?", taken from the view actually being sent. The guard

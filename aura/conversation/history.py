@@ -7,18 +7,16 @@ including its `reasoning_content`. The stored messages stay exact and durable
 so the transcript, the GUI, persistence, and usage evidence always see what
 really happened. Canonical history is never edited to fit a request.
 
-SECOND RULE — whether `reasoning_content` is replayed outbound is a transport
-policy, decided by the caller, not a universal rule.
+SECOND RULE — the outbound copy replays the reasoning of the *current* real
+user turn and sheds the reasoning of turns the user has moved past.
 
-The old DeepSeek OpenAI-compatible transport required `reasoning_content` to be
-passed back on ALL assistant messages that contain it, whether or not
-`tool_calls` is present; omitting it was rejected with a 400. That transport
-(and native Anthropic, which replays thinking blocks) still sends reasoning in
-the outbound copy. DeepSeek over the Anthropic Messages transport does NOT
-require replay, so its outbound copy sheds `reasoning_content` from every prior
-assistant message while canonical history keeps it exact. The decision is
-threaded in as ``requires_reasoning_replay`` through ``build_api_payload`` /
-``for_api`` into ``build_api_view`` (see `aura.conversation.api_view`).
+Reasoning produced while the model is executing the request it is still working
+on is that request's working state; the next round needs it to continue instead
+of re-deriving its plan. Reasoning from a finished request is dead weight that
+would be replayed on every later round. The boundary is Aura's latest genuine
+user message (`is_real_user_message`), so Aura's own internal continuation
+messages never split a live turn. See `aura.conversation.api_view`; how a given
+wire protocol carries that reasoning is decided in the client layer.
 """
 from __future__ import annotations
 
@@ -235,48 +233,26 @@ class History:
 
     # ---- API view -----------------------------------------------------------
 
-    def build_api_payload(
-        self,
-        max_tokens: int | None = None,
-        *,
-        requires_reasoning_replay: bool = True,
-    ) -> ApiView:
+    def build_api_payload(self, max_tokens: int | None = None) -> ApiView:
         """Build the outbound view plus its compaction diagnostics.
 
-        `max_tokens` is the active model's working-set budget.
-        `requires_reasoning_replay` is the transport's reasoning-replay policy:
-        when False, ``reasoning_content`` is shed from every prior assistant
-        message in the outbound copy while `self.messages` keeps it exact.
-        Nothing here mutates `self.messages`.
+        `max_tokens` is the active model's working-set budget. Nothing here
+        mutates `self.messages`.
         """
         budget = max_tokens if max_tokens and max_tokens > 0 else MAX_CONTEXT_TOKENS
-        return build_api_view(
-            self.system_prompt,
-            self.messages,
-            budget,
-            requires_reasoning_replay=requires_reasoning_replay,
-        )
+        return build_api_view(self.system_prompt, self.messages, budget)
 
-    def for_api(
-        self,
-        max_tokens: int | None = None,
-        *,
-        requires_reasoning_replay: bool = True,
-    ) -> list[dict[str, Any]]:
+    def for_api(self, max_tokens: int | None = None) -> list[dict[str, Any]]:
         """Build the messages array for the next API call.
 
         Rules:
         - Always include system message (if set) first.
-        - Assistant reasoning follows the transport's replay policy: when
-          ``requires_reasoning_replay`` is True, keep reasoning_content if
-          present regardless of whether tool_calls exists; when False, shed it
-          from every prior assistant message in the copy.
+        - Assistant reasoning from the current real user turn is replayed;
+          reasoning from turns the user has moved past is shed from the copy.
         - User and tool messages are passed through verbatim.
         - Stored history is never modified.
         """
-        return self.build_api_payload(
-            max_tokens, requires_reasoning_replay=requires_reasoning_replay
-        ).messages
+        return self.build_api_payload(max_tokens).messages
 
     # ---- introspection ------------------------------------------------------
 

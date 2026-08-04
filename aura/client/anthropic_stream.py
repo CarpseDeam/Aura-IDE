@@ -1,10 +1,10 @@
 """Anthropic/Claude streaming adapter — separate from the OpenAI-compatible client.
 
 Also serves any provider that speaks the Anthropic Messages wire protocol over
-its own transport — currently DeepSeek, whose Anthropic-compatible endpoint does
-not require prior reasoning to be replayed. Provider-specific behavior lives in
-one profile object (:class:`AnthropicThinkingProfile`), chosen by a single
-seam (:func:`anthropic_thinking_profile`), so the stream loop itself has no
+its own transport — currently DeepSeek, whose Anthropic-compatible endpoint
+carries the same ``thinking`` / ``tool_use`` block vocabulary. Provider-specific
+behavior lives in one profile object (:class:`AnthropicThinkingProfile`), chosen
+by a single seam (:func:`anthropic_thinking_profile`), so the stream loop has no
 ``provider == ...`` branches.
 """
 from __future__ import annotations
@@ -92,15 +92,21 @@ def _to_anthropic_messages(
 
         content_blocks: list[dict[str, Any]] = []
 
-        # 1. Handle Thinking (Reasoning). Native Anthropic must replay prior
-        #    thinking blocks to continue extended thinking. DeepSeek over the
-        #    Anthropic transport does NOT reconstruct thinking blocks from
-        #    ``reasoning_content``: the api view deliberately omitted that
-        #    reasoning from the outbound copy, and re-injecting it here would
-        #    undo the omission. No placeholder thinking blocks are ever added.
+        # 1. Handle Thinking (Reasoning). A provider that continues extended
+        #    thinking across tool rounds needs the round's own thinking back:
+        #    the api view has already decided *which* reasoning survives (the
+        #    current real user turn's), and this only re-encodes what is there
+        #    into the wire representation. Reasoning the view dropped cannot
+        #    reappear here, and no placeholder thinking block is ever invented.
+        #    The provider's signature travels with its block when the stream
+        #    reported one; an unsigned block is sent as-is rather than faked.
         rc = msg.get("reasoning_content")
         if reconstruct_thinking and rc and isinstance(rc, str):
-            content_blocks.append({"type": "thinking", "thinking": rc})
+            thinking_block: dict[str, Any] = {"type": "thinking", "thinking": rc}
+            signature = msg.get("reasoning_signature")
+            if isinstance(signature, str) and signature:
+                thinking_block["signature"] = signature
+            content_blocks.append(thinking_block)
 
         # 2. Handle Content (Text/Images)
         content = msg.get("content")
@@ -216,6 +222,10 @@ def _anthropic_max_tokens(model: str, thinking: ThinkingMode) -> int:
 
 
 def _anthropic_thinking_config(model: str, thinking: ThinkingMode) -> dict[str, Any]:
+    if thinking == "off":
+        # Native Anthropic keeps its existing shape: no thinking field at all,
+        # with ``temperature`` sent instead by the caller. Unchanged behavior.
+        return {}
     if model in _ADAPTIVE_THINKING_MODELS:
         config: dict[str, Any] = {
             "thinking": {"type": "adaptive", "display": "summarized"},
@@ -288,11 +298,16 @@ def _deepseek_anthropic_thinking_config(model: str, thinking: ThinkingMode) -> d
 
     DeepSeek ignores ``budget_tokens``, so it is never sent. ``auto`` enables
     thinking and omits ``output_config`` so DeepSeek applies its native effort
-    choice; explicit ``high``/``max`` send that effort verbatim. ``off`` sends
-    no thinking configuration at all (the caller handles temperature then).
+    choice; explicit ``high``/``max`` send that effort verbatim.
+
+    ``off`` is stated explicitly as ``{"type": "disabled"}`` rather than by
+    omitting the field: an absent ``thinking`` selects whatever the endpoint
+    defaults to for the model, which for a reasoning model is not necessarily
+    off. The user's Off selection has to be a request, not a silence. The
+    caller still sends ``temperature`` in this mode.
     """
     if thinking == "off":
-        return {}
+        return {"thinking": {"type": "disabled"}}
     config: dict[str, Any] = {"thinking": {"type": "enabled"}}
     if thinking in {"high", "max"}:
         config["output_config"] = {"effort": thinking}
@@ -324,10 +339,11 @@ class AnthropicThinkingProfile:
 
     provider: str
     #: Whether assistant ``reasoning_content`` in the outbound copy is
-    #: reconstructed as Anthropic ``thinking`` blocks. Native Anthropic must
-    #: replay prior thinking blocks to continue extended thinking; DeepSeek
-    #: over the Anthropic transport must not rebuild blocks from reasoning the
-    #: api view deliberately omitted.
+    #: reconstructed as Anthropic ``thinking`` blocks. Every provider on this
+    #: transport continues its own thinking across a tool round, so the
+    #: reasoning the api view kept (the current real user turn's) is re-encoded
+    #: for the wire. It never invents reasoning: what the view dropped stays
+    #: dropped.
     reconstruct_thinking: bool
 
     def max_tokens(self, model: str, thinking: ThinkingMode) -> int:
@@ -346,18 +362,20 @@ class AnthropicThinkingProfile:
         return _deepseek_anthropic_effort_policy(model, thinking)
 
 
-def anthropic_thinking_profile(provider: str) -> AnthropicThinkingProfile:
+def anthropic_thinking_profile(
+    provider: str, *, reconstruct_thinking: bool = True
+) -> AnthropicThinkingProfile:
     """The one decision seam: pick an Anthropic Messages thinking profile.
 
-    Native Anthropic keeps its Claude-specific adaptive/budget thinking and its
-    required thinking-block reconstruction. Every other Anthropic Messages
-    provider (DeepSeek) uses its native thinking over the Anthropic transport
-    and must not reconstruct thinking blocks from reasoning the api view
-    deliberately omitted.
+    Native Anthropic keeps its Claude-specific adaptive/budget thinking;
+    DeepSeek uses its native thinking over the same transport. Whether prior
+    reasoning is re-encoded as ``thinking`` blocks is the provider's declared
+    ``requires_reasoning_replay``, threaded in by the caller rather than
+    inferred from the provider id here.
     """
-    if provider == "anthropic":
-        return AnthropicThinkingProfile(provider=provider, reconstruct_thinking=True)
-    return AnthropicThinkingProfile(provider=provider, reconstruct_thinking=False)
+    return AnthropicThinkingProfile(
+        provider=provider, reconstruct_thinking=reconstruct_thinking
+    )
 
 
 def _iter_anthropic_sse(response: httpx.Response) -> Iterator[dict[str, Any]]:
@@ -417,9 +435,15 @@ def _stream_anthropic(
     provider: str = "anthropic",
     requires_reasoning_replay: bool = True,
 ) -> Iterator[Event]:
-    profile = anthropic_thinking_profile(provider)
+    profile = anthropic_thinking_profile(
+        provider, reconstruct_thinking=requires_reasoning_replay
+    )
+    # With thinking disabled the request declares no thinking at all, so prior
+    # thinking blocks have nothing to continue and are not sent; the assistant's
+    # own ``content`` carries the continuity for that mode.
     system, anthropic_messages = _to_anthropic_messages(
-        messages, reconstruct_thinking=profile.reconstruct_thinking
+        messages,
+        reconstruct_thinking=profile.reconstruct_thinking and thinking != "off",
     )
     body: dict[str, Any] = {
         "model": model,
@@ -443,8 +467,10 @@ def _stream_anthropic(
             }
     if thinking == "off":
         body["temperature"] = temperature
-    else:
-        body.update(profile.thinking_config(model, thinking))
+    # Off is a request too: a provider whose profile has an explicit
+    # disabled-thinking representation sends it, rather than leaving the field
+    # out and inheriting whatever the endpoint defaults to.
+    body.update(profile.thinking_config(model, thinking))
 
     _log.info(
         "provider_stream_start provider=%s chat_protocol=anthropic_messages "
@@ -469,6 +495,7 @@ def _stream_anthropic(
 
     content_buf: list[str] = []
     reasoning_buf: list[str] = []
+    signature_buf: list[str] = []
     tool_calls: dict[int, dict[str, Any]] = {}
     seen_tool_starts: set[int] = set()
     finish_reason: str | None = None
@@ -647,6 +674,14 @@ def _stream_anthropic(
                             if text:
                                 reasoning_buf.append(text)
                                 yield ReasoningDelta(text)
+                        elif delta_type == "signature_delta":
+                            # The provider's own signature over the thinking it
+                            # just streamed. Kept so the block can be replayed
+                            # intact on the next round; never displayed, never
+                            # fabricated when the provider sends none.
+                            sig = delta.get("signature") or ""
+                            if sig:
+                                signature_buf.append(sig)
                         elif delta_type == "input_json_delta":
                             chunk = delta.get("partial_json") or ""
                             if chunk:
@@ -691,6 +726,8 @@ def _stream_anthropic(
     }
     if not full_message["reasoning_content"]:
         full_message.pop("reasoning_content")
+    elif signature_buf:
+        full_message["reasoning_signature"] = "".join(signature_buf)
     if tool_calls:
         full_message["tool_calls"] = [
             _finalize_anthropic_tool_call(tool_calls[i])

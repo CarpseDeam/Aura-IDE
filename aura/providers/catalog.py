@@ -256,12 +256,13 @@ PROVIDER_CATALOG: dict[str, dict] = {
         # work, native Responses web search, and every other non-chat path.
         "base_url": "https://api.deepseek.com",
         # Chat/tool turns go over DeepSeek's Anthropic-compatible Messages
-        # transport, not OpenAI Chat Completions. That transport does not
-        # require prior ``reasoning_content`` to be replayed, so Aura stops
-        # feeding the model its earlier planning trajectory on every round.
+        # transport, not OpenAI Chat Completions. DeepSeek continues its own
+        # thinking across a tool round, so the reasoning of the request it is
+        # still executing is replayed as ``thinking`` blocks; the api view has
+        # already dropped everything older than the current real user turn.
         "chat_protocol": "anthropic_messages",
         "chat_base_url": "https://api.deepseek.com/anthropic/v1",
-        "requires_reasoning_replay": False,
+        "requires_reasoning_replay": True,
         "env_key": "DEEPSEEK_API_KEY",
         "default_model": "deepseek-v4-flash",
         "default_thinking": "auto",

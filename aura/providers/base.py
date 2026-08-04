@@ -53,11 +53,14 @@ class ProviderSpec:
     # ``chat_base_url`` overrides the API root used *only* for chat requests
     # (falls back to ``base_url``), so non-chat paths — model discovery,
     # pricing, native Responses web search — keep using the ordinary base URL.
-    # ``requires_reasoning_replay`` is the outbound reasoning-replay policy: a
-    # transport that demands prior assistant ``reasoning_content`` be replayed
-    # in every request (DeepSeek OpenAI chat, native Anthropic thinking) keeps
-    # it in the outbound API copy; one that does not (DeepSeek over Anthropic
-    # Messages) sheds it from the copy while canonical history keeps it exact.
+    # ``requires_reasoning_replay`` says whether this transport needs prior
+    # assistant reasoning re-encoded into the request to continue its thinking
+    # across a tool round — true for DeepSeek (both transports) and native
+    # Anthropic. It decides the *wire encoding* only. Which reasoning still
+    # exists to encode is decided once, for every provider, in
+    # ``aura.conversation.api_view``: the current real user turn keeps its
+    # reasoning, completed turns shed theirs, and canonical history keeps
+    # everything exact either way.
     chat_protocol: str = "openai_chat"
     chat_base_url: str | None = None
     requires_reasoning_replay: bool = True

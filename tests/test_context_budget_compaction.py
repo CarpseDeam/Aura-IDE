@@ -238,9 +238,10 @@ class TestReasoningReplay:
         replayed = [m for m in view.messages if m.get("reasoning_content")]
         assert len(replayed) == 1
 
-    def test_internal_steering_messages_are_the_provider_boundary(self) -> None:
-        """Aura's steering messages go out as role=user, so the provider sees
-        them as the boundary; reasoning before them is stripped."""
+    def test_internal_steering_messages_do_not_move_the_boundary(self) -> None:
+        """Aura's own steering messages go out as role=user, but they are not
+        new requests: reasoning produced before one is still the current turn's
+        working state, so it is replayed rather than stripped."""
         h = History()
         h.set_system("s")
         h.append_user_text("Fix the retry cap.")
@@ -260,9 +261,12 @@ class TestReasoningReplay:
         view = build_api_view("s", h.messages, 10_000_000)
         boundary = self._last_user_index(view.messages)
         assert view.messages[boundary]["content"].startswith("Loop guard:")
-        assert view.stats.reasoning_chars_dropped == len("thinking about the cap\n")
-        after = [m for m in view.messages[boundary + 1:] if m.get("role") == "assistant"]
-        assert all(m.get("reasoning_content") for m in after)
+        # The steering message is the last role=user message, but the turn began
+        # at the real request, so nothing inside it is shed.
+        assert view.stats.reasoning_chars_dropped == 0
+        assistants = [m for m in view.messages if m.get("role") == "assistant"]
+        assert len(assistants) == 2
+        assert all(m.get("reasoning_content") for m in assistants)
 
     def test_strip_runs_before_compaction_not_after(self, monkeypatch) -> None:
         """Reasoning is shed so evidence is not: with the strip, an overflowing

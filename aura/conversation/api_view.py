@@ -14,31 +14,24 @@ Two rules drive this module.
    envelope (every key, every path, every hash) survives and the result is
    always parseable.
 
-Invariants held by `build_api_view` — the outbound reasoning-replay policy is
-a *transport* decision threaded in by the caller as
-``requires_reasoning_replay``:
+Invariants held by `build_api_view`:
 
-* when the transport requires prior reasoning to be replayed (native DeepSeek
-  OpenAI chat, native Anthropic thinking):
-
-  * every assistant message in the *active* tool-call chain keeps its
-    ``reasoning_content`` — DeepSeek rejects a thinking-mode replay that drops
-    it (see ``_strip_superseded_reasoning`` for where the chain begins);
-  * reasoning from completed batches inside the *same* real user turn is
-    replayed verbatim once a later batch opens: the provider's context cache is
-    an exact prefix match, so stripping a batch's reasoning on a later round
-    rewrites an already-sent prefix and turns the whole suffix into a cache
-    miss (DeepSeek Flash input is 50x more expensive on a miss than on a hit).
-    Replayed reasoning is replayed at cache-hit prices; a smaller unstable
-    prefix is not cheaper. Completed-batch reasoning is shed only *across* real
-    user turns, where the boundary (the last ``role=user`` message) does not
-    move within the turn;
-
-* when the transport does not require replay (DeepSeek over Anthropic
-  Messages), every prior assistant message sheds ``reasoning_content`` from the
-  outbound copy — from the first time it is replayed, so the request prefix
-  never sends the reasoning once and strips it later. Canonical history keeps
-  the exact reasoning; only the outbound API copy changes;
+* every assistant message inside the *current real user turn* keeps its
+  ``content`` and its ``reasoning_content`` — that is the model's working state
+  for the request it is still executing, and dropping it is what made the model
+  restate its plan after every tool round (see ``_strip_superseded_reasoning``
+  for where the turn begins);
+* reasoning from completed batches inside that same turn is replayed verbatim
+  once a later batch opens: the provider's context cache is an exact prefix
+  match, so stripping a batch's reasoning on a later round rewrites an
+  already-sent prefix and turns the whole suffix into a cache miss (DeepSeek
+  Flash input is 50x more expensive on a miss than on a hit). Replayed
+  reasoning is replayed at cache-hit prices; a smaller unstable prefix is not
+  cheaper;
+* reasoning is shed only *across* real user turns. Whether the wire format then
+  carries that reasoning as provider-native ``reasoning_content`` or as
+  Anthropic ``thinking`` blocks is a transport decision, made in
+  ``aura.client.anthropic_stream``, not here;
 * an assistant message with ``tool_calls`` is always accompanied by exactly the
   tool messages for those ids, so compaction can never orphan a tool message;
 * a tool result that started as valid JSON is still valid JSON afterwards.
@@ -528,57 +521,42 @@ def _drop_block(messages: list[dict[str, Any]], start: int, end: int) -> None:
 def _strip_superseded_reasoning(
     working: list[dict[str, Any]],
     stats: CompactionStats,
-    *,
-    strip_all: bool = False,
 ) -> None:
-    """Drop ``reasoning_content`` from the outbound copy, per transport policy.
+    """Drop reasoning that belongs to *completed* real user turns.
 
-    With ``strip_all=False`` the shape is the DeepSeek OpenAI thinking-mode rule,
-    which is narrower than "never strip reasoning". Probed directly against the
-    API, with ``thinking`` enabled and the array ending on a tool result (Aura's
-    mid-loop shape):
+    One policy, for every transport. Reasoning produced inside the request the
+    model is still working on is its working state: it is what the model decided
+    before it called the tool whose result it is now reading. Removing it is what
+    forced the model to rebuild its plan on every round. Reasoning from turns the
+    user has already moved past is dead weight -- it is replayed on every
+    subsequent round, and in measured production turns it accounted for 46-98%
+    of all replayed reasoning, crowding out tool results that then had to be
+    dropped and re-read.
 
-    * stripping any assistant message that sits *after* the last user message
-      is rejected -- 400 "The `reasoning_content` in the thinking mode must be
-      passed back to the API";
-    * stripping assistant messages *before* the last user message is accepted.
+    So the boundary is the *latest genuine user request*
+    (:func:`is_real_user_message`): assistant messages before it shed their
+    reasoning, assistant messages at or after it keep it verbatim.
 
-    So the requirement binds the active tool-call chain, not the transcript.
-    Thinking from turns the user has already moved past is dead weight: it is
-    replayed on every subsequent round, and in measured production turns it
-    accounted for 46-98% of all replayed reasoning -- crowding out tool
-    results that then had to be dropped and re-read.
+    Two properties follow, and both matter:
 
-    The last user message is the boundary the provider itself sees, which
-    includes Aura's internal steering messages (they are sent as ``role:
-    user``). Across real user turns that boundary never moves within a turn, so
-    shedding the completed reasoning before it costs nothing on the provider
-    cache. Inside one real user turn the boundary stays at the turn's own first
-    user message and nothing is shed: a batch's reasoning is *not* rewritten on
-    a later round, because doing so would break the exact request prefix the
-    provider cache matches against (see the module invariants).
+    * DeepSeek's OpenAI-compatible thinking mode rejects a replay that drops
+      ``reasoning_content`` from any assistant message after the *last* user
+      message ("The `reasoning_content` in the thinking mode must be passed back
+      to the API"). The real-user boundary is never later than that one, so this
+      rule always keeps at least what that transport demands.
+    * Aura's own continuation messages are ``role="user"`` with
+      ``aura_internal``. Treating them as boundaries would move the strip point
+      *inside* a live turn: appending one would retroactively delete reasoning
+      already sent on an earlier round, rewriting the request prefix the
+      provider's context cache matches against (DeepSeek Flash input is 50x more
+      expensive on a miss than a hit). The real-user boundary does not move
+      until the user actually asks for something else.
 
-    With ``strip_all=True`` (a transport that does not require reasoning replay,
-    e.g. DeepSeek over Anthropic Messages) every assistant message in the copy
-    sheds its ``reasoning_content``, including the active chain. It is applied
-    uniformly from the first time a message is replayed, so no request ever
-    sends the reasoning once and strips it on a later one. Content, tool calls,
-    and every paired tool result are untouched.
-
-    Canonical history is untouched either way; this only shapes one request.
+    Canonical history is untouched; this only shapes one request.
     """
-    if strip_all:
-        for msg in working:
-            if msg.get("role") != "assistant":
-                continue
-            rc = msg.pop("reasoning_content", None)
-            if isinstance(rc, str):
-                stats.reasoning_chars_dropped += len(rc)
-        return
-
     boundary = -1
     for index, msg in enumerate(working):
-        if msg.get("role") == "user":
+        if is_real_user_message(msg):
             boundary = index
     if boundary < 0:
         return
@@ -639,18 +617,14 @@ def build_api_view(
     messages: list[dict[str, Any]],
     budget_tokens: int,
     keep_last_n_turns: int = 5,
-    requires_reasoning_replay: bool = True,
 ) -> ApiView:
     """Build the outbound message list without touching `messages`.
 
     `messages` is deep-copied first; the caller's canonical history is never
     modified, whatever the budget forces us to do here.
 
-    `requires_reasoning_replay` is the transport's reasoning-replay policy
-    (see ``_strip_superseded_reasoning``). True keeps the DeepSeek OpenAI /
-    native-Anthropic replay behavior; False sheds ``reasoning_content`` from
-    every prior assistant message in the outbound copy while canonical history
-    keeps it exact.
+    Reasoning follows one rule for every transport: the current real user turn
+    keeps it, completed turns shed it (see ``_strip_superseded_reasoning``).
     """
 
     working = copy.deepcopy(messages)
@@ -667,18 +641,12 @@ def build_api_view(
     stats.tokens_before = estimate_tokens(working, system_prompt)
 
     # Before compaction, so the space this frees is space the ladder does not
-    # have to take out of tool results. The reasoning-replay policy is a
-    # transport property: for transports that require replay, reasoning is shed
-    # only across a real user-turn boundary — stripping a finished batch's
-    # reasoning inside the *same* turn would rewrite an already-sent request
-    # prefix on the next round and turn the whole suffix into a DeepSeek cache
-    # miss (50x the input price of a hit). The last ``role=user`` message is the
-    # boundary the strip honours, and inside one real user turn it does not
-    # move. For transports that do not require replay (DeepSeek over Anthropic
-    # Messages), every prior assistant message sheds its reasoning from the copy.
-    _strip_superseded_reasoning(
-        working, stats, strip_all=not requires_reasoning_replay
-    )
+    # have to take out of tool results. Reasoning is shed only across a real
+    # user-turn boundary — stripping a finished batch's reasoning inside the
+    # *same* turn would both delete the model's working state and rewrite an
+    # already-sent request prefix on the next round, turning the whole suffix
+    # into a DeepSeek cache miss (50x the input price of a hit).
+    _strip_superseded_reasoning(working, stats)
 
     # If the copy still exceeds the working-set budget, the compaction ladder
     # shrinks it cheapest-loss-first, never touching canonical history.
@@ -830,16 +798,20 @@ def _render(
             continue
 
         api_msg = {"role": "assistant", "content": msg.get("content")}
-        # Reasoning is already shaped in ``working`` by the transport policy:
-        # transports that require replay keep it (``reasoning_chars_replayed``),
-        # and transports that do not (DeepSeek over Anthropic Messages) have had
-        # it shed from every assistant message before ``_render`` runs, so this
-        # only ever re-serialises what the policy left in the copy.
+        # Reasoning is already shaped in ``working``: the current real user
+        # turn kept it, completed turns shed it before ``_render`` runs, so this
+        # only ever re-serialises what the policy left in the copy. The
+        # provider's own signature for that reasoning travels with it —
+        # transports that verify replayed thinking blocks need the pair, and a
+        # signature without its reasoning is meaningless.
         rc = msg.get("reasoning_content")
         if rc:
             api_msg["reasoning_content"] = rc
             if isinstance(rc, str):
                 stats.reasoning_chars_replayed += len(rc)
+            signature = msg.get("reasoning_signature")
+            if signature:
+                api_msg["reasoning_signature"] = signature
         tool_calls = msg.get("tool_calls")
         if tool_calls:
             api_msg["tool_calls"] = tool_calls
