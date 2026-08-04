@@ -44,10 +44,7 @@ BUNDLED_SKILLS_SOURCE_REL = Path("aura") / "skills" / "bundled"
 BUNDLED_SKILLS_DEST_REL = Path("aura") / "skills" / "bundled"
 
 REQUIRED_ROLE_CAPSULE_FILES = [
-    "planner.md",
-    "worker.md",
     "single.md",
-    "critic.md",
 ]
 
 SUPPORTED_GRAMMARS = [
