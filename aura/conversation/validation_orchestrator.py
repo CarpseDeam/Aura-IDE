@@ -103,6 +103,7 @@ class ValidationCommandSpec:
         return bool(self.cwd.strip())
 
 
+@dataclass(frozen=True)
 class ValidationCommand:
     raw_text: str
     command: str
