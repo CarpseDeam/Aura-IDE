@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
 import threading
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -241,6 +243,23 @@ def _anthropic_thinking_config(model: str, thinking: ThinkingMode) -> dict[str, 
 #: Fallback output budget when a DeepSeek model is not in the provider catalog.
 _DEEPSEEK_ANTHROPIC_MAX_TOKENS_FALLBACK: int = 32_000
 
+# Bounded liveness for the Anthropic-Messages stream. These mirror the
+# watchdog in `aura.client.deepseek` for the chat-completions transport: the
+# provider gets 60s to send the first SSE event (the HTTP response may arrive
+# while the model is still cold-starting its thinking phase), and 180s between
+# events once the stream is live (a thinking model can legitimately be slow
+# between chunks — this is a stall detector, not a latency budget). Without
+# these, a provider that accepts the request and then holds the connection
+# open — no events, no close — leaves the worker thread blocked on the socket
+# forever and the run "live" in the UI, exactly what the chat path was
+# protected from and the Anthropic path was not.
+FIRST_STREAM_EVENT_TIMEOUT_SECONDS: float = 60.0
+CHAT_INTER_EVENT_TIMEOUT_SECONDS: float = 180.0
+
+#: SSE pump poll interval while no event is in flight. Short enough that a
+#: cancel or a stall is observed promptly.
+_ANTHROPIC_SSE_POLL_SECONDS: float = 0.1
+
 
 def _catalog_output_cap(model: str) -> int:
     """Declared ``max_output_tokens`` for *model* across the catalog, or 0."""
@@ -457,7 +476,10 @@ def _stream_anthropic(
     }
 
     # Use a generous timeout with read=None to avoid [WinError 10054] / ReadError
-    # during long thinking/streaming sessions.
+    # during long thinking/streaming sessions. Liveness is enforced below by
+    # the first-event/inter-event watchdog around the SSE pump, not by socket
+    # timeouts — a held-open connection surfaces as a terminal ApiError instead
+    # of a silent forever-block on ``iter_lines``.
     timeout = httpx.Timeout(120.0, connect=10.0, read=None)
     try:
         with httpx.Client(timeout=timeout) as client:
@@ -468,9 +490,102 @@ def _stream_anthropic(
                 json=body,
             ) as response:
                 response.raise_for_status()
-                for event in _iter_anthropic_sse(response):
+
+                sse_queue: queue.Queue = queue.Queue()
+
+                def _pump_sse() -> None:
+                    """Feed SSE events into ``sse_queue`` off the main loop."""
+                    try:
+                        for ev in _iter_anthropic_sse(response):
+                            sse_queue.put(("event", ev))
+                        sse_queue.put(("sentinel", None))
+                    except Exception as exc:  # noqa: BLE001 — surfaced as ApiError
+                        sse_queue.put(("error", exc))
+
+                pump_thread = threading.Thread(target=_pump_sse, daemon=True)
+                pump_thread.start()
+
+                _first_event_at = time.monotonic()
+                _first_read = True
+                _last_event_at = _first_event_at
+
+                def _close_stream_quietly() -> None:
+                    """Best-effort release of the HTTP stream on a stall."""
+                    closer = getattr(response, "close", None)
+                    if closer is None:
+                        return
+                    try:
+                        closer()
+                    except Exception:  # noqa: BLE001 — teardown must not mask the timeout
+                        _log.debug("anthropic_stream_close_failed host=%s", urlparse(base_url).hostname)
+
+                while True:
                     if cancel_event is not None and cancel_event.is_set():
                         break
+
+                    try:
+                        if _first_read:
+                            kind, payload = sse_queue.get(timeout=_ANTHROPIC_SSE_POLL_SECONDS)
+                        else:
+                            kind, payload = sse_queue.get(timeout=0.5)
+                    except queue.Empty:
+                        if _first_read:
+                            elapsed = time.monotonic() - _first_event_at
+                            if elapsed > FIRST_STREAM_EVENT_TIMEOUT_SECONDS:
+                                _log.info(
+                                    "anthropic_stream_first_event_timeout host=%s model=%s "
+                                    "elapsed_ms=%d",
+                                    urlparse(base_url).hostname, model,
+                                    int(elapsed * 1000),
+                                )
+                                yield ApiError(
+                                    status_code=None,
+                                    message=(
+                                        f"Provider did not send a first response event within "
+                                        f"{int(FIRST_STREAM_EVENT_TIMEOUT_SECONDS)} seconds. "
+                                        f"Check connection, provider status, model availability, "
+                                        f"or inspect the local logs."
+                                    ),
+                                )
+                                return
+                            continue
+
+                        # Stream started, then went silent. Terminate instead of
+                        # polling forever: no Done is fabricated and no partial
+                        # tool call is completed, matching the chat path.
+                        stalled_for = time.monotonic() - _last_event_at
+                        if stalled_for > CHAT_INTER_EVENT_TIMEOUT_SECONDS:
+                            _log.info(
+                                "anthropic_stream_inter_event_timeout host=%s model=%s "
+                                "elapsed_since_last_event_ms=%d",
+                                urlparse(base_url).hostname, model,
+                                int(stalled_for * 1000),
+                            )
+                            _close_stream_quietly()
+                            yield ApiError(
+                                status_code=None,
+                                message=(
+                                    f"Provider stream stalled after starting: no further "
+                                    f"response event for {int(CHAT_INTER_EVENT_TIMEOUT_SECONDS)} "
+                                    f"seconds. The turn is incomplete; completed tool results "
+                                    f"are preserved. Retry when the provider is healthy."
+                                ),
+                            )
+                            return
+                        continue
+
+                    if kind == "sentinel":
+                        break
+                    if kind == "error":
+                        yield ApiError(
+                            status_code=None,
+                            message=f"{type(payload).__name__}: {payload}",
+                        )
+                        return
+
+                    event = payload
+                    _first_read = False
+                    _last_event_at = time.monotonic()
                     ev_type = event.get("type")
 
                     if ev_type == "message_start":
