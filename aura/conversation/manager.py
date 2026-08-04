@@ -7,10 +7,13 @@ Cancellation: a threading.Event the GUI sets when Stop is clicked. We check
 it between rounds and propagate it into client.stream() so the OpenAI iterator
 short-circuits mid-chunk.
 
-Production SINGLE is the only role: one continuous model owns the whole turn.
-The loop has one shape — model response, append the complete assistant
-response, execute every emitted tool call, append every paired result, then
-continue or finish truthfully. There is no role router inside the loop.
+The loop is a conventional coding-agent loop and nothing more: send canonical
+history with the stable tool catalog, the selected model, and the user-selected
+thinking mode; forward the stream; append the complete assistant response; if it
+carries tool calls, validate them structurally, execute the whole batch, append
+one truthful result per call in order, and call the same model again; otherwise
+the turn is over. There is no router, no classifier, no counter, no budget, and
+no continuation Aura injects on the model's behalf.
 """
 from __future__ import annotations
 
@@ -37,25 +40,10 @@ from aura.client import (
 )
 from aura.config import ModelId, ThinkingMode
 from aura.context_gearbox.models import RuntimeRole
-from aura.conversation.completion_guard import (
-    assistant_message_text,
-    is_repetitive_completion_final,
-)
-from aura.conversation._report_tools import (
-    REPORT_ALREADY_SATISFIED,
-    REPORT_BLOCKER,
-)
+from aura.conversation._report_tools import REPORT_BLOCKER
 from aura.conversation.history import History
-from aura.conversation.manager_send_state import _SendState
 from aura.conversation.manager_tool_round import ToolRoundRunner
 from aura.conversation.planner_refresh import PlannerRefreshState
-from aura.conversation.stream_event_router import StreamEventRouter
-from aura.conversation.task_router import (
-    TaskRoute,
-    classify_user_request,
-    route_bears_production_action,
-)
-from aura.conversation.tool_limits import MAX_TOOL_CALLS_BY_MODE
 from aura.conversation.tool_runner import ToolRunner
 from aura.conversation.tools._types import (
     ApprovalCallback,
@@ -66,7 +54,6 @@ from aura.conversation.tools.registry import ToolRegistry
 from aura.events import EventBus
 from aura.lifecycle import LifecycleHooks
 from aura.model_streams import PRODUCTION_STREAM_HOOK, model_streams
-from aura.research.policy import NO_RESEARCH, decide_research_policy
 from aura.skills.turn_state import SkillTurnState
 from aura.conversation.validation_orchestrator import ValidationCommandSpec
 
@@ -75,17 +62,11 @@ EventCallback = Callable[[Event], None]
 _PRODUCTION_STREAM_LABEL = "production_stream"
 
 
-def _stream_log_label(hook_name: str) -> str:
-    """Return the log label for the active model-generation hook."""
-    return _PRODUCTION_STREAM_LABEL
-
-
 def _blocker_reason_from_call(full_message: dict[str, Any]) -> str:
     """Return the blocker text named by this turn's ``report_blocker`` call.
 
-    The ``blocker`` argument is the reason the implementation attempt ended.
-    Carried to the completion receipt so a blocked turn reports as blocked,
-    never as completed.
+    Bookkeeping for the completion receipt only: a turn that reported a blocker
+    is summarized as blocked rather than completed. It does not end the turn.
     """
     for call in full_message.get("tool_calls") or []:
         if not isinstance(call, dict):
@@ -100,25 +81,6 @@ def _blocker_reason_from_call(full_message: dict[str, Any]) -> str:
         reason = args.get("blocker")
         return str(reason).strip() if isinstance(reason, str) else ""
     return ""
-
-
-#: Stable harness/runtime classification for a production SINGLE turn that
-#: consumed the entire remote-protection emergency tool budget.  Reached only
-#: when every further tool call is rejected by preflight while prose still
-#: cannot close an implementation turn that owes its edit.  Deliberately
-#: distinct from ``blocked``, ``completed``, and ``already_satisfied``: the run
-#: is stopped by the harness, not satisfied, and not finished.
-SINGLE_RUNAWAY_HARNESS_FAILURE = "single_runaway_harness_failure"
-
-
-_UNPROVEN_CONTINUATION = (
-    "This turn has not reached a truthful terminal outcome: no edit has been "
-    "applied, no structured already-satisfied evidence was recorded, and no "
-    "blocker was reported. Do not end the turn with prose alone. Use the tools "
-    "to apply the change, call report_blocker with a real external blocker, or "
-    "call report_already_satisfied with the repository evidence that the "
-    "requested state already exists."
-)
 
 
 #: Structured payload paired to a tool call that was cancelled before Aura
@@ -211,28 +173,16 @@ class ConversationManager:
             history=self._history,
             tools=self._tools,
             tool_runner=self._tool_runner,
-            planner_refresh=self._planner_refresh,
             lifecycle=self._lifecycle,
             event_bus=self._event_bus,
         )
-        #: Terminal blocker reason from the most recent turn that ended in a
-        #: successful ``report_blocker``, for completion receipts. Reset at the
-        #: start of every send.
+        #: Blocker reason from the most recent turn's successful
+        #: ``report_blocker``, for completion receipts. Reset per send.
         self._last_turn_blocked_reason: str = ""
-        #: Whether the most recent turn ended in an unusable-provider failure.
-        #: Reserved for a provider that genuinely cannot be used; the shape of a
-        #: tool call is never one, because a formatting disagreement leaves the
-        #: evidence intact and the edit unmade. Reset per send.
-        self._last_turn_provider_contract_failure: bool = False
-        #: Whether the most recent turn ended in a successful structured
-        #: ``report_already_satisfied`` outcome — the requested state already
-        #: exists. Completion receipts read this as explicit evidence, never
+        #: Whether the most recent turn recorded a successful structured
+        #: ``report_already_satisfied``. Receipt bookkeeping only — never
         #: inferred from the absence of a write. Reset per send.
         self._last_turn_already_satisfied: bool = False
-        #: Whether the most recent turn was routed for a production action.
-        #: Read once from the turn's authoritative route at the start of send;
-        #: completion receipts hold such turns to the truthful-outcome contract.
-        self._last_turn_bears_production_action: bool = False
         #: The most recent send's frozen skill turn state (or None when the
         #: send exposed no candidates). Kept so the bridge can surface the
         #: activation ledger after the turn completes.
@@ -248,25 +198,9 @@ class ConversationManager:
         return self._last_turn_blocked_reason
 
     @property
-    def last_turn_provider_contract_failure(self) -> bool:
-        """Whether the last turn ended because the provider was unusable.
-
-        Never true for the *shape* of a tool call. A response Aura could not use
-        is repaired, reissued, and — if the narrowed request keeps failing —
-        replaced by the ordinary production request, with every byte of gathered
-        evidence intact.
-        """
-        return self._last_turn_provider_contract_failure
-
-    @property
     def last_turn_already_satisfied(self) -> bool:
-        """Whether the last turn ended in structured already-satisfied evidence."""
+        """Whether the last turn recorded structured already-satisfied evidence."""
         return self._last_turn_already_satisfied
-
-    @property
-    def last_turn_bears_production_action(self) -> bool:
-        """Whether the last turn was routed for a production action."""
-        return self._last_turn_bears_production_action
 
     def skill_activation_log(self) -> list[dict]:
         """Structured skill activation ledger of the last completed send.
@@ -339,7 +273,8 @@ class ConversationManager:
             target_files=target_files,
         )
 
-    def send(        self,
+    def send(
+        self,
         on_event: EventCallback,
         approval_cb: ApprovalCallback,
         cancel_event: threading.Event,
@@ -348,129 +283,60 @@ class ConversationManager:
         temperature: float = 0.7,
         explicit_validation_commands: list[ValidationCommandSpec] | None = None,
         declared_run_command: str | None = None,
-        task_route: TaskRoute | None = None,
     ) -> None:
-        """Run the model -> tool -> model loop until the turn ends truthfully.
+        """Run the model -> tool -> model loop until the model stops calling tools.
 
         Caller appends the user message to history before invoking this.
 
-        This is a conventional coding-agent loop, not a workflow engine:
+        One shape, every round:
 
-        * every model request uses the same stable tool catalog
-          (:meth:`ToolRegistry.tool_defs`), the caller-selected ``model``, and
-          the caller-selected ``thinking`` mode — never a narrowed checkpoint
-          or action-serialization surface, and never a thinking override;
-        * a response that carries tool calls is preflighted, executed, and the
-          assistant message plus one truthful result per call is appended, then
-          the model is called again with the same catalog;
-        * a response that carries no tool calls ends the turn only when it has
-          a truthful terminal outcome — a completed action in completion
-          context, structured blocker or already-satisfied evidence, or a
-          non-production answer.  A production turn that still owes its edit is
-          told what remains unproven and called again.
+        1. Send canonical history with the stable tool catalog
+           (:meth:`ToolRegistry.tool_defs`), the caller-selected ``model``, and
+           the caller-selected ``thinking`` mode.
+        2. Forward the provider stream to ``on_event`` as it arrives.
+        3. Append the complete assistant response exactly as received.
+        4. If it carries tool calls, validate them structurally, execute the
+           whole batch, append exactly one truthful result per call in original
+           call order, and call the same model again.
+        5. If it carries no tool calls, the turn is finished.
+        6. Cancellation or provider failure stops the loop without claiming the
+           work succeeded.
 
-        Production SINGLE has no count-based termination: it never ends because
-        the turn performed N model rounds, read N files, inspected N times,
-        consumed N tokens, or spent N seconds.  It ends when the work is done,
-        when a structured blocker or already-satisfied result succeeds, when the
-        user cancels, or when the provider genuinely fails.
-
-        `task_route` is the deterministic ``TaskRoute`` the send layer already
-        selected for this turn. It is read, never recomputed; the completion
-        contract reads it to know whether the turn owed a production action.
-
-        ``hook_name`` is always the production hook: model generation uses
-        ``generate_production_code`` exclusively.
+        Nothing else ends a turn. There is no round, tool, token, or time
+        ceiling; no injected continuation; no required-tool round; no rejection
+        of a repeated read; and no classification of the request deciding
+        whether the model is allowed to stop.
         """
-        latest_user_text = _latest_user_text(self._history)
-        if task_route is None:
-            # A production send with no route is not an unbounded turn. The
-            # completion contract reads the route, so a caller that omits one
-            # would silently change which turns owe a production action — the
-            # decision must not depend on a caller remembering to pass an
-            # argument. Resolving it here is the same deterministic
-            # classification the send layer already performs, over the same
-            # real user message, so a route that *was* passed is still never
-            # recomputed.
-            task_route = classify_user_request(latest_user_text)
-            _log.info(
-                "task_route_resolved_defensively lane=%s action=%s",
-                task_route.lane.value,
-                task_route.action,
-            )
-        state = _SendState(
-            mode="single",
-            research_policy=decide_research_policy(latest_user_text),
-            task_route=task_route,
-            tool_effect=self._tools.tool_effect,
-            read_only=bool(getattr(self._tools, "read_only", False)),
-        )
-        # Fix web research availability for the whole real user turn from the
-        # turn's own research route. Decided once, before the first request, so
-        # every round of the turn sees the identical catalog and the provider's
-        # cached request prefix survives. A turn that needs no external facts
-        # never sees the tool at all.
-        self._tools.set_web_search_enabled(
-            getattr(state.research_policy, "route", NO_RESEARCH) != NO_RESEARCH
-        )
+        self._last_turn_blocked_reason = ""
+        self._last_turn_already_satisfied = False
+        # Web research is offered when the search backend is genuinely
+        # configured — never because Aura read the user's sentence. Resolved
+        # once per turn so the catalog, and the provider's cached request
+        # prefix, stay identical across the turn's rounds.
+        self._tools.refresh_web_search_availability()
         # Freeze this real user turn's skill candidates once, so load_skills
         # resolves against the same deterministic selection that produced the
         # initial skill index — never a recomputation per round.
-        state.skill_turn = self._build_skill_turn_state()
-        self._last_skill_turn = state.skill_turn
-        self._last_turn_blocked_reason = ""
-        self._last_turn_provider_contract_failure = False
-        self._last_turn_already_satisfied = False
-        # The authoritative route (the caller's, or the defensive resolution
-        # above) decides whether this turn bore a production action. A
-        # read-only registry exposes no mutation tools, so such turns never owe
-        # an act and keep their ordinary completion behaviour. Read once and
-        # carried to the completion receipt, which holds production-action
-        # turns to the truthful-outcome contract.
-        self._last_turn_bears_production_action = (
-            not state.read_only
-            and route_bears_production_action(state.task_route)
-        )
+        skill_turn = self._build_skill_turn_state()
+        self._last_skill_turn = skill_turn
+        self._tool_round_runner.begin_turn()
 
         while True:
-            if (
-                state.task_completion_context
-                and state.final_messages_after_completion >= 1
-            ):
-                return
-
-            state.rounds_used += 1
-
-            state.limits.begin_model_round()
             if cancel_event.is_set():
                 self._cleanup_cancelled(on_event)
                 return
 
             full_message: dict[str, Any] | None = None
 
-            # ── The one normal request shape ─────────────────────────────
-            # Production SINGLE is a conventional agent loop: every active
-            # request exposes the same stable catalog, the user-selected model,
-            # and the user-selected thinking mode.  There is no checkpoint
-            # catalog, no focused-action catalog, no required-tool protocol,
-            # and no thinking override — the active schema never alternates.
+            # The one request shape: the same stable catalog, the user's model,
+            # and the user's thinking mode, on every round of the turn.
             tool_defs = self._tools.tool_defs()
-            round_thinking: ThinkingMode = thinking
 
-            if state.content_gate is not None:
-                state.content_gate.begin_round()
-
-            label = _stream_log_label(PRODUCTION_STREAM_HOOK)
             _log.info(
                 "%s_start model=%s thinking=%s hook_name=%s",
-                label, model, round_thinking, PRODUCTION_STREAM_HOOK,
+                _PRODUCTION_STREAM_LABEL, model, thinking, PRODUCTION_STREAM_HOOK,
             )
             _first_event = True
-
-            router = StreamEventRouter(
-                on_event=on_event,
-                content_gate=state.content_gate,
-            )
 
             # The request is canonical history, unchanged: system prompt, every
             # stored message, every assistant message's reasoning and signature.
@@ -484,36 +350,35 @@ class ConversationManager:
                 messages=request_messages,
                 tools=tool_defs,
                 model=model,
-                thinking=round_thinking,
+                thinking=thinking,
                 cancel_event=cancel_event,
                 temperature=temperature,
             ):
                 if _first_event:
-                    _log.info("%s_first_event model=%s", label, model)
+                    _log.info(
+                        "%s_first_event model=%s", _PRODUCTION_STREAM_LABEL, model
+                    )
                     _first_event = False
 
-                result = router.process(ev)
+                # Every event is forwarded as produced, including prose emitted
+                # before tool calls. Nothing is buffered, withheld, or blanked.
+                on_event(ev)
 
-                if result.full_message is not None:
-                    full_message = result.full_message
-                if result.api_error is not None:
-                    _log.info("%s_api_error model=%s", label, model)
-                    # An API error is not a contract verdict either: anything
-                    # the stream had already completed keeps its terminal event.
+                if isinstance(ev, Done):
+                    full_message = ev.full_message
+                elif isinstance(ev, ApiError):
+                    _log.info(
+                        "%s_api_error model=%s", _PRODUCTION_STREAM_LABEL, model
+                    )
+                    # A provider failure stops the turn. Nothing already
+                    # completed is retracted and no success is claimed.
                     return
 
-            _log.info("%s_done model=%s", label, model)
-
-            # A stream that ended without a Done (cancel, truncated provider
-            # response) still owes the user whatever prose it produced.  Rounds
-            # that reached Done already resolved their buffer, so this is a
-            # no-op for them.
-            if state.content_gate is not None:
-                state.content_gate.flush(on_event)
+            _log.info("%s_done model=%s", _PRODUCTION_STREAM_LABEL, model)
 
             if cancel_event.is_set():
-                # Cancellation is not a contract verdict: whatever the stream
-                # already completed keeps its terminal event.
+                # Cancellation is not a verdict: whatever the stream already
+                # completed keeps its terminal event.
                 # If we have some content but no tool calls, we can keep it.
                 # If it's empty or has orphaned tool calls, we must strip it.
                 if full_message is not None:
@@ -536,81 +401,20 @@ class ConversationManager:
                 return
 
             if full_message is None:
-                # Should not happen in normal stream completion. There is no
-                # message to validate, so nothing can be held back on its
-                # behalf.
+                # The stream ended without a Done. There is no assistant
+                # response to append and nothing to execute.
                 return
+
+            # The complete assistant response, exactly as received.
+            self._history.append_assistant(full_message)
 
             tool_calls = full_message.get("tool_calls") or []
-
-            if (
-                not tool_calls
-                and state.task_completion_context
-            ):
-                content_text = assistant_message_text(full_message)
-                if state.final_messages_after_completion >= 1:
-                    if is_repetitive_completion_final(
-                        content_text,
-                        state.last_completion_final_text,
-                    ):
-                        return
-                    return
-                self._history.append_assistant(full_message)
-                state.final_messages_after_completion += 1
-                state.last_completion_final_text = content_text
-                return
-
             if not tool_calls:
-                if (
-                    not state.read_only
-                    and state.implementation_action_pending()
-                ):
-                    if state.limits.total_calls >= MAX_TOOL_CALLS_BY_MODE["single"]:
-                        # The run has consumed the entire emergency tool budget:
-                        # every further tool call is rejected by preflight, and
-                        # this prose still cannot close a turn that owes its
-                        # edit.  A continuation could never be satisfied, so end
-                        # the send directly instead of looping forever between
-                        # rejected calls and refused prose.
-                        self._terminate_single_runaway(state, on_event)
-                        return
-                    # A production action turn that still owes its edit ended
-                    # this response with prose instead of an act. That is not a
-                    # truthful terminal outcome — no write, no structured
-                    # already-satisfied evidence, no blocker — so the turn is
-                    # not allowed to close on it. Append one compact internal
-                    # continuation stating exactly what remains unproven and
-                    # call the model again with the same catalog, the same
-                    # thinking mode, the same history, and every tool result
-                    # gathered so far.
-                    self._history.append_internal_user_text(_UNPROVEN_CONTINUATION)
-                    _log.info(
-                        "production_prose_not_terminal rounds_used=%d",
-                        state.rounds_used,
-                    )
-                    continue
-                self._history.append_assistant(full_message)
                 return
-
-            if (
-                tool_calls
-                and state.limits.total_calls + len(tool_calls)
-                > MAX_TOOL_CALLS_BY_MODE["single"]
-            ):
-                # The proposed batch would cross the emergency ceiling: every
-                # later call is rejected by preflight, and prose still cannot
-                # close an implementation turn that owes its edit.  Fail the
-                # run before appending an assistant tool-call block, so no
-                # unpaired block is written into canonical history and no
-                # partial batch executes.
-                self._terminate_single_runaway(state, on_event)
-                return
-
-            self._history.append_assistant(full_message)
 
             tool_round = self._tool_round_runner.run(
                 tool_calls=tool_calls,
-                state=state,
+                skill_turn=skill_turn,
                 on_event=on_event,
                 approval_cb=approval_cb,
                 cancel_event=cancel_event,
@@ -619,79 +423,22 @@ class ConversationManager:
                 declared_run_command=declared_run_command,
                 tool_defs=tool_defs,
             )
-            guard = state.pre_edit_guard
-            write_applied = bool(guard is not None and guard.write_applied)
 
-            # ── Structured terminal outcomes ─────────────────────────────
-            # A successful ``report_blocker`` names the reason the attempt
-            # ended; a successful ``report_already_satisfied`` records the
-            # requested state already exists. Each is terminal only when its
-            # structured tool result actually succeeded — never on the tool
-            # name alone and never on assistant prose. Either way the turn
-            # owes exactly one factual final response, which the completion
-            # path produces; the receipt reads the flags.
+            # ── Passive receipt bookkeeping ──────────────────────────────
+            # A successful ``report_blocker`` names why the attempt ended; a
+            # successful ``report_already_satisfied`` records that the requested
+            # state already existed. Both are ordinary optional tools: they are
+            # summarized in the completion receipt and neither ends the turn,
+            # forces a finalization round, or changes the next request.
             if tool_round.blocker_succeeded:
-                state.task_completion_context = True
                 self._last_turn_blocked_reason = _blocker_reason_from_call(
                     full_message
                 )
-                _log.info(
-                    "production_turn_blocked rounds_used=%d",
-                    state.rounds_used,
-                )
-            elif tool_round.already_satisfied_succeeded:
-                state.task_completion_context = True
+            if tool_round.already_satisfied_succeeded:
                 self._last_turn_already_satisfied = True
-                _log.info(
-                    "production_turn_already_satisfied rounds_used=%d",
-                    state.rounds_used,
-                )
 
-            # Observations are never counted. A turn that keeps returning
-            # genuinely new evidence keeps going; the only loop protection is
-            # the deterministic duplicate gate in PreEditLoopGuard, which
-            # rejects one wasteful repeat as a recoverable tool result and
-            # never ends the turn.
-
-            if tool_round.action == "return":
+            if tool_round.cancelled:
                 return
-            if tool_round.action == "continue":
-                continue
-
-    def _terminate_single_runaway(
-        self,
-        state: _SendState,
-        on_event: EventCallback,
-    ) -> None:
-        """Terminate a production SINGLE send at the emergency tool ceiling.
-
-        The ceiling is remote protection, not workflow control.  Once it is
-        reached every further tool call is rejected by preflight, while prose
-        cannot close an implementation turn that still owes its edit — so the
-        only continuation would be an endless alternation of rejected calls and
-        refused prose.  End the send directly: no further model request, no
-        ``_UNPROVEN_CONTINUATION``, no resend prompt, and no completed, blocked,
-        or already-satisfied verdict.  Every tool result, applied write, command
-        result, and validation result recorded before this point stays intact.
-        """
-        _log.info(
-            "production_single_runaway_halt failure_class=%s total_calls=%d",
-            SINGLE_RUNAWAY_HARNESS_FAILURE,
-            state.limits.total_calls,
-        )
-        on_event(
-            ApiError(
-                status_code=None,
-                message=(
-                    "The production run consumed the entire emergency tool-call "
-                    "ceiling and was stopped before issuing another model "
-                    f"request. This is a harness failure "
-                    f"({SINGLE_RUNAWAY_HARNESS_FAILURE}) — not a completed, "
-                    "blocked, or already-satisfied outcome. Completed tool "
-                    "results and applied changes are preserved."
-                ),
-            )
-        )
 
     def _cleanup_cancelled(self, on_event: EventCallback) -> None:
         """Repair the current real-user turn after a cancellation.
@@ -774,16 +521,6 @@ class ConversationManager:
             break
 
         on_event(ApiError(status_code=None, message="Cancelled."))
-
-
-def _latest_user_text(history: History) -> str:
-    """The real user request driving this send.
-
-    Aura's own steering messages are ``role="user"`` but carry
-    ``aura_internal``; letting one stand in here would decide research policy
-    from Aura's words rather than the user's. ``History`` owns that distinction.
-    """
-    return history.latest_real_user_text() or ""
 
 
 __all__ = [

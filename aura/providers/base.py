@@ -89,6 +89,5 @@ class ProviderClient(Protocol):
         thinking: ThinkingMode,
         cancel_event: Any = None,
         temperature: float = 0.7,
-        require_tool_call: bool = False,
     ) -> Iterator[Event]:
         ...

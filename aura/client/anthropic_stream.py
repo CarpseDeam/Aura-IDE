@@ -431,7 +431,6 @@ def _stream_anthropic(
     thinking: ThinkingMode,
     cancel_event: threading.Event | None,
     temperature: float,
-    require_tool_call: bool = False,
     provider: str = "anthropic",
     requires_reasoning_replay: bool = True,
 ) -> Iterator[Event]:
@@ -455,16 +454,9 @@ def _stream_anthropic(
         body["system"] = system
     anthropic_tools = _to_anthropic_tools(tools or [])
     if anthropic_tools:
+        # No ``tool_choice``: the model chooses freely between prose and tool
+        # calls, and parallel tool use is left enabled.
         body["tools"] = anthropic_tools
-        if require_tool_call:
-            # ``any`` means "use one of these tools" rather than naming which.
-            # Anthropic rejects a forced tool choice while extended thinking is
-            # on, which is exactly why the focused action request runs with
-            # thinking off — the two are one decision, not two.
-            body["tool_choice"] = {
-                "type": "any",
-                "disable_parallel_tool_use": True,
-            }
     if thinking == "off":
         body["temperature"] = temperature
     # Off is a request too: a provider whose profile has an explicit

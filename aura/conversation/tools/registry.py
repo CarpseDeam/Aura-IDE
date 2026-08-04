@@ -97,10 +97,11 @@ class ToolRegistry(
         # turn exposed no candidates and every activation request fails
         # truthfully.
         self._skill_turn_state: Any = None
-        # Whether the production single-agent catalog offers web research this
-        # turn.  Set once per real user turn from that turn's route and held
-        # for its whole duration, so the exposed catalog — and therefore the
-        # provider's cached request prefix — never moves between rounds.
+        # Whether the production catalog offers web research. Depends only on
+        # whether the search backend is genuinely configured; it is re-resolved
+        # once per real user turn and held for that turn's whole duration, so
+        # the exposed catalog — and therefore the provider's cached request
+        # prefix — never moves between rounds.
         self._web_search: bool = False
         self._executor = ToolExecutor(
             owner=self,
@@ -140,14 +141,24 @@ class ToolRegistry(
         """Whether this turn's production catalog offers ``web_search``."""
         return self._web_search
 
-    def set_web_search_enabled(self, value: bool) -> None:
-        """Fix web research availability for one real user turn.
+    def refresh_web_search_availability(self) -> None:
+        """Re-resolve whether the web-search backend is actually usable.
 
-        Called once at the start of ``send()`` from the turn's research route.
-        Never called per round: a catalog that changed mid-turn would discard
-        the provider's cached prefix and move the schema under the model.
+        Availability is a fact about configuration — whether the search
+        provider has a credential — and never a judgement about what the user
+        asked for. Called once at the start of ``send()`` so a key added in
+        Settings takes effect on the next turn while the catalog stays fixed
+        for the duration of the turn in flight.
         """
-        self._web_search = bool(value)
+        from aura.config import has_api_key
+        from aura.research.native import SEARCH_PROVIDER_ID
+
+        try:
+            self._web_search = bool(has_api_key(SEARCH_PROVIDER_ID))
+        except Exception:
+            # Withhold rather than assert: a capability that cannot be
+            # confirmed must not be offered as available.
+            self._web_search = False
 
     @property
     def active_cancel_event(self) -> threading.Event | None:

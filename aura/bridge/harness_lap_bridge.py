@@ -16,7 +16,6 @@ from aura.bridge.production_receipt import (
     STATUS_COMPLETED,
     STATUS_COMPLETED_UNVERIFIED,
     STATUS_HARNESS_ERROR,
-    STATUS_NO_AUTHORITATIVE_CHANGE,
     STATUS_PROVIDER_CONTRACT_FAILURE,
     STATUS_VALIDATION_FAILED,
     ProductionReceipt,
@@ -48,7 +47,6 @@ _RECEIPT_STATUS_TO_WORKER: dict[str, str] = {
     STATUS_BLOCKED: WorkerOutcomeStatus.harness_error.value,
     STATUS_HARNESS_ERROR: WorkerOutcomeStatus.harness_error.value,
     STATUS_PROVIDER_CONTRACT_FAILURE: WorkerOutcomeStatus.harness_error.value,
-    STATUS_NO_AUTHORITATIVE_CHANGE: WorkerOutcomeStatus.harness_error.value,
 }
 
 
@@ -85,7 +83,6 @@ class _LapWorker(QObject):
         self._blocked_reason: str = ""
         self._provider_contract_failure: bool = False
         self._already_satisfied: bool = False
-        self._bears_production_action: bool = False
         self._receipt: ProductionReceipt | None = None
 
     @Slot()
@@ -105,9 +102,6 @@ class _LapWorker(QObject):
                 self._manager.last_turn_provider_contract_failure
             )
             self._already_satisfied = self._manager.last_turn_already_satisfied
-            self._bears_production_action = (
-                self._manager.last_turn_bears_production_action
-            )
         except Exception as exc:
             logger.error(
                 "Harness lap worker error: %s", redact_secrets(str(exc))
@@ -120,7 +114,6 @@ class _LapWorker(QObject):
                     blocked_reason=self._blocked_reason,
                     provider_contract_failure=self._provider_contract_failure,
                     already_satisfied=self._already_satisfied,
-                    bears_production_action=self._bears_production_action,
                 )
             except Exception:
                 logger.exception("Harness lap failed to build production receipt")

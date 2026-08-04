@@ -53,7 +53,6 @@ from aura.gui.main_window_workspace import MainWindowWorkspaceController
 from aura.gui.onboarding_dialog import OnboardingDialog
 from aura.gui.playground import AuraPlayground
 from aura.gui.send_handler import SendHandler
-from aura.gui.silent_research_guard import SilentResearchUiGuard
 from aura.gui.status_bar import AuraStatusBar
 from aura.gui.update_dialog import UpdateDialog
 from aura.gui.widgets.aura_glow import AuraWidget
@@ -87,7 +86,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self._checkpoint_dialog: CheckpointDialog | None = None
-        self._answer_only_ui_guard: SilentResearchUiGuard | None = None
         # Final assistant message of the current turn, held until the turn is
         # saved so a pending handoff can run against it afterwards.
         self._final_stream_message: dict = {}
@@ -613,9 +611,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._drone_controller.sync_drone_tab_checked()
 
     def _on_finished(self) -> None:
-        if self._answer_only_ui_guard is not None:
-            self._answer_only_ui_guard.stop()
-            self._answer_only_ui_guard = None
         self._input.set_execution_active(False)
         # Closes the assistant card and records its transcript. By this point
         # ConversationManager has committed the final assistant message to
@@ -707,66 +702,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                             self._playground.open_file(Path(self._workspace_root) / p)
             except Exception:
                 pass
-
-    def _prepare_answer_only_research_ui(self) -> None:
-        """Hide work surfaces before a pure answer-only research turn."""
-        blocked_widgets: list[QWidget] = []
-
-        try:
-            terminal_window = self._playground.terminal_window()
-            blocked_widgets.append(terminal_window)
-            terminal_window.clear()
-            terminal_window.hide()
-        except Exception:
-            logger.debug("Failed to hide terminal for answer-only research", exc_info=True)
-
-        try:
-            blocked_widgets.append(self._drone_reports_window)
-            self._drone_reports_window.hide()
-        except Exception:
-            logger.debug("Failed to hide Drone Reports for answer-only research", exc_info=True)
-
-        try:
-            workbay = self._drone_controller.drone_workbay_window
-            if workbay is not None:
-                blocked_widgets.append(workbay)
-                workbay.hide()
-        except Exception:
-            logger.debug("Failed to hide Drone Workbay for answer-only research", exc_info=True)
-
-        try:
-            if self._checkpoint_dialog is not None:
-                blocked_widgets.append(self._checkpoint_dialog)
-                self._checkpoint_dialog.hide()
-        except Exception:
-            logger.debug("Failed to hide checkpoint dialog for answer-only research", exc_info=True)
-
-        if self._answer_only_ui_guard is not None:
-            self._answer_only_ui_guard.stop()
-        self._answer_only_ui_guard = SilentResearchUiGuard(
-            self,
-            blocked_widgets=blocked_widgets,
-            logger=logger,
-        )
-        self._answer_only_ui_guard.start()
-        for delay_ms in (100, 500, 1500, 3000, 5000):
-            QTimer.singleShot(delay_ms, self._suppress_answer_only_research_surfaces)
-
-        try:
-            self._terminal_controller._sync_terminal_checked_state()
-            self._drone_controller.sync_drone_tab_checked()
-        except Exception:
-            logger.debug("Failed to sync research UI chrome", exc_info=True)
-
-    def _suppress_answer_only_research_surfaces(self) -> None:
-        if self._answer_only_ui_guard is None:
-            return
-        self._answer_only_ui_guard.suppress_existing_surfaces()
-        try:
-            self._terminal_controller._sync_terminal_checked_state()
-            self._drone_controller.sync_drone_tab_checked()
-        except Exception:
-            logger.debug("Failed to sync research UI chrome", exc_info=True)
 
     def _on_diff_decided(
         self,

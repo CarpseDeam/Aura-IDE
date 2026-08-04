@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 from aura.config import PROVIDERS, AppSettings, ModelInfo, ThinkingMode, has_usable_provider_configuration
 from aura.conversation.target_files import extract_target_files
-from aura.conversation.task_router import TaskLane, TaskRoute, classify_user_request
+from aura.gui.builtin_commands import classify_built_in_command
 from aura.gui.input_panel import Attachment
 from aura.git_ops import (
     recent_commit_log,
@@ -43,15 +43,12 @@ class QueuedItem:
     """A captured send request waiting for the current production run to finish.
 
     Each item preserves its own submission-time state so that changing controls
-    after queueing does not alter an already queued request. The deterministic
-    ``TaskRoute`` computed at submit time travels with the item so a queued
-    message never loses or reuses another message's route.
+    after queueing does not alter an already queued request.
     """
     text: str
     attachments: list[Attachment]
     model: str
     thinking: ThinkingMode
-    route: TaskRoute
 
 
 class SendHandler(QObject):
@@ -69,7 +66,6 @@ class SendHandler(QObject):
 
     vision_done = Signal(object, list, object)  # SendPayload, list[str], str|None
     drone_bay_requested = Signal()  # /drone command → open/toggle Drone Workbay
-    answer_only_research_started = Signal()
 
     def __init__(
         self,
@@ -90,14 +86,9 @@ class SendHandler(QObject):
         # Queued messages sent while the bridge is running.
         self._message_queue: list[QueuedItem] = []
 
-        # Pending model/thinking/route stored while vision thread is running.
+        # Pending model/thinking stored while vision thread is running.
         self._pending_model: str = ""
         self._pending_thinking: ThinkingMode = "off"
-        self._pending_route: TaskRoute | None = None
-
-        # Route of the most recently sent production message, so a retry of the
-        # retained user turn keeps the same deterministic classification.
-        self._last_sent_route: TaskRoute | None = None
 
         # Wire our own signal so _on_vision_done runs on the GUI thread.
         self.vision_done.connect(self._on_vision_done)
@@ -115,7 +106,6 @@ class SendHandler(QObject):
     def clear_queue(self) -> None:
         """Clear any queued messages (called on new/open conversation)."""
         self._message_queue.clear()
-        self._last_sent_route = None
 
     def process_message_queue(self, model: str, thinking: ThinkingMode) -> None:
         """Send the next queued message, if any."""
@@ -128,17 +118,12 @@ class SendHandler(QObject):
         payload: SendPayload,
         model: str,
         thinking: ThinkingMode,
-        route: TaskRoute | None = None,
     ) -> None:
-        """Process a send payload: route built-ins, queue if busy, or send.
+        """Process a send payload: run Aura's own commands, queue if busy, or send.
 
-        ``route`` is the deterministic ``TaskRoute`` already selected for this
-        payload (for example by a dequeued ``QueuedItem`` or the vision path).
-        When omitted it is computed here with ``classify_user_request`` — the
-        normal GUI path always supplies one.
+        Anything that is not one of Aura's literal commands is an ordinary
+        message and goes to the production loop as the user wrote it.
         """
-        if route is None:
-            route = classify_user_request(payload.text)
         # Guard: no workspace selected
         if self._workspace_root is None:
             self._chat.add_error(
@@ -159,9 +144,10 @@ class SendHandler(QObject):
 
         # Drone mode checks removed — drone lifecycle removed.
 
-        if route.lane == TaskLane.built_in_action:
+        built_in = classify_built_in_command(payload.text)
+        if built_in is not None:
             self._chat.add_user(payload.text)
-            self._handle_built_in_action(route.action, payload.text)
+            self._handle_built_in_action(built_in, payload.text)
             return
 
         if self._bridge.is_running():
@@ -170,14 +156,10 @@ class SendHandler(QObject):
                 attachments=list(payload.attachments),
                 model=model,
                 thinking=thinking,
-                route=route,
             )
             self._message_queue.append(item)
             self._input.set_queued_messages(len(self._message_queue))
             return
-
-        if route.lane == TaskLane.research and route.action == "web_research":
-            self.answer_only_research_started.emit()
 
         # Check if the current model supports native vision
         m_info = self._get_current_model_info(model)
@@ -203,7 +185,6 @@ class SendHandler(QObject):
 
             self._pending_model = model
             self._pending_thinking = thinking
-            self._pending_route = route
 
             def _run_vision():
                 nonlocal vision_error
@@ -226,7 +207,7 @@ class SendHandler(QObject):
 
         # Either no images or native vision supported
         self._finalize_send(
-            payload, model, thinking, vision_descriptions, vision_error, route=route
+            payload, model, thinking, vision_descriptions, vision_error
         )
 
     def handle_stop(self) -> None:
@@ -251,13 +232,9 @@ class SendHandler(QObject):
             self._chat.add_error("Retry", "No user message to retry.")
             return False
 
-        # Derive both the route and the target files from the retained user
-        # text so stale turn state from another conversation cannot leak.
+        # Derive the target files from the retained user text so stale turn
+        # state from another conversation cannot leak.
         retained_text = self._bridge.history.latest_real_user_text()
-        route = (
-            classify_user_request(retained_text) if retained_text is not None else None
-        )
-        self._last_sent_route = route
         self._declare_turn_target_files(retained_text)
 
         self._message_queue.clear()
@@ -266,11 +243,7 @@ class SendHandler(QObject):
         if replay_cb is not None:
             replay_cb()
         self._chat.begin_assistant()
-        self._bridge.send(
-            model=model,
-            thinking=thinking,
-            route=route,
-        )
+        self._bridge.send(model=model, thinking=thinking)
         return True
 
     def _declare_turn_target_files(self, text: str | None) -> None:
@@ -289,7 +262,7 @@ class SendHandler(QObject):
 
     # ---- undo --------------------------------------------------------------
     def _handle_built_in_action(self, action: str, text: str = "") -> None:
-        """Run deterministic built-in actions without model or Worker dispatch."""
+        """Run one of Aura's own literal commands locally, without the model."""
         if action == "undo":
             self._handle_undo()
             return
@@ -446,7 +419,6 @@ class SendHandler(QObject):
             self._pending_thinking,
             descriptions,
             error,
-            route=self._pending_route,
         )
 
     # ---- finalise send -----------------------------------------------------
@@ -458,15 +430,8 @@ class SendHandler(QObject):
         thinking: ThinkingMode,
         vision_descriptions: list[str],
         vision_error: str | None,
-        route: TaskRoute | None = None,
     ) -> None:
-        """Build the message parts, append to history, and send via the bridge.
-
-        The deterministic route selected at send time travels with the message
-        into ``ConversationBridge.send`` so production context composition
-        treats this turn's classification as authoritative.
-        """
-        self._last_sent_route = route
+        """Build the message parts, append to history, and send via the bridge."""
         image_atts = [a for a in payload.attachments if a.kind == "image" and a.b64]
         text = payload.text
         text_refs = [a.text_ref for a in payload.attachments if a.text_ref]
@@ -533,11 +498,7 @@ class SendHandler(QObject):
             "send_start model=%s thinking=%s workspace_root=%s",
             model, thinking, self._workspace_root,
         )
-        self._bridge.send(
-            model=model,
-            thinking=thinking,
-            route=route,
-        )
+        self._bridge.send(model=model, thinking=thinking)
 
     # ---- model info lookup -------------------------------------------------
 
@@ -561,4 +522,4 @@ class SendHandler(QObject):
         # Reconstruct a SendPayload from the queued item, which captured its
         # own model and thinking at queue time.
         payload = SendPayload(text=item.text, attachments=list(item.attachments))
-        self.handle_send(payload, item.model, item.thinking, route=item.route)
+        self.handle_send(payload, item.model, item.thinking)

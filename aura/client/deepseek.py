@@ -20,18 +20,15 @@ outbound copy by the api view while canonical history keeps it exact. The
 transport is chosen from the provider's chat metadata here — never inferred
 from the provider id.
 
-Two DeepSeek OpenAI-compatible thinking-mode rules are enforced here rather than
+One DeepSeek OpenAI-compatible thinking-mode rule is enforced here rather than
 trusted to callers, preserved for any replay-requiring OpenAI-compatible
-transport (both are rejected with a 400 rather than degraded):
+transport (it is rejected with a 400 rather than degraded): a thinking-enabled
+request must replay ``reasoning_content`` on every assistant message after the
+last user message, so the trailing chain is filled in where Aura honestly
+produced none (see ``_ensure_reasoning_replay``).
 
-- ``tool_choice="required"`` may not travel with thinking enabled, so a request
-  that requires a tool call is sent as a genuine off-mode request;
-- a thinking-enabled request must replay ``reasoning_content`` on every
-  assistant message after the last user message, so the trailing chain is filled
-  in where Aura honestly produced none (see ``_ensure_reasoning_replay``).
-
-Both are request-local: the user's saved selection is never rewritten, canonical
-history is never touched, and each logs what it changed.
+It is request-local: the user's saved selection is never rewritten, canonical
+history is never touched, and it logs what it changed.
 """
 from __future__ import annotations
 
@@ -224,7 +221,6 @@ class DeepSeekClient:
         thinking: ThinkingMode,
         cancel_event: threading.Event | None = None,
         temperature: float = 0.7,
-        require_tool_call: bool = False,
     ) -> Iterator[Event]:
         # Chat transport is a provider-metadata property, not a provider-name
         # check. DeepSeek (and native Anthropic) speak Anthropic Messages;
@@ -242,7 +238,6 @@ class DeepSeekClient:
                 thinking=thinking,
                 cancel_event=cancel_event,
                 temperature=temperature,
-                require_tool_call=require_tool_call,
                 provider=self._provider,
                 requires_reasoning_replay=self._requires_reasoning_replay,
             )
@@ -255,53 +250,22 @@ class DeepSeekClient:
             "stream_options": {"include_usage": True},
         }
         if tools:
-            # ``required`` is the OpenAI-compatible spelling of "answer with a
-            # tool call, not prose"; DeepSeek and OpenRouter accept the same
-            # field. Parallel tool use is switched off so the response
-            # serializes exactly one action.
+            # The model always chooses freely between prose and tool calls, and
+            # may emit a complete parallel batch. Aura never forces a tool call
+            # and never disables parallel tool use.
             kwargs["tools"] = tools
-            if require_tool_call:
-                # ``required`` is the OpenAI-compatible spelling of "answer
-                # with a tool call, not prose", and ``parallel_tool_calls`` is
-                # switched off so the response serializes exactly one action.
-                kwargs["tool_choice"] = "required"
-                # DeepSeek's non-thinking focused request must not send
-                # ``parallel_tool_calls`` unless a live test proves support;
-                # OpenAI/OpenRouter accept it.  Either way the manager-side
-                # exact-one validation stays authoritative.
-                if self._provider in ("openai", "openrouter"):
-                    kwargs["parallel_tool_calls"] = False
-            else:
-                kwargs["tool_choice"] = "auto"
+            kwargs["tool_choice"] = "auto"
 
-        # DeepSeek rejects ``tool_choice="required"`` outright while thinking is
-        # enabled ("400: Thinking mode does not support this tool_choice"), and
-        # the requirement is the load-bearing half of a protocol request: the
-        # checkpoint is answered with a control call or it is reissued. So the
-        # transport, not just the caller, guarantees the two never leave here
-        # together — a future caller passing high/max/auto gets a request that
-        # works rather than a 400. Request-local: nothing saved is touched, and
-        # the resolved off-mode payload is the same one an ``off`` selection
-        # builds.
+        # The user's selected thinking mode is the mode that gets sent. Nothing
+        # here overrides it.
         effective_thinking: ThinkingMode = thinking
-        if require_tool_call and self._provider == "deepseek" and thinking != "off":
-            effective_thinking = "off"
-            _log.warning(
-                "deepseek_thinking_coerced_for_required_tool_call model=%s "
-                "requested_thinking=%s effective_thinking=%s reason=%s",
-                model, thinking, effective_thinking,
-                "tool_choice_required_incompatible_with_thinking",
-            )
 
-        # The other half of the same rule, and the reason it bites at all: a
-        # thinking-enabled DeepSeek request must replay ``reasoning_content`` on
-        # every assistant message after the last user message, and Aura honestly
-        # produces messages without it — the two narrowed protocol requests run
-        # with thinking off (above), workers synthesize assistant turns, and a
-        # reloaded conversation can predate the current selection. Filling the
-        # chain here means the mode the user picked is the mode that gets sent,
-        # instead of a 400. Decided from ``effective_thinking``, so a coerced
-        # request stays a genuine off-mode request and pays nothing.
+        # A thinking-enabled DeepSeek request must replay ``reasoning_content``
+        # on every assistant message after the last user message, and Aura
+        # honestly produces messages without it — workers synthesize assistant
+        # turns, and a reloaded conversation can predate the current selection.
+        # Filling the chain here means the mode the user picked is the mode that
+        # gets sent, instead of a 400.
         if self._provider == "deepseek" and effective_thinking != "off":
             kwargs["messages"], filled = _ensure_reasoning_replay(messages)
             if filled:

@@ -103,7 +103,6 @@ class GoogleCloudClient:
         thinking: str,
         cancel_event: threading.Event | None = None,
         temperature: float = 0.7,
-        require_tool_call: bool = False,
     ) -> Iterator[Event]:
         # Cooldown check
         if self._cooldown.is_cooling():
@@ -136,10 +135,6 @@ class GoogleCloudClient:
             config_kwargs["system_instruction"] = system_instruction
         if google_tools:
             config_kwargs["tools"] = [{"function_declarations": google_tools}]
-            if require_tool_call:
-                config_kwargs["tool_config"] = _google_any_tool_config(
-                    genai.types, google_tools
-                )
         thinking_config = _google_thinking_config(genai.types, model, thinking)
         if thinking_config is not None:
             config_kwargs["thinking_config"] = thinking_config
@@ -320,34 +315,6 @@ class GoogleCloudClient:
                         pass
 
         yield Done(finish_reason=finish_reason, full_message=full_message)
-
-
-def _google_any_tool_config(
-    types_module: Any, declarations: list[dict[str, Any]]
-) -> Any:
-    """Return Gemini's native ``ANY`` function-calling config.
-
-    ``ANY`` is Google's own "the response must be a function call" mode, and
-    ``allowed_function_names`` pins it to exactly the action surface this
-    request exposes. Where the installed SDK also offers a single-call switch
-    it is used; older SDKs simply do not have one, and Aura does not invent a
-    local substitute — it never truncates or discards a call the model made.
-    """
-    names = [
-        str(decl["name"])
-        for decl in declarations
-        if isinstance(decl, dict) and decl.get("name")
-    ]
-    config_kwargs: dict[str, Any] = {"mode": "ANY"}
-    if names:
-        config_kwargs["allowed_function_names"] = names
-    try:
-        function_calling_config = types_module.FunctionCallingConfig(**config_kwargs)
-    except (TypeError, ValueError):
-        function_calling_config = types_module.FunctionCallingConfig(mode="ANY")
-    return types_module.ToolConfig(
-        function_calling_config=function_calling_config
-    )
 
 
 def _google_thinking_config(types_module: Any, model: str, thinking: str) -> Any | None:

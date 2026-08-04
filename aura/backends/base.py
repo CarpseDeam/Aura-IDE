@@ -30,9 +30,11 @@ class AgentBackend(ABC):
         thinking: ThinkingMode,
         cancel_event: threading.Event | None = None,
         temperature: float = 0.7,
-        require_tool_call: bool = False,
     ) -> Iterator[Event]:
         """Stream a model response, yielding Event objects.
+
+        The model always answers freely: Aura never asks a provider to force a
+        tool call, name a tool, or serialize a single action.
 
         Args:
             messages: The conversation history in API format.
@@ -42,13 +44,6 @@ class AgentBackend(ABC):
             cancel_event: Optional event — when set, the stream should
                           stop generating as soon as possible.
             temperature: Sampling temperature (0.0-2.0).
-            require_tool_call: Provider-neutral request that the response be
-                          exactly one tool call rather than prose. Each
-                          provider maps it onto its own required-tool
-                          mechanism and, where supported, disables parallel
-                          tool use. Never a cap on anything the model
-                          generates — only a statement about the shape of the
-                          response.
 
         Yields:
             Event instances (ContentDelta, ReasoningDelta, ToolCallStart,

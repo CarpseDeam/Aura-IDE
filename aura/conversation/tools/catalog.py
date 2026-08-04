@@ -84,9 +84,9 @@ class ToolCatalog:
         """Build tool definitions for the production single-agent catalog.
 
         ``web_search`` adds the research tool to the production single-agent
-        catalog.  It is decided once per real user turn from that turn's route
-        and held for the whole turn, so the catalog the model sees never moves
-        between rounds.
+        catalog.  It reflects only whether the search backend is configured,
+        is resolved once per real user turn, and is held for the whole turn, so
+        the catalog the model sees never moves between rounds.
         """
         if read_only:
             tools: list[dict[str, Any]] = (
@@ -100,8 +100,8 @@ class ToolCatalog:
             # needs — read/glob/grep, TODO, the write and Godot edit tools, the
             # terminal, git status/diff, skills, and the two structured exit
             # tools — and it is stable: the same set on every active request of
-            # the turn.  ``web_search`` joins it only for a turn whose route
-            # genuinely requires external research, and then for the whole turn.
+            # the turn.  ``web_search`` joins it whenever the search backend is
+            # configured, and then for the whole turn.
             #
             # Deliberately absent: diagnostic and snapshot wrappers, extra git
             # subcommand wrappers, and drone tools.  Every one of them is either

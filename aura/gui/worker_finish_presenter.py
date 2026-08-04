@@ -50,8 +50,8 @@ class WorkerFinishPresenter:
         # A direct production run has exactly one visible outcome: the receipt
         # the backend already built from its execution evidence. Rendering it
         # only on success made every truthful non-success terminal status —
-        # blocked, validation_failed, harness_error, no_authoritative_change,
-        # cancelled — vanish, leaving the run with no visible end at all.
+        # blocked, validation_failed, harness_error, cancelled — vanish,
+        # leaving the run with no visible end at all.
         # Rendering the receipt the backend produced states the real outcome;
         # it never invents one.
         if outcome.should_show_visible_summary:

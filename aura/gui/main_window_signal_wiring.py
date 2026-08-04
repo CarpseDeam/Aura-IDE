@@ -68,8 +68,6 @@ class MainWindowSignalWiring:
         # ---- group 7: drone reports window ----
         w._drone_reports_window.geometry_saved.connect(w._terminal_controller._on_drone_reports_geometry_saved)
         w._drone_reports_window.visibility_changed.connect(lambda _visible: w._drone_controller.sync_drone_tab_checked())
-        w._send_handler.answer_only_research_started.connect(w._prepare_answer_only_research_ui)
-
         # ---- group 8: MainWindow drone signals ----
         w.droneRunFinishedOnUiThread.connect(w._drone_controller.on_drone_finished, Qt.ConnectionType.QueuedConnection)
         w.droneStatusChangedOnUiThread.connect(w._drone_controller.on_drone_status_changed)

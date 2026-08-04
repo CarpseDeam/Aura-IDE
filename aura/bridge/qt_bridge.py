@@ -63,7 +63,6 @@ from aura.conversation import (
     ConversationManager,
     History,
 )
-from aura.conversation.task_router import TaskLane, TaskRoute
 from aura.conversation.tools import (
     ToolRegistry,
 )
@@ -71,7 +70,6 @@ from aura.model_streams import (
     PRODUCTION_STREAM_HOOK,
     model_streams,
 )
-from aura.research.policy import NO_RESEARCH, decide_research_policy
 from aura.windows_mcp import WindowsComputerUseManager
 
 _log = logging.getLogger(__name__)
@@ -104,7 +102,6 @@ class _Worker(QObject):
         temperature: float = 0.7,
         workspace_root: Path | None = None,
         production_session: "ProductionExecutionSession | None" = None,
-        task_route: TaskRoute | None = None,
     ) -> None:
         super().__init__()
         self._manager = manager
@@ -115,11 +112,9 @@ class _Worker(QObject):
         self._temperature = temperature
         self._workspace_root = workspace_root
         self._production_session = production_session
-        self._task_route = task_route
         self._blocked_reason: str = ""
         self._provider_contract_failure: bool = False
         self._already_satisfied: bool = False
-        self._bears_production_action: bool = False
 
     @Slot()
     def run(self) -> None:
@@ -131,16 +126,9 @@ class _Worker(QObject):
                 model=self._model,
                 thinking=self._thinking,
                 temperature=self._temperature,
-                task_route=self._task_route,
             )
             self._blocked_reason = self._manager.last_turn_blocked_reason
-            self._provider_contract_failure = (
-                self._manager.last_turn_provider_contract_failure
-            )
             self._already_satisfied = self._manager.last_turn_already_satisfied
-            self._bears_production_action = (
-                self._manager.last_turn_bears_production_action
-            )
         except Exception as exc:
             from aura.config import redact_secrets
             self.apiError.emit(-1, redact_secrets(f"{type(exc).__name__}: {exc}"))
@@ -272,7 +260,9 @@ class ConversationBridge(QObject):
         self._custom_prompt_diagnostics = diagnose_custom_prompt(RuntimeRole.SINGLE, "")
         self._pre_worker_sha: str | None = None
         self._active_prompt_mode: str | None = None
-        self._turn_task_route: TaskRoute | None = None
+        # Skill-selection terrain no longer carries a task kind: Aura does not
+        # classify the request. Kept as a None-valued argument so the skill
+        # pack simply applies no task-kind filter.
         self._turn_task_kind: str | None = None
         self._turn_content: str = ""
         self._turn_target_files: tuple[str, ...] = ()
@@ -484,15 +474,8 @@ class ConversationBridge(QObject):
         self,
         model: ModelId,
         thinking: ThinkingMode,
-        *,
-        route: TaskRoute | None = None,
     ) -> None:
         """Run one production turn over the existing conversation.
-
-        ``route`` is the deterministic ``TaskRoute`` selected at send time and
-        is the authority for this turn's task kind. Callers that genuinely do
-        not provide one fall back to the previous research-only recomputation
-        inside ``_prepare_turn_context``.
 
         The manager already owns the persisted ``History``, so the model
         receives the actual conversation and the user's latest original
@@ -503,7 +486,6 @@ class ConversationBridge(QObject):
         # The active model is terrain for skill selection, so it must be known
         # before the turn's system prompt is composed.
         self._active_model = str(model)
-        self._turn_task_route = route
         self._prepare_turn_context()
         # Capture pre-run snapshot for reliable /undo.
         if self._registry.workspace_root is not None:
@@ -543,7 +525,6 @@ class ConversationBridge(QObject):
             temperature=self._temperature,
             workspace_root=self._registry.workspace_root,
             production_session=self._production_session,
-            task_route=self._turn_task_route,
         )
         self._worker.moveToThread(self._thread)
 
@@ -631,15 +612,11 @@ class ConversationBridge(QObject):
             worker._provider_contract_failure if worker is not None else False
         )
         already_satisfied = worker._already_satisfied if worker is not None else False
-        bears_production_action = (
-            worker._bears_production_action if worker is not None else False
-        )
         try:
             self._production_session.finish(
                 blocked_reason=blocked_reason,
                 provider_contract_failure=provider_contract_failure,
                 already_satisfied=already_satisfied,
-                bears_production_action=bears_production_action,
             )
         except Exception:
             _log.exception("Failed to build production completion receipt")
@@ -672,14 +649,6 @@ class ConversationBridge(QObject):
         workspace-startup composition.
         """
         self._turn_content = _latest_user_text(self._history)
-        route = self._turn_task_route
-        if route is not None:
-            # The route selected at send time is the authority for this turn.
-            self._turn_task_kind = _task_kind_from_route(route)
-        else:
-            # Fallback for callers that genuinely do not supply a route:
-            # keep the research-only recomputation from before.
-            self._turn_task_kind = _research_task_kind_for_text(self._turn_content)
         if self._registry.workspace_root is None:
             return
         role = self._active_runtime_role()
@@ -702,33 +671,6 @@ class ConversationBridge(QObject):
 
 def _dummy_root():
     return Path.home()
-
-
-def _task_kind_from_route(route: TaskRoute) -> str | None:
-    """Project a deterministic ``TaskRoute`` onto the turn's task kind.
-
-    The route is a lossless, first-class value from the existing router — no
-    second classifier here. Every lane that has a production task kind simply
-    surfaces the router's own action: research keeps ``web_research`` /
-    ``research_then_worker``, implementation keeps the shape it was routed as
-    (``bugfix``, ``refactor``, ``cleanup``, ``implementation``), and validation
-    keeps ``validation``. Chat and built-in actions have no production task
-    kind and yield ``None``.
-    """
-    if route.lane in (
-        TaskLane.research,
-        TaskLane.implementation,
-        TaskLane.validation,
-    ):
-        return route.action
-    return None
-
-
-def _research_task_kind_for_text(text: str) -> str | None:
-    decision = decide_research_policy(text)
-    if decision.route == NO_RESEARCH:
-        return None
-    return decision.route
 
 
 def _latest_user_text(history: History) -> str:
