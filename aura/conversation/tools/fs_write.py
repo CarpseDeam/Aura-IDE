@@ -413,12 +413,18 @@ def propose_patch_file(
 
     if expected_file_hash is not None:
         if not expected_file_hash_matches(original, current_hash, expected_file_hash):
+            current_logical_hash = _logical_text_hash(original)
             return _failure_payload(
                 workspace_root,
                 target,
                 "File content did not match expected_file_hash.",
                 "patch_file_hash_mismatch",
                 suggested_next_action="Re-read the file and submit one corrected patch_file transaction.",
+                supplied_hash=expected_file_hash,
+                current_raw_hash=current_hash,
+                current_logical_hash=current_logical_hash,
+                raw_hash_matches_supplied=current_hash == expected_file_hash,
+                logical_hash_matches_supplied=current_logical_hash == expected_file_hash,
             )
 
     proposed = original
