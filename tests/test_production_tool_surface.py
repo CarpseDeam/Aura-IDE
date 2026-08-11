@@ -31,7 +31,8 @@ from aura.conversation.tools.registry import ToolRegistry
 
 #: The whole ordinary production catalog: the capabilities a normal
 #: implementation turn needs and nothing else.  ``web_search`` is not here — it
-#: joins only for a turn whose route genuinely requires external research.
+#: joins only when the search backend is configured, and then for the whole
+#: turn.
 EXPECTED_PRODUCTION_TOOLS: frozenset[str] = frozenset({
     # read / search
     "read_file",
@@ -180,16 +181,22 @@ def test_removed_observations_stay_callable_for_transcript_replay(tmp_path) -> N
     assert not (replayable & EXPECTED_PRODUCTION_TOOLS)
 
 
-def test_planner_and_worker_catalogs_are_untouched() -> None:
-    """This is a production-SINGLE narrowing, not a global capability cut."""
+def test_planner_and_worker_see_the_single_catalog() -> None:
+    """The planner/worker dispatch is gone; every mode sees the same catalog.
+
+    Production SINGLE is the only coding loop — ``mode`` no longer branches
+    the exposed surface, and no mode resurrects the superseded read or git
+    wrappers.
+    """
     catalog = ToolCatalog()
 
+    single = set(_names(catalog.build_tool_defs(mode="single", read_only=False)))
     planner = set(_names(catalog.build_tool_defs(mode="planner", read_only=False)))
     worker = set(_names(catalog.build_tool_defs(mode="worker", read_only=False)))
 
-    assert "search_codebase" in planner
-    assert {"git_log", "git_show", "git_log_file"} <= planner
-    assert {"read_files", "list_directory"} <= worker
+    assert planner == single
+    assert worker == single
+    assert not (planner & {"git_log", "git_show", "git_log_file", "read_files", "list_directory"})
 
 
 # ── 2. web_search is per-turn and stable within the turn ────────────────────
@@ -207,17 +214,27 @@ def test_web_search_joins_only_a_research_turn_and_nothing_else_moves() -> None:
 
 
 def test_the_registry_holds_the_web_search_decision_for_the_whole_turn(
-    tmp_path,
+    tmp_path, monkeypatch,
 ) -> None:
+    """Availability resolves from configuration once; rounds never re-resolve."""
     registry = ToolRegistry(workspace_root=tmp_path, mode="single")
 
     assert registry.web_search_enabled is False
-    registry.set_web_search_enabled(True)
+    assert "web_search" not in _names(registry.tool_defs())
+
+    # The backend is configured: the turn's catalog offers web research.
+    monkeypatch.setattr("aura.config.has_api_key", lambda provider_id: True)
+    registry.refresh_web_search_availability()
+
     first = registry.tool_defs()
     second = registry.tool_defs()
 
     assert "web_search" in _names(first)
     assert first == second, "the catalog moved between rounds of the same turn"
+    # tool_defs() never re-resolves availability mid-turn: even a config
+    # change only takes effect at the next turn's explicit refresh.
+    monkeypatch.setattr("aura.config.has_api_key", lambda provider_id: False)
+    assert "web_search" in _names(registry.tool_defs())
 
 
 # ── 3. descriptions describe the tool, not a workflow ───────────────────────

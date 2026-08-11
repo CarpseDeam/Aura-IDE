@@ -118,10 +118,11 @@ class TestWorkerTodoTool:
 
         assert UPDATE_WORKER_TODO_TOOL in _tool_names(tools)
 
-    def test_planner_catalog_does_not_expose_update_worker_todo(self) -> None:
+    def test_planner_catalog_exposes_update_worker_todo(self) -> None:
+        """Planner mode shares the single production catalog — no per-mode cut."""
         tools = ToolCatalog().build_tool_defs(mode="planner", read_only=False)
 
-        assert UPDATE_WORKER_TODO_TOOL not in _tool_names(tools)
+        assert UPDATE_WORKER_TODO_TOOL in _tool_names(tools)
 
     def test_tool_handler_returns_normalized_snapshot(self, tmp_path) -> None:
         registry = ToolRegistry(workspace_root=tmp_path, mode="worker")
