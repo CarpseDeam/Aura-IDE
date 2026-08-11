@@ -48,9 +48,11 @@ def test_inspect_code_is_the_only_semantic_inspection_tool_in_production() -> No
         "code_intel_dependents",
         "code_intel_audit",
         "read_file_outline",
-        "search_codebase",
     }
     assert not (names & removed)
+    # search_codebase is a distinct, exposed capability — ranked structural
+    # retrieval, not semantic inspection — so it is not part of this removed set.
+    assert "search_codebase" in names
 
 
 def test_inspect_code_is_classified_as_observation() -> None:

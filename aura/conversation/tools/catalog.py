@@ -35,14 +35,19 @@ from aura.conversation.tools.effects import BUILTIN_TOOL_EFFECTS, ToolEffect
 # Every one of these is reachable through a tool that remains: line windows via
 # ``read_file``'s offset/limit, multi-file reads via several ``read_file`` calls
 # in one round, directory listing via ``glob``, and symbol/structure lookup via
-# ``grep_search``. ``search_codebase`` is ranked recall of the same files
-# ``grep_search`` and ``glob`` already reach exactly. Presenting all of them
-# made the model choose an approach before it could choose an action.
+# ``grep_search``. Presenting all of them made the model choose an approach
+# before it could choose an action.
+#
+# ``search_codebase`` is deliberately not in this set: it now returns ranked
+# structural retrieval documents (bounded source regions with symbol/kind/
+# parent metadata) rather than whole-file recall over what ``grep_search`` and
+# ``glob`` already reach exactly, so it is a distinct capability and stays in
+# the production catalog.
 #
 # The handlers stay registered, so a replayed historical tool call still runs.
 SINGLE_SUPERSEDED_READ_TOOL_NAMES: frozenset[str] = tool_names_for(
     {BULK_READ, CODE_INTEL}
-) | {"search_codebase"}
+)
 
 #: The git tools production SINGLE offers. ``git_status`` and ``git_diff`` are
 #: the two an implementation turn genuinely needs — what changed, and exactly

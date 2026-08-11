@@ -497,11 +497,16 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
                 "function": {
                     "name": "search_codebase",
                     "description": (
-                        "Rank whole files by how well they match a description, using a local BM25 "
-                        "index. Use this only when you cannot name the text to search for: "
-                        "\"the file that handled authentication\", \"the database migration script\". "
-                        "If you know the string, path, or symbol, use grep_search — it is exact and "
-                        "immediate, where this is ranked and builds an index on first use."
+                        "Ranked keyword/natural-language search over a local BM25 index of the "
+                        "workspace. The index is built from structure-aware retrieval documents: "
+                        "each file is partitioned into bounded, non-overlapping source regions "
+                        "using parser-derived structure where available, so a result is a "
+                        "function-, class-, or block-sized region rather than a whole file. Each "
+                        "result carries a workspace-relative path, a bounded text snippet, its "
+                        "start_line/end_line, and, when a parser range backs the region, symbol, "
+                        "symbol_kind, and parent. Relevance is BM25 lexical ranking over tokenized "
+                        "text, not a semantic or correctness judgment. The index builds lazily on "
+                        "first use and refreshes incrementally on later calls."
                     ),
                     "parameters": {
                         "type": "object",

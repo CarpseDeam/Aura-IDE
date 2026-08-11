@@ -2,13 +2,21 @@
 
 Two defects lived in the schema, not in the loop:
 
-* the catalog offered a long tail of wrappers — ranked file recall, six git
-  subcommand wrappers, a diagnostic runner, a workspace snapshot, drone tools —
-  every one of them reachable through a tool that stayed, and every one of them
-  another approach the model had to rule out before it could pick an action;
+* the catalog offered a long tail of wrappers — six git subcommand wrappers,
+  bulk-read helpers, a diagnostic runner, a workspace snapshot, drone tools,
+  the old CODE_INTEL wrapper group — every one of them reachable through a
+  tool that stayed, and every one of them another approach the model had to
+  rule out before it could pick an action;
 * the descriptions themselves taught inspection-first behaviour: use this
   before editing, use this to understand, verify before deciding, use this
   after editing.  A schema is not a place to put a workflow.
+
+``search_codebase`` was originally cut from this same long tail, back when it
+only ranked whole files — genuinely redundant with ``grep_search``/``glob``.
+It now returns ranked structural retrieval documents (bounded source regions
+with symbol/kind/parent metadata), a distinct capability from exact lexical
+matching or path discovery, so it is back in the exposed set alongside
+``read_file``, ``glob``, ``grep_search``, and ``inspect_code``.
 
 These tests read the *real* catalog the production registry exposes.  They test
 what the model is actually shown, not a copy of it.
@@ -29,6 +37,8 @@ EXPECTED_PRODUCTION_TOOLS: frozenset[str] = frozenset({
     "read_file",
     "glob",
     "grep_search",
+    # ranked structural retrieval over the workspace's BM25 index
+    "search_codebase",
     # dense evidence packet for one location or symbol
     "inspect_code",
     # live plan
@@ -63,7 +73,6 @@ EXPECTED_PRODUCTION_TOOLS: frozenset[str] = frozenset({
 #: Redundant surface removed from the production catalog. Each is reachable
 #: through a tool that stayed, or is unrelated to normal implementation.
 REMOVED_PRODUCTION_TOOLS: frozenset[str] = frozenset({
-    "search_codebase",
     "read_files",
     "read_file_range",
     "read_file_outline",
@@ -161,8 +170,11 @@ def test_removed_observations_stay_callable_for_transcript_replay(tmp_path) -> N
     registry = ToolRegistry(workspace_root=tmp_path, mode="single")
     replayable = set(_names(registry.replayable_tool_defs()))
 
-    for withheld in ("search_codebase", "read_files", "list_directory", "git_log"):
+    for withheld in ("find_usages", "read_files", "list_directory", "git_log"):
         assert withheld in replayable, withheld
+    # ``search_codebase`` is directly exposed now, not withheld-but-callable —
+    # it must not appear in the replay-only set.
+    assert "search_codebase" not in replayable
     # Nothing that can change the workspace is callable from outside the
     # catalog that offered it.
     assert not (replayable & EXPECTED_PRODUCTION_TOOLS)
@@ -231,9 +243,10 @@ def test_every_production_tool_still_describes_itself() -> None:
 
 def test_the_production_schema_shrank() -> None:
     """Measured against the surface this repair was diagnosed on: 35 tools and
-    35,768 characters of JSON. ``inspect_code`` (added later) accounts for the
-    one-tool, one-description bump over the original repair's numbers."""
+    35,768 characters of JSON. ``inspect_code`` and, later, re-exposing
+    ``search_codebase`` as a distinct capability each account for a one-tool,
+    one-description bump over the original repair's numbers."""
     defs = _production_defs(web_search=True)
 
-    assert len(defs) <= 25
-    assert len(json.dumps(defs)) < 32_000
+    assert len(defs) <= 26
+    assert len(json.dumps(defs)) < 34_000

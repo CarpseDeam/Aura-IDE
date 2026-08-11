@@ -19,7 +19,7 @@ Each tool call goes through a circuit breaker that tracks consecutive timeouts o
 | `read_file_outline` | Structural outline via AST (class names, functions, imports)       | `path`                                                       |
 | `grep_search`       | String or regex search across files                               | `pattern`, `regex_mode`, `case_sensitive`, `max_results`, `include_pattern` |
 | `find_usages`       | Word-boundary symbol search for refactoring safety                | `symbol`, `include_pattern`, `max_results`                   |
-| `search_codebase`   | BM25 semantic search across the project index                     | `query`, `top_k`                                             |
+| `search_codebase`   | Ranked BM25 keyword/natural-language search over bounded, structure-aware source regions (not whole files) | `query`, `top_k`                                             |
 
 `grep_search` is for discovery: finding candidate files and line locations across the workspace. For exact verification of known edited content, use `read_file` or `read_file_range`.
 
