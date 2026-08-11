@@ -329,9 +329,18 @@ TRUNCATE_TOOL_RESULT_CHARS = 500
 # (``aura.providers.base.ModelInfo``), where it describes the model rather
 # than governing what Aura sends.
 
+# Canonical repository traversal skip policy. This is the single literal
+# definition (aura.fs_utils and aura.codebase_index used to keep competing
+# copies); aura.repository_inventory imports these directly and is the
+# policy owner for repository-wide candidate discovery — see that module for
+# sensitive-file policy and the canonical discovery/metadata contract built
+# on top of these two sets. Kept here (rather than in repository_inventory)
+# because get_subprocess_kwargs below and these sets are both needed by
+# modules that must not import each other in a cycle.
 SKIP_DIRS = {
     "__pycache__",
     ".venv",
+    "venv",
     ".git",
     "node_modules",
     ".import",
@@ -339,10 +348,16 @@ SKIP_DIRS = {
     ".mypy_cache",
     ".pytest_cache",
     ".ruff_cache",
+    "build",
+    "dist",
+    ".svn",
+    ".hg",
+    "eggs",
+    ".eggs",
 }
 SKIP_FILE_SUFFIXES = {
     ".import",
-    ".pyc", ".pyo", ".so", ".dll", ".dylib", ".o", ".a", ".exe", ".bin", ".class", ".wasm",
+    ".pyc", ".pyo", ".so", ".dll", ".dylib", ".o", ".a", ".exe", ".bin", ".class", ".wasm", ".jar",
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp",
     ".woff", ".woff2", ".ttf", ".otf", ".eot",
     ".zip", ".tar", ".gz", ".7z", ".rar",
@@ -351,15 +366,6 @@ SKIP_FILE_SUFFIXES = {
 }
 
 # Codebase index (BM25 search_codebase tool)
-
-CODEBASE_INDEX_EXTENSIONS: set[str] = {
-    ".py", ".js", ".ts", ".jsx", ".tsx", ".gd", ".cpp", ".c", ".h", ".hpp",
-    ".rs", ".go", ".java", ".rb", ".php", ".swift", ".kt", ".scala",
-    ".cfg", ".toml", ".yaml", ".yml", ".json", ".xml", ".ini",
-    ".md", ".rst", ".txt", ".sh", ".bash", ".zsh", ".fish",
-    ".css", ".scss", ".less", ".html", ".vue", ".svelte",
-    ".sql", ".r", ".lua", ".zig", ".odin",
-}
 
 MAX_CODEBASE_INDEX_FILES: int = 1500
 CODEBASE_INDEX_MAX_FILE_BYTES: int = 128 * 1024

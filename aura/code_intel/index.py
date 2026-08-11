@@ -9,20 +9,12 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
-import time
 from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any
 
 from aura.config import MAX_READ_BYTES
-from aura.fs_utils import (
-    MAX_DIRS_VISITED,
-    MAX_FILES_CONSIDERED,
-    MAX_SCAN_SECONDS,
-    SKIP_DIRS,
-    SKIP_FILE_SUFFIXES,
-)
+from aura.repository_inventory import build_inventory, passes_canonical_policy
 
 logger = logging.getLogger(__name__)
 
@@ -171,9 +163,7 @@ class CodeIntelIndex:
             self._evict_file(norm)
             return
 
-        fname = Path(norm).name
-        suffix = Path(norm).suffix.lower()
-        if suffix in SKIP_FILE_SUFFIXES or fname.startswith("."):
+        if not passes_canonical_policy(norm):
             self._evict_file(norm)
             return
 
@@ -320,97 +310,53 @@ class CodeIntelIndex:
     # -- internal: full walk -------------------------------------------------
 
     def _refresh_full(self) -> None:
-        """Walk the workspace and index every parseable file."""
+        """Index every parseable file from the canonical repository inventory."""
         from aura.code_intel.adapter import get_adapter
 
-        start = time.monotonic()
-        dirs_visited = 0
-        files_considered = 0
-        budget_exceeded = False
+        inventory = build_inventory(self._root)
         seen_paths: set[str] = set()
 
-        for dirpath, dirnames, filenames in os.walk(self._root):
-            dirs_visited += 1
-            if dirs_visited > MAX_DIRS_VISITED or time.monotonic() - start > MAX_SCAN_SECONDS:
-                budget_exceeded = True
-            if budget_exceeded:
-                break
+        for rf in inventory.files:
+            rel_path = rf.rel_path
+            seen_paths.add(rel_path)
 
-            # Prune skipped dirs
-            dirnames[:] = [
-                d
-                for d in dirnames
-                if not d.startswith(".")
-                and d not in SKIP_DIRS
-                and (self._root / d).parts[-1] not in SKIP_DIRS
-            ]
+            # Stat-based skip: if FileInfo exists and the file hasn't changed, skip
+            existing = self._files.get(rel_path)
+            if existing is not None and existing.mtime == rf.mtime and existing.size == rf.size:
+                continue
 
-            rel_dir = os.path.relpath(dirpath, self._root)
-            if rel_dir == ".":
-                rel_dir = ""
+            if rf.size > _MAX_PARSE_BYTES:
+                continue
 
-            for fname in sorted(filenames):
-                suffix = Path(fname).suffix.lower()
-                if suffix in SKIP_FILE_SUFFIXES:
-                    continue
-                if fname.startswith("."):
-                    continue
+            try:
+                with open(rf.abs_path, "rb") as f:
+                    raw = f.read(_MAX_PARSE_BYTES)
+            except (OSError, PermissionError):
+                continue
 
-                files_considered += 1
-                if files_considered > MAX_FILES_CONSIDERED:
-                    budget_exceeded = True
-                    break
+            try:
+                content = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
 
-                rel_path = os.path.join(rel_dir, fname).replace("\\", "/")
-                abs_path = os.path.join(dirpath, fname)
+            if not content.strip():
+                continue
 
-                try:
-                    st = os.stat(abs_path)
-                    file_size = st.st_size
-                    file_mtime = st.st_mtime
-                except OSError:
-                    continue
+            adapter = get_adapter(rel_path, content=content)
+            if adapter is None:
+                continue
 
-                seen_paths.add(rel_path)
+            self._index_file(rel_path, content)
 
-                # Stat-based skip: if FileInfo exists and the file hasn't changed, skip
-                existing = self._files.get(rel_path)
-                if existing is not None and existing.mtime == file_mtime and existing.size == file_size:
-                    continue
-
-                if file_size > _MAX_PARSE_BYTES:
-                    continue
-
-                try:
-                    with open(abs_path, "rb") as f:
-                        raw = f.read(_MAX_PARSE_BYTES)
-                except (OSError, PermissionError):
-                    continue
-
-                try:
-                    content = raw.decode("utf-8")
-                except UnicodeDecodeError:
-                    continue
-
-                if not content.strip():
-                    continue
-
-                adapter = get_adapter(rel_path, content=content)
-                if adapter is None:
-                    continue
-
-                self._index_file(rel_path, content)
-
-        if not budget_exceeded:
+        if inventory.complete:
             stale = set(self._files.keys()) - seen_paths
             for path in stale:
                 self._evict_file(path)
-
-        if budget_exceeded:
+        else:
             logger.info(
-                "CodeIntelIndex walk truncated: root=%s dirs_visited=%d files_considered=%d elapsed_ms=%.0f",
-                self._root, dirs_visited, files_considered,
-                (time.monotonic() - start) * 1000,
+                "CodeIntelIndex refresh used a partial inventory (source=%s reason=%s); "
+                "skipping stale-file eviction so unseen existing files are not dropped.",
+                inventory.source, inventory.incomplete_reason,
             )
 
     # -- internal: incremental update ---------------------------------------

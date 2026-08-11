@@ -7,7 +7,6 @@ workspace on first search, then incrementally refreshes on subsequent calls.
 from __future__ import annotations
 import hashlib
 import json
-import os
 import time
 from pathlib import Path
 
@@ -16,10 +15,9 @@ from aura.config import (
     CODEBASE_INDEX_MAX_FILE_BYTES,
     CODEBASE_INDEX_MAX_WALK_SECONDS,
     MAX_CODEBASE_INDEX_FILES,
-    SKIP_DIRS,
-    SKIP_FILE_SUFFIXES,
 )
 from aura.paths import config_dir
+from aura.repository_inventory import RepositoryFile, build_inventory
 
 
 def _cache_path(workspace_root: Path) -> Path:
@@ -90,42 +88,27 @@ class CodebaseIndex:
 
     # ---- file filtering ----------------------------------------------------
 
-    def _should_index(self, file_path: Path, rel_path: Path) -> bool:
-        """Determine whether *file_path* should be included in the index.
+    def _should_index(self, rf: RepositoryFile) -> bool:
+        """Determine whether *rf* should be included in the BM25 index.
 
-        Rejects hidden files, certain directories, binary files,
-        and files exceeding the byte limit.
+        The canonical inventory already applied repository-wide policy (skip
+        dirs, hidden files, sensitive files, workspace jail). This is BM25's
+        own capability-specific acceptance on top of that: a byte limit and a
+        binary-content sniff. A file the inventory reports may still be
+        rejected here without that meaning it isn't a real repository file.
 
         Args:
-            file_path: Absolute path to the candidate file.
-            rel_path: Relative path from workspace root.
+            rf: Candidate file from the canonical repository inventory.
 
         Returns:
             True if the file should be indexed.
         """
-        # Check file size
-        try:
-            size = file_path.stat().st_size
-        except OSError:
-            return False
-        if size > self._max_file_bytes or size == 0:
-            return False
-
-        # Check path parts for skip dirs / hidden
-        parts = rel_path.parts
-        for part in parts:
-            if part in SKIP_DIRS:
-                return False
-            if part.startswith("."):
-                return False
-
-        # Check suffix against skip suffixes
-        if file_path.suffix.lower() in SKIP_FILE_SUFFIXES:
+        if rf.size > self._max_file_bytes or rf.size == 0:
             return False
 
         # Binary content sniff: reject files containing a null byte in first 8KB
         try:
-            with file_path.open("rb") as fh:
+            with rf.abs_path.open("rb") as fh:
                 head = fh.read(8192)
             if b"\x00" in head:
                 return False
@@ -158,27 +141,24 @@ class CodebaseIndex:
 
     # ---- file collection ---------------------------------------------------
 
-    def _walk_and_collect(self) -> dict[str, tuple[Path, float]]:
-        """Walk the workspace and collect indexable files.
+    def _collect(self) -> dict[str, tuple[Path, float]]:
+        """Collect indexable files from the canonical repository inventory.
 
-        Uses os.walk with directory pruning for performance.
-        Stops early when max_files or max_walk_seconds budget is exceeded,
-        setting self._index_partial = True to indicate a truncated index.
+        Applies BM25's own file-count and wall-clock budget on top of
+        canonical discovery, and inherits the inventory's own partial state
+        (a truncated filesystem fallback, or a failed Git command) — either
+        source of incompleteness marks the resulting index partial.
 
         Returns:
             Dict mapping relative path strings (posix) to ``(absolute_path, mtime)``.
         """
         collected: dict[str, tuple[Path, float]] = {}
-        self._index_partial = False
         start = time.monotonic()
-        root_str = str(self._root)
 
-        for dirpath, dirnames, filenames in os.walk(root_str, topdown=True):
-            # Prune hidden and skip directories in-place so os.walk never descends
-            dirnames[:] = [d for d in dirnames
-                           if d not in SKIP_DIRS and not d.startswith(".")]
+        inventory = build_inventory(self._root)
+        self._index_partial = not inventory.complete
 
-            # Check wall-clock budget and file cap
+        for rf in inventory.files:
             if len(collected) >= self._max_files:
                 self._index_partial = True
                 break
@@ -186,31 +166,10 @@ class CodebaseIndex:
                 self._index_partial = True
                 break
 
-            for name in filenames:
-                if len(collected) >= self._max_files:
-                    self._index_partial = True
-                    break
-                if time.monotonic() - start > self._max_walk_seconds:
-                    self._index_partial = True
-                    break
+            if not self._should_index(rf):
+                continue
 
-                abs_path = Path(dirpath) / name
-                try:
-                    rel_path = abs_path.relative_to(self._root)
-                except ValueError:
-                    continue
-
-                rel_str = rel_path.as_posix()
-
-                if not self._should_index(abs_path, rel_path):
-                    continue
-
-                try:
-                    mtime = abs_path.stat().st_mtime
-                except OSError:
-                    continue
-
-                collected[rel_str] = (abs_path, mtime)
+            collected[rf.rel_path] = (rf.abs_path, rf.mtime)
 
         return collected
 
@@ -310,7 +269,7 @@ class CodebaseIndex:
         self._scorer = BM25Scorer()
         self._files = {}
 
-        collected = self._walk_and_collect()
+        collected = self._collect()
 
         for rel_str, (abs_path, _mtime) in collected.items():
             content = self._read_file_safe(abs_path)
@@ -331,7 +290,7 @@ class CodebaseIndex:
         Called on every search after the first build. Fast for small changes.
         The updated index is persisted to disk.
         """
-        current = self._walk_and_collect()
+        current = self._collect()
         current_keys = set(current.keys())
         old_keys = set(self._files.keys())
 

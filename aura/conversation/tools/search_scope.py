@@ -22,6 +22,10 @@ truthful about what was not searched, rather than quietly reporting no match.
 
 Both engines (ripgrep and the Python fallback) apply the same policy, so which
 binary happens to be installed never changes what is reachable.
+
+The sensitive-file classification itself (``is_sensitive_path``) is owned by
+:mod:`aura.repository_inventory` so that grep and every repository index
+share one authority; it is re-exported here rather than duplicated.
 """
 
 from __future__ import annotations
@@ -29,97 +33,13 @@ from __future__ import annotations
 from pathlib import Path, PurePosixPath
 
 from aura.paths import safe_is_relative_to
+from aura.repository_inventory import is_sensitive_path  # noqa: F401 — re-exported
 
 #: Reason recorded in ``skipped_details`` for a policy-skipped file.
 SENSITIVE_SKIP_REASON = "sensitive file (secrets are not searchable)"
 
 #: Reason recorded when a path resolved outside the workspace root.
 ESCAPED_SKIP_REASON = "resolved outside the workspace root"
-
-#: Exact file names that hold credentials by convention.
-_SENSITIVE_NAMES: frozenset[str] = frozenset({
-    ".netrc",
-    "_netrc",
-    ".npmrc",
-    ".pypirc",
-    ".htpasswd",
-    "credentials",
-    "id_rsa",
-    "id_dsa",
-    "id_ecdsa",
-    "id_ed25519",
-})
-
-#: Suffixes of key/certificate material.
-_SENSITIVE_SUFFIXES: tuple[str, ...] = (
-    ".pem",
-    ".key",
-    ".p8",
-    ".p12",
-    ".pfx",
-    ".jks",
-    ".keystore",
-    ".asc",
-    ".gpg",
-    ".kdbx",
-)
-
-#: Directories whose contents are credential stores wherever they appear.
-_SENSITIVE_DIRS: frozenset[str] = frozenset({
-    ".ssh",
-    ".gnupg",
-    ".aws",
-})
-
-#: Aura's own on-disk secrets. ``.aura`` is already in ``SKIP_DIRS`` for the
-#: walkers, but the policy states it independently so it holds for any caller.
-_SENSITIVE_PREFIXES: tuple[str, ...] = (
-    ".aura/secrets/",
-    ".aura/tokens/",
-    ".aura/config/",
-)
-
-#: ``.env`` variants that are checked-in templates, not real secrets.
-_ENV_TEMPLATE_SUFFIXES: tuple[str, ...] = (
-    ".example",
-    ".sample",
-    ".template",
-    ".dist",
-)
-
-
-def is_sensitive_path(rel_path: str | Path) -> bool:
-    """True when *rel_path* is credential material that must not be searched.
-
-    *rel_path* is workspace-relative; the check is on names and directories,
-    never on content, so it costs nothing and cannot be defeated by a file
-    being unreadable or binary.
-    """
-    text = str(rel_path).replace("\\", "/").lstrip("/")
-    if not text:
-        return False
-    posix = PurePosixPath(text)
-    name = posix.name
-    lowered = name.lower()
-
-    if lowered.startswith(".env"):
-        # `.env.example` and friends are templates committed on purpose.
-        return not lowered.endswith(_ENV_TEMPLATE_SUFFIXES)
-
-    if lowered in _SENSITIVE_NAMES:
-        return True
-
-    # `id_ed25519` is a private key; `id_ed25519.pub` is not.
-    if lowered.endswith(".pub"):
-        return False
-
-    if lowered.endswith(_SENSITIVE_SUFFIXES):
-        return True
-
-    if _SENSITIVE_DIRS & {part.lower() for part in posix.parts[:-1]}:
-        return True
-
-    return text.startswith(_SENSITIVE_PREFIXES)
 
 
 def _has_parent_ref(text: str) -> bool:

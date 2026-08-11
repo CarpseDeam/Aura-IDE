@@ -12,17 +12,13 @@ from pathlib import Path
 from typing import Any
 
 from aura.ast_utils import parse_python_ast
-from aura.fs_utils import (
-    SKIP_DIRS,
-    SKIP_FILE_SUFFIXES,
-    get_max_mtime,
-)
+from aura.repository_inventory import RepositoryInventory, build_inventory
 
 logger = logging.getLogger(__name__)
 
-# Cache: workspace_root_str -> (max_mtime, cached_text)
-_repo_map_cache: dict[str, tuple[float, str]] = {}
-_repo_summary_cache: dict[str, tuple[float, str]] = {}
+# Cache: workspace_root_str -> (fingerprint, cached_text)
+_repo_map_cache: dict[str, tuple[tuple[int, float], str]] = {}
+_repo_summary_cache: dict[str, tuple[tuple[int, float], str]] = {}
 
 MAX_LINES = 300
 
@@ -36,17 +32,20 @@ SUMMARY_MAX_DIRS = 40
 
 _PY_FUNC_TYPES = (ast.FunctionDef, ast.AsyncFunctionDef)
 
-def _should_skip(path: Path) -> bool:
-    """Check if a path should be excluded from the repo map."""
-    parts = set(path.parts)
-    if parts & SKIP_DIRS:
-        return True
-    if path.name.startswith("."):
-        return True
-    if path.suffix in SKIP_FILE_SUFFIXES:
-        return True
-    return False
 
+def _fingerprint(inventory: RepositoryInventory) -> tuple[int, float]:
+    """A cheap freshness fingerprint for a repository inventory snapshot.
+
+    Not a full content hash — (file_count, max_mtime) is enough to notice an
+    addition (count changes), a removal (count changes), or an edit (the
+    edited file's mtime becomes "now", which is >= the prior max) without
+    reading any file body. This replaces the old max-mtime-of-.py/.ts/.tsx/.js
+    check, which never noticed a file being added or removed at all and
+    ignored every other supported repository language.
+    """
+    if not inventory.files:
+        return (0, 0.0)
+    return (len(inventory.files), max(f.mtime for f in inventory.files))
 
 
 def _outline_python(text: str, filename: str = "<unknown>") -> dict[str, Any]:
@@ -160,10 +159,11 @@ def generate_repo_map(workspace_root: Path, force: bool = False) -> str:
         if cached_text:
             return cached_text
 
-    # Check cache with mtime validation
-    current_mtime = get_max_mtime(workspace_root)
-    cached_mtime, cached_text = _repo_map_cache.get(root_str, (0.0, ""))
-    if current_mtime == cached_mtime and cached_text:
+    # Check cache with a fingerprint derived from the canonical inventory
+    inventory = build_inventory(workspace_root)
+    current_fingerprint = _fingerprint(inventory)
+    cached_fingerprint, cached_text = _repo_map_cache.get(root_str, ((0, 0.0), ""))
+    if current_fingerprint == cached_fingerprint and cached_text:
         return cached_text
 
     from aura.code_intel.index import CodeIntelIndex
@@ -196,7 +196,7 @@ def generate_repo_map(workspace_root: Path, force: bool = False) -> str:
 
     if file_count == 0:
         result = "No Python/TypeScript files found."
-        _repo_map_cache[root_str] = (current_mtime, result)
+        _repo_map_cache[root_str] = (current_fingerprint, result)
         return result
 
     # Build header
@@ -209,7 +209,7 @@ def generate_repo_map(workspace_root: Path, force: bool = False) -> str:
         tree_lines.append("... (output truncated)")
 
     result = header + "\n".join(tree_lines)
-    _repo_map_cache[root_str] = (current_mtime, result)
+    _repo_map_cache[root_str] = (current_fingerprint, result)
     return result
 
 
@@ -228,9 +228,10 @@ def generate_repo_summary(workspace_root: Path, force: bool = False) -> str:
         if cached_text:
             return cached_text
 
-    current_mtime = get_max_mtime(workspace_root)
-    cached_mtime, cached_text = _repo_summary_cache.get(root_str, (0.0, ""))
-    if current_mtime == cached_mtime and cached_text:
+    inventory = build_inventory(workspace_root)
+    current_fingerprint = _fingerprint(inventory)
+    cached_fingerprint, cached_text = _repo_summary_cache.get(root_str, ((0, 0.0), ""))
+    if current_fingerprint == cached_fingerprint and cached_text:
         return cached_text
 
     try:
@@ -245,7 +246,7 @@ def generate_repo_summary(workspace_root: Path, force: bool = False) -> str:
         return ""
 
     if file_count == 0:
-        _repo_summary_cache[root_str] = (current_mtime, "")
+        _repo_summary_cache[root_str] = (current_fingerprint, "")
         return ""
 
     counts: dict[str, int] = {}
@@ -272,5 +273,5 @@ def generate_repo_summary(workspace_root: Path, force: bool = False) -> str:
         lines.append(f"- ... {omitted} smaller directories not listed")
 
     result = "\n".join(lines)
-    _repo_summary_cache[root_str] = (current_mtime, result)
+    _repo_summary_cache[root_str] = (current_fingerprint, result)
     return result
