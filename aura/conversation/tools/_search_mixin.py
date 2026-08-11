@@ -3,6 +3,7 @@
 Expected on self:
     _root: Path  (workspace root)
     _codebase_index: CodebaseIndex | None
+    _code_intel_index: CodeIntelIndex  (shared with CodebaseIndex, never duplicated)
 
 Functions are looked up through *registry* at call time so that
 ``unittest.mock.patch("aura.conversation.tools.registry.<name>")``
@@ -61,7 +62,9 @@ class SearchHandlersMixin:
             return ToolExecResult(ok=False, payload={"ok": False, "error": "query is required"})
         top_k = int(args.get("top_k", SEARCH_CODEBASE_TOP_K))
         if self._codebase_index is None:
-            self._codebase_index = _reg.CodebaseIndex(self._root)
+            self._codebase_index = _reg.CodebaseIndex(
+                self._root, code_intel_index=self._code_intel_index
+            )
         result = _reg._search_codebase(
             workspace_root=self._root,
             query=query,

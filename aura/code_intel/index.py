@@ -149,6 +149,20 @@ class CodeIntelIndex:
             self._lazy_parse(path)
         return list(self._diagnostics.get(path, []))
 
+    def index_content(
+        self, path: str, content: str, *, mtime: float | None = None, size: int | None = None
+    ) -> None:
+        """Ingest caller-supplied source for *path* without re-reading the file.
+
+        The caller (e.g. :class:`~aura.codebase_index.indexer.CodebaseIndex`)
+        already read *content* from disk; this reuses that exact content
+        instead of CodeIntel re-reading the file itself. Pass *mtime*/*size*
+        when already known (e.g. from the canonical repository inventory) to
+        avoid a redundant stat.
+        """
+        norm = path.replace("\\", "/")
+        self._index_file(norm, content, mtime=mtime, size=size)
+
     def ensure_fresh(self, path: str) -> None:
         """Ensure cached facts for one workspace-relative file match disk.
 
@@ -238,8 +252,16 @@ class CodeIntelIndex:
         self._refs.pop(path, None)
         self._diagnostics.pop(path, None)
 
-    def _index_file(self, path: str, content: str) -> None:
-        """Parse *content* for *path* and populate all caches."""
+    def _index_file(
+        self, path: str, content: str, *, mtime: float | None = None, size: int | None = None
+    ) -> None:
+        """Parse *content* for *path* and populate all caches.
+
+        *mtime*/*size* are known-good stat metadata supplied by a caller that
+        already has it; whichever is omitted is stat'd from disk (falling
+        back to a content-derived size when the stat fails), exactly as
+        before this parameter existed.
+        """
         from aura.code_intel.adapter import get_adapter
         from aura.code_intel.models import FileInfo
 
@@ -252,14 +274,19 @@ class CodeIntelIndex:
             return
 
         # --- FileInfo ---
-        abs_path = self._root / path
-        try:
-            st = abs_path.stat()
-            mtime = st.st_mtime
-            size = st.st_size
-        except OSError:
-            mtime = 0.0
-            size = len(content.encode("utf-8"))
+        if mtime is None or size is None:
+            abs_path = self._root / path
+            try:
+                st = abs_path.stat()
+                if mtime is None:
+                    mtime = st.st_mtime
+                if size is None:
+                    size = st.st_size
+            except OSError:
+                if mtime is None:
+                    mtime = 0.0
+                if size is None:
+                    size = len(content.encode("utf-8"))
 
         content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
         self._files[path] = FileInfo(

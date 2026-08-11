@@ -33,8 +33,12 @@ def search_codebase(
         - ``ok`` (bool): Whether the search succeeded.
         - ``query`` (str): The original query.
         - ``results`` (list[dict]): Each result has ``path``, ``score``,
-          ``snippet``.
-        - ``indexed_file_count`` (int): Number of files in the index.
+          ``snippet``, plus truthful structural metadata (``start_line``,
+          ``end_line``, ``symbol``, ``symbol_kind``, ``parent``,
+          ``chunk_kind``) from the winning retrieval document.
+        - ``indexed_file_count`` (int): Number of indexed repository files.
+        - ``indexed_document_count`` (int): Number of BM25 documents (a
+          file may own more than one — see ``aura/codebase_index/documents.py``).
         - ``indexed_term_count`` (int): Number of unique terms in the index.
     """
     query = query.strip()

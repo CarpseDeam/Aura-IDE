@@ -56,10 +56,6 @@ class PythonAdapter(CodeIntelAdapter):
         # Collect symbols and references in one AST walk
         for node in ast.iter_child_nodes(tree):
             if isinstance(node, ast.ClassDef):
-                methods: list[str] = []
-                for body_node in node.body:
-                    if isinstance(body_node, _PY_FUNC_TYPES):
-                        methods.append(body_node.name)
                 symbols.append(
                     SymbolInfo(
                         name=node.name,
@@ -72,6 +68,21 @@ class PythonAdapter(CodeIntelAdapter):
                         signature="class " + node.name,
                     )
                 )
+                for body_node in node.body:
+                    if isinstance(body_node, _PY_FUNC_TYPES):
+                        symbols.append(
+                            SymbolInfo(
+                                name=body_node.name,
+                                kind="method",
+                                file=file_path,
+                                line=body_node.lineno,
+                                column=body_node.col_offset,
+                                end_line=body_node.end_lineno,
+                                end_column=body_node.end_col_offset,
+                                signature=_py_func_signature_str(body_node),
+                                parent=node.name,
+                            )
+                        )
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 sig = _py_func_signature_str(node)
                 symbols.append(
