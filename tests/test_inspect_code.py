@@ -89,8 +89,10 @@ def test_python_symbol_resolution_returns_bounded_source_and_truthful_target(
     assert target["kind"] == "function"
     assert target["declaration_line"] == 8
     assert target["provenance"] == "aura_parser"
-    # The parser never sees a body end, so this must never be implied.
-    assert "exact_body_range_unavailable" in payload["limitations"]
+    # Python's ast exposes an honest end range for this function, so the
+    # blanket "we never know a body end" limitation must not be implied here.
+    assert target["declaration_end_line"] == 9
+    assert "exact_body_range_unavailable" not in payload["limitations"]
     assert "resolved_references_unavailable" in payload["limitations"]
     assert "call_graph_unavailable" in payload["limitations"]
     assert "type_resolution_unavailable" in payload["limitations"]
@@ -99,7 +101,8 @@ def test_python_symbol_resolution_returns_bounded_source_and_truthful_target(
     assert excerpt["path"] == "app.py"
     assert "def target_fn" in excerpt["text"]
     assert excerpt["provenance"] == "filesystem"
-    assert excerpt["bounded_window"] is True
+    assert excerpt["parser_bounded"] is True
+    assert excerpt["bounded_window"] is False
 
 
 def test_line_anchor_without_symbol_resolves_by_line(tmp_path: Path) -> None:
@@ -189,6 +192,91 @@ def test_unsupported_language_still_returns_source_and_states_limitations(
     assert payload["ok"] is True
     assert payload["source_excerpt"]["text"] != ""
     assert payload["target"]["language"] in ("text", "unknown")
+    assert "exact_body_range_unavailable" in payload["limitations"]
+
+
+# ── 11/12/13/14: parser-owned declaration ranges ─────────────────────────
+
+
+def test_resolved_python_target_reports_exact_parser_owned_range(
+    tmp_path: Path,
+) -> None:
+    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    _write(
+        tmp_path / "app.py",
+        "def target_fn(x):\n    y = x + 1\n    return y\n",
+    )
+
+    payload = _inspect(registry, path="app.py", symbol="target_fn")
+
+    target = payload["target"]
+    assert target["declaration_line"] == 1
+    assert target["declaration_end_line"] == 3
+    assert target["declaration_end_column"] == len("    return y")
+    # An exact range is now known, so the blanket limitation must not appear.
+    assert "exact_body_range_unavailable" not in payload["limitations"]
+
+
+def test_inspect_code_uses_parser_bounded_source_when_exact_range_known(
+    tmp_path: Path,
+) -> None:
+    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    _write(
+        tmp_path / "app.py",
+        "x = 0\n\n\ndef target_fn(x):\n    y = x + 1\n    return y\n\n\nz = 1\n",
+    )
+
+    payload = _inspect(registry, path="app.py", symbol="target_fn")
+
+    excerpt = payload["source_excerpt"]
+    assert excerpt["parser_bounded"] is True
+    assert excerpt["bounded_window"] is False
+    assert excerpt["start_line"] == 4
+    assert excerpt["end_line"] == 6
+    assert excerpt["text"] == "def target_fn(x):\n    y = x + 1\n    return y"
+    # No surrounding context lines (x = 0 / z = 1) leak into a parser-bounded
+    # excerpt — it is exactly the declaration, not a heuristic window.
+    assert "x = 0" not in excerpt["text"]
+    assert "z = 1" not in excerpt["text"]
+    assert excerpt["truncated"] is False
+
+
+def test_parser_owned_body_larger_than_cap_is_bounded_but_range_metadata_stays_true(
+    tmp_path: Path,
+) -> None:
+    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    from aura.code_intel.inspection import EXCERPT_MAX_LINES
+
+    body_lines = "\n".join(f"    x{i} = {i}" for i in range(EXCERPT_MAX_LINES + 20))
+    _write(tmp_path / "app.py", f"def big_fn():\n{body_lines}\n    return 1\n")
+
+    payload = _inspect(registry, path="app.py", symbol="big_fn")
+
+    target = payload["target"]
+    full_end_line = EXCERPT_MAX_LINES + 20 + 2  # def line + body + return line
+    # Full structural end range is preserved in target metadata even though
+    # the excerpt itself had to be cut short.
+    assert target["declaration_end_line"] == full_end_line
+
+    excerpt = payload["source_excerpt"]
+    assert excerpt["parser_bounded"] is True
+    assert excerpt["end_line"] < full_end_line
+    assert excerpt["truncated"] is True
+
+
+def test_fallback_text_target_does_not_claim_a_body_range(tmp_path: Path) -> None:
+    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    _write(tmp_path / "notes.txt", "line one\nline two\nline three\n")
+
+    payload = _inspect(registry, path="notes.txt", line=1)
+
+    target = payload["target"]
+    assert target["declaration_end_line"] is None
+    assert target["declaration_end_column"] is None
+
+    excerpt = payload["source_excerpt"]
+    assert excerpt["parser_bounded"] is False
+    assert excerpt["bounded_window"] is True
     assert "exact_body_range_unavailable" in payload["limitations"]
 
 

@@ -67,6 +67,8 @@ class PythonAdapter(CodeIntelAdapter):
                         file=file_path,
                         line=node.lineno,
                         column=node.col_offset,
+                        end_line=node.end_lineno,
+                        end_column=node.end_col_offset,
                         signature="class " + node.name,
                     )
                 )
@@ -79,6 +81,8 @@ class PythonAdapter(CodeIntelAdapter):
                         file=file_path,
                         line=node.lineno,
                         column=node.col_offset,
+                        end_line=node.end_lineno,
+                        end_column=node.end_col_offset,
                         signature=sig,
                     )
                 )
@@ -92,6 +96,8 @@ class PythonAdapter(CodeIntelAdapter):
                                 file=file_path,
                                 line=target.lineno,
                                 column=target.col_offset,
+                                end_line=node.end_lineno,
+                                end_column=node.end_col_offset,
                             )
                         )
             elif isinstance(node, ast.AnnAssign):
@@ -103,6 +109,8 @@ class PythonAdapter(CodeIntelAdapter):
                             file=file_path,
                             line=node.target.lineno,
                             column=node.target.col_offset,
+                            end_line=node.end_lineno,
+                            end_column=node.end_col_offset,
                         )
                     )
 

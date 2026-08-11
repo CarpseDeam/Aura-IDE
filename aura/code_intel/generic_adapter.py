@@ -253,6 +253,7 @@ class GenericSymbolAdapter(CodeIntelAdapter):
             for pattern_index, captures in cursor.matches(tree.root_node):
                 kind = None
                 name_node = None
+                def_node = None
 
                 for capture_name, nodes in captures.items():
                     if capture_name.startswith("definition."):
@@ -261,6 +262,8 @@ class GenericSymbolAdapter(CodeIntelAdapter):
                             kind = def_kind
                         else:
                             kind = "variable"
+                        if nodes:
+                            def_node = nodes[0]
                     elif capture_name == "name":
                         if nodes:
                             name_node = nodes[0]
@@ -268,8 +271,21 @@ class GenericSymbolAdapter(CodeIntelAdapter):
                 if name_node is not None and kind is not None:
                     name_bytes = utf8_bytes[name_node.start_byte:name_node.end_byte]
                     name = name_bytes.decode("utf-8", errors="replace")
-                    line = name_node.start_point[0] + 1  # 0-based → 1-based
-                    column = name_node.start_point[1]
+
+                    # Prefer the definition node's own range (the whole
+                    # declaration) over the bare identifier token — a
+                    # trustworthy end range only exists when the tags query
+                    # actually gave us a definition node to read it from.
+                    if def_node is not None:
+                        line = def_node.start_point[0] + 1  # 0-based → 1-based
+                        column = def_node.start_point[1]
+                        end_line = def_node.end_point[0] + 1
+                        end_column = def_node.end_point[1]
+                    else:
+                        line = name_node.start_point[0] + 1
+                        column = name_node.start_point[1]
+                        end_line = None
+                        end_column = None
 
                     symbols.append(
                         SymbolInfo(
@@ -278,6 +294,8 @@ class GenericSymbolAdapter(CodeIntelAdapter):
                             file=file_path,
                             line=line,
                             column=column,
+                            end_line=end_line,
+                            end_column=end_column,
                         )
                     )
         except Exception as exc:

@@ -7,7 +7,9 @@ parser diagnostics, the filesystem for a bounded source excerpt, and
 ``find_usages`` for lexical occurrences. It does not add semantic
 capabilities the underlying adapters lack — it packages what they already
 provide and states plainly what they do not: no resolved references, no call
-graph, no type inference, no exact declaration end range.
+graph, no type inference. A declaration end range is reported only when the
+resolving adapter genuinely parsed one (see ``SymbolInfo.end_line`` /
+``end_column``); otherwise the result says so rather than implying one.
 """
 
 from __future__ import annotations
@@ -41,7 +43,6 @@ _BASE_LIMITATIONS: tuple[str, ...] = (
     "resolved_references_unavailable",
     "call_graph_unavailable",
     "type_resolution_unavailable",
-    "exact_body_range_unavailable",
 )
 
 #: Provenance label for a resolved symbol / diagnostics, by adapter language
@@ -136,6 +137,7 @@ class CodeInspector:
 
         resolved, resolution = _resolve_target(symbols, line, symbol)
         anchor_line = resolved.line if resolved is not None else (line if line is not None else 1)
+        has_exact_range = resolved is not None and resolved.end_line is not None
 
         occurrence_symbol = symbol or (resolved.name if resolved is not None else None)
         occurrences = self._find_occurrences(occurrence_symbol, cancel_event)
@@ -144,10 +146,10 @@ class CodeInspector:
             "ok": True,
             "path": rel_path,
             "target": self._build_target(rel_path, language, line, symbol, resolved, resolution),
-            "source_excerpt": self._build_excerpt(abs_path, rel_path, anchor_line),
+            "source_excerpt": self._build_excerpt(abs_path, rel_path, anchor_line, resolved),
             "occurrences": occurrences,
             "diagnostics": self._build_diagnostics(diagnostics, language),
-            "limitations": self._limitations(occurrences is not None),
+            "limitations": self._limitations(occurrences is not None, has_exact_range),
         }
 
     # -- section builders -----------------------------------------------
@@ -170,6 +172,8 @@ class CodeInspector:
             "name": None,
             "kind": None,
             "declaration_line": None,
+            "declaration_end_line": None,
+            "declaration_end_column": None,
             "signature": None,
             "enclosing": None,
             "provenance": None,
@@ -179,18 +183,31 @@ class CodeInspector:
                 "name": resolved.name,
                 "kind": resolved.kind,
                 "declaration_line": resolved.line,
+                "declaration_end_line": resolved.end_line,
+                "declaration_end_column": resolved.end_column,
                 "signature": resolved.signature,
                 "enclosing": resolved.parent,
                 "provenance": _parser_provenance(language),
             })
         return target
 
-    def _build_excerpt(self, abs_path: Path, rel_path: str, anchor_line: int) -> dict[str, Any]:
-        start = max(1, anchor_line - EXCERPT_CONTEXT_BEFORE_LINES)
-        end = start + EXCERPT_MAX_LINES - 1
+    def _build_excerpt(
+        self, abs_path: Path, rel_path: str, anchor_line: int, resolved: Any | None
+    ) -> dict[str, Any]:
+        has_exact_range = resolved is not None and resolved.end_line is not None
+        if has_exact_range:
+            start = resolved.line
+            requested_end = resolved.end_line
+        else:
+            start = max(1, anchor_line - EXCERPT_CONTEXT_BEFORE_LINES)
+            requested_end = start + EXCERPT_MAX_LINES - 1
 
         try:
-            raw = abs_path.read_bytes()
+            file_size = abs_path.stat().st_size
+            # Bounded read: never pull more than the existing hard cap off
+            # disk, even for a file far larger than that cap.
+            with open(abs_path, "rb") as f:
+                raw = f.read(MAX_READ_BYTES)
         except OSError as exc:
             return {
                 "path": rel_path,
@@ -198,19 +215,25 @@ class CodeInspector:
                 "end_line": start,
                 "text": "",
                 "truncated": False,
+                "bounded_window": not has_exact_range,
+                "parser_bounded": has_exact_range,
                 "provenance": "filesystem",
                 "error": str(exc),
             }
 
-        size_truncated = len(raw) > MAX_READ_BYTES
-        if size_truncated:
-            raw = raw[:MAX_READ_BYTES]
+        size_truncated = file_size > MAX_READ_BYTES
         text = raw.decode("utf-8", errors="replace")
         lines = text.splitlines()
         total_lines = len(lines)
 
         actual_start = min(start, max(total_lines, 1))
-        actual_end = min(end, total_lines)
+        full_end = min(requested_end, total_lines)
+        # Even an exact parser-owned range is still bounded by the same hard
+        # line cap as a context window — a huge body gets truncated, not a
+        # blown-out response.
+        window_cap_end = actual_start + EXCERPT_MAX_LINES - 1
+        actual_end = min(full_end, window_cap_end)
+
         selected = lines[actual_start - 1:actual_end] if total_lines else []
         excerpt_text = "\n".join(selected)
 
@@ -218,13 +241,20 @@ class CodeInspector:
         if char_truncated:
             excerpt_text = excerpt_text[:EXCERPT_MAX_CHARS]
 
+        if has_exact_range:
+            range_truncated = actual_end < full_end
+            truncated = bool(char_truncated or size_truncated or range_truncated)
+        else:
+            truncated = bool(char_truncated or size_truncated or actual_end < total_lines)
+
         return {
             "path": rel_path,
             "start_line": actual_start,
             "end_line": actual_end,
             "text": excerpt_text,
-            "truncated": bool(char_truncated or size_truncated or actual_end < total_lines),
-            "bounded_window": True,
+            "truncated": truncated,
+            "bounded_window": not has_exact_range,
+            "parser_bounded": has_exact_range,
             "provenance": "filesystem",
         }
 
@@ -284,8 +314,10 @@ class CodeInspector:
             "provenance": _parser_provenance(language),
         }
 
-    def _limitations(self, has_occurrences: bool) -> list[str]:
+    def _limitations(self, has_occurrences: bool, has_exact_range: bool) -> list[str]:
         items = list(_BASE_LIMITATIONS)
+        if not has_exact_range:
+            items.append("exact_body_range_unavailable")
         if has_occurrences:
             items.append("occurrences_are_lexical")
         return items

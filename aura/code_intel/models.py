@@ -19,6 +19,10 @@ class SymbolInfo:
     file: str  # workspace-relative
     line: int
     column: int | None = None
+    # Parser-owned end-of-declaration coordinates. None when the adapter has
+    # no honest source for them — never inferred/guessed by callers.
+    end_line: int | None = None
+    end_column: int | None = None
     signature: str | None = None  # human-readable, e.g. "def foo(x: int) -> str"
     parent: str | None = None  # enclosing class or function name
     docstring: str | None = None
