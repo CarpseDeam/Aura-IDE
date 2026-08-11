@@ -11,7 +11,7 @@ The grouping exists so the catalog can be reasoned about and staged:
 * ``SPECIALIZED`` groups are the long tail — the natural contents of a
   name-only deferred index, should Aura grow one.
 
-Keep this in sync with the schemas in ``_schemas.py`` and ``_drone_schemas.py``.
+Keep this in sync with the schemas in the tools/schemas package.
 """
 
 from __future__ import annotations

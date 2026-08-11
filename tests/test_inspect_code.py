@@ -2,7 +2,7 @@
 
 ``inspect_code`` is the one new observation tool this vertical slice adds
 (see aura/code_intel/inspection.py for the owner and
-aura/conversation/tools/_inspect_schema.py for the schema). These tests cover
+aura/conversation/tools/schemas/code_intel.py for the schema). These tests cover
 the model-facing contract: truthful resolution/provenance, bounded and
 labeled evidence, workspace jailing, effect classification, and graceful
 degradation for languages without a rich adapter.
@@ -13,7 +13,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import aura.code_intel  # noqa: F401 — triggers adapter registration
-
 from aura.conversation.tools._types import ApprovalDecision
 from aura.conversation.tools.catalog import ToolCatalog
 from aura.conversation.tools.effects import ToolEffect

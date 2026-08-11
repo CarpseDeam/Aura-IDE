@@ -2,18 +2,12 @@
 
 from __future__ import annotations
 
-import copy
 from typing import Any
 
-from aura.conversation.tools._drone_schemas import (
-    CHECK_DRONE_RUN_TOOL_DEF,
-    DECLARE_UI_CONTRACT_TOOL_DEF,
-    LAUNCH_READ_ONLY_DRONE_TOOL_DEF,
-    REGISTER_DRONE_FOLDER_TOOL_DEF,
-    RUN_READ_ONLY_DRONE_TOOL_DEF,
-)
-from aura.conversation.tools._inspect_schema import INSPECT_CODE_TOOL_DEF
-from aura.conversation.tools._schemas import (
+from aura.conversation.tools._types import RegistryMode
+from aura.conversation.tools.capability_groups import BULK_READ, CODE_INTEL, tool_names_for
+from aura.conversation.tools.effects import BUILTIN_TOOL_EFFECTS, ToolEffect
+from aura.conversation.tools.schemas import (
     GIT_TOOL_DEFS,
     LOAD_SKILLS_TOOL_DEF,
     READ_TOOL_DEFS,
@@ -26,9 +20,8 @@ from aura.conversation.tools._schemas import (
     WORKSPACE_SNAPSHOT_TOOL_DEF,
     WRITE_TOOL_DEFS,
 )
-from aura.conversation.tools._types import RegistryMode
-from aura.conversation.tools.capability_groups import BULK_READ, CODE_INTEL, tool_names_for
-from aura.conversation.tools.effects import BUILTIN_TOOL_EFFECTS, ToolEffect
+from aura.conversation.tools.schemas.code_intel import INSPECT_CODE_TOOL_DEF
+from aura.conversation.tools.schemas.drones import RUN_READ_ONLY_DRONE_TOOL_DEF
 
 # Read and search tools the production single-agent catalog no longer offers.
 #

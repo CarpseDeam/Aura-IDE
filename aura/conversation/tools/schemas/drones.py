@@ -1,5 +1,4 @@
 """Tool definition schemas for Drone-related tools."""
-
 from __future__ import annotations
 
 from typing import Any
@@ -46,7 +45,6 @@ LAUNCH_READ_ONLY_DRONE_TOOL_DEF: dict[str, Any] = {
     },
 }
 
-
 RUN_READ_ONLY_DRONE_TOOL_DEF: dict[str, Any] = {
     "type": "function",
     "function": {
@@ -81,7 +79,6 @@ RUN_READ_ONLY_DRONE_TOOL_DEF: dict[str, Any] = {
     },
 }
 
-
 CHECK_DRONE_RUN_TOOL_DEF: dict[str, Any] = {
     "type": "function",
     "function": {
@@ -113,7 +110,6 @@ CHECK_DRONE_RUN_TOOL_DEF: dict[str, Any] = {
     },
 }
 
-
 REGISTER_DRONE_FOLDER_TOOL_DEF: dict[str, Any] = {
     "type": "function",
     "function": {
@@ -141,7 +137,6 @@ REGISTER_DRONE_FOLDER_TOOL_DEF: dict[str, Any] = {
         },
     },
 }
-
 
 DECLARE_UI_CONTRACT_TOOL_DEF: dict[str, Any] = {
     "type": "function",
@@ -188,6 +183,42 @@ DECLARE_UI_CONTRACT_TOOL_DEF: dict[str, Any] = {
                 },
             },
             "required": ["folder_path", "assertions"],
+        },
+    },
+}
+
+SUMMON_DRONE_TOOL_DEF: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "summon_drone",
+        "description": (
+            "Suggest launching a saved Drone to handle a focused sub-task independently. "
+            "Call this when the user's request matches a saved Drone's purpose. "
+            "The Drone runs separately and its receipt appears in the right panel."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "drone_id": {
+                    "type": "string",
+                    "description": (
+                        "The id of the saved Drone to launch (from Available Drones list)."
+                    ),
+                },
+                "goal": {
+                    "type": "string",
+                    "description": (
+                        "What the Drone should accomplish this specific run."
+                    ),
+                },
+                "reason": {
+                    "type": "string",
+                    "description": (
+                        "Why this Drone is being summoned — shown to the user for confirmation."
+                    ),
+                },
+            },
+            "required": ["drone_id", "goal"],
         },
     },
 }

@@ -14,13 +14,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import aura.code_intel  # noqa: F401 — triggers adapter registration
-
-from aura.codebase_index.indexer import CodebaseIndex
 from aura.code_intel.index import CodeIntelIndex
-from aura.conversation.tools._inspect_schema import INSPECT_CODE_TOOL_DEF
-from aura.conversation.tools._schemas import READ_TOOL_DEFS
+from aura.codebase_index.indexer import CodebaseIndex
 from aura.conversation.tools._types import ApprovalDecision
 from aura.conversation.tools.registry import ToolRegistry
+from aura.conversation.tools.schemas.code_intel import INSPECT_CODE_TOOL_DEF
+from aura.conversation.tools.schemas.search import SEARCH_TOOL_DEFS
 
 _APPROVE = lambda _req: ApprovalDecision(action="approve")  # noqa: E731
 
@@ -31,10 +30,10 @@ def _write(path: Path, content: str) -> None:
 
 
 def _search_codebase_def() -> dict:
-    for tool in READ_TOOL_DEFS:
+    for tool in SEARCH_TOOL_DEFS:
         if tool["function"]["name"] == "search_codebase":
             return tool
-    raise AssertionError("search_codebase not found in READ_TOOL_DEFS")
+    raise AssertionError("search_codebase not found in SEARCH_TOOL_DEFS")
 
 
 # ── search_codebase: description matches structural result shape ───────────
