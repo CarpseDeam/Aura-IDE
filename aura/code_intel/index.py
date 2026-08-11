@@ -157,6 +157,54 @@ class CodeIntelIndex:
             self._lazy_parse(path)
         return list(self._diagnostics.get(path, []))
 
+    def ensure_fresh(self, path: str) -> None:
+        """Ensure cached facts for one workspace-relative file match disk.
+
+        Stats and, only if the file actually changed, re-parses this single
+        path. Never walks the workspace — callers that need repository-wide
+        state (references, dependents, audit) still call ``refresh()``.
+        """
+        norm = path.replace("\\", "/")
+        abs_path = self._root / norm
+
+        if not abs_path.is_file():
+            self._evict_file(norm)
+            return
+
+        fname = Path(norm).name
+        suffix = Path(norm).suffix.lower()
+        if suffix in SKIP_FILE_SUFFIXES or fname.startswith("."):
+            self._evict_file(norm)
+            return
+
+        try:
+            st = abs_path.stat()
+        except OSError:
+            self._evict_file(norm)
+            return
+
+        existing = self._files.get(norm)
+        if existing is not None and existing.mtime == st.st_mtime and existing.size == st.st_size:
+            return
+
+        if st.st_size > _MAX_PARSE_BYTES:
+            self._evict_file(norm)
+            return
+
+        try:
+            with open(abs_path, "rb") as f:
+                raw = f.read(_MAX_PARSE_BYTES)
+            content = raw.decode("utf-8")
+        except (OSError, UnicodeDecodeError, PermissionError):
+            self._evict_file(norm)
+            return
+
+        if not content.strip():
+            self._evict_file(norm)
+            return
+
+        self._index_file(norm, content)
+
     # -- internal: lazy single-file parse -----------------------------------
 
     def _lazy_parse(self, path: str) -> None:
@@ -389,25 +437,3 @@ class CodeIntelIndex:
 
             if content.strip():
                 self._index_file(norm, content)
-
-
-# ---------------------------------------------------------------------------
-# Per-workspace index cache (dispatch/worker thread only; single-threaded)
-# ---------------------------------------------------------------------------
-_index_cache: dict[str, CodeIntelIndex] = {}
-
-
-def get_cached_index(root: Path) -> CodeIntelIndex:
-    """Return a cached CodeIntelIndex for *root* (construct + refresh on miss).
-
-    The returned index is shared across audit and code-intel tool calls
-    running on the dispatch/worker thread.  Callers must still call
-    ``index.refresh()`` to pick up new/changed files \u2014 the stat-based
-    skip gate makes subsequent full walks cheap.
-    """
-    resolved = str(root.resolve())
-    if resolved not in _index_cache:
-        idx = CodeIntelIndex(root)
-        idx.refresh()
-        _index_cache[resolved] = idx
-    return _index_cache[resolved]

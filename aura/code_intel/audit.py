@@ -10,30 +10,36 @@ import importlib.util
 import logging
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from aura.code_intel.index import get_cached_index
-
-if TYPE_CHECKING:
-    from aura.code_intel.index import CodeIntelIndex
+from aura.code_intel.index import CodeIntelIndex
 
 logger = logging.getLogger(__name__)
 
 
 def audit_changed_files(
-    workspace_root: Path, changed_files: list[str]
+    workspace_root: Path,
+    changed_files: list[str],
+    *,
+    index: CodeIntelIndex | None = None,
 ) -> list[Any]:
     """Run structural audit on a set of changed files.
 
     Phases:
 
-    1. Cached/refresh a :class:`CodeIntelIndex` for the workspace (full
-       refresh for blast-radius context, then re-parse changed files).
+    1. Full refresh of *index* (or a locally constructed one when none is
+       supplied) for whole-repo blast-radius context, then re-parse changed
+       files specifically.
     2. Parse-failure detection on each changed file.
     3. Removed-export detection via git HEAD comparison.
     4. Stale-reference detection in blast-radius dependents.
     5. Unresolved-dependency detection.
     6. Return findings sorted by file, then line.
+
+    Args:
+        index: Workspace-owned index to reuse (e.g. ToolRegistry's). When
+            omitted, a local index is constructed for this call only — never
+            cached globally.
 
     Returns:
         list[AuditFinding]
@@ -46,7 +52,8 @@ def audit_changed_files(
     findings: list[AuditFinding] = []
 
     try:
-        index = get_cached_index(workspace_root)
+        if index is None:
+            index = CodeIntelIndex(workspace_root)
         # Full refresh first to build whole-repo context for blast radius
         index.refresh()
         # Then re-parse changed files specifically

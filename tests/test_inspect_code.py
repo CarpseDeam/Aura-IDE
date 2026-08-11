@@ -296,3 +296,174 @@ def test_workspace_root_change_rebinds_inspection(tmp_path: Path) -> None:
     registry.set_workspace_root(root_b)
     second = _inspect(registry, path="app.py", line=1)
     assert second["target"]["name"] == "only_in_b"
+
+
+# ── CodeIntel ownership lifecycle: targeted freshness, no full walk ─────
+
+
+def test_inspect_code_never_triggers_a_full_workspace_refresh(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from aura.code_intel.index import CodeIntelIndex
+
+    def _refresh_guard(self, changed_files=None):
+        raise AssertionError("inspect_code must not trigger CodeIntelIndex.refresh()")
+
+    monkeypatch.setattr(CodeIntelIndex, "refresh", _refresh_guard)
+
+    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    _write(tmp_path / "app.py", "def target_fn():\n    return 1\n")
+
+    payload = _inspect(registry, path="app.py", symbol="target_fn")
+
+    assert payload["ok"] is True
+    assert payload["target"]["name"] == "target_fn"
+
+
+def test_first_inspection_indexes_only_the_requested_file(tmp_path: Path) -> None:
+    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    _write(tmp_path / "app.py", "def a(): pass\n")
+    _write(tmp_path / "sibling.py", "def b(): pass\n")
+
+    _inspect(registry, path="app.py", line=1)
+
+    assert registry._code_intel_index.file_paths() == ["app.py"]
+
+
+def test_reinspecting_unchanged_file_does_not_reparse(tmp_path: Path) -> None:
+    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    _write(tmp_path / "app.py", "def stable(): pass\n")
+
+    _inspect(registry, path="app.py", line=1)
+    first_info = registry._code_intel_index.get_file("app.py")
+
+    _inspect(registry, path="app.py", line=1)
+    second_info = registry._code_intel_index.get_file("app.py")
+
+    # Identity, not just equality: proves ensure_fresh's stat-based skip
+    # gate returned without re-parsing and re-creating the FileInfo record.
+    assert second_info is first_info
+
+
+def test_editing_inspected_file_returns_new_symbol(tmp_path: Path) -> None:
+    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    app_py = tmp_path / "app.py"
+    _write(app_py, "def old_fn(): pass\n")
+
+    _inspect(registry, path="app.py", line=1)
+
+    _write(app_py, "def new_fn():\n    return 2\n")
+    payload = _inspect(registry, path="app.py", line=1)
+
+    assert payload["target"]["name"] == "new_fn"
+
+
+def test_workspace_root_change_discards_old_index_facts(tmp_path: Path) -> None:
+    root_a = tmp_path / "a"
+    root_b = tmp_path / "b"
+    _write(root_a / "app.py", "def only_in_a(): pass\n")
+    _write(root_b / "app.py", "def only_in_b(): pass\n")
+
+    registry = ToolRegistry(workspace_root=root_a, mode="single")
+    _inspect(registry, path="app.py", line=1)
+    old_index = registry._code_intel_index
+    assert "app.py" in old_index.file_paths()
+
+    registry.set_workspace_root(root_b)
+
+    # A brand new index is bound — the old one (and its "only_in_a" fact)
+    # is no longer reachable from the registry at all.
+    assert registry._code_intel_index is not old_index
+    assert registry._code_inspector._index is registry._code_intel_index
+    assert registry._code_intel_index.file_paths() == []
+
+    _inspect(registry, path="app.py", line=1)
+    names = [s.name for s in registry._code_intel_index.get_symbols("app.py")]
+    assert names == ["only_in_b"]
+
+
+# ── withheld code-intel handlers: freshness policy per operation ────────
+
+
+def test_code_intel_outline_uses_targeted_freshness_not_full_refresh(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from aura.code_intel.index import CodeIntelIndex
+
+    def _refresh_guard(self, changed_files=None):
+        raise AssertionError("code_intel_outline must not trigger a full refresh")
+
+    monkeypatch.setattr(CodeIntelIndex, "refresh", _refresh_guard)
+
+    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    _write(tmp_path / "app.py", "def helper():\n    pass\n")
+
+    result = registry.execute("code_intel_outline", {"path": "app.py"}, approval_cb=_APPROVE)
+
+    assert result.payload["ok"] is True
+    assert any(f["name"] == "helper" for f in result.payload["outline"]["functions"])
+
+
+def test_code_intel_references_still_uses_full_refresh(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from aura.code_intel.index import CodeIntelIndex
+
+    calls: list[Any] = []
+    original_refresh = CodeIntelIndex.refresh
+
+    def _tracking_refresh(self, changed_files=None):
+        calls.append(changed_files)
+        return original_refresh(self, changed_files)
+
+    monkeypatch.setattr(CodeIntelIndex, "refresh", _tracking_refresh)
+
+    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    _write(tmp_path / "app.py", "def target():\n    pass\n")
+
+    result = registry.execute(
+        "code_intel_references", {"symbol": "target"}, approval_cb=_APPROVE
+    )
+
+    assert result.payload["ok"] is True
+    assert calls, "code_intel_references must call CodeIntelIndex.refresh()"
+
+
+def test_code_intel_dependents_still_uses_full_refresh(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from aura.code_intel.index import CodeIntelIndex
+
+    calls: list[Any] = []
+    original_refresh = CodeIntelIndex.refresh
+
+    def _tracking_refresh(self, changed_files=None):
+        calls.append(changed_files)
+        return original_refresh(self, changed_files)
+
+    monkeypatch.setattr(CodeIntelIndex, "refresh", _tracking_refresh)
+
+    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    _write(tmp_path / "lib.py", "VERSION = 1\n")
+    _write(tmp_path / "app.py", "import lib\n")
+
+    result = registry.execute(
+        "code_intel_dependents", {"path": "lib.py"}, approval_cb=_APPROVE
+    )
+
+    assert result.payload["ok"] is True
+    assert calls, "code_intel_dependents must call CodeIntelIndex.refresh()"
+
+
+def test_code_intel_audit_reuses_registry_owned_index(tmp_path: Path) -> None:
+    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    _write(tmp_path / "app.py", "def a():\n    pass\n")
+
+    result = registry.execute(
+        "code_intel_audit", {"paths": ["app.py"]}, approval_cb=_APPROVE
+    )
+
+    assert result.payload["ok"] is True
+    # The audit was passed the registry's own index rather than a private
+    # one it fetched from a global cache.
+    assert "app.py" in registry._code_intel_index.file_paths()

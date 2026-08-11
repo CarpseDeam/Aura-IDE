@@ -5,6 +5,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from aura.code_intel.index import CodeIntelIndex
 from aura.code_intel.inspection import CodeInspector
 from aura.codebase_index.indexer import CodebaseIndex  # noqa: F401
 from aura.codebase_index.tool import search_codebase as _search_codebase  # noqa: F401
@@ -81,7 +82,8 @@ class ToolRegistry(
         self._codebase_index: CodebaseIndex | None = None
         self._fs_handler = FsReadHandler(self._root, self._resolve_in_root)
         self._git_handler = GitHandler(self._root)
-        self._code_inspector = CodeInspector(self._root)
+        self._code_intel_index = CodeIntelIndex(self._root)
+        self._code_inspector = CodeInspector(self._root, self._code_intel_index)
         self._catalog = ToolCatalog()
         self._dynamic_tools = DynamicToolRegistry(self._root)
         self._mcp_tools = MCPToolRegistry()
@@ -123,7 +125,10 @@ class ToolRegistry(
         self._codebase_index = None
         self._fs_handler = FsReadHandler(self._root, self._resolve_in_root)
         self._git_handler = GitHandler(self._root)
-        self._code_inspector.set_workspace_root(self._root)
+        # Replace, not mutate: no CodeIntel fact from the old workspace's
+        # index must remain reachable after the root changes.
+        self._code_intel_index = CodeIntelIndex(self._root)
+        self._code_inspector = CodeInspector(self._root, self._code_intel_index)
 
     @property
     def read_only(self) -> bool:

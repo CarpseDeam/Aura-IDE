@@ -17,7 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from aura.code_intel.index import get_cached_index
+from aura.code_intel.index import CodeIntelIndex
 from aura.config import MAX_READ_BYTES
 from aura.paths import safe_relative_to
 
@@ -101,16 +101,15 @@ def _resolve_target(
 class CodeInspector:
     """Workspace-scoped owner of the ``inspect_code`` operation.
 
-    Holds only the workspace root; symbol/diagnostic data comes from the
-    shared :class:`CodeIntelIndex` cache, keyed by resolved root, so this
-    object carries no index state of its own to go stale.
+    Symbol/diagnostic data comes from the workspace :class:`CodeIntelIndex`
+    injected by its owner (:class:`~aura.conversation.tools.registry.ToolRegistry`).
+    A workspace-root change replaces this object rather than mutating it, so
+    an inspector never outlives the index it was built for.
     """
 
-    def __init__(self, workspace_root: Path) -> None:
+    def __init__(self, workspace_root: Path, index: CodeIntelIndex) -> None:
         self._root = workspace_root.resolve()
-
-    def set_workspace_root(self, root: Path) -> None:
-        self._root = root.resolve()
+        self._index = index
 
     def inspect(
         self,
@@ -127,12 +126,11 @@ class CodeInspector:
 
         rel_path = safe_relative_to(abs_path, self._root).as_posix()
 
-        index = get_cached_index(self._root)
-        index.refresh()
+        self._index.ensure_fresh(rel_path)
 
-        file_info = index.get_file(rel_path)
-        symbols = index.get_symbols(rel_path)
-        diagnostics = index.get_diagnostics(rel_path)
+        file_info = self._index.get_file(rel_path)
+        symbols = self._index.get_symbols(rel_path)
+        diagnostics = self._index.get_diagnostics(rel_path)
         language = file_info.language if file_info is not None else _detect_language(rel_path)
 
         resolved, resolution = _resolve_target(symbols, line, symbol)
