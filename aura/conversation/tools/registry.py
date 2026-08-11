@@ -5,6 +5,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from aura.code_intel.inspection import CodeInspector
 from aura.codebase_index.indexer import CodebaseIndex  # noqa: F401
 from aura.codebase_index.tool import search_codebase as _search_codebase  # noqa: F401
 from aura.conversation.tools._blocker_mixin import BlockerHandlersMixin
@@ -80,6 +81,7 @@ class ToolRegistry(
         self._codebase_index: CodebaseIndex | None = None
         self._fs_handler = FsReadHandler(self._root, self._resolve_in_root)
         self._git_handler = GitHandler(self._root)
+        self._code_inspector = CodeInspector(self._root)
         self._catalog = ToolCatalog()
         self._dynamic_tools = DynamicToolRegistry(self._root)
         self._mcp_tools = MCPToolRegistry()
@@ -121,6 +123,7 @@ class ToolRegistry(
         self._codebase_index = None
         self._fs_handler = FsReadHandler(self._root, self._resolve_in_root)
         self._git_handler = GitHandler(self._root)
+        self._code_inspector.set_workspace_root(self._root)
 
     @property
     def read_only(self) -> bool:
@@ -410,3 +413,4 @@ TOOL_HANDLERS["code_intel_outline"] = ToolRegistry._handle_code_intel_outline
 TOOL_HANDLERS["code_intel_references"] = ToolRegistry._handle_code_intel_references
 TOOL_HANDLERS["code_intel_dependents"] = ToolRegistry._handle_code_intel_dependents
 TOOL_HANDLERS["code_intel_audit"] = ToolRegistry._handle_code_intel_audit
+TOOL_HANDLERS["inspect_code"] = ToolRegistry._handle_inspect_code

@@ -12,6 +12,7 @@ from aura.conversation.tools._drone_schemas import (
     REGISTER_DRONE_FOLDER_TOOL_DEF,
     RUN_READ_ONLY_DRONE_TOOL_DEF,
 )
+from aura.conversation.tools._inspect_schema import INSPECT_CODE_TOOL_DEF
 from aura.conversation.tools._schemas import (
     GIT_TOOL_DEFS,
     LOAD_SKILLS_TOOL_DEF,
@@ -118,6 +119,7 @@ class ToolCatalog:
             ]
             tools = (
                 single_read_tools
+                + [dict(INSPECT_CODE_TOOL_DEF)]
                 + [dict(WORKER_TODO_TOOL_DEF)]
                 + list(WRITE_TOOL_DEFS)
                 + [dict(REPORT_BLOCKER_TOOL_DEF)]

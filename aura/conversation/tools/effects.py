@@ -89,6 +89,7 @@ BUILTIN_TOOL_EFFECTS: dict[str, ToolEffect] = {
     "code_intel_references": ToolEffect.OBSERVATION,
     "code_intel_dependents": ToolEffect.OBSERVATION,
     "code_intel_audit": ToolEffect.OBSERVATION,
+    "inspect_code": ToolEffect.OBSERVATION,
     "git_status": ToolEffect.OBSERVATION,
     "git_diff": ToolEffect.OBSERVATION,
     "git_log": ToolEffect.OBSERVATION,

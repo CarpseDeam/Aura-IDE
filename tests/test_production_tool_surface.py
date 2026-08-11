@@ -29,6 +29,8 @@ EXPECTED_PRODUCTION_TOOLS: frozenset[str] = frozenset({
     "read_file",
     "glob",
     "grep_search",
+    # dense evidence packet for one location or symbol
+    "inspect_code",
     # live plan
     "update_worker_todo",
     # write / edit
@@ -229,8 +231,9 @@ def test_every_production_tool_still_describes_itself() -> None:
 
 def test_the_production_schema_shrank() -> None:
     """Measured against the surface this repair was diagnosed on: 35 tools and
-    35,768 characters of JSON."""
+    35,768 characters of JSON. ``inspect_code`` (added later) accounts for the
+    one-tool, one-description bump over the original repair's numbers."""
     defs = _production_defs(web_search=True)
 
-    assert len(defs) <= 24
-    assert len(json.dumps(defs)) < 30_000
+    assert len(defs) <= 25
+    assert len(json.dumps(defs)) < 32_000

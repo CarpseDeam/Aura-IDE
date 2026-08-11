@@ -70,3 +70,23 @@ class CodeIntelHandlersMixin:
             for f in findings
         ]
         return ToolExecResult(ok=True, payload={"ok": True, "findings": compact, "count": len(compact)})
+
+    def _handle_inspect_code(self, args, approval_cb, reject_all) -> ToolExecResult:
+        """Thin forward to CodeInspector — no semantic logic lives here."""
+        raw_path = args.get("path", "")
+        if not raw_path:
+            return ToolExecResult(ok=False, payload={"ok": False, "error": "path required"})
+        line = args.get("line")
+        if line is not None and not isinstance(line, int):
+            return ToolExecResult(ok=False, payload={"ok": False, "error": "line must be an integer"})
+        symbol = args.get("symbol")
+        if symbol is not None and not isinstance(symbol, str):
+            return ToolExecResult(ok=False, payload={"ok": False, "error": "symbol must be a string"})
+        try:
+            target = self._resolve_in_root(raw_path)
+        except ValueError as e:
+            return ToolExecResult(ok=False, payload={"ok": False, "error": str(e)})
+        result = self._code_inspector.inspect(
+            target, line=line, symbol=(symbol or None), cancel_event=self.active_cancel_event
+        )
+        return ToolExecResult(ok=bool(result.get("ok", False)), payload=result)

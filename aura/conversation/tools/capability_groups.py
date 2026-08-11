@@ -25,6 +25,7 @@ CORE_WEB = "core_web"
 
 GIT = "git"
 CODE_INTEL = "code_intel"
+INSPECT = "inspect"
 BULK_READ = "bulk_read"
 DIAGNOSTICS = "diagnostics"
 SNAPSHOT = "snapshot"
@@ -57,6 +58,9 @@ CAPABILITY_TOOLS: dict[str, frozenset[str]] = {
         "code_intel_dependents",
         "code_intel_audit",
     }),
+    # The single production semantic-inspection tool that replaces the
+    # CODE_INTEL group above in the production catalog.
+    INSPECT: frozenset({"inspect_code"}),
     GIT: frozenset({
         "git_status",
         "git_diff",
