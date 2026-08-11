@@ -97,10 +97,23 @@ class _ApprovalProxy(QObject):
     def _event_from_request(
         req: ApprovalRequest, decision: str
     ) -> dict[str, Any]:
+        # ``rel_path``/``old_content``/``new_content``/``is_new_file`` mirror
+        # the first file for single-file-shaped consumers. ``changes`` is the
+        # truthful ordered list of every file this one decision covers — one
+        # entry for an ordinary write, several for a patch_file transaction.
         return {
             "rel_path": req.rel_path,
             "old_content": req.old_content,
             "new_content": req.new_content,
             "is_new_file": req.is_new_file,
             "decision": decision,
+            "changes": [
+                {
+                    "rel_path": change.rel_path,
+                    "old_content": change.old_content,
+                    "new_content": change.new_content,
+                    "is_new_file": change.is_new_file,
+                }
+                for change in req.file_changes
+            ],
         }

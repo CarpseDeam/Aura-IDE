@@ -79,24 +79,26 @@ FILESYSTEM_WRITE_TOOL_DEFS: list[dict[str, Any]] = [
             "function": {
                 "name": "patch_file",
                 "description": (
-                    "Apply multiple exact-text replacement hunks to one existing workspace file as a single "
-                    "atomic, approval-gated transaction. Each hunk's old text must match the file exactly. "
+                    "Apply exact-text replacement hunks to one or more existing workspace files as a single "
+                    "atomic, approval-gated transaction. Each hunk's old text must match its file exactly. "
                     "In Worker mode expected_file_hash is required and must be the content_hash returned by "
-                    "read_file or read_files. Every hunk is applied to an in-memory copy first; if any hunk is "
-                    "missing or ambiguous, nothing is written and the result names which hunk failed. Use "
-                    "occurrence to disambiguate repeated exact text, or give more surrounding context in the old "
-                    "block. Craft reviews the full proposed file once and the user sees one approval diff."
+                    "read_file or read_files. Every hunk, across every target file, is applied to an in-memory "
+                    "copy first; if any hunk in any file is missing or ambiguous, nothing is written and the "
+                    "result names which file and hunk failed. Use occurrence to disambiguate repeated exact "
+                    "text, or give more surrounding context in the old block. Craft reviews the complete "
+                    "proposed transaction once and the user sees one approval diff covering every file. "
+                    "Call this with either path+edits for one file, or files for two or more files — not both."
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "Workspace-relative file path.",
+                            "description": "Workspace-relative file path. Use with edits for a single-file patch.",
                         },
                         "edits": {
                             "type": "array",
-                            "description": "Ordered exact-text replacement hunks to apply to the file.",
+                            "description": "Ordered exact-text replacement hunks to apply to path.",
                             "items": {
                                 "type": "object",
                                 "properties": {
@@ -127,15 +129,70 @@ FILESYSTEM_WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                             "type": "string",
                             "description": (
                                 "SHA-256 hex digest of the current whole file from read_file "
-                                "or read_files. Required by Worker mode for existing files."
+                                "or read_files. Required by Worker mode for existing files. "
+                                "Only used with path+edits."
                             ),
+                        },
+                        "files": {
+                            "type": "array",
+                            "description": (
+                                "Two or more target files patched as one transaction, in place of path+edits. "
+                                "Each entry names one existing file and its own ordered hunks."
+                            ),
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "path": {
+                                        "type": "string",
+                                        "description": "Workspace-relative file path for this target.",
+                                    },
+                                    "edits": {
+                                        "type": "array",
+                                        "description": "Ordered exact-text replacement hunks to apply to this file.",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "old": {
+                                                    "type": "string",
+                                                    "description": "Exact current text block to replace.",
+                                                },
+                                                "new": {
+                                                    "type": "string",
+                                                    "description": "Replacement text for this hunk.",
+                                                },
+                                                "occurrence": {
+                                                    "type": "integer",
+                                                    "description": "Optional 1-based occurrence number when old appears more than once.",
+                                                    "default": 1,
+                                                },
+                                                "allow_multiple": {
+                                                    "type": "boolean",
+                                                    "description": "If true, replace every occurrence of old for this hunk.",
+                                                    "default": False,
+                                                },
+                                            },
+                                            "required": ["old", "new"],
+                                            "additionalProperties": False,
+                                        },
+                                    },
+                                    "expected_file_hash": {
+                                        "type": "string",
+                                        "description": (
+                                            "SHA-256 hex digest of this file's current content from read_file "
+                                            "or read_files. Required by Worker mode for existing files."
+                                        ),
+                                    },
+                                },
+                                "required": ["path", "edits"],
+                                "additionalProperties": False,
+                            },
                         },
                         "description": {
                             "type": "string",
                             "description": "Optional short description of the patch.",
                         },
                     },
-                    "required": ["path", "edits"],
+                    "required": [],
                     "additionalProperties": False,
                 },
             },

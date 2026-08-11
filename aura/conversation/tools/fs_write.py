@@ -2,12 +2,63 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import stat
+import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
 from aura.conversation.tools._replacement_engine import _preview_block, apply_replacement_to_content
 from aura.conversation.tools.fs_read import read_file_snapshot
 from aura.paths import safe_is_relative_to, safe_relative_to
+
+_REPLACE_RETRY_ATTEMPTS = 10
+_REPLACE_RETRY_DELAY_SECONDS = 0.05
+
+
+def _replace_with_retry(temp_path: Path, target: Path) -> None:
+    """``os.replace`` with a short retry on transient sharing violations.
+
+    On Windows a freshly-read file can still be held briefly by another
+    process — a validation subprocess that just imported it, an indexer, or an
+    antivirus scanner — and ``os.replace`` then raises ``PermissionError``
+    (WinError 32). That surfaced as a corrective edit silently failing right
+    after a validation run, which is exactly when the production agent needs
+    the repair to land. Retry briefly, then re-raise so a genuine permission
+    problem is still reported.
+    """
+    for attempt in range(_REPLACE_RETRY_ATTEMPTS):
+        try:
+            os.replace(temp_path, target)
+            return
+        except PermissionError:
+            if attempt == _REPLACE_RETRY_ATTEMPTS - 1:
+                raise
+            time.sleep(_REPLACE_RETRY_DELAY_SECONDS)
+
+
+def atomic_write_bytes(target: Path, data: bytes) -> None:
+    """Write *data* to *target* via a same-directory temp file + atomic replace."""
+    temp_path: Path | None = None
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, dir=target.parent) as tmp:
+            temp_path = Path(tmp.name)
+            tmp.write(data)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        if target.exists():
+            os.chmod(temp_path, stat.S_IMODE(target.stat().st_mode))
+        _replace_with_retry(temp_path, target)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+
 
 PATCH_CANDIDATE_INVALID_SYNTAX_ACTION = (
     "The proposed patch candidate would make this Python file invalid. The live file was not changed. "

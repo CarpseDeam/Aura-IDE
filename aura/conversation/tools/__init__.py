@@ -1,6 +1,7 @@
 """File-system tools (read-only and write) gated by approval callbacks."""
 from aura.conversation.tools._types import (
     ApprovalDecision,
+    ApprovalFileChange,
     ApprovalRequest,
     RegistryMode,
     ToolExecResult,
@@ -17,6 +18,7 @@ def __getattr__(name: str):
 __all__ = [
     "ToolRegistry",
     "ApprovalDecision",
+    "ApprovalFileChange",
     "ApprovalRequest",
     "RegistryMode",
     "ToolExecResult",

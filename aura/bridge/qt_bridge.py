@@ -582,14 +582,19 @@ class ConversationBridge(QObject):
         if approval:
             ev = self._approval_proxy.consume_last_event()
             if ev is not None:
-                self.diffDecided.emit(
-                    tool_id,
-                    str(approval),
-                    str(ev["rel_path"]),
-                    str(ev["old_content"]),
-                    str(ev["new_content"]),
-                    bool(ev["is_new_file"]),
-                )
+                # One emit per changed file — truthful for a multi-file
+                # patch_file transaction; identical to before for the
+                # ordinary single-file case.
+                changes = ev.get("changes") or [ev]
+                for change in changes:
+                    self.diffDecided.emit(
+                        tool_id,
+                        str(approval),
+                        str(change["rel_path"]),
+                        str(change["old_content"]),
+                        str(change["new_content"]),
+                        bool(change["is_new_file"]),
+                    )
         self.toolResult.emit(tool_id, name, ok, result, extras)
 
     @Slot()

@@ -13,19 +13,21 @@ in test_tool_registry.py takes effect correctly.
 
 from __future__ import annotations
 
-import os
-import stat
-import tempfile
-import time
 from pathlib import Path
 from typing import Any
 
-from aura.conversation.tools._types import ApprovalRequest, ToolExecResult
+from aura.conversation.tools._types import ApprovalFileChange, ApprovalRequest, ToolExecResult
 from aura.conversation.tools.fs_write import (
     _raw_sha256,
+    atomic_write_bytes as _atomic_write_bytes,
     stale_approval_reason,
 )
 from aura.conversation.tools.write_payloads import _mark_not_applied, _mark_delete_not_applied
+from aura.conversation.tools.write_transaction import (
+    commit_patch_transaction,
+    normalize_patch_args,
+    propose_patch_transaction,
+)
 from aura.conversation.path_utils import normalize_worker_path as _shared_normalize_worker_path
 from aura.paths import safe_relative_to
 
@@ -200,52 +202,6 @@ def _is_scratch_python_name(name: str) -> bool:
     )
 
 
-_REPLACE_RETRY_ATTEMPTS = 10
-_REPLACE_RETRY_DELAY_SECONDS = 0.05
-
-
-def _replace_with_retry(temp_path: Path, target: Path) -> None:
-    """``os.replace`` with a short retry on transient sharing violations.
-
-    On Windows a freshly-read file can still be held briefly by another
-    process — a validation subprocess that just imported it, an indexer, or an
-    antivirus scanner — and ``os.replace`` then raises ``PermissionError``
-    (WinError 32). That surfaced as a corrective edit silently failing right
-    after a validation run, which is exactly when the production agent needs
-    the repair to land. Retry briefly, then re-raise so a genuine permission
-    problem is still reported.
-    """
-    for attempt in range(_REPLACE_RETRY_ATTEMPTS):
-        try:
-            os.replace(temp_path, target)
-            return
-        except PermissionError:
-            if attempt == _REPLACE_RETRY_ATTEMPTS - 1:
-                raise
-            time.sleep(_REPLACE_RETRY_DELAY_SECONDS)
-
-
-def _atomic_write_bytes(target: Path, data: bytes) -> None:
-    temp_path: Path | None = None
-    target.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, dir=target.parent) as tmp:
-            temp_path = Path(tmp.name)
-            tmp.write(data)
-            tmp.flush()
-            os.fsync(tmp.fileno())
-        if target.exists():
-            os.chmod(temp_path, stat.S_IMODE(target.stat().st_mode))
-        _replace_with_retry(temp_path, target)
-        temp_path = None
-    finally:
-        if temp_path is not None:
-            try:
-                temp_path.unlink()
-            except OSError:
-                pass
-
-
 class WriteHandlersMixin:
     """Handlers for write tools — guards + approval + backup."""
 
@@ -262,7 +218,90 @@ class WriteHandlersMixin:
     def _handle_patch_file(self, args, approval_cb, reject_all) -> ToolExecResult:
         if self._read_only:
             return ToolExecResult(ok=False, payload=_mark_not_applied({"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled.", "failure_class": "read_only"}))
-        return self._handle_write("patch_file", args, approval_cb, reject_all)
+        if reject_all:
+            return ToolExecResult(
+                ok=False,
+                payload=_mark_not_applied(
+                    {"ok": False, "error": "User rejected all writes in this turn.", "failure_class": "approval_rejected"},
+                    "approval_rejected",
+                ),
+                extras={"rejected_all": True},
+            )
+
+        specs, description, failure = normalize_patch_args(args)
+        if failure is not None:
+            return ToolExecResult(ok=False, payload=_mark_not_applied(failure))
+
+        transaction, failure = propose_patch_transaction(
+            self._root, self._resolve_in_root, specs, description
+        )
+        if failure is not None:
+            return ToolExecResult(ok=False, payload=_mark_not_applied(failure))
+
+        changes = tuple(
+            ApprovalFileChange(f.rel_path, f.old_content, f.new_content, False)
+            for f in transaction.files
+        )
+        primary = changes[0]
+        req = ApprovalRequest(
+            tool_name="patch_file",
+            rel_path=primary.rel_path,
+            old_content=primary.old_content,
+            new_content=primary.new_content,
+            is_new_file=False,
+            changes=changes,
+        )
+        decision = approval_cb(req)
+
+        if decision.action == "reject":
+            return ToolExecResult(
+                ok=False,
+                payload=_mark_not_applied(
+                    {"ok": False, "error": "User rejected this change.", "path": req.rel_path, "failure_class": "approval_rejected"},
+                    "approval_rejected",
+                ),
+                extras={
+                    "approval": "reject",
+                    "rel_path": req.rel_path,
+                    "approval_metadata": decision.metadata,
+                },
+            )
+        if decision.action == "reject_all":
+            return ToolExecResult(
+                ok=False,
+                payload={
+                    "ok": False,
+                    "error": "User rejected this change and all further writes in this turn.",
+                    "path": req.rel_path,
+                    "failure_class": "approval_rejected",
+                    "applied": False,
+                    "write_outcome": "not_applied_user_rejected",
+                },
+                extras={
+                    "approval": "reject_all",
+                    "rel_path": req.rel_path,
+                    "approval_metadata": decision.metadata,
+                },
+            )
+
+        result = commit_patch_transaction(
+            self._root,
+            transaction,
+            capture_before_write=lambda rel_path: self._capture_before_write(self, rel_path),
+            atomic_write_bytes=_atomic_write_bytes,
+        )
+        ok = bool(result.get("ok"))
+        if ok:
+            result.setdefault("applied_tool", "patch_file")
+        return ToolExecResult(
+            ok=ok,
+            payload=result if ok else _mark_not_applied(result),
+            extras={
+                "approval": "approve",
+                "rel_path": req.rel_path,
+                "approval_metadata": decision.metadata,
+            },
+        )
 
     def _handle_delete(
         self,
@@ -603,46 +642,6 @@ class WriteHandlersMixin:
                 new_content=proposal["new_content"],
                 is_new_file=proposal.get("is_new_file", False),
             )
-        elif name == "patch_file":
-            edits = args.get("edits")
-            expected_file_hash = args.get("expected_file_hash")
-            description = args.get("description")
-            if not isinstance(edits, list):
-                return ToolExecResult(
-                    ok=False,
-                    payload=_mark_not_applied({"ok": False, "error": "edits must be a list", "failure_class": "internal_error"}),
-                )
-            if expected_file_hash is not None and not isinstance(expected_file_hash, str):
-                return ToolExecResult(
-                    ok=False,
-                    payload=_mark_not_applied({"ok": False, "error": "expected_file_hash must be a string when supplied", "failure_class": "internal_error"}),
-                )
-            if description is not None and not isinstance(description, str):
-                return ToolExecResult(
-                    ok=False,
-                    payload=_mark_not_applied({"ok": False, "error": "description must be a string when supplied", "failure_class": "internal_error"}),
-                )
-            proposal = _reg.propose_patch_file(
-                self._root,
-                target,
-                edits,
-                expected_file_hash=expected_file_hash,
-                description=description,
-            )
-            if not proposal.get("ok", False):
-                return ToolExecResult(ok=False, payload=_mark_not_applied(proposal))
-
-            syntax_error = _python_syntax_error_payload(proposal)
-            if syntax_error is not None:
-                return ToolExecResult(ok=False, payload=syntax_error)
-
-            req = ApprovalRequest(
-                tool_name="patch_file",
-                rel_path=proposal["rel_path"],
-                old_content=proposal["old_content"],
-                new_content=proposal["new_content"],
-                is_new_file=False,
-            )
         else:
             return ToolExecResult(
                 ok=False,
@@ -740,8 +739,6 @@ class WriteHandlersMixin:
             payload["pre_existing_environment_issues"] = proposal.get("pre_existing_environment_issues")
         if proposal.get("checks_warned"):
             payload["checks_warned"] = proposal.get("checks_warned")
-        if name == "patch_file":
-            payload["hunk_count"] = proposal.get("hunk_count", 0)
         return ToolExecResult(
             ok=True,
             payload=payload,

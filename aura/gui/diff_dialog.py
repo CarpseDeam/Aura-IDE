@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aura.conversation.tools._types import ApprovalDecision, ApprovalRequest
+from aura.conversation.tools._types import ApprovalDecision, ApprovalFileChange, ApprovalRequest
 
 try:
     from aura.gui.syntax import DiffHighlighter, language_from_path
@@ -52,12 +52,36 @@ def render_unified_diff(old: str, new: str, rel_path: str) -> str:
     return "\n".join(cleaned)
 
 
+def render_transaction_diff(changes: tuple[ApprovalFileChange, ...]) -> str:
+    """Concatenate every file's diff into one reviewed transaction, in order.
+
+    Each file's block is clearly separated with a path header so the whole
+    transaction reads as one document even though the change spans several
+    files.
+    """
+    blocks: list[str] = []
+    for change in changes:
+        if change.is_new_file:
+            body = "\n".join(f"+{line}" for line in change.new_content.splitlines())
+        else:
+            body = render_unified_diff(change.old_content, change.new_content, change.rel_path)
+            if not body.strip():
+                body = "(no textual difference)"
+        blocks.append(f"=== {change.rel_path} ===\n{body}")
+    return "\n\n".join(blocks)
+
+
 class DiffApprovalDialog(QDialog):
     """Shows the proposed change. Returns ApprovalDecision via .decision()."""
 
     def __init__(self, request: ApprovalRequest, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle(f"Apply change to {request.rel_path}?")
+        changes = request.file_changes
+        is_multi = request.is_multi_file
+        self.setWindowTitle(
+            f"Apply changes to {len(changes)} files?" if is_multi
+            else f"Apply change to {request.rel_path}?"
+        )
         self.setModal(True)
         self.resize(900, 640)
         self._decision = ApprovalDecision(action="reject")
@@ -70,10 +94,9 @@ class DiffApprovalDialog(QDialog):
         header.setStyleSheet(f"color: {FG}; font-weight: 600; font-size: 14px;")
         layout.addWidget(header)
 
-        sub = QLabel(
-            "New file" if request.is_new_file else "Modify existing file"
-        )
+        sub = QLabel(self._format_subheader(changes))
         sub.setStyleSheet(f"color: {FG_DIM};")
+        sub.setWordWrap(True)
         layout.addWidget(sub)
 
         self._diff_view = QPlainTextEdit(self)
@@ -90,9 +113,11 @@ class DiffApprovalDialog(QDialog):
         )
         layout.addWidget(self._diff_view, 1)
 
-        # Attach syntax highlighter for the diff view
+        # Attach syntax highlighter for the diff view. Single-file requests
+        # get their language from the one path; a multi-file transaction may
+        # span languages, so the highlighter falls back to plain diff text.
         if _HAVE_PYGMENTS:
-            lang = language_from_path(request.rel_path) or "text"
+            lang = "text" if is_multi else (language_from_path(request.rel_path) or "text")
             self._highlighter = DiffHighlighter(self._diff_view.document(), lang)
 
         self._populate_diff(request)
@@ -128,11 +153,20 @@ class DiffApprovalDialog(QDialog):
         layout.addLayout(button_row)
 
     def _format_header(self, request: ApprovalRequest) -> str:
+        if request.is_multi_file:
+            return f"Edit {len(request.file_changes)} files"
         verb = "Create" if request.is_new_file else "Edit"
         return f"{verb}: {request.rel_path}"
 
+    def _format_subheader(self, changes: tuple[ApprovalFileChange, ...]) -> str:
+        if len(changes) == 1:
+            return "New file" if changes[0].is_new_file else "Modify existing file"
+        return ", ".join(change.rel_path for change in changes)
+
     def _populate_diff(self, request: ApprovalRequest) -> None:
-        if request.is_new_file:
+        if request.is_multi_file:
+            text = render_transaction_diff(request.file_changes)
+        elif request.is_new_file:
             text = "\n".join(f"+{line}" for line in request.new_content.splitlines())
         else:
             text = render_unified_diff(

@@ -287,15 +287,21 @@ class WorkerEventRelay(QObject):
             if approval:
                 last = self._approval_proxy.consume_last_event()
                 if last is not None:
-                    self.diffDecided.emit(
-                        tool_call_id,
-                        ev.tool_call_id,
-                        str(approval),
-                        str(last["rel_path"]),
-                        str(last["old_content"]),
-                        str(last["new_content"]),
-                        bool(last["is_new_file"]),
-                    )
+                    # Emit once per changed file so a multi-file patch_file
+                    # transaction is represented truthfully rather than as a
+                    # single file; an ordinary single-file write has exactly
+                    # one entry here and behaves exactly as before.
+                    changes = last.get("changes") or [last]
+                    for change in changes:
+                        self.diffDecided.emit(
+                            tool_call_id,
+                            ev.tool_call_id,
+                            str(approval),
+                            str(change["rel_path"]),
+                            str(change["old_content"]),
+                            str(change["new_content"]),
+                            bool(change["is_new_file"]),
+                        )
             self.toolResult.emit(
                 tool_call_id, ev.tool_call_id, ev.name, ev.ok, ev.result, ev.extras or {}
             )
