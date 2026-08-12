@@ -5,7 +5,7 @@ from enum import Enum, auto
 
 from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QFrame, QSizePolicy, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QToolButton, QVBoxLayout, QWidget
 
 from aura.config import media_path
 from aura.gui.drones.drone_rail_pip import DroneRailPip
@@ -60,7 +60,6 @@ class EdgeTabRail(QFrame):
     def _setup_ui(self) -> None:
         self.setObjectName("edgeTabRail")
         self.setFixedWidth(40)
-        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         self.setStyleSheet(
             "QFrame#edgeTabRail { background: transparent; border: none; }"
         )
@@ -342,18 +341,18 @@ class EdgeTabRail(QFrame):
             f"  background: {bg};"
             f"  color: {fg};"
             f"  border: 1px solid {border};"
-            "  border-right: none;"
-            "  border-top-left-radius: 8px;"
-            "  border-bottom-left-radius: 8px;"
-            "  border-top-right-radius: 0px;"
-            "  border-bottom-right-radius: 0px;"
+            "  border-left: none;"
+            "  border-top-left-radius: 0px;"
+            "  border-bottom-left-radius: 0px;"
+            "  border-top-right-radius: 8px;"
+            "  border-bottom-right-radius: 8px;"
             "  padding: 0px;"
             "}"
             "QToolButton#edgeTerminalTab:hover {"
             "  background: #2b2b34;"
             f"  color: {FG};"
             f"  border-color: {ACCENT};"
-            "  border-right: none;"
+            "  border-left: none;"
             "}"
         )
 
@@ -363,30 +362,30 @@ class EdgeTabRail(QFrame):
             "  background: #161b33;"
             f"  color: {LABEL_FILES};"
             f"  border: 1px solid {ACCENT};"
-            "  border-right: none;"
-            "  border-top-left-radius: 8px;"
-            "  border-bottom-left-radius: 8px;"
-            "  border-top-right-radius: 0px;"
-            "  border-bottom-right-radius: 0px;"
+            "  border-left: none;"
+            "  border-top-left-radius: 0px;"
+            "  border-bottom-left-radius: 0px;"
+            "  border-top-right-radius: 8px;"
+            "  border-bottom-right-radius: 8px;"
             "  padding: 0px;"
             "}"
             "QToolButton#edgeDroneTab:hover {"
             "  background: #1d2f55;"
             f"  color: {ACCENT_HOVER};"
             f"  border-color: {LABEL_FILES};"
-            "  border-right: none;"
+            "  border-left: none;"
             "}"
             "QToolButton#edgeDroneTab:checked {"
             "  background: #221b44;"
             f"  color: {LABEL_PROJECTS};"
             f"  border-color: {LABEL_PROJECTS};"
-            "  border-right: none;"
+            "  border-left: none;"
             "}"
             "QToolButton#edgeDroneTab:checked:hover {"
             "  background: #2a245f;"
             f"  color: {FG};"
             f"  border-color: {ACCENT_HOVER};"
-            "  border-right: none;"
+            "  border-left: none;"
             "}"
         )
 
@@ -397,11 +396,11 @@ class EdgeTabRail(QFrame):
             "  background: #0b2514;"
             f"  color: {neon};"
             f"  border: 1px solid {neon};"
-            "  border-right: none;"
-            "  border-top-left-radius: 8px;"
-            "  border-bottom-left-radius: 8px;"
-            "  border-top-right-radius: 0px;"
-            "  border-bottom-right-radius: 0px;"
+            "  border-left: none;"
+            "  border-top-left-radius: 0px;"
+            "  border-bottom-left-radius: 0px;"
+            "  border-top-right-radius: 8px;"
+            "  border-bottom-right-radius: 8px;"
             "  font-size: 18px;"
             "  font-weight: 800;"
             "  padding: 0px;"
@@ -418,17 +417,17 @@ class EdgeTabRail(QFrame):
             f"  background: {bg};"
             f"  color: {accent};"
             f"  border: 1px solid {accent};"
-            "  border-right: none;"
-            "  border-top-left-radius: 8px;"
-            "  border-bottom-left-radius: 8px;"
-            "  border-top-right-radius: 0px;"
-            "  border-bottom-right-radius: 0px;"
+            "  border-left: none;"
+            "  border-top-left-radius: 0px;"
+            "  border-bottom-left-radius: 0px;"
+            "  border-top-right-radius: 8px;"
+            "  border-bottom-right-radius: 8px;"
             "  padding: 0px;"
             "}"
             "QToolButton#edgeCompanionTab:hover {"
             f"  background: #1d2f55;"
             f"  color: {ACCENT_HOVER};"
             f"  border-color: {ACCENT_HOVER};"
-            "  border-right: none;"
+            "  border-left: none;"
             "}"
         )

@@ -11,7 +11,6 @@ from PySide6.QtCore import QByteArray, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (
     QDialog,
-    QHBoxLayout,
     QMainWindow,
     QMessageBox,
     QSplitter,
@@ -38,7 +37,7 @@ from aura.gui.chat_view import ChatView
 from aura.gui.checkpoint_dialog import CheckpointDialog
 from aura.gui.conv_persistence import ConversationPersistence
 from aura.gui.drones.drone_reports_window import DroneReportsWindow
-from aura.gui.edge_rails import EdgeTabRail
+from aura.gui.edge_rail_host import ExternalEdgeRailHost
 from aura.gui.gui_event_probe import install_gui_event_probe
 from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.left_pane import LeftPane
@@ -292,27 +291,24 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._main_splitter.setCollapsible(1, True)    # center: allow collapse to 0
         self._main_splitter.setCollapsible(2, True)    # playground: allow collapse to 0
 
-        # Edge tab rail — terminal + checkpoint tabs. A fixed-width column
-        # beside the main splitter (not a splitter pane), so it can't be
-        # resized/collapsed and never overlaps the workspace or its scrollbar.
-        self._edge_rail = EdgeTabRail(self)
+        self.setCentralWidget(self._main_splitter)
+
+        # Make the central widget and splitter transparent so the gradient shows through
+        self._main_splitter.setStyleSheet("background: transparent;")
+        self.centralWidget().setStyleSheet("background: transparent;")
+        self.centralWidget().setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+
+        # Edge tab rail — terminal + checkpoint tabs. Hosted in a separate
+        # frameless tool window that clings to the outside of the main
+        # window's right edge, so it consumes zero pixels of the main
+        # window's own layout. ExternalEdgeRailHost is the single owner of
+        # that window's geometry.
+        self._edge_rail_host = ExternalEdgeRailHost(self)
+        self._edge_rail = self._edge_rail_host.rail
         self._terminal_tab = self._edge_rail.terminal_tab
         self._terminal_container = self._edge_rail.terminal_container
         self._corner_widget = self._edge_rail.corner_widget
         self._drone_controller.sync_drone_tab_checked()
-
-        central_container = QWidget(self)
-        central_layout = QHBoxLayout(central_container)
-        central_layout.setContentsMargins(0, 0, 0, 0)
-        central_layout.setSpacing(0)
-        central_layout.addWidget(self._main_splitter, 1)
-        central_layout.addWidget(self._edge_rail, 0)
-        self.setCentralWidget(central_container)
-
-        # Make the central widget and splitter transparent so the gradient shows through
-        self._main_splitter.setStyleSheet("background: transparent;")
-        central_container.setStyleSheet("background: transparent;")
-        central_container.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
 
         # Sync companion badge after rail exists (status may have fired before rail was created)
         self._companion_controller.sync_edge_rail_status()
