@@ -343,6 +343,25 @@ class ConversationBridge(QObject):
     def set_read_only(self, value: bool) -> None:
         self._registry.set_read_only(value)
 
+    # ---- Reference Folder ---------------------------------------------------
+
+    def set_reference_root(self, path: Path | None) -> tuple[bool, str]:
+        """Authorize (or clear, with None) the session's Reference Folder.
+
+        Narrow delegation to ToolRegistry — the bridge creates no second
+        owner of Reference Folder trust or path resolution.
+        """
+        return self._registry.set_reference_root(path)
+
+    @property
+    def reference_root_name(self) -> str | None:
+        return self._registry.reference_root_name
+
+    @property
+    def reference_root_display_path(self) -> str | None:
+        """Absolute path for GUI display only — never sent to the model."""
+        return self._registry.reference_root_display_path
+
     def set_system_prompt(self, prompt: str) -> None:
         """Store the custom production system prompt and reapply composition."""
         self._single_system_prompt = prompt or ""

@@ -10,6 +10,7 @@ from aura.conversation.tools.effects import BUILTIN_TOOL_EFFECTS, ToolEffect
 from aura.conversation.tools.schemas import (
     GIT_TOOL_DEFS,
     LOAD_SKILLS_TOOL_DEF,
+    READ_REFERENCE_FILE_TOOL_DEF,
     READ_TOOL_DEFS,
     REPORT_ALREADY_SATISFIED_TOOL_DEF,
     REPORT_BLOCKER_TOOL_DEF,
@@ -81,6 +82,7 @@ class ToolCatalog:
         mcp_schemas: list[dict[str, Any]] | None = None,
         web_search: bool = False,
         plan_review: bool = False,
+        reference_available: bool = False,
     ) -> list[dict[str, Any]]:
         """Build tool definitions for the production single-agent catalog.
 
@@ -93,6 +95,12 @@ class ToolCatalog:
         is enabled for the active real user turn (frozen once at turn start,
         same as ``web_search``). Never offered in read-only mode: nothing
         read-only can mutate, so there is nothing for a plan to gate.
+
+        ``reference_available`` adds ``read_reference_file`` whenever a
+        Reference Folder is currently attached — in both production and
+        read-only mode, since its effect is observation-only. With no
+        Reference Folder attached the catalog is unchanged from before this
+        capability existed.
         """
         if read_only:
             tools: list[dict[str, Any]] = (
@@ -138,6 +146,9 @@ class ToolCatalog:
                 tools.append(dict(WEB_SEARCH_TOOL_DEF))
             if plan_review:
                 tools.append(dict(REVIEW_IMPLEMENTATION_PLAN_TOOL_DEF))
+
+        if reference_available:
+            tools.append(dict(READ_REFERENCE_FILE_TOOL_DEF))
 
         if not read_only and dynamic_schemas:
             tools.extend(dynamic_schemas)

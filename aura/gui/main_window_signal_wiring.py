@@ -54,6 +54,12 @@ class MainWindowSignalWiring:
         w._left_pane.planner_thinking_changed.connect(lambda: w._refresh_status_bar())
         w._left_pane.drone_selected.connect(lambda folder: w._drone_controller.on_drone_folder_selected(folder.name))
         w._left_pane.new_drone_requested.connect(w._drone_controller.on_create_drone)
+        w._left_pane.reference_root_change_requested.connect(
+            w._workspace_controller.on_change_reference_root
+        )
+        w._left_pane.reference_root_clear_requested.connect(
+            w._workspace_controller.on_clear_reference_root
+        )
 
         # ---- group 4: launchpad ----
         w._launchpad.open_existing_requested.connect(w._workspace_controller.on_open_existing)

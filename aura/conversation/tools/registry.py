@@ -21,6 +21,7 @@ from aura.conversation.tools._memory_mixin import MemoryHandlersMixin
 from aura.conversation.tools._plan_review_mixin import PlanReviewHandlersMixin
 from aura.conversation.tools._planner_mixin import PlannerHandlersMixin
 from aura.conversation.tools._read_mixin import ReadHandlersMixin
+from aura.conversation.tools._reference_mixin import ReferenceReadHandlersMixin
 from aura.conversation.tools._search_mixin import SearchHandlersMixin
 from aura.conversation.tools._types import (
     ApprovalCallback,
@@ -47,6 +48,7 @@ from aura.conversation.tools.fs_write import (  # noqa: F401
 from aura.conversation.tools.git_handler import GitHandler
 from aura.conversation.tools.grep import grep_files  # noqa: F401
 from aura.conversation.tools.mcp_registry import MCPToolRegistry
+from aura.conversation.tools.reference_root import ReferenceRootAccess
 from aura.conversation.tools.task_context import TaskContextHandlersMixin
 from aura.conversation.plan_review import PlanReviewState, blocked_tool_payload
 
@@ -58,6 +60,7 @@ class ToolRegistry(
     CodeIntelHandlersMixin,
     TaskContextHandlersMixin,
     ReadHandlersMixin,
+    ReferenceReadHandlersMixin,
     SearchHandlersMixin,
     GitHandlersMixin,
     GodotAssetHandlersMixin,
@@ -87,6 +90,10 @@ class ToolRegistry(
         self._git_handler = GitHandler(self._root)
         self._code_intel_index = CodeIntelIndex(self._root)
         self._code_inspector = CodeInspector(self._root, self._code_intel_index)
+        # The single session-scoped, workspace-scoped Reference Folder
+        # authorization. The user attaches it through the GUI; no model-facing
+        # tool can attach or change it. See ReferenceRootAccess.
+        self._reference_root = ReferenceRootAccess(self._root)
         self._catalog = ToolCatalog()
         self._dynamic_tools = DynamicToolRegistry(self._root)
         self._mcp_tools = MCPToolRegistry()
@@ -139,6 +146,9 @@ class ToolRegistry(
         # index must remain reachable after the root changes.
         self._code_intel_index = CodeIntelIndex(self._root)
         self._code_inspector = CodeInspector(self._root, self._code_intel_index)
+        # A Reference Folder authorized for the old workspace must never
+        # remain reachable once the active workspace changes.
+        self._reference_root.set_workspace_root(self._root)
 
     @property
     def read_only(self) -> bool:
@@ -153,6 +163,44 @@ class ToolRegistry(
 
     def set_mode(self, mode: RegistryMode) -> None:
         self._mode = mode
+
+    # ---- Reference Folder --------------------------------------------------
+
+    @property
+    def reference_root_available(self) -> bool:
+        """Whether a Reference Folder is currently attached."""
+        return self._reference_root.is_available
+
+    @property
+    def reference_root_name(self) -> str | None:
+        """Non-sensitive display name of the attached Reference Folder."""
+        return self._reference_root.name
+
+    @property
+    def reference_root_display_path(self) -> str | None:
+        """Absolute path of the attached Reference Folder, for GUI display only.
+
+        Never sent to the model — GUI callers may show it in a tooltip, but
+        no model-facing tool payload includes it.
+        """
+        root = self._reference_root.root
+        return str(root) if root is not None else None
+
+    def set_reference_root(self, path: Path | None) -> tuple[bool, str]:
+        """Authorize *path* as the Reference Folder, or clear it with None.
+
+        The user, not the model, calls this — there is no model-facing tool
+        that attaches or changes the Reference Folder. Returns ``(ok,
+        message)``; on failure the previously attached root (if any) is left
+        unchanged.
+        """
+        if path is None:
+            self._reference_root.clear()
+            return True, "cleared"
+        return self._reference_root.attach(path)
+
+    def clear_reference_root(self) -> None:
+        self._reference_root.clear()
 
     @property
     def plan_review(self) -> PlanReviewState:
@@ -222,6 +270,7 @@ class ToolRegistry(
             mcp_schemas=mcp_schemas or None,
             web_search=self._web_search,
             plan_review=(not self._read_only) and self._plan_review.required,
+            reference_available=self._reference_root.is_available,
         )
 
     def replayable_tool_defs(self) -> list[dict[str, Any]]:
@@ -409,6 +458,7 @@ class ToolRegistry(
 
 TOOL_HANDLERS["load_skills"] = ToolRegistry._handle_load_skills
 TOOL_HANDLERS["read_file"] = ToolRegistry._handle_read_file
+TOOL_HANDLERS["read_reference_file"] = ToolRegistry._handle_read_reference_file
 TOOL_HANDLERS["read_files"] = ToolRegistry._handle_read_files
 TOOL_HANDLERS["read_file_range"] = ToolRegistry._handle_read_file_range
 TOOL_HANDLERS["read_task_context"] = ToolRegistry._handle_read_task_context
