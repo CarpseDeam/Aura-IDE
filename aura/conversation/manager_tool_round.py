@@ -20,6 +20,7 @@ from aura.conversation._report_tools import (
     REPORT_BLOCKER,
 )
 from aura.conversation.history import History
+from aura.conversation.plan_review import blocked_tool_payload
 from aura.conversation.tool_names import WRITE_TOOLS
 from aura.conversation.tool_preflight import (
     decode_arguments,
@@ -416,6 +417,26 @@ class ToolRoundRunner:
         tool_call_id = task["id"]
         name = task["name"]
         args = task["args"]
+
+        # Plan Review's runtime guarantee applies here first because
+        # run_and_watch/run_terminal_command below are special-cased straight
+        # to ToolRunner and never reach ToolRegistry.execute(), which carries
+        # the same check for every other tool. Both call sites defer to
+        # ``PlanReviewState.blocks`` — the one authoritative policy — so nothing
+        # here re-derives which effects are blocked.
+        if self._tools.plan_review.blocks(task["effect"]):
+            payload = json.dumps(blocked_tool_payload(), ensure_ascii=False)
+            return {
+                "id": tool_call_id,
+                "result_payload": payload,
+                "event": ToolResult(
+                    tool_call_id=tool_call_id,
+                    name=name,
+                    ok=False,
+                    result=payload,
+                    extras={"failure_class": "plan_review_required"},
+                ),
+            }
 
         if name == "run_and_watch":
             # Streams its output and appends its own authoritative result.

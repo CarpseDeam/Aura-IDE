@@ -48,7 +48,7 @@ from aura.conversation.tools.git_handler import GitHandler
 from aura.conversation.tools.grep import grep_files  # noqa: F401
 from aura.conversation.tools.mcp_registry import MCPToolRegistry
 from aura.conversation.tools.task_context import TaskContextHandlersMixin
-from aura.conversation.plan_review import PlanReviewState
+from aura.conversation.plan_review import PlanReviewState, blocked_tool_payload
 
 TOOL_HANDLERS: dict[str, Any] = {}
 
@@ -357,23 +357,16 @@ class ToolRegistry(
         self._skill_turn_state = skill_turn_state
         try:
             # Plan Review's runtime guarantee: while required and not yet
-            # approved for this turn, a MUTATION-effect call is refused
-            # before it reaches any handler — the authoritative effect
-            # lookup covers built-in, MCP, and dynamic tools alike, so there
-            # is no second handwritten mutation-name list to keep in sync.
-            if self._plan_review.mutation_blocked and self.tool_effect(name) is ToolEffect.MUTATION:
-                return ToolExecResult(
-                    ok=False,
-                    payload={
-                        "ok": False,
-                        "failure_class": "plan_review_required",
-                        "required_tool": "review_implementation_plan",
-                        "message": (
-                            "Plan Review is enabled. Review and approve the "
-                            "implementation plan before workspace mutations."
-                        ),
-                    },
-                )
+            # approved for this turn, a MUTATION- or COMMAND-effect call is
+            # refused before it reaches any handler — the authoritative
+            # effect lookup covers built-in, MCP, and dynamic tools alike, so
+            # there is no second handwritten mutation/command-name list to
+            # keep in sync. ``PlanReviewState.blocks`` is the single
+            # authoritative policy; the tool round's terminal-special-cased
+            # dispatch (run_terminal_command/run_and_watch, which never
+            # reaches this method) consults the same method before it runs.
+            if self._plan_review.blocks(self.tool_effect(name)):
+                return ToolExecResult(ok=False, payload=blocked_tool_payload())
             return self._executor.execute(name, args, approval_cb, reject_all)
         finally:
             self._cancel_event = None

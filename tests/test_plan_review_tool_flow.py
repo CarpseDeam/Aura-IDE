@@ -20,6 +20,7 @@ from aura.conversation.history import History
 from aura.conversation.manager import ConversationManager
 from aura.conversation.plan_review import ApprovedPlan, PlanReviewDecision, PlanReviewState
 from aura.conversation.tools._types import ApprovalDecision
+from aura.conversation.tools.effects import ToolEffect
 from aura.conversation.tools.registry import ToolRegistry
 from aura.model_streams import PRODUCTION_STREAM_HOOK, ModelStreamRegistry
 
@@ -175,7 +176,7 @@ def test_next_turn_requires_a_new_review() -> None:
     state.begin_turn(required=True)
     assert state.approved is False
     assert state.approved_plan is None
-    assert state.mutation_blocked is True
+    assert state.blocks(ToolEffect.MUTATION) is True
 
 
 # ── full-loop integration: one manager, one history, one model ─────────────

@@ -1,9 +1,10 @@
-"""Plan Review's runtime mutation gate: authoritative ToolEffect lookup.
+"""Plan Review's runtime mutation/command gate: authoritative ToolEffect lookup.
 
 Proves the gate lives in ``ToolRegistry.execute`` and reads ``tool_effect``
-directly — no second handwritten mutation-name list — so it covers built-in
-mutation tools and mutation-classified extensible (MCP) tools alike, while
-observation and command/bookkeeping tools stay callable throughout.
+directly — no second handwritten mutation/command-name list — so it covers
+built-in and extensible (MCP) tools alike. MUTATION and COMMAND are blocked
+while review is required and unapproved; OBSERVATION and BOOKKEEPING
+(including ``review_implementation_plan`` itself) stay callable throughout.
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from aura.conversation.plan_review import ApprovedPlan
 from aura.conversation.tools.effects import SCHEMA_EFFECT_KEY, ToolEffect
 from aura.conversation.tools.registry import ToolRegistry
 
@@ -35,10 +37,25 @@ def test_observation_tool_remains_callable_before_plan_approval(tmp_path: Path) 
     assert result.ok is True
 
 
-def test_command_effect_tool_remains_callable_before_plan_approval(tmp_path: Path) -> None:
+def test_command_effect_tool_blocked_before_plan_approval(tmp_path: Path) -> None:
     registry = ToolRegistry(tmp_path, mode="single")
     registry.plan_review.begin_turn(required=True)
     assert registry.tool_effect("run_diagnostic_command") is ToolEffect.COMMAND
+
+    result = registry.execute(
+        "run_diagnostic_command", {"command": "python -c \"print(1)\""}, approval_cb=None
+    )
+    assert result.ok is False
+    assert result.payload["failure_class"] == "plan_review_required"
+    assert result.payload["required_tool"] == "review_implementation_plan"
+
+
+def test_command_effect_tool_allowed_once_approved(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path, mode="single")
+    registry.plan_review.begin_turn(required=True)
+    registry.plan_review.approve(
+        ApprovedPlan(goal="g", files=(), spec="s", acceptance="a")
+    )
 
     result = registry.execute(
         "run_diagnostic_command", {"command": "python -c \"print(1)\""}, approval_cb=None

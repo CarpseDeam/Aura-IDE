@@ -14,6 +14,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from aura.conversation.tools.effects import ToolEffect
+
+#: The effect classes Plan Review refuses while required and not yet
+#: approved. This is the single authoritative statement of that policy —
+#: every execution seam (``ToolRegistry.execute`` and the tool round's
+#: terminal-special-cased dispatch) calls :meth:`PlanReviewState.blocks`
+#: rather than repeating this set.
+_BLOCKED_EFFECTS = frozenset({ToolEffect.MUTATION, ToolEffect.COMMAND})
+
 
 @dataclass(frozen=True)
 class ApprovedPlan:
@@ -82,10 +91,38 @@ class PlanReviewState:
     def approved_plan(self) -> ApprovedPlan | None:
         return self._approved_plan
 
-    @property
-    def mutation_blocked(self) -> bool:
-        """Whether a MUTATION-effect tool call must be refused right now."""
-        return self._required and not self._approved
+    def blocks(self, effect: ToolEffect) -> bool:
+        """Whether Plan Review must refuse a call with this effect right now.
+
+        True only while review is required and not yet approved, and only for
+        the consequential effects in :data:`_BLOCKED_EFFECTS` (MUTATION and
+        COMMAND). OBSERVATION and BOOKKEEPING — including
+        ``review_implementation_plan`` itself — are never blocked.
+        """
+        return self._required and not self._approved and effect in _BLOCKED_EFFECTS
 
 
-__all__ = ["ApprovedPlan", "PlanReviewDecision", "PlanReviewState"]
+def blocked_tool_payload() -> dict[str, Any]:
+    """The one deterministic refusal payload for a Plan-Review-blocked call.
+
+    Shared by every execution seam that calls :meth:`PlanReviewState.blocks`
+    so a blocked call always reports the same ``failure_class`` and
+    ``required_tool``, regardless of which seam refused it.
+    """
+    return {
+        "ok": False,
+        "failure_class": "plan_review_required",
+        "required_tool": "review_implementation_plan",
+        "message": (
+            "Plan Review is enabled. Review and approve the "
+            "implementation plan before workspace mutations."
+        ),
+    }
+
+
+__all__ = [
+    "ApprovedPlan",
+    "PlanReviewDecision",
+    "PlanReviewState",
+    "blocked_tool_payload",
+]
