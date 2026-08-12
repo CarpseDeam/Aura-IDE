@@ -8,7 +8,7 @@ ReferenceRootAccess remains the authorization and containment boundary.
 from __future__ import annotations
 
 import re
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from aura.paths import safe_is_relative_to
 
@@ -22,9 +22,11 @@ class ReferencePathError(ValueError):
 _QUOTED_PATH = re.compile(r'(?P<quote>["`])(?P<path>[^"`\r\n]+)(?P=quote)')
 # Bare paths intentionally stop at whitespace. A user can still paste a
 # space-containing path by quoting/backticking it, while ordinary prose after
-# a path is not swallowed into the candidate.
+# a path is not swallowed into the candidate. Aura is a Windows harness, so a
+# bare candidate must begin with a drive root or a conventional backslash UNC
+# prefix; a leading forward slash is ordinary prompt text, not authority.
 _BARE_PATH = re.compile(
-    r"(?<![A-Za-z0-9_:/])(?P<path>(?:[A-Za-z]:[\\/]|/)[^\s<>\"'“”‘’]+)"
+    r"(?<![A-Za-z0-9_:/])(?P<path>(?:[A-Za-z]:[\\/]|\\\\)[^\s<>\"'“”‘’]+)"
 )
 
 _TRAILING_PUNCTUATION = ".,;!?)]}"
@@ -35,10 +37,9 @@ def _trim_candidate(raw: str) -> str:
 
 
 def _is_absolute_path_text(raw: str) -> bool:
-    """Recognize native and Windows absolute syntax on every host."""
-    return Path(raw).is_absolute() or bool(
-        re.match(r"^(?:[A-Za-z]:[\\/]|/)", raw)
-    )
+    """Recognize explicit Windows absolute syntax on every host."""
+    has_windows_root = bool(re.match(r"^(?:[A-Za-z]:[\\/]|\\\\)", raw))
+    return has_windows_root and PureWindowsPath(raw).is_absolute()
 
 
 def extract_absolute_path_candidates(text: str | None) -> list[str]:

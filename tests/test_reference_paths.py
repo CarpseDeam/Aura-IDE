@@ -1,9 +1,11 @@
 """Focused tests for literal user-path reference authorization."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from PySide6.QtCore import QCoreApplication
 
 from aura.conversation.history import History
@@ -25,18 +27,86 @@ def _paths(tmp_path: Path) -> tuple[Path, Path]:
     return workspace, reference
 
 
-def test_bare_absolute_external_directory_is_detected(tmp_path: Path) -> None:
+_WINDOWS_FILESYSTEM = pytest.mark.skipif(
+    os.name != "nt",
+    reason="filesystem authorization tests use the Windows path syntax supported by Aura",
+)
+
+
+def test_windows_drive_backslash_form_is_recognized_as_absolute_syntax() -> None:
+    assert extract_absolute_path_candidates(r"C:\Projects\Foo") == [
+        r"C:\Projects\Foo"
+    ]
+
+
+def test_windows_drive_slash_form_is_recognized_as_absolute_syntax() -> None:
+    assert extract_absolute_path_candidates("C:/Projects/Foo") == ["C:/Projects/Foo"]
+
+
+def test_quoted_and_backticked_windows_paths_with_spaces_are_detected() -> None:
+    quoted = r"C:\Projects With Spaces\Old App"
+    backticked = "C:/Projects With Spaces/Old App"
+
+    assert extract_absolute_path_candidates(f'"{quoted}"') == [quoted]
+    assert extract_absolute_path_candidates(f"`{backticked}`") == [backticked]
+
+
+def test_windows_unc_path_is_recognized_as_absolute_syntax() -> None:
+    assert extract_absolute_path_candidates(r"\\server\share\Project") == [
+        r"\\server\share\Project"
+    ]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "/Quantity",
+        "/api/orders",
+        "/users",
+        "/foo",
+        "Price/Quantity",
+        "foo/bar",
+        "src/module.py",
+        "https://example.com/api/orders",
+        "//server/share/Project",
+    ],
+)
+def test_non_windows_path_shaped_prompt_text_is_not_authority(text: str) -> None:
+    assert extract_absolute_path_candidates(text) == []
+
+
+def test_market_summary_prompt_does_not_extract_route_text_as_a_path() -> None:
+    prompt = r"""# Implement deterministic target MarketStateSummary
+
+Work in `C:\Projects\Lantern` on `master`.
+
+Starting HEAD must be:
+
+`acdfd19cd26efcb9bcadfc573ca2bab1ae13e654`
+
+Implement Lantern's first compact deterministic market-state summary.
+
+... /Quantity ...
+"""
+
+    assert extract_absolute_path_candidates(prompt) == [r"C:\Projects\Lantern"]
+
+
+@_WINDOWS_FILESYSTEM
+def test_existing_external_windows_directory_is_detected(tmp_path: Path) -> None:
     workspace, reference = _paths(tmp_path)
     assert extract_reference_path(f"{reference}\nLook at it", workspace) == reference.resolve()
 
 
-def test_windows_slash_form_is_recognized_as_absolute_syntax(tmp_path: Path) -> None:
+@_WINDOWS_FILESYSTEM
+def test_existing_external_windows_slash_directory_is_detected(tmp_path: Path) -> None:
     workspace, reference = _paths(tmp_path)
     slash_form = str(reference).replace("\\", "/")
     assert slash_form in extract_absolute_path_candidates(slash_form)
     assert extract_reference_path(slash_form, workspace) == reference.resolve()
 
 
+@_WINDOWS_FILESYSTEM
 def test_quoted_and_backticked_paths_with_spaces_are_detected(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     reference = tmp_path / "My Projects" / "Old App"
@@ -47,6 +117,7 @@ def test_quoted_and_backticked_paths_with_spaces_are_detected(tmp_path: Path) ->
     assert extract_reference_path(f"`{reference}`", workspace) == reference.resolve()
 
 
+@_WINDOWS_FILESYSTEM
 def test_relative_and_workspace_absolute_paths_do_not_authorize(tmp_path: Path) -> None:
     workspace, reference = _paths(tmp_path)
     assert extract_reference_path("old-project", workspace) is None
@@ -55,6 +126,7 @@ def test_relative_and_workspace_absolute_paths_do_not_authorize(tmp_path: Path) 
     assert reference.exists()
 
 
+@_WINDOWS_FILESYSTEM
 def test_missing_external_path_fails_locally(tmp_path: Path) -> None:
     workspace, reference = _paths(tmp_path)
     missing = reference / "does-not-exist"
@@ -66,6 +138,7 @@ def test_missing_external_path_fails_locally(tmp_path: Path) -> None:
         raise AssertionError("expected missing external path to fail")
 
 
+@_WINDOWS_FILESYSTEM
 def test_external_file_path_does_not_authorize(tmp_path: Path) -> None:
     workspace, reference = _paths(tmp_path)
     file_path = reference / "project.godot"
@@ -78,6 +151,7 @@ def test_external_file_path_does_not_authorize(tmp_path: Path) -> None:
         raise AssertionError("expected external file path to fail")
 
 
+@_WINDOWS_FILESYSTEM
 def test_multiple_distinct_external_directories_fail(tmp_path: Path) -> None:
     workspace, first = _paths(tmp_path)
     second = tmp_path / "another-project"
@@ -173,6 +247,7 @@ def _handler(tmp_path: Path, monkeypatch) -> tuple[SendHandler, _Bridge, _Chat]:
     return handler, bridge, chat
 
 
+@_WINDOWS_FILESYSTEM
 def test_valid_user_path_is_authorized_before_send(tmp_path: Path, monkeypatch) -> None:
     handler, bridge, chat = _handler(tmp_path, monkeypatch)
     reference = tmp_path / "old-project"
@@ -195,6 +270,23 @@ def test_no_path_clears_stale_authorization_for_new_turn(tmp_path: Path, monkeyp
     assert bridge.authorization_available_at_send == [False]
 
 
+@_WINDOWS_FILESYSTEM
+def test_current_workspace_path_and_route_text_proceed_without_external_authorization(
+    tmp_path: Path, monkeypatch
+) -> None:
+    handler, bridge, chat = _handler(tmp_path, monkeypatch)
+    workspace = tmp_path / "workspace"
+    prompt = f"Work in `{workspace}` on `master`. Implement the summary ... /Quantity ..."
+
+    handler.handle_send(SendPayload(prompt, []), "model", "off")
+
+    assert bridge.authorization_calls == [None]
+    assert bridge.authorization_available_at_send == [False]
+    assert len(bridge.send_calls) == 1
+    assert chat.errors == []
+
+
+@_WINDOWS_FILESYSTEM
 def test_invalid_user_path_stops_before_history_or_model_send(tmp_path: Path, monkeypatch) -> None:
     handler, bridge, chat = _handler(tmp_path, monkeypatch)
 
@@ -208,6 +300,7 @@ def test_invalid_user_path_stops_before_history_or_model_send(tmp_path: Path, mo
     assert chat.errors and "existing directory" in chat.errors[0][1]
 
 
+@_WINDOWS_FILESYSTEM
 def test_queued_message_authorizes_only_when_it_becomes_active(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -223,6 +316,7 @@ def test_queued_message_authorizes_only_when_it_becomes_active(
     assert bridge.authorization_calls == [reference.resolve()]
 
 
+@_WINDOWS_FILESYSTEM
 def test_retry_rederives_authorization_from_retained_user_text(
     tmp_path: Path, monkeypatch
 ) -> None:
