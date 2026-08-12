@@ -18,7 +18,6 @@ class MainWindowTerminalController(QObject):
     def _on_terminal_toggle(self, checked: bool) -> None:
         self._window._playground.toggle_terminal_window()
         self._sync_terminal_checked_state()
-        self._window._position_edge_tabs()
 
     def _on_terminal_started(self) -> None:
         self._window._edge_rail.set_state("running")
@@ -34,7 +33,6 @@ class MainWindowTerminalController(QObject):
         self._sync_terminal_checked_state()
         self._window._edge_rail.set_is_terminal_open(self._window._playground.is_terminal_window_open())
         self._window._edge_rail.set_state(self._window._edge_rail.state)
-        self._window._position_edge_tabs()
 
     def _on_terminal_cleared(self) -> None:
         self._window._edge_rail.set_state("dim")

@@ -5,7 +5,7 @@ from enum import Enum, auto
 
 from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QFrame, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 from aura.config import media_path
 from aura.gui.drones.drone_rail_pip import DroneRailPip
@@ -60,6 +60,7 @@ class EdgeTabRail(QFrame):
     def _setup_ui(self) -> None:
         self.setObjectName("edgeTabRail")
         self.setFixedWidth(40)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         self.setStyleSheet(
             "QFrame#edgeTabRail { background: transparent; border: none; }"
         )
@@ -127,9 +128,7 @@ class EdgeTabRail(QFrame):
         self._companion_tab.setStyleSheet(self._companion_tab_style())
         self._rail_layout.addWidget(self._companion_tab)
 
-        self.adjustSize()
         self.set_state("dim")
-        self.raise_()
 
     # ------------------------------------------------------------------
     # Public API
@@ -200,8 +199,6 @@ class EdgeTabRail(QFrame):
         pip.begin_launch_animation()
         self._drone_run_pips[run_id] = pip
         self._drone_run_stack_layout.addWidget(pip, alignment=Qt.AlignmentFlag.AlignCenter)
-        self.adjustSize()
-        self.setFixedHeight(self.sizeHint().height())
         QTimer.singleShot(0, lambda rid=run_id: self._play_summon_animation(rid))
 
     def set_drone_run_pip_state(self, run_id: str, drone_name: str, state: str) -> None:
@@ -237,8 +234,6 @@ class EdgeTabRail(QFrame):
             return
         self._drone_run_stack_layout.removeWidget(pip)
         pip.deleteLater()
-        self.adjustSize()
-        self.setFixedHeight(self.sizeHint().height())
 
     def rekey_drone_run_pip(self, old_run_id: str, new_run_id: str) -> None:
         """Move a pip widget from old_run_id to new_run_id without visual disruption."""

@@ -236,7 +236,6 @@ class MainWindowDroneController(QObject):
     def on_drone_bay_requested(self) -> None:
         self.open_or_toggle_drone_workbay()
         self.sync_drone_tab_checked()
-        self._window._position_edge_tabs()
 
     def open_or_toggle_drone_workbay(self) -> None:
         """Open the Drone Workbay as a standalone window or focus it."""
@@ -440,7 +439,6 @@ class MainWindowDroneController(QObject):
             # Notify workbay card that this drone is running
             card_id = loop_drone_id if loop_drone_id else run_drone.id
             self.update_workbay_card_run_state(card_id, "running")
-            self._window._position_edge_tabs()
 
             # Start the thread.
             thread.started.connect(runner.run)
@@ -462,7 +460,6 @@ class MainWindowDroneController(QObject):
                 self._loop_pip_run_id.pop(loop_drone_id, None)
             if run_id:
                 self._window._edge_rail.remove_drone_run_pip(run_id)
-                self._window._position_edge_tabs()
             # Cancel the runner so its worker thread doesn't leak
             runner.cancel()
             return None
@@ -622,7 +619,6 @@ class MainWindowDroneController(QObject):
     def remove_drone_run_pip(self, run_id: str) -> None:
         logger.debug("[DroneRun] remove_drone_run_pip run_id=%s", run_id)
         self._window._edge_rail.remove_drone_run_pip(run_id)
-        self._window._position_edge_tabs()
 
     def drone_is_running(self, drone_id: str) -> bool:
         for run in self._drone_runs.values():

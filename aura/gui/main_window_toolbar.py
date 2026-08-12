@@ -125,10 +125,7 @@ class MainWindowToolbar(QToolBar):
         self._logs_btn.clicked.connect(self.logs_requested.emit)
         self.addWidget(self._logs_btn)
 
-        # Spacer between Logs and Settings.
-        settings_spacer = QWidget()
-        settings_spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self.addWidget(settings_spacer)
+        self.addWidget(_toolbar_separator())
 
         # Settings button
         settings_act = QAction(QIcon(str(media_path("settings_24dp.svg"))), "Settings", self)

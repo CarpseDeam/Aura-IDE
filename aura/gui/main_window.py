@@ -11,6 +11,7 @@ from PySide6.QtCore import QByteArray, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (
     QDialog,
+    QHBoxLayout,
     QMainWindow,
     QMessageBox,
     QSplitter,
@@ -291,19 +292,27 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._main_splitter.setCollapsible(1, True)    # center: allow collapse to 0
         self._main_splitter.setCollapsible(2, True)    # playground: allow collapse to 0
 
-        self.setCentralWidget(self._main_splitter)
-
-        # Make the central widget and splitter transparent so the gradient shows through
-        self._main_splitter.setStyleSheet("background: transparent;")
-        self.centralWidget().setStyleSheet("background: transparent;")
-        self.centralWidget().setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
-
-        # Edge tab rail — terminal + checkpoint tabs
+        # Edge tab rail — terminal + checkpoint tabs. A fixed-width column
+        # beside the main splitter (not a splitter pane), so it can't be
+        # resized/collapsed and never overlaps the workspace or its scrollbar.
         self._edge_rail = EdgeTabRail(self)
         self._terminal_tab = self._edge_rail.terminal_tab
         self._terminal_container = self._edge_rail.terminal_container
         self._corner_widget = self._edge_rail.corner_widget
         self._drone_controller.sync_drone_tab_checked()
+
+        central_container = QWidget(self)
+        central_layout = QHBoxLayout(central_container)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.setSpacing(0)
+        central_layout.addWidget(self._main_splitter, 1)
+        central_layout.addWidget(self._edge_rail, 0)
+        self.setCentralWidget(central_container)
+
+        # Make the central widget and splitter transparent so the gradient shows through
+        self._main_splitter.setStyleSheet("background: transparent;")
+        central_container.setStyleSheet("background: transparent;")
+        central_container.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
 
         # Sync companion badge after rail exists (status may have fired before rail was created)
         self._companion_controller.sync_edge_rail_status()
@@ -327,7 +336,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         QTimer.singleShot(0, lambda: self._left_pane.refresh_drones(self._workspace_root))
 
         self._refresh_status_bar()
-        self._position_edge_tabs()
 
         logger.debug(
             "layout_diag win_min=(%d,%d) splitter_min=(%d,%d) left_min=(%d,%d) center_min=(%d,%d) playground_min=(%d,%d) chat_min=(%d,%d) input_min=(%d,%d)",
@@ -390,31 +398,12 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     def showEvent(self, event) -> None:
         """Triggered when the window is shown."""
         super().showEvent(event)
-        self._position_edge_tabs()
         # Mark first launch done so onboarding never shows on subsequent starts.
         QTimer.singleShot(0, self._mark_first_launch_done)
 
     def _mark_first_launch_done(self) -> None:
         self._settings.first_launch_done = True
         save_settings(self._settings)
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self._position_edge_tabs()
-
-    def _position_edge_tabs(self) -> None:
-        rail = self._edge_rail
-        if rail is None:
-            return
-
-        rail_w = rail.width()
-        rail_h = rail.sizeHint().height()
-        margin_bottom = self.statusBar().height() + 28
-        x = self.width() - rail_w
-        y = max(0, self.height() - rail_h - margin_bottom)
-        rail.setFixedHeight(rail_h)
-        rail.move(x, y)
-        rail.raise_()
 
     def _show_onboarding(self) -> None:
         dlg = OnboardingDialog(
