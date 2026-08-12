@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from aura.config import media_path
-from aura.gui.theme import LABEL_APPROVE, LABEL_DRONES, LABEL_READ_ONLY
+from aura.gui.theme import LABEL_APPROVE, LABEL_DRONES, LABEL_PLAN, LABEL_READ_ONLY
 from aura.gui.widgets.glass_switch import GlassSwitch
 
 
@@ -28,6 +28,7 @@ class MainWindowToolbar(QToolBar):
     new_conversation_requested = Signal()
     open_conversation_requested = Signal()
     read_only_toggled = Signal(bool)
+    plan_review_toggled = Signal(bool)
     auto_approve_toggled = Signal(bool)
     auto_summon_drones_toggled = Signal(bool)
     update_requested = Signal()
@@ -69,6 +70,19 @@ class MainWindowToolbar(QToolBar):
         self.addWidget(self._read_only_badge)
 
         self._update_read_only_state(False)
+
+        self.addWidget(_toolbar_separator())
+
+        # Group 2b: Plan Review toggle — independent of Approve. Applies to
+        # the next real user turn (see ConversationBridge.send()).
+        self._plan_review_switch = GlassSwitch(
+            "Plan",
+            getattr(self._settings, "review_plan_before_changes", False),
+            vertical=True,
+            accent_color=LABEL_PLAN,
+        )
+        self._plan_review_switch.toggled.connect(self.plan_review_toggled.emit)
+        self.addWidget(self._plan_review_switch)
 
         self.addWidget(_toolbar_separator())
 
@@ -167,8 +181,13 @@ class MainWindowToolbar(QToolBar):
     def update_settings(self, settings) -> None:
         """Use the latest settings object and refresh setting-backed controls."""
         self._settings = settings
+        self.set_plan_review(getattr(settings, "review_plan_before_changes", False))
         self.set_auto_approve(settings.auto_approve)
         self.set_auto_summon_drones(getattr(settings, "auto_summon_drones", False))
+        self.refresh_auto_toggle_tooltips()
+
+    def set_plan_review(self, checked: bool) -> None:
+        self._plan_review_switch.setChecked(checked)
         self.refresh_auto_toggle_tooltips()
 
     def set_auto_approve(self, checked: bool) -> None:
@@ -180,6 +199,10 @@ class MainWindowToolbar(QToolBar):
         self.refresh_auto_toggle_tooltips()
 
     def refresh_auto_toggle_tooltips(self) -> None:
+        self._plan_review_switch.setToolTip(
+            "Plan review: when ON, Aura pauses before workspace changes so you "
+            "can review or edit the implementation plan. Applies to the next request."
+        )
         self._auto_approve_switch.setToolTip(
             "Auto-approve: when ON, file diffs are applied without confirmation. When OFF, you review and approve each change."
         )

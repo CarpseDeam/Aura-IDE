@@ -51,6 +51,7 @@ from aura.gui.main_window_toolbar import MainWindowToolbar
 from aura.gui.main_window_update import MainWindowUpdateController
 from aura.gui.main_window_workspace import MainWindowWorkspaceController
 from aura.gui.onboarding_dialog import OnboardingDialog
+from aura.gui.plan_review_controller import PlanReviewController
 from aura.gui.playground import AuraPlayground
 from aura.gui.send_handler import SendHandler
 from aura.gui.status_bar import AuraStatusBar
@@ -111,6 +112,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._bridge.set_temperature(self._settings.temperature)
         self._bridge.set_system_prompt(self._settings.system_prompt)
         self._bridge.set_auto_approve(self._settings.auto_approve)
+        self._bridge.set_review_plan_before_changes(self._settings.review_plan_before_changes)
         # Restores a connection the user already turned on. Disabled is the
         # default and does nothing at all — no process, no download, no
         # network — so launch cost is unchanged for everyone else.
@@ -165,6 +167,15 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # its compact tool presentation.
         self._chat.set_compact_tools(True)
         center_layout.addWidget(self._chat, 1)
+
+        # Plan Review — renders the inline Plan Ready card and forwards the
+        # user's Implement/Edit/Cancel decision back through the bridge's
+        # proxy so the blocked worker thread resumes.
+        self._plan_review_controller = PlanReviewController(
+            proxy=self._bridge.plan_review_proxy,
+            chat=self._chat,
+            parent_widget=self,
+        )
 
         self._center_stack.addWidget(center)
 

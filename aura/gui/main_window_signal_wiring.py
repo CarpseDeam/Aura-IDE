@@ -36,6 +36,7 @@ class MainWindowSignalWiring:
         w._toolbar.new_conversation_requested.connect(w._on_new_conversation)
         w._toolbar.open_conversation_requested.connect(w._on_open_conversation)
         w._toolbar.read_only_toggled.connect(w._on_read_only_toggled)
+        w._toolbar.plan_review_toggled.connect(w._settings_controller.on_plan_review_toggled)
         w._toolbar.auto_approve_toggled.connect(w._settings_controller.on_auto_approve_toggled)
         w._toolbar.auto_summon_drones_toggled.connect(w._settings_controller.on_auto_summon_drones_toggled)
         w._toolbar.update_requested.connect(w._on_open_update)

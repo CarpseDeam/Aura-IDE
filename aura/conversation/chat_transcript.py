@@ -12,6 +12,7 @@ USER = "user"
 PLANNER = "planner"
 WORKER_COMPLETE = "worker_complete"
 ERROR = "error"
+PLAN_REVIEW = "plan_review"
 
 
 def user_item(text: str, image_b64s: list[str] | None = None) -> dict[str, Any]:
@@ -59,6 +60,33 @@ def worker_complete_item(
     }
 
 
+def plan_review_item(
+    *,
+    goal: str,
+    files: list[str],
+    spec: str,
+    acceptance: str,
+    summary: str,
+    approved: bool,
+    user_edited: bool = False,
+) -> dict[str, Any]:
+    """A resolved Plan Review decision — durable conversation state.
+
+    Only ever recorded *resolved*: there is no persisted "pending" plan
+    review, so replay never recreates a pending review or executes anything.
+    """
+    return {
+        "kind": PLAN_REVIEW,
+        "goal": str(goal),
+        "files": [str(f) for f in files],
+        "spec": str(spec),
+        "acceptance": str(acceptance),
+        "summary": str(summary),
+        "approved": bool(approved),
+        "user_edited": bool(user_edited),
+    }
+
+
 def normalize_chat_item(data: Any) -> dict[str, Any] | None:
     if not isinstance(data, dict):
         return None
@@ -94,6 +122,18 @@ def normalize_chat_item(data: Any) -> dict[str, Any] | None:
             ),
             ok=bool(data.get("ok", False)),
             needs_followup=bool(data.get("needs_followup", False)),
+        )
+    if kind == PLAN_REVIEW:
+        raw_files = data.get("files")
+        files = [str(f) for f in raw_files] if isinstance(raw_files, list) else []
+        return plan_review_item(
+            goal=str(data.get("goal", "")),
+            files=files,
+            spec=str(data.get("spec", "")),
+            acceptance=str(data.get("acceptance", "")),
+            summary=str(data.get("summary", "")),
+            approved=bool(data.get("approved", False)),
+            user_edited=bool(data.get("user_edited", False)),
         )
     return None
 

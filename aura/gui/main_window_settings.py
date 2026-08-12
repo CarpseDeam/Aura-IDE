@@ -81,16 +81,24 @@ class MainWindowSettingsController(QObject):
         window._bridge.set_temperature(settings.temperature)
         window._bridge.set_system_prompt(settings.system_prompt)
         window._bridge.set_auto_approve(settings.auto_approve)
+        window._bridge.set_review_plan_before_changes(settings.review_plan_before_changes)
         # Returns immediately: connecting (and, the first time, installing)
         # happens on the manager's worker thread.
         window._bridge.apply_windows_computer_use(settings)
         window._toolbar.set_auto_approve(settings.auto_approve)
         window._toolbar.set_auto_summon_drones(settings.auto_summon_drones)
+        window._toolbar.set_plan_review(settings.review_plan_before_changes)
         window._refresh_status_bar()
 
     def on_auto_approve_toggled(self, checked: bool) -> None:
         self._window._settings.auto_approve = checked
         self._window._bridge.set_auto_approve(checked)
+        self._window._toolbar.refresh_auto_toggle_tooltips()
+        save_settings(self._window._settings)
+
+    def on_plan_review_toggled(self, checked: bool) -> None:
+        self._window._settings.review_plan_before_changes = checked
+        self._window._bridge.set_review_plan_before_changes(checked)
         self._window._toolbar.refresh_auto_toggle_tooltips()
         save_settings(self._window._settings)
 

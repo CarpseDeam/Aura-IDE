@@ -18,6 +18,7 @@ from aura.conversation.tools._godot_assets_mixin import GodotAssetHandlersMixin
 from aura.conversation.tools._godot_editor_mixin import GodotEditorHandlersMixin
 from aura.conversation.tools._godot_scene_mixin import GodotSceneHandlersMixin
 from aura.conversation.tools._memory_mixin import MemoryHandlersMixin
+from aura.conversation.tools._plan_review_mixin import PlanReviewHandlersMixin
 from aura.conversation.tools._planner_mixin import PlannerHandlersMixin
 from aura.conversation.tools._read_mixin import ReadHandlersMixin
 from aura.conversation.tools._search_mixin import SearchHandlersMixin
@@ -47,6 +48,7 @@ from aura.conversation.tools.git_handler import GitHandler
 from aura.conversation.tools.grep import grep_files  # noqa: F401
 from aura.conversation.tools.mcp_registry import MCPToolRegistry
 from aura.conversation.tools.task_context import TaskContextHandlersMixin
+from aura.conversation.plan_review import PlanReviewState
 
 TOOL_HANDLERS: dict[str, Any] = {}
 
@@ -67,6 +69,7 @@ class ToolRegistry(
     MemoryHandlersMixin,
     DiagnosticHandlersMixin,
     PlannerHandlersMixin,
+    PlanReviewHandlersMixin,
 ):
     """Workspace-scoped tool dispatcher."""
 
@@ -107,6 +110,13 @@ class ToolRegistry(
         # the exposed catalog — and therefore the provider's cached request
         # prefix — never moves between rounds.
         self._web_search: bool = False
+        # Plan Review — required/approved state for the active turn, and the
+        # GUI-thread proxy that pauses the tool loop for human review. The
+        # state always exists (required defaults to False); the proxy is
+        # wired in by the caller that owns a GUI (see
+        # ``set_plan_review_proxy``) and is None in a headless registry.
+        self._plan_review: PlanReviewState = PlanReviewState()
+        self._plan_review_proxy: Any = None
         self._executor = ToolExecutor(
             owner=self,
             dynamic_tools=self._dynamic_tools,
@@ -143,6 +153,23 @@ class ToolRegistry(
 
     def set_mode(self, mode: RegistryMode) -> None:
         self._mode = mode
+
+    @property
+    def plan_review(self) -> PlanReviewState:
+        """This turn's Plan Review required/approved state."""
+        return self._plan_review
+
+    def set_plan_review_proxy(self, proxy: Any | None) -> None:
+        """Wire (or clear) the GUI-thread Plan Review synchronization proxy.
+
+        ``None`` (the default) means no GUI is connected: the
+        ``review_implementation_plan`` handler then fails closed instead of
+        blocking forever.
+        """
+        self._plan_review_proxy = proxy
+
+    def get_plan_review_proxy(self) -> Any | None:
+        return self._plan_review_proxy
 
     @property
     def web_search_enabled(self) -> bool:
@@ -194,6 +221,7 @@ class ToolRegistry(
             dynamic_schemas=dynamic_schemas or None,
             mcp_schemas=mcp_schemas or None,
             web_search=self._web_search,
+            plan_review=(not self._read_only) and self._plan_review.required,
         )
 
     def replayable_tool_defs(self) -> list[dict[str, Any]]:
@@ -328,6 +356,24 @@ class ToolRegistry(
         self._cancel_event = cancel_event
         self._skill_turn_state = skill_turn_state
         try:
+            # Plan Review's runtime guarantee: while required and not yet
+            # approved for this turn, a MUTATION-effect call is refused
+            # before it reaches any handler — the authoritative effect
+            # lookup covers built-in, MCP, and dynamic tools alike, so there
+            # is no second handwritten mutation-name list to keep in sync.
+            if self._plan_review.mutation_blocked and self.tool_effect(name) is ToolEffect.MUTATION:
+                return ToolExecResult(
+                    ok=False,
+                    payload={
+                        "ok": False,
+                        "failure_class": "plan_review_required",
+                        "required_tool": "review_implementation_plan",
+                        "message": (
+                            "Plan Review is enabled. Review and approve the "
+                            "implementation plan before workspace mutations."
+                        ),
+                    },
+                )
             return self._executor.execute(name, args, approval_cb, reject_all)
         finally:
             self._cancel_event = None
@@ -419,3 +465,4 @@ TOOL_HANDLERS["code_intel_references"] = ToolRegistry._handle_code_intel_referen
 TOOL_HANDLERS["code_intel_dependents"] = ToolRegistry._handle_code_intel_dependents
 TOOL_HANDLERS["code_intel_audit"] = ToolRegistry._handle_code_intel_audit
 TOOL_HANDLERS["inspect_code"] = ToolRegistry._handle_inspect_code
+TOOL_HANDLERS["review_implementation_plan"] = ToolRegistry._handle_review_implementation_plan

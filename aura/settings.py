@@ -72,6 +72,11 @@ class AppSettings:
     system_prompt: str = ""
     auto_approve: bool = False
     auto_summon_drones: bool = False
+    #: When True, Aura pauses before the first workspace mutation of a real
+    #: user turn so the user can review/edit the implementation plan via the
+    #: ``review_implementation_plan`` tool. Off by default so existing
+    #: production behavior is unchanged until the user opts in.
+    review_plan_before_changes: bool = False
     sandbox_mode: str = DEFAULT_SANDBOX_MODE
     terminal_window_geometry: str = ""
     drone_reports_window_geometry: str = ""
@@ -143,6 +148,8 @@ class AppSettings:
             s.auto_approve = data["auto_approve"]
         if isinstance(data.get("auto_summon_drones"), bool):
             s.auto_summon_drones = data["auto_summon_drones"]
+        if isinstance(data.get("review_plan_before_changes"), bool):
+            s.review_plan_before_changes = data["review_plan_before_changes"]
         if isinstance(data.get("sandbox_mode"), str) and data["sandbox_mode"] in ("host", "docker", "wasm"):
             s.sandbox_mode = data["sandbox_mode"]
         # Companion — relay URL, web URL, and display name are persistent config.

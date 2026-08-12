@@ -38,6 +38,7 @@ from aura.backends import (
     APIAgentBackend,
 )
 from aura.bridge.approval_proxy import _ApprovalProxy
+from aura.bridge.plan_review_proxy import PlanReviewProxy
 from aura.bridge.production_execution import ProductionExecutionSession
 from aura.client import (
     ApiError,
@@ -237,6 +238,12 @@ class ConversationBridge(QObject):
         self._windows_computer_use = WindowsComputerUseManager(self._registry)
         self._parent_widget = parent_widget
         self._approval_proxy = _ApprovalProxy(parent_widget)
+        self._plan_review_proxy = PlanReviewProxy(parent=self)
+        self._registry.set_plan_review_proxy(self._plan_review_proxy)
+        # Toolbar-controlled: whether the *next* real user turn requires Plan
+        # Review. A toggle change mid-turn never mutates the turn already
+        # frozen in ToolRegistry.plan_review (see send()).
+        self._review_plan_before_changes: bool = False
 
         # Production execution session — owns the run identity, the single
         # authoritative execution ledger, and workspace projection.
@@ -298,6 +305,11 @@ class ConversationBridge(QObject):
     @property
     def registry(self) -> ToolRegistry:
         return self._registry
+
+    @property
+    def plan_review_proxy(self) -> PlanReviewProxy:
+        """The GUI-thread synchronization proxy for the active Plan Review."""
+        return self._plan_review_proxy
 
     @property
     def production_session(self) -> ProductionExecutionSession:
@@ -377,6 +389,14 @@ class ConversationBridge(QObject):
 
     def set_auto_approve(self, enabled: bool) -> None:
         self._approval_proxy.set_approve_all_session(enabled)
+
+    def set_review_plan_before_changes(self, enabled: bool) -> None:
+        """Set whether the *next* real user turn requires Plan Review.
+
+        Takes effect at the start of the next ``send()`` — never mutates a
+        turn already in flight.
+        """
+        self._review_plan_before_changes = bool(enabled)
 
     def _active_runtime_role(self) -> RuntimeRole:
         """Normal coding always runs the production single-agent role."""
@@ -483,6 +503,10 @@ class ConversationBridge(QObject):
         """
         if self.is_running():
             return
+        # Freeze Plan Review's required/approved state for this turn now, so
+        # a toolbar toggle flipped while the turn is running cannot mutate
+        # the tool catalog or gate it already exposed.
+        self._registry.plan_review.begin_turn(required=self._review_plan_before_changes)
         # The active model is terrain for skill selection, so it must be known
         # before the turn's system prompt is composed.
         self._active_model = str(model)
@@ -552,6 +576,7 @@ class ConversationBridge(QObject):
         self._cancel.set()
         self._production_session.note_cancelled()
         self._approval_proxy.cancel_active_dialog()
+        self._plan_review_proxy.cancel_active()
 
     # ---- private slots ----------------------------------------------------
 

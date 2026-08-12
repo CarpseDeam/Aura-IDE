@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 from aura.conversation.chat_transcript import (
     clone_chat_items,
     error_item,
+    plan_review_item,
     planner_item,
     user_item,
 )
@@ -24,6 +25,7 @@ from aura.gui.cards.assistant_card import AssistantCard
 from aura.gui.cards.code_writer_card import CodeWriterCard
 from aura.gui.cards.diff_card import DiffCard
 from aura.gui.cards.error_card import ErrorCard
+from aura.gui.cards.plan_review_card import PlanReviewCard
 from aura.gui.cards.terminal_card import TerminalCard
 from aura.gui.cards.user_card import UserCard
 from aura.gui.controllers import ToolStreamController
@@ -569,6 +571,52 @@ class ChatView(QScrollArea):
         # Append as a footer under the assistant card.
         ac.add_footer_widget(card)
         self._scroll_to_bottom()
+
+    def add_plan_review_card(
+        self,
+        review_id: str,
+        goal: str,
+        files: list[str],
+        spec: str,
+        acceptance: str,
+        summary: str = "",
+    ) -> PlanReviewCard:
+        """Attach a Plan Review card to the current assistant turn.
+
+        Used both for the live interactive card (the caller wires its
+        signals to the proxy) and, with an empty ``review_id`` immediately
+        followed by ``card.show_resolved(...)``, for non-interactive replay.
+        """
+        ac = self.current_assistant()
+        card = PlanReviewCard(review_id, goal, files, spec, acceptance, summary, parent=self)
+        ac.add_footer_widget(card)
+        self._scroll_to_bottom()
+        return card
+
+    def record_plan_review(
+        self,
+        goal: str,
+        files: list[str],
+        spec: str,
+        acceptance: str,
+        summary: str,
+        *,
+        approved: bool,
+        user_edited: bool = False,
+    ) -> None:
+        """Record a resolved Plan Review decision into the durable transcript."""
+        if self._record_transcript:
+            self._chat_items.append(
+                plan_review_item(
+                    goal=goal,
+                    files=files,
+                    spec=spec,
+                    acceptance=acceptance,
+                    summary=summary,
+                    approved=approved,
+                    user_edited=user_edited,
+                )
+            )
 
     def add_info(self, title: str, message: str) -> None:
         """Add a neutral informational card to the chat."""

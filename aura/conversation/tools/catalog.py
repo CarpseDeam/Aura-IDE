@@ -13,6 +13,7 @@ from aura.conversation.tools.schemas import (
     READ_TOOL_DEFS,
     REPORT_ALREADY_SATISFIED_TOOL_DEF,
     REPORT_BLOCKER_TOOL_DEF,
+    REVIEW_IMPLEMENTATION_PLAN_TOOL_DEF,
     RUN_AND_WATCH_TOOL_DEF,
     TERMINAL_TOOL_DEF,
     WEB_SEARCH_TOOL_DEF,
@@ -79,6 +80,7 @@ class ToolCatalog:
         dynamic_schemas: list[dict[str, Any]] | None = None,
         mcp_schemas: list[dict[str, Any]] | None = None,
         web_search: bool = False,
+        plan_review: bool = False,
     ) -> list[dict[str, Any]]:
         """Build tool definitions for the production single-agent catalog.
 
@@ -86,6 +88,11 @@ class ToolCatalog:
         catalog.  It reflects only whether the search backend is configured,
         is resolved once per real user turn, and is held for the whole turn, so
         the catalog the model sees never moves between rounds.
+
+        ``plan_review`` adds ``review_implementation_plan`` when Plan Review
+        is enabled for the active real user turn (frozen once at turn start,
+        same as ``web_search``). Never offered in read-only mode: nothing
+        read-only can mutate, so there is nothing for a plan to gate.
         """
         if read_only:
             tools: list[dict[str, Any]] = (
@@ -129,6 +136,8 @@ class ToolCatalog:
             )
             if web_search:
                 tools.append(dict(WEB_SEARCH_TOOL_DEF))
+            if plan_review:
+                tools.append(dict(REVIEW_IMPLEMENTATION_PLAN_TOOL_DEF))
 
         if not read_only and dynamic_schemas:
             tools.extend(dynamic_schemas)

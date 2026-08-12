@@ -24,6 +24,7 @@ from aura.conversation.persistence import (
 )
 from aura.conversation.chat_transcript import (
     ERROR,
+    PLAN_REVIEW,
     PLANNER,
     USER,
     WORKER_COMPLETE,
@@ -461,6 +462,22 @@ class ConversationPersistence(QObject):
                 # Worker completion records are durable diagnostics only.
                 # Replaying them must not recreate main-chat finish cards.
                 continue
+            elif kind == PLAN_REVIEW:
+                # Replay a resolved Plan Review in its non-interactive final
+                # state: never a pending review, never re-executed.
+                self._chat.begin_assistant()
+                raw_files = item.get("files")
+                files = [str(f) for f in raw_files] if isinstance(raw_files, list) else []
+                card = self._chat.add_plan_review_card(
+                    "",
+                    str(item.get("goal", "")),
+                    files,
+                    str(item.get("spec", "")),
+                    str(item.get("acceptance", "")),
+                    str(item.get("summary", "")),
+                )
+                card.show_resolved(approved=bool(item.get("approved", False)))
+                self._chat.assistant_done()
         if hasattr(self._chat, "end_transcript_replay"):
             self._chat.end_transcript_replay(render_items)
         self._chat.end_bulk_update()
