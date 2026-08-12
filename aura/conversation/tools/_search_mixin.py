@@ -4,6 +4,8 @@ Expected on self:
     _root: Path  (workspace root)
     _codebase_index: CodebaseIndex | None
     _code_intel_index: CodeIntelIndex  (shared with CodebaseIndex, never duplicated)
+    _reference_root: ReferenceRootAccess
+    _reference_codebase_index: CodebaseIndex | None
 
 Functions are looked up through *registry* at call time so that
 ``unittest.mock.patch("aura.conversation.tools.registry.<name>")``
@@ -13,12 +15,12 @@ in test_tool_registry.py takes effect correctly.
 from __future__ import annotations
 
 from aura.config import SEARCH_CODEBASE_TOP_K
-from aura.conversation.tools._types import ToolExecResult
 
 # Import the registry module so we can look up functions at call time.
 # This creates a circular import, but Python handles it because
 # `registry` is already in sys.modules by the time this module is loaded.
 from aura.conversation.tools import registry as _reg
+from aura.conversation.tools._types import ToolExecResult
 
 
 class SearchHandlersMixin:
@@ -61,14 +63,48 @@ class SearchHandlersMixin:
         if not query:
             return ToolExecResult(ok=False, payload={"ok": False, "error": "query is required"})
         top_k = int(args.get("top_k", SEARCH_CODEBASE_TOP_K))
-        if self._codebase_index is None:
-            self._codebase_index = _reg.CodebaseIndex(
-                self._root, code_intel_index=self._code_intel_index
+        source = args.get("source", "workspace")
+        if source not in ("workspace", "reference"):
+            return ToolExecResult(
+                ok=False,
+                payload={
+                    "ok": False,
+                    "error": "source must be either 'workspace' or 'reference'",
+                },
             )
-        result = _reg._search_codebase(
-            workspace_root=self._root,
-            query=query,
-            top_k=top_k,
-            _index=self._codebase_index,
-        )
+
+        if source == "workspace":
+            if self._codebase_index is None:
+                self._codebase_index = _reg.CodebaseIndex(
+                    self._root, code_intel_index=self._code_intel_index
+                )
+            result = _reg._search_codebase(
+                workspace_root=self._root,
+                query=query,
+                top_k=top_k,
+                _index=self._codebase_index,
+            )
+        else:
+            reference = self._reference_root
+            if not reference.is_available or reference.root is None:
+                return ToolExecResult(
+                    ok=False,
+                    payload={
+                        "ok": False,
+                        "failure_class": "reference_root_unavailable",
+                        "error": "no user-authorized external reference project is active for this turn",
+                    },
+                )
+            if self._reference_codebase_index is None:
+                self._reference_codebase_index = _reg.CodebaseIndex(reference.root)
+            result = _reg._search_codebase(
+                workspace_root=reference.root,
+                query=query,
+                top_k=top_k,
+                _index=self._reference_codebase_index,
+            )
+            if result.get("ok"):
+                result["source"] = "reference"
+                result["reference_name"] = reference.name
+                result["read_only"] = True
         return ToolExecResult(ok=result.get("ok", False), payload=result)

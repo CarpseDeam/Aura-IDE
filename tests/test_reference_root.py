@@ -57,6 +57,17 @@ def test_root_must_exist_and_be_a_directory(tmp_path: Path) -> None:
     assert access.is_available is False
 
 
+def test_reference_candidate_must_be_absolute(tmp_path: Path) -> None:
+    workspace = tmp_path / "Foo-v2"
+    workspace.mkdir()
+    access = ReferenceRootAccess(workspace)
+
+    ok, message = access.attach(Path("relative-reference"))
+
+    assert ok is False
+    assert "absolute" in message.lower()
+
+
 def test_workspace_itself_is_rejected(tmp_path: Path) -> None:
     workspace = tmp_path / "Foo-v2"
     workspace.mkdir()
@@ -219,7 +230,7 @@ def _make_registry_with_reference(tmp_path: Path) -> ToolRegistry:
     )
 
     registry = ToolRegistry(workspace_root=workspace, mode="single")
-    ok, message = registry.set_reference_root(reference)
+    ok, message = registry.begin_reference_turn(reference)
     assert ok is True, message
     return registry
 
@@ -275,7 +286,7 @@ def test_no_attached_reference_returns_deterministic_failure(tmp_path: Path) -> 
 
     assert result.ok is False
     assert result.payload["failure_class"] == "reference_root_unavailable"
-    assert "Reference Folder" in result.payload["error"]
+    assert "user-authorized" in result.payload["error"]
 
 
 # ── C. Catalog exposure ──────────────────────────────────────────────────────
@@ -305,7 +316,7 @@ def test_clearing_reference_removes_the_tool(tmp_path: Path) -> None:
     registry = _make_registry_with_reference(tmp_path)
     assert "read_reference_file" in _tool_names(registry.tool_defs())
 
-    registry.clear_reference_root()
+    registry.clear_reference_authorization()
 
     assert "read_reference_file" not in _tool_names(registry.tool_defs())
 
@@ -317,7 +328,7 @@ def test_appears_in_global_read_only_mode_when_attached(tmp_path: Path) -> None:
     reference.mkdir()
 
     registry = ToolRegistry(workspace_root=workspace, mode="single", read_only=True)
-    ok, message = registry.set_reference_root(reference)
+    ok, message = registry.begin_reference_turn(reference)
     assert ok is True, message
 
     assert "read_reference_file" in _tool_names(registry.tool_defs())
@@ -398,3 +409,111 @@ def test_workspace_switch_clears_reference_authorization(tmp_path: Path) -> None
 
     assert registry.reference_root_available is False
     assert "read_reference_file" not in _tool_names(registry.tool_defs())
+
+
+def test_broad_filesystem_and_user_roots_are_rejected(tmp_path: Path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    for name in ("Desktop", "Documents", "Downloads", "OneDrive"):
+        (home / name).mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
+
+    access = ReferenceRootAccess(workspace)
+    candidates = [
+        Path(home.anchor or str(home)),
+        home,
+        *(home / n for n in ("Desktop", "Documents", "Downloads", "OneDrive")),
+    ]
+    for candidate in candidates:
+        ok, _message = access.attach(candidate)
+        assert ok is False, candidate
+        assert access.is_available is False
+
+
+def test_reference_search_uses_a_dedicated_index_and_decorates_payload(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    reference = tmp_path / "reference"
+    workspace.mkdir()
+    reference.mkdir()
+    (workspace / "workspace_only.py").write_text(
+        "workspace_unique_marker = True\n", encoding="utf-8"
+    )
+    (reference / "reference_only.py").write_text(
+        "reference_unique_marker = True\n", encoding="utf-8"
+    )
+
+    registry = ToolRegistry(workspace, mode="single")
+    ok, message = registry.begin_reference_turn(reference)
+    assert ok is True, message
+
+    result = registry.execute(
+        "search_codebase",
+        {"query": "reference_unique_marker", "source": "reference"},
+        approval_cb=None,
+    )
+
+    assert result.ok is True
+    assert result.payload["source"] == "reference"
+    assert result.payload["reference_name"] == "reference"
+    assert result.payload["read_only"] is True
+    assert result.payload["results"][0]["path"] == "reference_only.py"
+    assert str(reference) not in str(result.payload)
+    assert "reference_only.py" not in registry._code_intel_index.file_paths()
+    assert registry._reference_codebase_index is not None
+
+
+def test_reference_search_without_authorization_is_unavailable(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path, mode="single")
+    result = registry.execute(
+        "search_codebase",
+        {"query": "anything", "source": "reference"},
+        approval_cb=None,
+    )
+    assert result.ok is False
+    assert result.payload["failure_class"] == "reference_root_unavailable"
+
+
+def test_search_source_validation_and_workspace_default(tmp_path: Path) -> None:
+    marker = tmp_path / "workspace.py"
+    marker.write_text("workspace_default_marker = True\n", encoding="utf-8")
+    registry = ToolRegistry(tmp_path, mode="single")
+
+    implicit = registry.execute(
+        "search_codebase", {"query": "workspace_default_marker"}, approval_cb=None
+    )
+    explicit = registry.execute(
+        "search_codebase",
+        {"query": "workspace_default_marker", "source": "workspace"},
+        approval_cb=None,
+    )
+    invalid = registry.execute(
+        "search_codebase", {"query": "x", "source": "other"}, approval_cb=None
+    )
+
+    assert implicit.payload == explicit.payload
+    assert invalid.ok is False
+    assert "workspace" in invalid.payload["error"]
+
+
+def test_reference_index_is_released_with_turn_authorization(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    reference = tmp_path / "reference"
+    workspace.mkdir()
+    reference.mkdir()
+    (reference / "old.py").write_text("old_marker = True\n", encoding="utf-8")
+    registry = ToolRegistry(workspace, mode="single")
+    ok, message = registry.begin_reference_turn(reference)
+    assert ok is True, message
+    registry.execute(
+        "search_codebase", {"query": "old_marker", "source": "reference"}, approval_cb=None
+    )
+    assert registry._reference_codebase_index is not None
+
+    registry.clear_reference_authorization()
+
+    assert registry._reference_codebase_index is None
+    assert registry.reference_root_available is False

@@ -86,13 +86,13 @@ class ToolRegistry(
         self._read_only = read_only
         self._mode: RegistryMode = mode
         self._codebase_index: CodebaseIndex | None = None
+        self._reference_codebase_index: CodebaseIndex | None = None
         self._fs_handler = FsReadHandler(self._root, self._resolve_in_root)
         self._git_handler = GitHandler(self._root)
         self._code_intel_index = CodeIntelIndex(self._root)
         self._code_inspector = CodeInspector(self._root, self._code_intel_index)
-        # The single session-scoped, workspace-scoped Reference Folder
-        # authorization. The user attaches it through the GUI; no model-facing
-        # tool can attach or change it. See ReferenceRootAccess.
+        # The single turn-scoped external reference authorization. No
+        # model-facing tool can attach or change it. See ReferenceRootAccess.
         self._reference_root = ReferenceRootAccess(self._root)
         self._catalog = ToolCatalog()
         self._dynamic_tools = DynamicToolRegistry(self._root)
@@ -140,6 +140,7 @@ class ToolRegistry(
         self._root = root.resolve()
         self._dynamic_tools.set_workspace_root(self._root)
         self._codebase_index = None
+        self._reference_codebase_index = None
         self._fs_handler = FsReadHandler(self._root, self._resolve_in_root)
         self._git_handler = GitHandler(self._root)
         # Replace, not mutate: no CodeIntel fact from the old workspace's
@@ -164,43 +165,34 @@ class ToolRegistry(
     def set_mode(self, mode: RegistryMode) -> None:
         self._mode = mode
 
-    # ---- Reference Folder --------------------------------------------------
+    # ---- turn-scoped external reference ------------------------------------
 
     @property
     def reference_root_available(self) -> bool:
-        """Whether a Reference Folder is currently attached."""
+        """Whether this turn has an authorized external reference root."""
         return self._reference_root.is_available
 
     @property
     def reference_root_name(self) -> str | None:
-        """Non-sensitive display name of the attached Reference Folder."""
+        """Non-sensitive folder name used to label reference observations."""
         return self._reference_root.name
 
-    @property
-    def reference_root_display_path(self) -> str | None:
-        """Absolute path of the attached Reference Folder, for GUI display only.
+    def begin_reference_turn(self, candidate: Path | None) -> tuple[bool, str]:
+        """Clear prior authorization and authorize one candidate for a turn."""
+        self.clear_reference_authorization()
+        if candidate is None:
+            return True, "no external reference"
+        ok, message = self._reference_root.attach(candidate)
+        if not ok:
+            # ``attach`` preserves a previous root by design; this boundary
+            # must not, because authorization is strictly turn-scoped.
+            self.clear_reference_authorization()
+        return ok, message
 
-        Never sent to the model — GUI callers may show it in a tooltip, but
-        no model-facing tool payload includes it.
-        """
-        root = self._reference_root.root
-        return str(root) if root is not None else None
-
-    def set_reference_root(self, path: Path | None) -> tuple[bool, str]:
-        """Authorize *path* as the Reference Folder, or clear it with None.
-
-        The user, not the model, calls this — there is no model-facing tool
-        that attaches or changes the Reference Folder. Returns ``(ok,
-        message)``; on failure the previously attached root (if any) is left
-        unchanged.
-        """
-        if path is None:
-            self._reference_root.clear()
-            return True, "cleared"
-        return self._reference_root.attach(path)
-
-    def clear_reference_root(self) -> None:
+    def clear_reference_authorization(self) -> None:
+        """End the turn's external capability and release its live index."""
         self._reference_root.clear()
+        self._reference_codebase_index = None
 
     @property
     def plan_review(self) -> PlanReviewState:

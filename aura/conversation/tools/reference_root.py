@@ -1,13 +1,15 @@
-"""Runtime owner of the single attached read-only Reference Folder.
+"""Runtime owner of the single turn-scoped read-only external reference.
 
-Session-scoped and workspace-scoped: holds at most one authorized external
-root, resolves reference-relative paths against it, and enforces that the
-resolved target never escapes it. This object is never passed to write,
+Holds at most one authorized external root, resolves reference-relative paths
+against it, and enforces that the resolved target never escapes it. This object
+is never passed to write,
 terminal, MCP, dynamic-tool, Godot mutation, or Git handlers — its only
 consumer is the read_reference_file handler.
 """
 from __future__ import annotations
 
+import os
+import re
 from pathlib import Path
 
 from aura.paths import safe_is_relative_to
@@ -23,11 +25,15 @@ def _looks_absolute(raw: str) -> bool:
     is the actual security boundary; this is an explicit, early rejection so
     the error is clear rather than accidental.
     """
-    return Path(raw).is_absolute() or raw.startswith(("/", "\\"))
+    return (
+        Path(raw).is_absolute()
+        or raw.startswith(("/", "\\"))
+        or bool(re.match(r"^[A-Za-z]:", raw))
+    )
 
 
 class ReferenceRootAccess:
-    """Holds and resolves against the currently authorized Reference Folder.
+    """Holds and resolves against the current turn's external reference.
 
     Responsibility is limited to: hold the authorized root (or None),
     attach/clear it, report availability and a non-sensitive display name,
@@ -55,9 +61,8 @@ class ReferenceRootAccess:
     def set_workspace_root(self, workspace_root: Path) -> None:
         """Repoint the workspace boundary and clear any attached reference.
 
-        Reference authorization is session-scoped to one workspace: a
-        Reference Folder attached while working in Project A must never
-        remain reachable once the active workspace becomes Project B.
+        A reference authorized for the old workspace must never remain
+        reachable once the active workspace becomes Project B.
         """
         self._workspace_root = workspace_root.resolve()
         self._root = None
@@ -68,6 +73,9 @@ class ReferenceRootAccess:
         Returns ``(ok, message)``. On success the root is now attached; on
         failure the previously attached root (if any) is left unchanged.
         """
+        if not _looks_absolute(str(candidate)):
+            return False, "Reference Folder path must be absolute"
+
         try:
             resolved = candidate.resolve()
         except OSError as exc:
@@ -75,6 +83,10 @@ class ReferenceRootAccess:
 
         if not resolved.exists() or not resolved.is_dir():
             return False, "Reference Folder must be an existing directory"
+
+        broad_root_error = self._broad_root_error(resolved)
+        if broad_root_error is not None:
+            return False, broad_root_error
 
         if resolved == self._workspace_root:
             return False, "Reference Folder cannot be the active workspace itself"
@@ -87,6 +99,31 @@ class ReferenceRootAccess:
 
         self._root = resolved
         return True, "attached"
+
+    @staticmethod
+    def _broad_root_error(candidate: Path) -> str | None:
+        """Reject roots whose scope is obviously broader than one project."""
+        if candidate.parent == candidate:
+            return "Reference Folder cannot be a filesystem or drive root"
+
+        try:
+            home = Path.home().resolve()
+        except (OSError, RuntimeError):
+            home = None
+
+        if home is None:
+            return None
+
+        def same_path(left: Path, right: Path) -> bool:
+            return os.path.normcase(str(left)) == os.path.normcase(str(right))
+
+        if same_path(candidate, home):
+            return "Reference Folder cannot be the user home directory"
+
+        broad_names = ("Desktop", "Documents", "Downloads", "OneDrive")
+        if any(same_path(candidate, (home / name).resolve()) for name in broad_names):
+            return "Reference Folder cannot be a broad user folder"
+        return None
 
     def clear(self) -> None:
         self._root = None

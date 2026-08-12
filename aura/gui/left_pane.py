@@ -322,8 +322,6 @@ class LeftPane(QFrame):
     planner_thinking_changed = Signal(str)
     drone_selected = Signal(Path)
     new_drone_requested = Signal()
-    reference_root_change_requested = Signal()
-    reference_root_clear_requested = Signal()
 
     def __init__(self, workspace_root: Path | None, parent=None) -> None:
         super().__init__(parent)
@@ -360,28 +358,6 @@ class LeftPane(QFrame):
         change_row.setContentsMargins(8, 0, 8, 6)
         change_row.addWidget(change_btn)
         _projects_block_layout.addLayout(change_row)
-
-        reference_btn = QPushButton("Reference Folder...")
-        reference_btn.clicked.connect(self.reference_root_change_requested.emit)
-        self._reference_clear_btn = QToolButton()
-        self._reference_clear_btn.setText("✕")
-        self._reference_clear_btn.setToolTip("Clear Reference Folder")
-        self._reference_clear_btn.setEnabled(False)
-        self._reference_clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._reference_clear_btn.clicked.connect(self.reference_root_clear_requested.emit)
-        reference_row = QHBoxLayout()
-        reference_row.setContentsMargins(8, 0, 8, 2)
-        reference_row.addWidget(reference_btn, 1)
-        reference_row.addWidget(self._reference_clear_btn)
-        _projects_block_layout.addLayout(reference_row)
-
-        self._reference_label = _ElidedLabel("Reference: (none)")
-        self._reference_label.setObjectName("referenceLabel")
-        self._reference_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
-        reference_label_row = QHBoxLayout()
-        reference_label_row.setContentsMargins(8, 0, 8, 6)
-        reference_label_row.addWidget(self._reference_label)
-        _projects_block_layout.addLayout(reference_label_row)
 
         new_project_row = QHBoxLayout()
         new_project_row.setContentsMargins(8, 0, 8, 6)
@@ -459,21 +435,6 @@ class LeftPane(QFrame):
             self._workspace_label.setText("(none)")
             return
         self._workspace_label.setText(str(root))
-
-    def update_reference_root_label(self, name: str | None, display_path: str | None = None) -> None:
-        """Reflect the attached Reference Folder's non-sensitive name.
-
-        ``display_path``, when given, is shown only in the GUI tooltip — it
-        is never sent to the model.
-        """
-        if name is None:
-            self._reference_label.set_full_text("Reference: (none)")
-            self._reference_label.setToolTip("")
-            self._reference_clear_btn.setEnabled(False)
-            return
-        self._reference_label.set_full_text(f"Reference: {name}")
-        self._reference_label.setToolTip(display_path or name)
-        self._reference_clear_btn.setEnabled(True)
 
     def set_production_model(self, model: str) -> None:
         """Select the production model (role-neutral entry point)."""

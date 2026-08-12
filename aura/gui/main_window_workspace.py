@@ -255,9 +255,6 @@ class MainWindowWorkspaceController(QObject):
         window._tree.set_root(storage_root)
         logger.info("tree.set_root done in %.3fs", time.perf_counter() - t0)
         self.update_workspace_label()
-        # Reference Folder authorization is session-scoped to one workspace;
-        # ``set_workspace_root`` above already cleared it — reflect that here.
-        self.update_reference_root_label()
         window._refresh_status_bar()
         # Switch from launchpad to workspace view
         window._switch_to_workspace_view()
@@ -322,7 +319,6 @@ class MainWindowWorkspaceController(QObject):
         _project = ProjectStore().create_or_update_project(path)
         cc.set_current_project(_project.id, _project.name)
         self.update_workspace_label()
-        self.update_reference_root_label()
 
         def _do_refresh_after_load():
             t0 = time.perf_counter()
@@ -449,40 +445,3 @@ class MainWindowWorkspaceController(QObject):
 
     def update_workspace_label(self) -> None:
         self._window._left_pane.update_workspace_label(self._window._workspace_root)
-
-    # ---- Reference Folder ---------------------------------------------------
-
-    def on_change_reference_root(self) -> None:
-        """Let the user attach an external read-only Reference Folder.
-
-        This is the sole authorization seam for Reference Folder access —
-        there is no model-facing tool that can attach or change it. Reuses
-        the same broad-root warning as the workspace picker; the actual
-        security boundary (workspace containment, existence) lives in
-        ``ReferenceRootAccess``.
-        """
-        window = self._window
-        chosen = QFileDialog.getExistingDirectory(
-            window, "Choose Reference Folder", str(Path.home())
-        )
-        if not chosen:
-            return
-        path = Path(chosen)
-        if self._warn_blocked_root(path):
-            return
-        ok, message = window._bridge.set_reference_root(path)
-        if not ok:
-            QMessageBox.warning(window, "Reference Folder Not Attached", message)
-            return
-        self.update_reference_root_label()
-
-    def on_clear_reference_root(self) -> None:
-        self._window._bridge.set_reference_root(None)
-        self.update_reference_root_label()
-
-    def update_reference_root_label(self) -> None:
-        window = self._window
-        window._left_pane.update_reference_root_label(
-            window._bridge.reference_root_name,
-            window._bridge.reference_root_display_path,
-        )

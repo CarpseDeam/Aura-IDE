@@ -106,12 +106,14 @@ SEARCH_TOOL_DEFS: list[dict[str, Any]] = [
                     "function": {
                         "name": "search_codebase",
                         "description": (
-                            "Ranked keyword/natural-language search over a local BM25 index of the "
-                            "workspace. The index is built from structure-aware retrieval documents: "
+                            "Ranked keyword/natural-language search over a local BM25 index. By "
+                            "default it searches the active workspace; source='reference' searches "
+                            "the external project explicitly authorized by the user for this turn. "
+                            "The index is built from structure-aware retrieval documents: "
                             "each file is partitioned into bounded, non-overlapping source regions "
                             "using parser-derived structure where available, so a result is a "
                             "function-, class-, or block-sized region rather than a whole file. Each "
-                            "result carries a workspace-relative path, a bounded text snippet, its "
+                            "result carries a root-relative path, a bounded text snippet, its "
                             "start_line/end_line, and, when a parser range backs the region, symbol, "
                             "symbol_kind, and parent. Relevance is BM25 lexical ranking over tokenized "
                             "text, not a semantic or correctness judgment. The index builds lazily on "
@@ -128,6 +130,15 @@ SEARCH_TOOL_DEFS: list[dict[str, Any]] = [
                                     "type": "integer",
                                     "description": "Maximum number of results to return. Default: 5.",
                                     "default": 5,
+                                },
+                                "source": {
+                                    "type": "string",
+                                    "enum": ["workspace", "reference"],
+                                    "description": (
+                                        "Search the editable workspace or the user-authorized "
+                                        "read-only external reference project. Defaults to workspace."
+                                    ),
+                                    "default": "workspace",
                                 },
                             },
                             "required": ["query"],

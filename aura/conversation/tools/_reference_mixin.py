@@ -12,7 +12,7 @@ from aura.conversation.tools.fs_handler import FsReadHandler
 
 class ReferenceReadHandlersMixin:
     """Handler for read_reference_file — reuses FsReadHandler over the
-    currently attached Reference Folder rather than forking a second reader."""
+    currently authorized external root rather than forking a second reader."""
 
     def _handle_read_reference_file(self, args, approval_cb, reject_all) -> ToolExecResult:
         reference = self._reference_root
@@ -20,7 +20,7 @@ class ReferenceReadHandlersMixin:
             payload = {
                 "ok": False,
                 "failure_class": "reference_root_unavailable",
-                "error": "no Reference Folder is attached; the user must attach one first",
+                "error": "no user-authorized external reference project is active for this turn",
             }
             return ToolExecResult(ok=False, payload=payload)
 

@@ -343,24 +343,15 @@ class ConversationBridge(QObject):
     def set_read_only(self, value: bool) -> None:
         self._registry.set_read_only(value)
 
-    # ---- Reference Folder ---------------------------------------------------
+    # ---- turn-scoped external reference ------------------------------------
 
-    def set_reference_root(self, path: Path | None) -> tuple[bool, str]:
-        """Authorize (or clear, with None) the session's Reference Folder.
+    def authorize_reference_root(self, candidate: Path | None) -> tuple[bool, str]:
+        """Authorize one user-derived reference candidate for the next turn."""
+        return self._registry.begin_reference_turn(candidate)
 
-        Narrow delegation to ToolRegistry — the bridge creates no second
-        owner of Reference Folder trust or path resolution.
-        """
-        return self._registry.set_reference_root(path)
-
-    @property
-    def reference_root_name(self) -> str | None:
-        return self._registry.reference_root_name
-
-    @property
-    def reference_root_display_path(self) -> str | None:
-        """Absolute path for GUI display only — never sent to the model."""
-        return self._registry.reference_root_display_path
+    def clear_reference_authorization(self) -> None:
+        """End the active turn's external read-only capability."""
+        self._registry.clear_reference_authorization()
 
     def set_system_prompt(self, prompt: str) -> None:
         """Store the custom production system prompt and reapply composition."""
@@ -682,13 +673,21 @@ class ConversationBridge(QObject):
         except Exception:
             _log.exception("Failed to surface skill activation ledger")
 
-        if worker is not None:
-            worker.deleteLater()
-        if thread is not None:
-            thread.quit()
-            thread.wait(2000)
-            thread.deleteLater()
-        self.finished.emit()
+        try:
+            if worker is not None:
+                worker.deleteLater()
+            if thread is not None:
+                thread.quit()
+                thread.wait(2000)
+                thread.deleteLater()
+        except Exception:
+            _log.exception("Failed to clean up production worker thread")
+        finally:
+            # Reference authorization is a production-turn capability, never
+            # a session setting. Clear the root and its dedicated index before
+            # the bridge announces that the turn is finished.
+            self.clear_reference_authorization()
+            self.finished.emit()
 
     def _prepare_turn_context(self) -> None:
         """Recompose the system prompt against this turn's live terrain.

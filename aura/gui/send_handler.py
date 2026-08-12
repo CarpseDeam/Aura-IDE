@@ -19,9 +19,8 @@ _log = logging.getLogger(__name__)
 from dataclasses import dataclass
 
 from aura.config import PROVIDERS, AppSettings, ModelInfo, ThinkingMode, has_usable_provider_configuration
+from aura.conversation.reference_paths import ReferencePathError, extract_reference_path
 from aura.conversation.target_files import extract_target_files
-from aura.gui.builtin_commands import classify_built_in_command
-from aura.gui.input_panel import Attachment
 from aura.git_ops import (
     recent_commit_log,
     restore_to_snapshot,
@@ -29,7 +28,8 @@ from aura.git_ops import (
     working_tree_diff,
     working_tree_status,
 )
-from aura.gui.input_panel import SendPayload
+from aura.gui.builtin_commands import classify_built_in_command
+from aura.gui.input_panel import Attachment, SendPayload
 
 
 def _extract_snapshot_sha(text: str) -> str | None:
@@ -235,6 +235,10 @@ class SendHandler(QObject):
         # Derive the target files from the retained user text so stale turn
         # state from another conversation cannot leak.
         retained_text = self._bridge.history.latest_real_user_text()
+        auth_text_fn = getattr(self._bridge.history, "latest_real_user_authored_text", None)
+        auth_text = auth_text_fn() if callable(auth_text_fn) else retained_text
+        if not self._authorize_reference_for_turn(auth_text):
+            return False
         self._declare_turn_target_files(retained_text)
 
         self._message_queue.clear()
@@ -244,6 +248,31 @@ class SendHandler(QObject):
             replay_cb()
         self._chat.begin_assistant()
         self._bridge.send(model=model, thinking=thinking)
+        return True
+
+    def _authorize_reference_for_turn(self, raw_user_text: str | None) -> bool:
+        """Derive and authorize the external reference for this active turn."""
+        if self._workspace_root is None:
+            return True
+        try:
+            candidate = extract_reference_path(raw_user_text, self._workspace_root)
+        except ReferencePathError as exc:
+            clear = getattr(self._bridge, "clear_reference_authorization", None)
+            if callable(clear):
+                clear()
+            self._chat.add_error("External reference", str(exc))
+            return False
+
+        authorize = getattr(self._bridge, "authorize_reference_root", None)
+        if not callable(authorize):
+            # Lightweight bridge doubles used by non-production callers may
+            # predate this optional seam; the real ConversationBridge always
+            # supplies it.
+            return True
+        ok, message = authorize(candidate)
+        if not ok:
+            self._chat.add_error("External reference", message)
+            return False
         return True
 
     def _declare_turn_target_files(self, text: str | None) -> None:
@@ -432,6 +461,12 @@ class SendHandler(QObject):
         vision_error: str | None,
     ) -> None:
         """Build the message parts, append to history, and send via the bridge."""
+        # Authorization is derived from the literal user text before history
+        # mutation or bridge.send(). Attachment metadata and vision output are
+        # intentionally not part of this decision.
+        if not self._authorize_reference_for_turn(payload.text):
+            return
+
         image_atts = [a for a in payload.attachments if a.kind == "image" and a.b64]
         text = payload.text
         text_refs = [a.text_ref for a in payload.attachments if a.text_ref]
@@ -485,6 +520,12 @@ class SendHandler(QObject):
             display_text = text
             history_text = text
             self._bridge.history.append_user_text(history_text)
+
+        record_authored = getattr(
+            self._bridge.history, "set_latest_real_user_authored_text", None
+        )
+        if callable(record_authored):
+            record_authored(payload.text)
 
         self._chat.add_user(display_text, [a.b64 for a in image_atts] or None)
         self._chat.scroll_to_bottom(force=True)

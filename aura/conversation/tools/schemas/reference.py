@@ -8,9 +8,10 @@ READ_REFERENCE_FILE_TOOL_DEF: dict[str, Any] = {
     "function": {
         "name": "read_reference_file",
         "description": (
-            "Read a UTF-8 text file from the single user-attached read-only Reference Folder — "
-            "an external folder distinct from the active workspace. The path argument is relative "
-            "to that Reference Folder, not the workspace. By default returns the full contents "
+            "Read a UTF-8 text file from the single read-only external project explicitly "
+            "authorized by the user for this turn — an external folder distinct from the active "
+            "workspace. The path argument is relative to that external project, not the workspace. "
+            "By default returns the full contents "
             "(capped at 200KB); pass offset/limit to read a specific window of lines instead. "
             "Nothing in the Reference Folder can be modified or executed through this tool."
         ),
@@ -19,7 +20,7 @@ READ_REFERENCE_FILE_TOOL_DEF: dict[str, Any] = {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Reference-Folder-relative path, e.g. 'src/auth.py'.",
+                    "description": "External-project-relative path, e.g. 'src/auth.py'.",
                 },
                 "offset": {
                     "type": "integer",

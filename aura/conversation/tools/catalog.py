@@ -96,10 +96,10 @@ class ToolCatalog:
         same as ``web_search``). Never offered in read-only mode: nothing
         read-only can mutate, so there is nothing for a plan to gate.
 
-        ``reference_available`` adds ``read_reference_file`` whenever a
-        Reference Folder is currently attached — in both production and
-        read-only mode, since its effect is observation-only. With no
-        Reference Folder attached the catalog is unchanged from before this
+        ``reference_available`` adds ``read_reference_file`` whenever the
+        current turn has an authorized external reference — in both
+        production and read-only mode, since its effect is observation-only.
+        With no reference authorized the catalog is unchanged from before this
         capability existed.
         """
         if read_only:
