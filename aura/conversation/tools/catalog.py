@@ -12,6 +12,7 @@ from aura.conversation.tools.schemas import (
     LOAD_SKILLS_TOOL_DEF,
     READ_REFERENCE_FILE_TOOL_DEF,
     READ_TOOL_DEFS,
+    RECORD_IMPLEMENTATION_DECISION_TOOL_DEF,
     REPORT_ALREADY_SATISFIED_TOOL_DEF,
     REPORT_BLOCKER_TOOL_DEF,
     REVIEW_IMPLEMENTATION_PLAN_TOOL_DEF,
@@ -134,6 +135,7 @@ class ToolCatalog:
                 single_read_tools
                 + [dict(INSPECT_CODE_TOOL_DEF)]
                 + [dict(WORKER_TODO_TOOL_DEF)]
+                + [dict(RECORD_IMPLEMENTATION_DECISION_TOOL_DEF)]
                 + list(WRITE_TOOL_DEFS)
                 + [dict(REPORT_BLOCKER_TOOL_DEF)]
                 + [dict(REPORT_ALREADY_SATISFIED_TOOL_DEF)]

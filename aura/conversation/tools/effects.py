@@ -129,6 +129,7 @@ BUILTIN_TOOL_EFFECTS: dict[str, ToolEffect] = {
     "register_drone_folder": ToolEffect.BOOKKEEPING,
     "save_to_project_memory": ToolEffect.BOOKKEEPING,
     "review_implementation_plan": ToolEffect.BOOKKEEPING,
+    "record_implementation_decision": ToolEffect.BOOKKEEPING,
 }
 
 _EFFECT_BY_VALUE: dict[str, ToolEffect] = {effect.value: effect for effect in ToolEffect}

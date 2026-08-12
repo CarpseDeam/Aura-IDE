@@ -44,6 +44,8 @@ EXPECTED_PRODUCTION_TOOLS: frozenset[str] = frozenset({
     "inspect_code",
     # live plan
     "update_worker_todo",
+    # working implementation decision record
+    "record_implementation_decision",
     # write / edit
     "write_file",
     "patch_file",
@@ -260,10 +262,11 @@ def test_every_production_tool_still_describes_itself() -> None:
 
 def test_the_production_schema_shrank() -> None:
     """Measured against the surface this repair was diagnosed on: 35 tools and
-    35,768 characters of JSON. ``inspect_code`` and, later, re-exposing
-    ``search_codebase`` as a distinct capability each account for a one-tool,
+    35,768 characters of JSON. ``inspect_code``, later re-exposing
+    ``search_codebase`` as a distinct capability, and later still
+    ``record_implementation_decision`` each account for a one-tool,
     one-description bump over the original repair's numbers."""
     defs = _production_defs(web_search=True)
 
-    assert len(defs) <= 26
+    assert len(defs) <= 27
     assert len(json.dumps(defs)) < 34_000

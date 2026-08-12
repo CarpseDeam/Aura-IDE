@@ -167,6 +167,42 @@ def test_single_remains_the_implementer(tmp_path: Path) -> None:
     assert "### worker_execution_contract" not in prompt
 
 
+def test_the_capsule_carries_the_decision_record_instruction_with_no_ceremony() -> None:
+    """One durable behavioral rule, not a second workflow bolted onto SINGLE."""
+    text = _capsule_text()
+    lower = text.lower()
+
+    assert "record_implementation_decision" in text
+    assert len(text) < 2_600, f"the SINGLE capsule regrew to {len(text)} chars"
+
+    # No phase ladder, no historical checkpoint/focused-action ceremony.
+    for retired in (
+        "DISCOVER:",
+        "DECIDE:",
+        "IMPLEMENT:",
+        "VALIDATE:",
+        "REPORT:",
+        "decision checkpoint",
+        "commit_implementation_decision",
+        "focused action",
+        "focused_action",
+        "focusedactionstate",
+    ):
+        assert retired not in text, f"retired ceremony {retired!r} is back"
+
+    # No mandatory counts, forced-order phasing, or reasoning/tool budgets.
+    for budget in (
+        "after n reads",
+        "one or two tool calls",
+        "at most",
+        "no more than",
+        "stop after",
+        "reasoning budget",
+        "token budget",
+    ):
+        assert budget not in lower, f"a budget/ceremony phrase is back: {budget!r}"
+
+
 # ── 2. no concept has a second owner ────────────────────────────────────────
 
 

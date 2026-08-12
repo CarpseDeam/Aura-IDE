@@ -73,6 +73,7 @@ def test_catalog_composition_preserves_read_only_and_single_order() -> None:
         "search_codebase",
         "inspect_code",
         "update_worker_todo",
+        "record_implementation_decision",
         "install_godot_editor_bridge",
         "edit_godot_editor",
         "edit_godot_asset_preview",
