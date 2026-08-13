@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Literal
 
 ApprovalAction = Literal["approve", "reject", "reject_all", "approve_all"]
-RegistryMode = Literal["single", "planner", "worker"]
 
 
 @dataclass(frozen=True)

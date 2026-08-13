@@ -1,4 +1,4 @@
-"""The production SINGLE tool surface is minimal and instruction-free.
+"""The production tool surface is minimal and instruction-free.
 
 Two defects lived in the schema, not in the loop:
 
@@ -43,7 +43,7 @@ EXPECTED_PRODUCTION_TOOLS: frozenset[str] = frozenset({
     # dense evidence packet for one location or symbol
     "inspect_code",
     # live plan
-    "update_worker_todo",
+    "update_task_checklist",
     # working implementation decision record
     "record_implementation_decision",
     # write / edit
@@ -144,7 +144,7 @@ def _names(defs: list[dict]) -> list[str]:
 
 def _production_defs(*, web_search: bool = False) -> list[dict]:
     return ToolCatalog().build_tool_defs(
-        mode="single", read_only=False, web_search=web_search
+        read_only=False, web_search=web_search
     )
 
 
@@ -163,14 +163,14 @@ def test_production_schema_is_the_intended_minimal_tool_set() -> None:
 
 def test_the_live_registry_exposes_that_same_set(tmp_path) -> None:
     """The catalog is not tested in isolation from what production builds."""
-    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    registry = ToolRegistry(workspace_root=tmp_path)
 
     assert set(_names(registry.tool_defs())) == EXPECTED_PRODUCTION_TOOLS
 
 
 def test_removed_observations_stay_callable_for_transcript_replay(tmp_path) -> None:
     """Narrowing shapes choice; it does not revoke a replayed historical call."""
-    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    registry = ToolRegistry(workspace_root=tmp_path)
     replayable = set(_names(registry.replayable_tool_defs()))
 
     for withheld in ("find_usages", "read_files", "list_directory", "git_log"):
@@ -183,22 +183,12 @@ def test_removed_observations_stay_callable_for_transcript_replay(tmp_path) -> N
     assert not (replayable & EXPECTED_PRODUCTION_TOOLS)
 
 
-def test_planner_and_worker_see_the_single_catalog() -> None:
-    """The planner/worker dispatch is gone; every mode sees the same catalog.
-
-    Production SINGLE is the only coding loop — ``mode`` no longer branches
-    the exposed surface, and no mode resurrects the superseded read or git
-    wrappers.
-    """
+def test_catalog_has_no_runtime_mode_dimension() -> None:
+    """The production catalog is derived from actual capability facts only."""
     catalog = ToolCatalog()
+    names = set(_names(catalog.build_tool_defs(read_only=False)))
 
-    single = set(_names(catalog.build_tool_defs(mode="single", read_only=False)))
-    planner = set(_names(catalog.build_tool_defs(mode="planner", read_only=False)))
-    worker = set(_names(catalog.build_tool_defs(mode="worker", read_only=False)))
-
-    assert planner == single
-    assert worker == single
-    assert not (planner & {"git_log", "git_show", "git_log_file", "read_files", "list_directory"})
+    assert not (names & {"git_log", "git_show", "git_log_file", "read_files", "list_directory"})
 
 
 # ── 2. web_search is per-turn and stable within the turn ────────────────────
@@ -219,7 +209,7 @@ def test_the_registry_holds_the_web_search_decision_for_the_whole_turn(
     tmp_path, monkeypatch,
 ) -> None:
     """Availability resolves from configuration once; rounds never re-resolve."""
-    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    registry = ToolRegistry(workspace_root=tmp_path)
 
     assert registry.web_search_enabled is False
     assert "web_search" not in _names(registry.tool_defs())

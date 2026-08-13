@@ -2,7 +2,7 @@
 
 ## Aura Companion
 
-Aura Companion is a web-based mobile surface that connects to your running Aura desktop instance. It lets you interact with your Planner from your phone — browse projects, send messages, and dispatch specs — while the desktop streams responses back in real-time.
+Aura Companion is a web-based mobile surface that connects to your running Aura desktop instance. It lets you browse projects and send messages while the desktop streams responses back in real-time.
 
 ## How It Works
 
@@ -14,8 +14,7 @@ The relay is optional. You can run a local relay for LAN-only access, or use a h
 
 - **Browse projects** — See all recent Aura projects on your desktop
 - **Browse conversations** — View threads within a project
-- **Chat with the Planner** — Send messages and get real-time streaming responses
-- **Dispatch specs** — The Planner can dispatch specs that the desktop Worker executes
+- **Chat with Aura** — Send messages and get real-time streaming responses
 - **View receipts** — Browse completed run receipts
 - **Check drone status** — See active drone runs
 
@@ -41,9 +40,8 @@ Tap a desktop to begin chatting. The companion shows "Online" or "Offline" in th
 
 ## Current State
 
-- Chat with Planner is functional
+- Chat is functional
 - Project and conversation browsing works
-- Spec dispatch from phone works
 - Desktop streams responses in real-time
 - More features landing soon
 

@@ -23,7 +23,7 @@ def _approve(_request: object) -> _Decision:
 
 
 def _registry(root: Path) -> ToolRegistry:
-    return ToolRegistry(workspace_root=root, mode="single")
+    return ToolRegistry(workspace_root=root)
 
 
 def _symbol_names(registry: ToolRegistry, path: str) -> list[str]:

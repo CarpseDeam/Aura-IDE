@@ -1,10 +1,9 @@
-"""Tool catalog - builds the list of tool schemas for the current mode/read-only state."""
+"""Tool catalog for Aura's production and read-only capability surfaces."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from aura.conversation.tools._types import RegistryMode
 from aura.conversation.tools.capability_groups import BULK_READ, CODE_INTEL, tool_names_for
 from aura.conversation.tools.effects import BUILTIN_TOOL_EFFECTS, ToolEffect
 from aura.conversation.tools.schemas import (
@@ -17,16 +16,16 @@ from aura.conversation.tools.schemas import (
     REPORT_BLOCKER_TOOL_DEF,
     REVIEW_IMPLEMENTATION_PLAN_TOOL_DEF,
     RUN_AND_WATCH_TOOL_DEF,
+    TASK_CHECKLIST_TOOL_DEF,
     TERMINAL_TOOL_DEF,
     WEB_SEARCH_TOOL_DEF,
-    WORKER_TODO_TOOL_DEF,
     WORKSPACE_SNAPSHOT_TOOL_DEF,
     WRITE_TOOL_DEFS,
 )
 from aura.conversation.tools.schemas.code_intel import INSPECT_CODE_TOOL_DEF
 from aura.conversation.tools.schemas.drones import RUN_READ_ONLY_DRONE_TOOL_DEF
 
-# Read and search tools the production single-agent catalog no longer offers.
+# Read and search tools the production catalog no longer offers.
 #
 # Every one of these is reachable through a tool that remains: line windows via
 # ``read_file``'s offset/limit, multi-file reads via several ``read_file`` calls
@@ -41,16 +40,16 @@ from aura.conversation.tools.schemas.drones import RUN_READ_ONLY_DRONE_TOOL_DEF
 # the production catalog.
 #
 # The handlers stay registered, so a replayed historical tool call still runs.
-SINGLE_SUPERSEDED_READ_TOOL_NAMES: frozenset[str] = tool_names_for(
+PRODUCTION_SUPERSEDED_READ_TOOL_NAMES: frozenset[str] = tool_names_for(
     {BULK_READ, CODE_INTEL}
 )
 
-#: The git tools production SINGLE offers. ``git_status`` and ``git_diff`` are
+#: The git tools the production conversation offers. ``git_status`` and ``git_diff`` are
 #: the two an implementation turn genuinely needs — what changed, and exactly
 #: how. History, branch, and stash inspection is ordinary shell work reachable
 #: through ``run_terminal_command``, and a wrapper per git subcommand only
 #: enlarged the surface the model has to choose from.
-SINGLE_GIT_TOOL_NAMES: frozenset[str] = frozenset({"git_status", "git_diff"})
+PRODUCTION_GIT_TOOL_NAMES: frozenset[str] = frozenset({"git_status", "git_diff"})
 
 #: The production mutation tools — the write/edit tools the model acts through.
 #: The same set the normal catalogs already register; used by the effect-model
@@ -72,12 +71,11 @@ def _tool_name(tool_def: dict[str, Any]) -> str:
 
 
 class ToolCatalog:
-    """Builds the available tool schemas for the current mode/read-only state."""
+    """Builds the available tool schemas for current capability facts."""
 
     def build_tool_defs(
         self,
         *,
-        mode: RegistryMode,
         read_only: bool,
         dynamic_schemas: list[dict[str, Any]] | None = None,
         mcp_schemas: list[dict[str, Any]] | None = None,
@@ -85,9 +83,9 @@ class ToolCatalog:
         plan_review: bool = False,
         reference_available: bool = False,
     ) -> list[dict[str, Any]]:
-        """Build tool definitions for the production single-agent catalog.
+        """Build tool definitions for the production catalog.
 
-        ``web_search`` adds the research tool to the production single-agent
+        ``web_search`` adds the research tool to the production
         catalog.  It reflects only whether the search backend is configured,
         is resolved once per real user turn, and is held for the whole turn, so
         the catalog the model sees never moves between rounds.
@@ -110,7 +108,7 @@ class ToolCatalog:
                 + list(GIT_TOOL_DEFS)
             )
         else:
-            # Production single-agent mode: one continuous model owns the whole
+            # Production: one continuous model owns the whole
             # request.  The catalog is the minimum a normal implementation turn
             # needs — read/glob/grep, TODO, the write and Godot edit tools, the
             # terminal, git status/diff, skills, and the two structured exit
@@ -123,25 +121,25 @@ class ToolCatalog:
             # reachable through ``run_terminal_command`` or unrelated to normal
             # implementation, and each one made the model pick an approach
             # before it could pick an action.
-            single_read_tools = [
+            production_read_tools = [
                 tool for tool in READ_TOOL_DEFS
-                if _tool_name(tool) not in SINGLE_SUPERSEDED_READ_TOOL_NAMES
+                if _tool_name(tool) not in PRODUCTION_SUPERSEDED_READ_TOOL_NAMES
             ]
-            single_git_tools = [
+            production_git_tools = [
                 tool for tool in GIT_TOOL_DEFS
-                if _tool_name(tool) in SINGLE_GIT_TOOL_NAMES
+                if _tool_name(tool) in PRODUCTION_GIT_TOOL_NAMES
             ]
             tools = (
-                single_read_tools
+                production_read_tools
                 + [dict(INSPECT_CODE_TOOL_DEF)]
-                + [dict(WORKER_TODO_TOOL_DEF)]
+                + [dict(TASK_CHECKLIST_TOOL_DEF)]
                 + [dict(RECORD_IMPLEMENTATION_DECISION_TOOL_DEF)]
                 + list(WRITE_TOOL_DEFS)
                 + [dict(REPORT_BLOCKER_TOOL_DEF)]
                 + [dict(REPORT_ALREADY_SATISFIED_TOOL_DEF)]
                 + [dict(TERMINAL_TOOL_DEF)]
                 + [dict(RUN_AND_WATCH_TOOL_DEF)]
-                + single_git_tools
+                + production_git_tools
                 + [dict(LOAD_SKILLS_TOOL_DEF)]
             )
             if web_search:
@@ -163,13 +161,12 @@ class ToolCatalog:
     def build_replayable_tool_defs(
         self,
         *,
-        mode: RegistryMode,
         read_only: bool,
     ) -> list[dict[str, Any]]:
-        """Defs for tools this mode withholds but still accepts when called.
+        """Definitions for withheld observation tools that remain replayable.
 
-        A mode narrows its catalog to shape *choice*, not to revoke capability:
-        the single-agent catalog drops the superseded read, search, git-history
+        The production catalog narrows *choice*, not capability: it drops the
+        superseded read, search, git-history
         and snapshot tools because offering all of them made the model pick an
         approach before it could pick an action, but their handlers stay
         registered so a replayed historical tool call still runs.  Preflight
@@ -179,15 +176,14 @@ class ToolCatalog:
 
         Only observations qualify.  Nothing that can change the workspace is
         callable from outside the catalog that offered it, which is what keeps
-        ``read_only`` and Planner mode's refusal to edit meaningful rather than
-        advisory.
+        ``read_only`` meaningful rather than advisory.
         """
-        if read_only or mode != "single":
+        if read_only:
             return []
         exposed = {
             _tool_name(tool)
             for tool in self.build_tool_defs(
-                mode=mode, read_only=read_only, web_search=True
+                read_only=read_only, web_search=True
             )
         }
         candidates = (

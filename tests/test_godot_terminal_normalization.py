@@ -9,7 +9,7 @@ from aura.conversation.tool_runner import ToolRunner
 from aura.sandbox import SandboxResult
 
 
-def test_worker_executes_import_after_validate_project_alias(
+def test_execution_runs_import_after_validate_project_alias(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -46,7 +46,6 @@ def test_worker_executes_import_after_validate_project_alias(
         {"command": requested},
         events.append,
         threading.Event(),
-        "worker",
         explicit_validation_commands=None,
     )
 

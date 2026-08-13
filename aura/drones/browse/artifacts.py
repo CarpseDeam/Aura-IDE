@@ -123,8 +123,8 @@ def build_boundary_artifact(
 ) -> dict[str, Any]:
     """Build a produced_artifact dict for a boundary (policy-blocked) action.
 
-    The artifact status is ``needs_planner_decision`` when the policy verdict
-    is ``needs_planner_decision``, otherwise ``blocked_manual``.
+    The artifact status is ``needs_review`` when the policy verdict
+    is ``needs_review``, otherwise ``blocked_manual``.
 
     If ``profile_metadata`` is provided, its fields (browser_profile,
     persistent_session, visible) are merged into the artifact.
@@ -142,8 +142,8 @@ def build_boundary_artifact(
         "matched_text": policy_result.matched_text,
     }
     artifact_status = (
-        "needs_planner_decision"
-        if policy_result.verdict == "needs_planner_decision"
+        "needs_review"
+        if policy_result.verdict == "needs_review"
         else "blocked_manual"
     )
     artifact = {

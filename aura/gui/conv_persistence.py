@@ -14,6 +14,15 @@ from PySide6.QtCore import QObject, QTimer, Signal, Slot
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from aura.config import APP_NAME
+from aura.conversation.chat_transcript import (
+    ASSISTANT,
+    ERROR,
+    EXECUTION_COMPLETE,
+    PLAN_REVIEW,
+    USER,
+    clone_chat_items,
+    legacy_chat_items_from_messages,
+)
 from aura.conversation.history import History
 from aura.conversation.persistence import (
     LoadedConversation,
@@ -21,15 +30,6 @@ from aura.conversation.persistence import (
     load_conversation,
     most_recent_conversation,
     save_conversation,
-)
-from aura.conversation.chat_transcript import (
-    ERROR,
-    PLAN_REVIEW,
-    PLANNER,
-    USER,
-    WORKER_COMPLETE,
-    clone_chat_items,
-    legacy_chat_items_from_messages,
 )
 from aura.projects.store import ProjectStore
 from aura.settings import AppSettings
@@ -47,7 +47,7 @@ def _is_transient_replay_message(m: dict) -> bool:
         return True
     if role == "user":
         content = m.get("content", "")
-        if isinstance(content, str) and content.startswith("Planner stale-read invalidation:"):
+        if isinstance(content, str) and content.startswith("Production stale-read invalidation:"):
             return True
     elif role == "assistant":
         # Assistant messages with tool_calls are operational chatter, not final prose.
@@ -220,7 +220,7 @@ class ConversationPersistence(QObject):
         self._active_replay_id += 1
         self._conversation_generation += 1
         self._bridge.reset_history()
-        self._bridge.clear_pre_worker_snapshot()
+        self._bridge.clear_pre_execution_snapshot()
         self._chat.reset()
         self._playground.clear()
         self._current_conversation_path = None
@@ -322,11 +322,11 @@ class ConversationPersistence(QObject):
             loaded.path,
         )
         self._active_replay_id += 1
-        # Old conversations may carry legacy Planner/Worker metadata. They load
-        # safely, but the live session always resumes in production single-agent
-        # mode with the single-model fields only.
-        from aura.prompts import SINGLE_SYSTEM_PROMPT
-        default_prompt = SINGLE_SYSTEM_PROMPT
+        # Old conversations may carry legacy Assistant/Execution metadata. They load
+        # safely, but the live session always resumes with the production
+        # conversation's model fields only.
+        from aura.prompts import PRODUCTION_SYSTEM_PROMPT
+        default_prompt = PRODUCTION_SYSTEM_PROMPT
 
         self._bridge.history.system_prompt = (
             loaded.history.system_prompt or default_prompt
@@ -345,15 +345,15 @@ class ConversationPersistence(QObject):
         self._bridge.set_production_provider(loaded.provider)
         self._left_pane.populate_models(loaded.provider)
 
-        # Always resume in production single-agent mode.
-        self._bridge.set_production_mode()
+        # Always resume the production conversation.
+        self._bridge.refresh_production_prompt()
         if loaded.model:
             self._left_pane.set_production_model(loaded.model)
         if loaded.thinking:
             self._left_pane.set_production_thinking(loaded.thinking)
         self._chat.reset()
         self._playground.clear()
-        self._bridge.clear_pre_worker_snapshot()
+        self._bridge.clear_pre_execution_snapshot()
         self._render_chat_items(loaded.chat_items)
         self.needs_status_refresh.emit()
 
@@ -411,7 +411,7 @@ class ConversationPersistence(QObject):
                     kind = item.get("kind")
                     if kind == USER:
                         self._chat.add_user(str(item.get("text", "")))
-                    elif kind == PLANNER:
+                    elif kind == ASSISTANT:
                         self._chat.begin_assistant()
                         self._chat.append_content(str(item.get("text", "")))
                         self._chat.assistant_done()
@@ -448,7 +448,7 @@ class ConversationPersistence(QObject):
                     str(item.get("text", "")),
                     image_b64s if isinstance(image_b64s, list) else None,
                 )
-            elif kind == PLANNER:
+            elif kind == ASSISTANT:
                 self._chat.begin_assistant()
                 self._chat.append_content(str(item.get("text", "")))
                 self._chat.assistant_done()
@@ -458,8 +458,8 @@ class ConversationPersistence(QObject):
                     str(item.get("message", "")),
                     bool(item.get("show_retry", False)),
                 )
-            elif kind == WORKER_COMPLETE:
-                # Worker completion records are durable diagnostics only.
+            elif kind == EXECUTION_COMPLETE:
+                # Execution completion records are durable diagnostics only.
                 # Replaying them must not recreate main-chat finish cards.
                 continue
             elif kind == PLAN_REVIEW:

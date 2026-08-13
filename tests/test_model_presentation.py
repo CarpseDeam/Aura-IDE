@@ -93,9 +93,9 @@ class TestCompatibilityEntries:
     def test_extra_compat_ids_appended(self):
         models = {"a": _model("a")}
         items = build_model_picker_items(
-            "deepseek", models, extra_compat_ids=("worker-mid",)
+            "deepseek", models, extra_compat_ids=("compat-mid",)
         )
-        assert [i.model_id for i in items] == ["a", "worker-mid"]
+        assert [i.model_id for i in items] == ["a", "compat-mid"]
 
     def test_compat_entries_do_not_mutate_source_models_dict(self):
         models = {"a": _model("a")}

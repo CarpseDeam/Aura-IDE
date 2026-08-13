@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from aura.conversation.worker_outcome import WorkerOutcomeStatus
+from aura.conversation.execution_outcome import ExecutionOutcomeStatus
 
 _log = logging.getLogger(__name__)
 
@@ -38,8 +38,8 @@ class SourceUtility:
 def _is_success_status(status: str) -> bool:
     """Return True if the status is a successful outcome."""
     return status in (
-        WorkerOutcomeStatus.completed.value,
-        WorkerOutcomeStatus.completed_with_caveats.value,
+        ExecutionOutcomeStatus.completed.value,
+        ExecutionOutcomeStatus.completed_with_caveats.value,
     )
 
 

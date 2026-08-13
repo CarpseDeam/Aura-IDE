@@ -15,7 +15,7 @@ import json
 import logging
 
 import websockets
-from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
+from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 logger = logging.getLogger(__name__)
 
@@ -181,8 +181,8 @@ class CompanionWsClient(QObject):
         worker.moveToThread(thread)
 
         # Wire signals BEFORE starting the thread.
-        worker.connected.connect(self._on_worker_connected)
-        worker.disconnected.connect(self._on_worker_disconnected)
+        worker.connected.connect(self._on_execution_connected)
+        worker.disconnected.connect(self._on_execution_disconnected)
         worker.message_received.connect(self.message_received)
         worker.error.connect(self.error)
 
@@ -193,12 +193,12 @@ class CompanionWsClient(QObject):
         thread.start()
 
     @Slot()
-    def _on_worker_connected(self) -> None:
+    def _on_execution_connected(self) -> None:
         self._is_connected = True
         self.connected.emit()
 
     @Slot()
-    def _on_worker_disconnected(self) -> None:
+    def _on_execution_disconnected(self) -> None:
         self._is_connected = False
         self.disconnected.emit()
 

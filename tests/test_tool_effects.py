@@ -42,9 +42,8 @@ def _production_catalog_names() -> set[str]:
     """Every tool name the actual production catalog can expose."""
     catalog = ToolCatalog()
     names: set[str] = set()
-    for mode in ("single", "worker", "planner"):
-        names.update(_tool_names(catalog.build_tool_defs(mode=mode, read_only=False)))
-    names.update(_tool_names(catalog.build_tool_defs(mode="single", read_only=True)))
+    names.update(_tool_names(catalog.build_tool_defs(read_only=False)))
+    names.update(_tool_names(catalog.build_tool_defs(read_only=True)))
     return names
 
 
@@ -278,7 +277,7 @@ def test_builtin_spot_checks() -> None:
     assert registry.tool_effect("read_file") is ToolEffect.OBSERVATION
     assert registry.tool_effect("write_file") is ToolEffect.MUTATION
     assert registry.tool_effect("run_terminal_command") is ToolEffect.COMMAND
-    assert registry.tool_effect("update_worker_todo") is ToolEffect.BOOKKEEPING
+    assert registry.tool_effect("update_task_checklist") is ToolEffect.BOOKKEEPING
 
 
 # ── the fail-safe foundation: exposure and approval follow the effect ───────

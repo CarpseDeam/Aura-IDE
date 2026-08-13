@@ -3,7 +3,7 @@
 Plan Review is a human interaction inside the existing production tool loop,
 not a second architecture: one turn still means one History, one
 ConversationManager, one model. This module owns only the values that cross
-the worker-thread/GUI boundary (:class:`ApprovedPlan`, :class:`PlanReviewDecision`)
+the execution-thread/GUI boundary (:class:`ApprovedPlan`, :class:`PlanReviewDecision`)
 and the small per-turn flag set that says whether review is required and
 whether it has been satisfied yet (:class:`PlanReviewState`).
 
@@ -11,7 +11,7 @@ No counters, no stages, no task classifier, no general agent-state machine.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from aura.conversation.tools.effects import ToolEffect

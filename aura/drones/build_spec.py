@@ -25,7 +25,7 @@ class DroneBuildBrief:
     response_type: str  # "question" | "brief"
     message: str  # natural-language message to show the user
     ready_to_build: bool = False  # True when Workshop has enough info
-    build_brief: str = ""  # plain-language brief for Planner/Worker
+    build_brief: str = ""  # plain-language brief for a Drone run
 
     def validate(self) -> list[str]:
         """Return a list of error strings (never raises)."""

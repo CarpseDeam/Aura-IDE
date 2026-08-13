@@ -4,11 +4,11 @@ import hashlib
 import json
 from typing import Any
 
-from aura.conversation.path_utils import normalize_worker_path as _normalize_worker_path
+from aura.conversation.path_utils import normalize_execution_path as _normalize_execution_path
 
 
 def edit_shape_signature(name: str, args: dict[str, Any]) -> str:
-    path = _normalize_worker_path(str(args.get("path", "")))
+    path = _normalize_execution_path(str(args.get("path", "")))
     if name == "edit_file":
         raw = str(args.get("old_str", ""))
         marker = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()

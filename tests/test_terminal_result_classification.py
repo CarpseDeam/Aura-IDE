@@ -396,17 +396,17 @@ class TestValidationRunResultMetadata:
 
 
 # =========================================================================
-# Test the existing worker logic: validation vs. launch strictness
+# Test the existing execution logic: validation vs. launch strictness
 # =========================================================================
 
 
-class TestWorkerFinalValidationBehavior:
+class TestExecutionValidationBehavior:
     """Regression: watch/traceback behavior for validation vs launch."""
 
     def test_validation_passes_with_intermediate_traceback(self) -> None:
         """A watch result with exit_code=0 and traceback -> validation passes.
 
-        This simulates what worker_final_validation.run_explicit_validation_commands
+        This simulates what execution_validation.run_explicit_validation_commands
         does: ok = bool(watch.exited_early and watch.exit_code == 0).
         """
         # Simulate a sandbox watch where an intermediate command
@@ -579,7 +579,7 @@ class TestToolRunnerValidationPayloadAggregation:
     """Simulate the payload_dict merging logic from tool_runner.py.
 
     Validates that contextual classify_command_outcome overrides raw
-    terminal_classification for validation commands, so Workers do not
+    terminal_classification for validation commands, so Executions do not
     see a scary terminal_classification alongside passed validation.
     """
 

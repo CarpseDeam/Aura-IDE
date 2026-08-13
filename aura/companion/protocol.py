@@ -40,7 +40,7 @@ class CompanionThread:
 @dataclass
 class ActiveRunSummary:
     run_id: str
-    kind: Literal["worker", "drone"]
+    kind: Literal["production", "drone"]
     label: str
     status: str
     started_at: str | None = None
@@ -52,7 +52,7 @@ class ActiveRunSummary:
 @dataclass
 class ReceiptSummary:
     run_id: str
-    kind: Literal["drone", "worker"]
+    kind: Literal["drone", "production"]
     label: str
     status: str
     completed_at: str

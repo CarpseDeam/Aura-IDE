@@ -15,6 +15,7 @@ from aura.conversation.tools._blocker_mixin import BlockerHandlersMixin
 from aura.conversation.tools._code_intel_mixin import CodeIntelHandlersMixin
 from aura.conversation.tools._decision_mixin import DecisionHandlersMixin
 from aura.conversation.tools._diagnostic_mixin import DiagnosticHandlersMixin
+from aura.conversation.tools._drone_mixin import DroneHandlersMixin
 from aura.conversation.tools._git_mixin import GitHandlersMixin
 from aura.conversation.tools._godot_asset_preview_mixin import GodotAssetPreviewHandlersMixin
 from aura.conversation.tools._godot_assets_mixin import GodotAssetHandlersMixin
@@ -22,16 +23,13 @@ from aura.conversation.tools._godot_editor_mixin import GodotEditorHandlersMixin
 from aura.conversation.tools._godot_scene_mixin import GodotSceneHandlersMixin
 from aura.conversation.tools._memory_mixin import MemoryHandlersMixin
 from aura.conversation.tools._plan_review_mixin import PlanReviewHandlersMixin
-from aura.conversation.tools._planner_mixin import PlannerHandlersMixin
 from aura.conversation.tools._read_mixin import ReadHandlersMixin
 from aura.conversation.tools._reference_mixin import ReferenceReadHandlersMixin
+from aura.conversation.tools._research_mixin import ResearchHandlersMixin
 from aura.conversation.tools._search_mixin import SearchHandlersMixin
-from aura.conversation.tools._types import (
-    ApprovalCallback,
-    RegistryMode,
-    ToolExecResult,
-)
-from aura.conversation.tools._worker_todo_mixin import WorkerTodoHandlersMixin
+from aura.conversation.tools._task_checklist_mixin import TaskChecklistHandlersMixin
+from aura.conversation.tools._types import ApprovalCallback, ToolExecResult
+from aura.conversation.tools._workspace_mixin import WorkspaceHandlersMixin
 from aura.conversation.tools._write_mixin import WriteHandlersMixin
 from aura.conversation.tools.backup import backup_existing  # noqa: F401
 from aura.conversation.tools.catalog import ToolCatalog
@@ -72,10 +70,12 @@ class ToolRegistry(
     GodotEditorHandlersMixin,
     GodotSceneHandlersMixin,
     WriteHandlersMixin,
-    WorkerTodoHandlersMixin,
+    TaskChecklistHandlersMixin,
     MemoryHandlersMixin,
     DiagnosticHandlersMixin,
-    PlannerHandlersMixin,
+    DroneHandlersMixin,
+    ResearchHandlersMixin,
+    WorkspaceHandlersMixin,
     PlanReviewHandlersMixin,
 ):
     """Workspace-scoped tool dispatcher."""
@@ -84,11 +84,9 @@ class ToolRegistry(
         self,
         workspace_root: Path,
         read_only: bool = False,
-        mode: RegistryMode = "single",
     ) -> None:
         self._root = workspace_root.resolve()
         self._read_only = read_only
-        self._mode: RegistryMode = mode
         self._codebase_index: CodebaseIndex | None = None
         self._reference_codebase_index: CodebaseIndex | None = None
         self._fs_handler = FsReadHandler(self._root, self._resolve_in_root)
@@ -183,13 +181,6 @@ class ToolRegistry(
     def set_read_only(self, value: bool) -> None:
         self._read_only = value
 
-    @property
-    def mode(self) -> RegistryMode:
-        return self._mode
-
-    def set_mode(self, mode: RegistryMode) -> None:
-        self._mode = mode
-
     # ---- turn-scoped external reference ------------------------------------
 
     @property
@@ -281,7 +272,6 @@ class ToolRegistry(
             else self._mcp_tools.schemas
         )
         return self._catalog.build_tool_defs(
-            mode=self._mode,
             read_only=self._read_only,
             dynamic_schemas=dynamic_schemas or None,
             mcp_schemas=mcp_schemas or None,
@@ -299,7 +289,6 @@ class ToolRegistry(
         historical call is schema-checked rather than rejected as unexposed.
         """
         return self._catalog.build_replayable_tool_defs(
-            mode=self._mode,
             read_only=self._read_only,
         )
 
@@ -505,7 +494,7 @@ TOOL_HANDLERS["inspect_godot_api"] = ToolRegistry._handle_inspect_godot_api
 TOOL_HANDLERS["edit_godot_editor"] = ToolRegistry._handle_edit_godot_editor
 TOOL_HANDLERS["edit_godot_asset_preview"] = ToolRegistry._handle_edit_godot_asset_preview
 TOOL_HANDLERS["install_godot_editor_bridge"] = ToolRegistry._handle_install_godot_editor_bridge
-TOOL_HANDLERS["update_worker_todo"] = ToolRegistry._handle_update_worker_todo
+TOOL_HANDLERS["update_task_checklist"] = ToolRegistry._handle_update_task_checklist
 TOOL_HANDLERS["report_blocker"] = ToolRegistry._handle_report_blocker
 TOOL_HANDLERS["report_already_satisfied"] = ToolRegistry._handle_report_already_satisfied
 TOOL_HANDLERS["record_implementation_decision"] = (

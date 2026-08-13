@@ -139,7 +139,7 @@ class WindowsComputerUseManager:
             self._generation += 1
             generation = self._generation
             already = self._connected_command
-            worker_running = self._worker is not None and self._worker.is_alive()
+            execution_running = self._worker is not None and self._worker.is_alive()
 
         # A custom command is known before any work happens, so an unchanged
         # one can be recognised as already-satisfied without touching the disk
@@ -147,7 +147,7 @@ class WindowsComputerUseManager:
         # so it is compared on the worker thread instead.
         if custom and already == custom:
             return
-        if not custom and already and not worker_running:
+        if not custom and already and not execution_running:
             resolved_same = self._managed_command_matches(already)
             if resolved_same:
                 return

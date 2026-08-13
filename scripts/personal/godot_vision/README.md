@@ -15,7 +15,7 @@ Aura's Nuitka installer build.
 3. Copy `critique_godot_preview.py` into `C:\Projects\V_Ruins\.aura\tools\`.
 4. Restart Aura with `C:\Projects\V_Ruins` as the workspace.
 
-Aura discovers `.aura/tools/*.py` automatically in Worker and single-agent modes. The resulting tool
+Aura discovers `.aura/tools/*.py` automatically in Execution and single-agent modes. The resulting tool
 is named `critique_godot_preview_local`.
 
 Example PowerShell setup:

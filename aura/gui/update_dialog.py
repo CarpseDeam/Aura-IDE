@@ -188,7 +188,7 @@ class UpdateDialog(QDialog):
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.output.connect(self._append_output)
-        self._worker.finished.connect(self._on_worker_finished)
+        self._worker.finished.connect(self._on_execution_finished)
         self._worker.finished.connect(self._thread.quit)
         self._worker.finished.connect(self._worker.deleteLater)
         self._thread.finished.connect(self._thread.deleteLater)
@@ -212,7 +212,7 @@ class UpdateDialog(QDialog):
         if busy:
             self._action_btn.setEnabled(False)
 
-    def _on_worker_finished(self, result: object) -> None:
+    def _on_execution_finished(self, result: object) -> None:
         if isinstance(result, UpdateStatus):
             self._show_status(result)
         elif isinstance(result, PullResult):

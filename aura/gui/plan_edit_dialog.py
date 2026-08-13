@@ -1,8 +1,6 @@
 """Modal dialog for editing a Plan Review plan before implementing it.
 
-Modernized from the orphaned Worker-era ``SpecEditDialog`` under truthful
-Plan Review naming — same form shape, no Worker/dispatch terminology. Used
-only for the "Edit Plan" action; the primary experience is the inline
+Used only for the "Edit Plan" action; the primary experience is the inline
 ``PlanReviewCard`` in chat, not this dialog.
 """
 from __future__ import annotations

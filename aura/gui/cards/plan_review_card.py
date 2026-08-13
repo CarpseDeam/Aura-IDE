@@ -1,11 +1,7 @@
 """Plan Review card — the "Plan Ready" inline chat presentation.
 
-Visual reference: the historical Aura SpecCard
-(``git show 5ae8533c867dc5c0f14cdf97b5030c6a5493b165:aura/gui/cards/spec_card.py``).
-This is a focused rewrite for the model-facing ``review_implementation_plan``
-tool: no Worker/dispatch terminology, no dispatch state, and no Fast/Careful
-Plan or risk heuristics — Plan Review has exactly one policy, the user's Plan
-toggle, so there is nothing left for a classifier to guess.
+This card presents the model-facing ``review_implementation_plan`` tool.
+Plan Review has exactly one policy, the user's Plan toggle.
 """
 from __future__ import annotations
 
@@ -60,7 +56,7 @@ class PlanReviewCard(QFrame):
     """Inline "Plan Ready" card: Implement / Edit Plan / Cancel.
 
     Emits the review id (not a tool_call_id — Plan Review is a human
-    interaction, not a dispatch) on each button so the controller can resolve
+    interaction) on each button so the controller can resolve
     the matching pending review through the proxy.
     """
 

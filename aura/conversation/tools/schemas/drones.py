@@ -144,7 +144,7 @@ DECLARE_UI_CONTRACT_TOOL_DEF: dict[str, Any] = {
         "name": "declare_ui_contract",
         "description": (
             "Declares the UI contract the launch gate verifies after boot. "
-            "Must be called before the worker lap edits code. Each assertion "
+            "Must be called before the Drone lap edits code. Each assertion "
             "names a node the post-edit accessibility tree must contain or "
             "must not contain."
         ),

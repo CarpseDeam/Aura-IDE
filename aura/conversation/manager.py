@@ -1,6 +1,6 @@
 """ConversationManager — runs the tool-loop and forwards events to a callback.
 
-Lives on a worker thread (Qt bridge owns the QThread). The GUI never touches
+Lives on a conversation thread (Qt bridge owns the QThread). The GUI never touches
 this directly except through the bridge.
 
 Cancellation: a threading.Event the GUI sets when Stop is clicked. We check
@@ -39,11 +39,10 @@ from aura.client import (
     Usage,
 )
 from aura.config import ModelId, ThinkingMode
-from aura.context_gearbox.models import RuntimeRole
 from aura.conversation._report_tools import REPORT_BLOCKER
+from aura.conversation.context_refresh import ContextRefreshState
 from aura.conversation.history import History
 from aura.conversation.manager_tool_round import ToolRoundRunner
-from aura.conversation.planner_refresh import PlannerRefreshState
 from aura.conversation.tool_runner import ToolRunner
 from aura.conversation.tools._types import (
     ApprovalCallback,
@@ -51,11 +50,10 @@ from aura.conversation.tools._types import (
     ApprovalRequest,
 )
 from aura.conversation.tools.registry import ToolRegistry
+from aura.conversation.validation_orchestrator import ValidationCommandSpec
 from aura.events import EventBus
-from aura.lifecycle import LifecycleHooks
 from aura.model_streams import PRODUCTION_STREAM_HOOK, model_streams
 from aura.skills.turn_state import SkillTurnState
-from aura.conversation.validation_orchestrator import ValidationCommandSpec
 
 EventCallback = Callable[[Event], None]
 
@@ -153,18 +151,16 @@ class ConversationManager:
         self,
         history: History,
         tool_registry: ToolRegistry,
-        lifecycle: LifecycleHooks | None = None,
         event_bus: EventBus | None = None,
     ) -> None:
         self._history = history
         self._tools = tool_registry
-        self._lifecycle = lifecycle
         self._event_bus = event_bus
         self._tool_runner = ToolRunner(
             history=self._history,
             workspace_root=self._tools.workspace_root,
         )
-        self._planner_refresh = PlannerRefreshState(
+        self._context_refresh = ContextRefreshState(
             capabilities_provider=getattr(
                 self._tools, "active_capabilities", None
             ),
@@ -173,7 +169,6 @@ class ConversationManager:
             history=self._history,
             tools=self._tools,
             tool_runner=self._tool_runner,
-            lifecycle=self._lifecycle,
             event_bus=self._event_bus,
         )
         #: Blocker reason from the most recent turn's successful
@@ -222,17 +217,17 @@ class ConversationManager:
         frozen index from the same terrain and repository state.  ``None`` when
         no workspace/terrain is configured (the send exposed no candidates).
         """
-        root = self._planner_refresh.workspace_root
+        root = self._context_refresh.workspace_root
         if root is None:
             return None
         from aura.skills.text import build_skill_pack
 
         pack = build_skill_pack(
             root,
-            model=self._planner_refresh.model,
-            task_kind=self._planner_refresh.task_kind,
-            target_files=self._planner_refresh.target_files,
-            content=self._planner_refresh.content,
+            model=self._context_refresh.model,
+            task_kind=self._context_refresh.task_kind,
+            target_files=self._context_refresh.target_files,
+            content=self._context_refresh.content,
         )
         if not pack.candidates:
             return None
@@ -249,24 +244,22 @@ class ConversationManager:
         self,
         base_prompt: str,
         workspace_root: Path,
-        role: RuntimeRole | str = RuntimeRole.SINGLE,
         *,
         model: str | None = None,
         task_kind: str | None = None,
         content: str | None = None,
         target_files: tuple[str, ...] = (),
     ) -> None:
-        """Role-neutral entry point: store the base prompt, root, role, terrain.
+        """Store the production base prompt, root, and live terrain.
 
         This is the canonical configuration call for the production
-        single-agent path.  Mid-turn context refreshes recompose against
-        *role* and this turn's terrain, so nothing role-specific leaks into
-        production execution and the turn's skills are not dropped mid-run.
+        production path. Mid-turn context refreshes use this terrain so the
+        turn's skills are not dropped mid-run.
         """
-        self._planner_refresh.configure(
+        self._context_refresh.configure(
             base_prompt,
             workspace_root,
-            role,
+
             model=model,
             task_kind=task_kind,
             content=content,

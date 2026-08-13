@@ -1,7 +1,7 @@
 """Contract coverage for the two production evidence tools' schemas.
 
 ``search_codebase`` and ``inspect_code`` are the model's only two ranked/dense
-evidence tools in production SINGLE. This file proves their schema
+evidence tools in the production catalog. This file proves their schema
 descriptions communicate durable capability facts truthfully — ranked
 *structural* retrieval rather than whole-file recall for the former, and a
 source excerpt that can be genuinely declaration-bounded (not always a fixed
@@ -81,7 +81,7 @@ def test_search_codebase_description_has_no_workflow_coaching() -> None:
 def test_inspect_code_description_reflects_parser_bounded_excerpt(
     tmp_path: Path,
 ) -> None:
-    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    registry = ToolRegistry(workspace_root=tmp_path)
     _write(tmp_path / "app.py", "def target_fn(x):\n    y = x + 1\n    return y\n")
 
     result = registry.execute(

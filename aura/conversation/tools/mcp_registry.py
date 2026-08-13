@@ -6,7 +6,7 @@ properties hold here rather than being left to whoever connects a server.
 **Instance-owned.**  Registered tools live on the registry that connected the
 server and nowhere else.  Publishing them to the process-global
 ``TOOL_HANDLERS`` made every registry in the process — a second window, a
-Planner alongside its Worker — able to call a server it never connected, with
+another registry instance — able to call a server it never connected, with
 another registry's client and another workspace's root.
 
 **Collision-safe.**  A server does not get to name its tool ``write_file``.

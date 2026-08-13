@@ -67,7 +67,7 @@ def _tool_names(tools: list[dict]) -> set[str]:
 
 class TestHandler:
     def test_valid_input_succeeds(self, tmp_path) -> None:
-        registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+        registry = ToolRegistry(workspace_root=tmp_path)
 
         result = registry.execute(TOOL_NAME, _valid_args(), approval_cb=None)
 
@@ -84,7 +84,7 @@ class TestHandler:
 
     @pytest.mark.parametrize("field", ["decision", "basis", "reconsider_if", "validation"])
     def test_blank_required_strings_fail(self, tmp_path, field) -> None:
-        registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+        registry = ToolRegistry(workspace_root=tmp_path)
         blank = "" if field in ("decision", "validation") else []
 
         result = registry.execute(TOOL_NAME, _valid_args(**{field: blank}), approval_cb=None)
@@ -94,7 +94,7 @@ class TestHandler:
         assert field in result.payload["error"]
 
     def test_whitespace_only_required_strings_fail(self, tmp_path) -> None:
-        registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+        registry = ToolRegistry(workspace_root=tmp_path)
 
         result = registry.execute(
             TOOL_NAME, _valid_args(decision="   ", validation="\t\n"), approval_cb=None
@@ -103,7 +103,7 @@ class TestHandler:
         assert result.ok is False
 
     def test_blank_list_entries_are_normalized_away(self, tmp_path) -> None:
-        registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+        registry = ToolRegistry(workspace_root=tmp_path)
 
         result = registry.execute(
             TOOL_NAME,
@@ -119,7 +119,7 @@ class TestHandler:
         assert result.payload["basis"] == ["MainWindow owns geometry."]
 
     def test_missing_optional_targets_produces_empty_list(self, tmp_path) -> None:
-        registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+        registry = ToolRegistry(workspace_root=tmp_path)
         args = _valid_args()
         del args["targets"]
 
@@ -129,7 +129,7 @@ class TestHandler:
         assert result.payload["targets"] == []
 
     def test_same_normalized_content_produces_same_decision_id(self, tmp_path) -> None:
-        registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+        registry = ToolRegistry(workspace_root=tmp_path)
 
         first = registry.execute(TOOL_NAME, _valid_args(), approval_cb=None)
         second = registry.execute(
@@ -141,7 +141,7 @@ class TestHandler:
         assert first.payload["decision_id"] == second.payload["decision_id"]
 
     def test_materially_different_content_produces_different_decision_id(self, tmp_path) -> None:
-        registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+        registry = ToolRegistry(workspace_root=tmp_path)
 
         first = registry.execute(TOOL_NAME, _valid_args(), approval_cb=None)
         second = registry.execute(
@@ -153,8 +153,8 @@ class TestHandler:
 
     def test_decision_id_ignores_call_order_and_process_state(self, tmp_path) -> None:
         """Two independent registries produce identical ids for identical content."""
-        registry_a = ToolRegistry(workspace_root=tmp_path, mode="single")
-        registry_b = ToolRegistry(workspace_root=tmp_path, mode="single")
+        registry_a = ToolRegistry(workspace_root=tmp_path)
+        registry_b = ToolRegistry(workspace_root=tmp_path)
 
         result_a = registry_a.execute(TOOL_NAME, _valid_args(), approval_cb=None)
         result_b = registry_b.execute(TOOL_NAME, _valid_args(), approval_cb=None)
@@ -162,7 +162,7 @@ class TestHandler:
         assert result_a.payload["decision_id"] == result_b.payload["decision_id"]
 
     def test_returned_ordering_is_deterministic(self, tmp_path) -> None:
-        registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+        registry = ToolRegistry(workspace_root=tmp_path)
         args = _valid_args(
             basis=["third fact", "first fact", "second fact"],
         )
@@ -172,7 +172,7 @@ class TestHandler:
         assert result.payload["basis"] == ["third fact", "first fact", "second fact"]
 
     def test_payload_carries_working_decision_semantics(self, tmp_path) -> None:
-        registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+        registry = ToolRegistry(workspace_root=tmp_path)
 
         result = registry.execute(TOOL_NAME, _valid_args(), approval_cb=None)
 
@@ -186,12 +186,12 @@ class TestHandler:
 
 class TestToolSurface:
     def test_writable_production_single_exposes_the_tool(self) -> None:
-        tools = ToolCatalog().build_tool_defs(mode="single", read_only=False)
+        tools = ToolCatalog().build_tool_defs(read_only=False)
 
         assert TOOL_NAME in _tool_names(tools)
 
     def test_read_only_mode_does_not_expose_the_tool(self) -> None:
-        tools = ToolCatalog().build_tool_defs(mode="single", read_only=True)
+        tools = ToolCatalog().build_tool_defs(read_only=True)
 
         assert TOOL_NAME not in _tool_names(tools)
 
@@ -299,7 +299,7 @@ def _run(workspace: Path, backend: _ScriptedBackend, isolated_streams: ModelStre
     history = History()
     history.set_system("You are Aura's production coding agent.")
     history.append_user_text("Set TARGET to 1 in file_00.py.")
-    registry = ToolRegistry(workspace_root=workspace, mode="single")
+    registry = ToolRegistry(workspace_root=workspace)
     manager = ConversationManager(history, registry)
     isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
 

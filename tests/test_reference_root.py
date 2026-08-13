@@ -229,7 +229,7 @@ def _make_registry_with_reference(tmp_path: Path) -> ToolRegistry:
         "\n".join(f"line {i}" for i in range(1, 21)) + "\n", encoding="utf-8"
     )
 
-    registry = ToolRegistry(workspace_root=workspace, mode="single")
+    registry = ToolRegistry(workspace_root=workspace)
     ok, message = registry.begin_reference_turn(reference)
     assert ok is True, message
     return registry
@@ -280,7 +280,7 @@ def test_payload_exposes_relative_path_not_absolute_reference_root(tmp_path: Pat
 def test_no_attached_reference_returns_deterministic_failure(tmp_path: Path) -> None:
     workspace = tmp_path / "Foo-v2"
     workspace.mkdir()
-    registry = ToolRegistry(workspace_root=workspace, mode="single")
+    registry = ToolRegistry(workspace_root=workspace)
 
     result = registry.execute("read_reference_file", {"path": "src/auth.py"}, approval_cb=None)
 
@@ -301,7 +301,7 @@ def test_without_attached_reference_production_catalog_is_unchanged(tmp_path: Pa
 
     workspace = tmp_path / "Foo-v2"
     workspace.mkdir()
-    registry = ToolRegistry(workspace_root=workspace, mode="single")
+    registry = ToolRegistry(workspace_root=workspace)
 
     assert _tool_names(registry.tool_defs()) == EXPECTED_PRODUCTION_TOOLS
     assert "read_reference_file" not in _tool_names(registry.tool_defs())
@@ -327,7 +327,7 @@ def test_appears_in_global_read_only_mode_when_attached(tmp_path: Path) -> None:
     workspace.mkdir()
     reference.mkdir()
 
-    registry = ToolRegistry(workspace_root=workspace, mode="single", read_only=True)
+    registry = ToolRegistry(workspace_root=workspace, read_only=True)
     ok, message = registry.begin_reference_turn(reference)
     assert ok is True, message
 
@@ -336,9 +336,9 @@ def test_appears_in_global_read_only_mode_when_attached(tmp_path: Path) -> None:
 
 def test_catalog_build_tool_defs_reference_flag_directly() -> None:
     catalog = ToolCatalog()
-    without = _tool_names(catalog.build_tool_defs(mode="single", read_only=False))
+    without = _tool_names(catalog.build_tool_defs(read_only=False))
     with_ref = _tool_names(
-        catalog.build_tool_defs(mode="single", read_only=False, reference_available=True)
+        catalog.build_tool_defs(read_only=False, reference_available=True)
     )
     assert "read_reference_file" not in without
     assert "read_reference_file" in with_ref
@@ -446,7 +446,7 @@ def test_reference_search_uses_a_dedicated_index_and_decorates_payload(
         "reference_unique_marker = True\n", encoding="utf-8"
     )
 
-    registry = ToolRegistry(workspace, mode="single")
+    registry = ToolRegistry(workspace)
     ok, message = registry.begin_reference_turn(reference)
     assert ok is True, message
 
@@ -467,7 +467,7 @@ def test_reference_search_uses_a_dedicated_index_and_decorates_payload(
 
 
 def test_reference_search_without_authorization_is_unavailable(tmp_path: Path) -> None:
-    registry = ToolRegistry(tmp_path, mode="single")
+    registry = ToolRegistry(tmp_path)
     result = registry.execute(
         "search_codebase",
         {"query": "anything", "source": "reference"},
@@ -480,7 +480,7 @@ def test_reference_search_without_authorization_is_unavailable(tmp_path: Path) -
 def test_search_source_validation_and_workspace_default(tmp_path: Path) -> None:
     marker = tmp_path / "workspace.py"
     marker.write_text("workspace_default_marker = True\n", encoding="utf-8")
-    registry = ToolRegistry(tmp_path, mode="single")
+    registry = ToolRegistry(tmp_path)
 
     implicit = registry.execute(
         "search_codebase", {"query": "workspace_default_marker"}, approval_cb=None
@@ -505,7 +505,7 @@ def test_reference_index_is_released_with_turn_authorization(tmp_path: Path) -> 
     workspace.mkdir()
     reference.mkdir()
     (reference / "old.py").write_text("old_marker = True\n", encoding="utf-8")
-    registry = ToolRegistry(workspace, mode="single")
+    registry = ToolRegistry(workspace)
     ok, message = registry.begin_reference_turn(reference)
     assert ok is True, message
     registry.execute(

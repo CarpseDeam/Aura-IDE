@@ -36,7 +36,7 @@ def build_commit_message(goal: str, files: list[str], summary: str) -> str:
     """Build a clean commit message from goal, file list, and summary.
 
     Subject is derived from the first line of *goal*, truncated at 72 chars
-    on a word boundary.  Internal terms (AI, Worker, Planner, etc.) are
+    on a word boundary. Internal implementation terms are
     stripped from the subject.
     """
     import re
@@ -45,7 +45,7 @@ def build_commit_message(goal: str, files: list[str], summary: str) -> str:
 
     # Strip internal implementation terms from the subject
     subject = re.sub(
-        r"\b(AI|Worker|Planner|Aura|agent|tool)\b",
+        r"\b(AI|Aura|agent|tool)\b",
         "",
         subject,
         flags=re.IGNORECASE,
@@ -631,7 +631,6 @@ _AURA_GITIGNORE_ENTRIES = (
     "/.aura/threads/",
     "/.aura/tmp/",
     "/.aura/memory.db",
-    "/.aura/planner.txt",
     "/.aura/project.json",
     "/.aura/toolist.txt",
     "/.aura/drones/runs/",

@@ -19,18 +19,14 @@ from aura.providers.base import ModelId, ModelInfo, ProviderId, ThinkingMode  # 
 from aura.providers.base import ProviderSpec as ProviderConfig
 from aura.providers.catalog import (  # noqa: F401
     DEFAULT_MODEL,
-    DEFAULT_PLANNER_MODEL,
-    DEFAULT_PLANNER_THINKING,
     DEFAULT_THINKING,
-    DEFAULT_WORKER_MODEL,
-    DEFAULT_WORKER_THINKING,
 )
 from aura.providers.registry import provider_registry
 from aura.settings import (  # noqa: F401
     DEFAULT_PROVIDER,
     AppSettings,
     load_settings,
-    resolve_role_default_model,
+    resolve_production_default_model,
     save_settings,
 )
 

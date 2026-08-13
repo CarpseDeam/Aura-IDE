@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from aura.config import (
-    DEFAULT_PLANNER_THINKING,
+    DEFAULT_THINKING,
     ProviderId,
     ThinkingMode,
 )
@@ -319,8 +319,8 @@ class LeftPane(QFrame):
     project_selected = Signal(Path)
     thread_selected = Signal(Path)  # conversation_path
     new_project_requested = Signal()
-    planner_model_changed = Signal(str)
-    planner_thinking_changed = Signal(str)
+    production_model_changed = Signal(str)
+    production_thinking_changed = Signal(str)
     drone_selected = Signal(Path)
     new_drone_requested = Signal()
 
@@ -400,32 +400,32 @@ class LeftPane(QFrame):
         footer_layout.addWidget(model_label)
 
         # Production model — the one model that owns normal coding.
-        planner_model_row = QHBoxLayout()
-        planner_model_row.setSpacing(4)
-        planner_model_label = QLabel("Model:")
-        planner_model_label.setStyleSheet(f"color: {FG_DIM};")
-        planner_model_row.addWidget(planner_model_label)
-        self._planner_model_combo = SearchableModelCombo()
-        self._planner_model_combo.currentIndexChanged.connect(
-            lambda: self.planner_model_changed.emit(self.current_planner_model())
+        production_model_row = QHBoxLayout()
+        production_model_row.setSpacing(4)
+        production_model_label = QLabel("Model:")
+        production_model_label.setStyleSheet(f"color: {FG_DIM};")
+        production_model_row.addWidget(production_model_label)
+        self._production_model_combo = SearchableModelCombo()
+        self._production_model_combo.currentIndexChanged.connect(
+            lambda: self.production_model_changed.emit(self.current_production_model())
         )
-        planner_model_row.addWidget(self._planner_model_combo, 1)
-        footer_layout.addLayout(planner_model_row)
+        production_model_row.addWidget(self._production_model_combo, 1)
+        footer_layout.addLayout(production_model_row)
 
-        # Planner thinking
-        planner_think_row = QHBoxLayout()
-        planner_think_row.setSpacing(4)
-        planner_think_label = QLabel("Thinking:")
-        planner_think_label.setStyleSheet(f"color: {FG_DIM};")
-        planner_think_row.addWidget(planner_think_label)
-        self._planner_thinking_combo = NoWheelComboBox()
-        _populate_thinking_combo(self._planner_thinking_combo)
-        _select_thinking(self._planner_thinking_combo, DEFAULT_PLANNER_THINKING)
-        self._planner_thinking_combo.currentIndexChanged.connect(
-            lambda: self.planner_thinking_changed.emit(self.current_planner_thinking())
+        # Production thinking
+        production_think_row = QHBoxLayout()
+        production_think_row.setSpacing(4)
+        production_think_label = QLabel("Thinking:")
+        production_think_label.setStyleSheet(f"color: {FG_DIM};")
+        production_think_row.addWidget(production_think_label)
+        self._production_thinking_combo = NoWheelComboBox()
+        _populate_thinking_combo(self._production_thinking_combo)
+        _select_thinking(self._production_thinking_combo, DEFAULT_THINKING)
+        self._production_thinking_combo.currentIndexChanged.connect(
+            lambda: self.production_thinking_changed.emit(self.current_production_thinking())
         )
-        planner_think_row.addWidget(self._planner_thinking_combo, 1)
-        footer_layout.addLayout(planner_think_row)
+        production_think_row.addWidget(self._production_thinking_combo, 1)
+        footer_layout.addLayout(production_think_row)
 
         layout.addWidget(self._model_config_footer)
 
@@ -437,52 +437,32 @@ class LeftPane(QFrame):
             return
         self._workspace_label.setText(str(root))
 
-    def set_production_model(self, model: str) -> None:
-        """Select the production model (role-neutral entry point)."""
-        self.set_planner_model(model)
-
-    def set_production_thinking(self, thinking: ThinkingMode) -> None:
-        """Select the production thinking mode (role-neutral entry point)."""
-        self.set_planner_thinking(thinking)
-
-    def current_production_model(self) -> str:
-        return self.current_planner_model()
-
-    def current_production_thinking(self) -> ThinkingMode:
-        return self.current_planner_thinking()
-
     def populate_models(
         self,
         provider: ProviderId,
     ) -> None:
         """Populate the production model list."""
         cfg = provider_registry.get(provider)
-        extra_compat_ids: tuple[str, ...] = ()
-        if provider == "deepseek":
-            from aura.providers.catalog import DEFAULT_WORKER_MODEL
-
-            extra_compat_ids = (DEFAULT_WORKER_MODEL,)
         items = build_model_picker_items(
             provider,
             cfg.models,
             default_model=cfg.default_model,
-            extra_compat_ids=extra_compat_ids,
         )
-        self._planner_model_combo.set_items(items, cfg.default_model)
+        self._production_model_combo.set_items(items, cfg.default_model)
 
-    def current_planner_model(self) -> str:
-        return self._planner_model_combo.currentData()
+    def current_production_model(self) -> str:
+        return self._production_model_combo.currentData()
 
-    def current_planner_thinking(self) -> ThinkingMode:
-        return self._planner_thinking_combo.currentData()
+    def current_production_thinking(self) -> ThinkingMode:
+        return self._production_thinking_combo.currentData()
 
-    def set_planner_model(self, model: str) -> None:
-        idx = self._planner_model_combo.findData(model)
+    def set_production_model(self, model: str) -> None:
+        idx = self._production_model_combo.findData(model)
         if idx >= 0:
-            self._planner_model_combo.setCurrentIndex(idx)
+            self._production_model_combo.setCurrentIndex(idx)
 
-    def set_planner_thinking(self, thinking: ThinkingMode) -> None:
-        _select_thinking(self._planner_thinking_combo, thinking)
+    def set_production_thinking(self, thinking: ThinkingMode) -> None:
+        _select_thinking(self._production_thinking_combo, thinking)
 
     def _clear_projects_layout(self) -> None:
         while self._projects_layout.count():

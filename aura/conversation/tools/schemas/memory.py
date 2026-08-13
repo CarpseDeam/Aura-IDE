@@ -9,7 +9,7 @@ PROJECT_MEMORY_TOOL_DEFS: list[dict[str, Any]] = [
         "function": {
             "name": "search_project_memory",
             "description": (
-                "Search the project's archival memory for past dispatch records "
+                "Search the project's archival memory for past execution records "
                 "and saved documentation. Use this when you need context from "
                 "previous work."
             ),

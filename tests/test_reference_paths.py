@@ -234,7 +234,7 @@ def _handler(tmp_path: Path, monkeypatch) -> tuple[SendHandler, _Bridge, _Chat]:
         lambda _provider: True,
     )
     workspace, _reference = _paths(tmp_path)
-    bridge = _Bridge(ToolRegistry(workspace, mode="single"))
+    bridge = _Bridge(ToolRegistry(workspace))
     chat = _Chat()
     handler = SendHandler(
         bridge=bridge,

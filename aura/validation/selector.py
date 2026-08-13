@@ -36,7 +36,7 @@ _KIND_LABELS: dict[str, str] = {
 _KNOWN_TEST_MAPPINGS: dict[str, str] = {
     "aura/gui/info_hub_pane.py": "tests/test_info_hub_pane.py",
     "aura/validation/selector.py": "tests/test_validation_selector.py",
-    "aura/gui/worker_handler.py": "tests/test_worker_handler.py",
+    "aura/gui/execution_handler.py": "tests/test_execution_handler.py",
     "aura/bridge/dispatch.py": "tests/test_dispatch.py",
     "aura/context_gearbox/sources.py": "tests/test_context_gearbox.py",
 }
@@ -404,7 +404,7 @@ def _candidate_test_paths(file_path: str) -> list[str]:
                     return [_KNOWN_TEST_MAPPINGS[candidate]]
 
     # 3. General stem rule
-    stem = file_path.rsplit("/", 1)[-1][:-3]  # e.g. "worker_handler"
+    stem = file_path.rsplit("/", 1)[-1][:-3]  # e.g. "execution_handler"
     return [f"tests/test_{stem}.py"]
 
 

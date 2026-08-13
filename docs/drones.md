@@ -8,9 +8,9 @@ Drones handle repeatable work you do not want to re-explain every time. They app
 
 A Drone's `kind` field determines how it executes.
 
-**`command`** (default) — Aura launches the entrypoint command, sends one JSON payload on stdin, and reads one JSON result from stdout. The Drone runs as a standalone process with no Planner/Worker loop.
+**`command`** (default) — Aura launches the entrypoint command, sends one JSON payload on stdin, and reads one JSON result from stdout. The Drone runs as a standalone process.
 
-**`harness-lap`** — The Drone runs through Aura's Planner/Worker loop with built-in guardrails. Use this for bounded maintenance work where you want safe, verified changes with rollback. Repo Gardener is a harness-lap Drone.
+**`harness-lap`** — The Drone runs one bounded production conversation with built-in guardrails. Use this for maintenance work where you want safe, verified changes with rollback. Repo Gardener is a harness-lap Drone.
 
 ## Write policies
 
@@ -20,7 +20,7 @@ The `write_policy` field controls what a Drone may do:
 |---|---|
 | `read_only` | Analysis only. No file modifications. Safe to run multiple in parallel. |
 | `ask_before_writes` | Per-action approval before each write. |
-| `normal_diff_approval` | Changes files through the same diff-approval cycle as any Worker. |
+| `normal_diff_approval` | Changes files through the same diff-approval cycle as any Execution. |
 
 Read-only Drones can run in parallel (up to 3). Write-capable Drones use a shared write lane and run exclusively so the approval flow is not contested.
 

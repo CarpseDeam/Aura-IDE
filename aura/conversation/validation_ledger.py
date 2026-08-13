@@ -32,7 +32,7 @@ class ValidationLedgerRecord:
     """Whether the payload counts as a validation attempt."""
 
 
-class WorkerValidationLedger:
+class ExecutionValidationLedger:
     """Passive append-only validation evidence log.
 
     Records are added via ``observe()`` and exposed via the ``records``
@@ -76,5 +76,5 @@ class WorkerValidationLedger:
 
 __all__ = [
     "ValidationLedgerRecord",
-    "WorkerValidationLedger",
+    "ExecutionValidationLedger",
 ]

@@ -11,6 +11,7 @@ degradation for languages without a rich adapter.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import aura.code_intel  # noqa: F401 — triggers adapter registration
 from aura.conversation.tools._types import ApprovalDecision
@@ -37,7 +38,7 @@ def _inspect(registry: ToolRegistry, **args) -> dict:
 def test_inspect_code_is_the_only_semantic_inspection_tool_in_production() -> None:
     names = {
         d["function"]["name"]
-        for d in ToolCatalog().build_tool_defs(mode="single", read_only=False)
+        for d in ToolCatalog().build_tool_defs(read_only=False)
     }
     assert "inspect_code" in names
     removed = {
@@ -55,7 +56,7 @@ def test_inspect_code_is_the_only_semantic_inspection_tool_in_production() -> No
 
 
 def test_inspect_code_is_classified_as_observation() -> None:
-    registry = ToolRegistry(workspace_root=Path("."), mode="single")
+    registry = ToolRegistry(workspace_root=Path("."))
     assert registry.tool_effect("inspect_code") is ToolEffect.OBSERVATION
 
 
@@ -63,7 +64,7 @@ def test_inspect_code_is_classified_as_observation() -> None:
 
 
 def test_inspect_code_rejects_paths_that_escape_the_workspace(tmp_path: Path) -> None:
-    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    registry = ToolRegistry(workspace_root=tmp_path)
     payload = _inspect(registry, path="../outside.py")
     assert payload["ok"] is False
     assert "error" in payload
@@ -75,7 +76,7 @@ def test_inspect_code_rejects_paths_that_escape_the_workspace(tmp_path: Path) ->
 def test_python_symbol_resolution_returns_bounded_source_and_truthful_target(
     tmp_path: Path,
 ) -> None:
-    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    registry = ToolRegistry(workspace_root=tmp_path)
     _write(
         tmp_path / "app.py",
         "import os\n\n\ndef helper():\n    return 1\n\n\ndef target_fn(x):\n    return x + 1\n",
@@ -107,7 +108,7 @@ def test_python_symbol_resolution_returns_bounded_source_and_truthful_target(
 
 
 def test_line_anchor_without_symbol_resolves_by_line(tmp_path: Path) -> None:
-    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    registry = ToolRegistry(workspace_root=tmp_path)
     _write(tmp_path / "app.py", "def foo():\n    pass\n")
 
     payload = _inspect(registry, path="app.py", line=1)
@@ -117,7 +118,7 @@ def test_line_anchor_without_symbol_resolves_by_line(tmp_path: Path) -> None:
 
 
 def test_line_between_declarations_is_nearest_preceding_not_exact(tmp_path: Path) -> None:
-    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    registry = ToolRegistry(workspace_root=tmp_path)
     _write(tmp_path / "app.py", "def foo():\n    x = 1\n    return x\n")
 
     # Line 2 is inside foo's body, not a declaration line itself.
@@ -128,7 +129,7 @@ def test_line_between_declarations_is_nearest_preceding_not_exact(tmp_path: Path
 
 
 def test_unresolvable_anchor_still_returns_source(tmp_path: Path) -> None:
-    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    registry = ToolRegistry(workspace_root=tmp_path)
     _write(tmp_path / "app.py", "x = 1\ny = 2\n")
 
     payload = _inspect(registry, path="app.py", symbol="does_not_exist")
@@ -144,7 +145,7 @@ def test_unresolvable_anchor_still_returns_source(tmp_path: Path) -> None:
 
 
 def test_occurrences_are_labeled_lexical_and_bounded(tmp_path: Path) -> None:
-    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    registry = ToolRegistry(workspace_root=tmp_path)
     _write(
         tmp_path / "app.py",
         "def shared_name():\n    pass\n",
@@ -168,7 +169,7 @@ def test_occurrences_are_labeled_lexical_and_bounded(tmp_path: Path) -> None:
 
 
 def test_no_symbol_no_occurrences(tmp_path: Path) -> None:
-    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    registry = ToolRegistry(workspace_root=tmp_path)
     # A bare comment produces no top-level symbol, so line 1 resolves to
     # nothing and there is no symbol name to search occurrences for.
     _write(tmp_path / "app.py", "# just a comment\n")
@@ -185,7 +186,7 @@ def test_no_symbol_no_occurrences(tmp_path: Path) -> None:
 def test_unsupported_language_still_returns_source_and_states_limitations(
     tmp_path: Path,
 ) -> None:
-    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    registry = ToolRegistry(workspace_root=tmp_path)
     _write(tmp_path / "notes.txt", "line one\nline two\nline three\n")
 
     payload = _inspect(registry, path="notes.txt", line=2)
@@ -202,7 +203,7 @@ def test_unsupported_language_still_returns_source_and_states_limitations(
 def test_resolved_python_target_reports_exact_parser_owned_range(
     tmp_path: Path,
 ) -> None:
-    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    registry = ToolRegistry(workspace_root=tmp_path)
     _write(
         tmp_path / "app.py",
         "def target_fn(x):\n    y = x + 1\n    return y\n",
@@ -221,7 +222,7 @@ def test_resolved_python_target_reports_exact_parser_owned_range(
 def test_inspect_code_uses_parser_bounded_source_when_exact_range_known(
     tmp_path: Path,
 ) -> None:
-    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    registry = ToolRegistry(workspace_root=tmp_path)
     _write(
         tmp_path / "app.py",
         "x = 0\n\n\ndef target_fn(x):\n    y = x + 1\n    return y\n\n\nz = 1\n",
@@ -245,7 +246,7 @@ def test_inspect_code_uses_parser_bounded_source_when_exact_range_known(
 def test_parser_owned_body_larger_than_cap_is_bounded_but_range_metadata_stays_true(
     tmp_path: Path,
 ) -> None:
-    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    registry = ToolRegistry(workspace_root=tmp_path)
     from aura.code_intel.inspection import EXCERPT_MAX_LINES
 
     body_lines = "\n".join(f"    x{i} = {i}" for i in range(EXCERPT_MAX_LINES + 20))
@@ -266,7 +267,7 @@ def test_parser_owned_body_larger_than_cap_is_bounded_but_range_metadata_stays_t
 
 
 def test_fallback_text_target_does_not_claim_a_body_range(tmp_path: Path) -> None:
-    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    registry = ToolRegistry(workspace_root=tmp_path)
     _write(tmp_path / "notes.txt", "line one\nline two\nline three\n")
 
     payload = _inspect(registry, path="notes.txt", line=1)
@@ -290,7 +291,7 @@ def test_workspace_root_change_rebinds_inspection(tmp_path: Path) -> None:
     _write(root_a / "app.py", "def only_in_a():\n    pass\n")
     _write(root_b / "app.py", "def only_in_b():\n    pass\n")
 
-    registry = ToolRegistry(workspace_root=root_a, mode="single")
+    registry = ToolRegistry(workspace_root=root_a)
     first = _inspect(registry, path="app.py", line=1)
     assert first["target"]["name"] == "only_in_a"
 
@@ -312,7 +313,7 @@ def test_inspect_code_never_triggers_a_full_workspace_refresh(
 
     monkeypatch.setattr(CodeIntelIndex, "refresh", _refresh_guard)
 
-    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    registry = ToolRegistry(workspace_root=tmp_path)
     _write(tmp_path / "app.py", "def target_fn():\n    return 1\n")
 
     payload = _inspect(registry, path="app.py", symbol="target_fn")
@@ -322,7 +323,7 @@ def test_inspect_code_never_triggers_a_full_workspace_refresh(
 
 
 def test_first_inspection_indexes_only_the_requested_file(tmp_path: Path) -> None:
-    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    registry = ToolRegistry(workspace_root=tmp_path)
     _write(tmp_path / "app.py", "def a(): pass\n")
     _write(tmp_path / "sibling.py", "def b(): pass\n")
 
@@ -332,7 +333,7 @@ def test_first_inspection_indexes_only_the_requested_file(tmp_path: Path) -> Non
 
 
 def test_reinspecting_unchanged_file_does_not_reparse(tmp_path: Path) -> None:
-    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    registry = ToolRegistry(workspace_root=tmp_path)
     _write(tmp_path / "app.py", "def stable(): pass\n")
 
     _inspect(registry, path="app.py", line=1)
@@ -347,7 +348,7 @@ def test_reinspecting_unchanged_file_does_not_reparse(tmp_path: Path) -> None:
 
 
 def test_editing_inspected_file_returns_new_symbol(tmp_path: Path) -> None:
-    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    registry = ToolRegistry(workspace_root=tmp_path)
     app_py = tmp_path / "app.py"
     _write(app_py, "def old_fn(): pass\n")
 
@@ -365,7 +366,7 @@ def test_workspace_root_change_discards_old_index_facts(tmp_path: Path) -> None:
     _write(root_a / "app.py", "def only_in_a(): pass\n")
     _write(root_b / "app.py", "def only_in_b(): pass\n")
 
-    registry = ToolRegistry(workspace_root=root_a, mode="single")
+    registry = ToolRegistry(workspace_root=root_a)
     _inspect(registry, path="app.py", line=1)
     old_index = registry._code_intel_index
     assert "app.py" in old_index.file_paths()
@@ -396,7 +397,7 @@ def test_code_intel_outline_uses_targeted_freshness_not_full_refresh(
 
     monkeypatch.setattr(CodeIntelIndex, "refresh", _refresh_guard)
 
-    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    registry = ToolRegistry(workspace_root=tmp_path)
     _write(tmp_path / "app.py", "def helper():\n    pass\n")
 
     result = registry.execute("code_intel_outline", {"path": "app.py"}, approval_cb=_APPROVE)
@@ -419,7 +420,7 @@ def test_code_intel_references_still_uses_full_refresh(
 
     monkeypatch.setattr(CodeIntelIndex, "refresh", _tracking_refresh)
 
-    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    registry = ToolRegistry(workspace_root=tmp_path)
     _write(tmp_path / "app.py", "def target():\n    pass\n")
 
     result = registry.execute(
@@ -444,7 +445,7 @@ def test_code_intel_dependents_still_uses_full_refresh(
 
     monkeypatch.setattr(CodeIntelIndex, "refresh", _tracking_refresh)
 
-    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    registry = ToolRegistry(workspace_root=tmp_path)
     _write(tmp_path / "lib.py", "VERSION = 1\n")
     _write(tmp_path / "app.py", "import lib\n")
 
@@ -457,7 +458,7 @@ def test_code_intel_dependents_still_uses_full_refresh(
 
 
 def test_code_intel_audit_reuses_registry_owned_index(tmp_path: Path) -> None:
-    registry = ToolRegistry(workspace_root=tmp_path, mode="single")
+    registry = ToolRegistry(workspace_root=tmp_path)
     _write(tmp_path / "app.py", "def a():\n    pass\n")
 
     result = registry.execute(

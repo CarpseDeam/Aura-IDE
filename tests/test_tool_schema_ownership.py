@@ -53,15 +53,15 @@ def test_aggregate_schema_order_matches_the_existing_model_surface() -> None:
     ]
 
 
-def test_catalog_composition_preserves_read_only_and_single_order() -> None:
+def test_catalog_composition_preserves_read_only_and_production_order() -> None:
     catalog = ToolCatalog()
-    read_only = _names(catalog.build_tool_defs(mode="single", read_only=True))
-    single = _names(catalog.build_tool_defs(mode="single", read_only=False))
+    read_only = _names(catalog.build_tool_defs(read_only=True))
+    production = _names(catalog.build_tool_defs(read_only=False))
 
     assert read_only == _names(READ_TOOL_DEFS) + [
         "load_skills",
     ] + _names(GIT_TOOL_DEFS)
-    assert single == [
+    assert production == [
         "inspect_godot_assets",
         "inspect_godot_asset_preview",
         "capture_godot_asset_preview",
@@ -72,7 +72,7 @@ def test_catalog_composition_preserves_read_only_and_single_order() -> None:
         "grep_search",
         "search_codebase",
         "inspect_code",
-        "update_worker_todo",
+        "update_task_checklist",
         "record_implementation_decision",
         "install_godot_editor_bridge",
         "edit_godot_editor",

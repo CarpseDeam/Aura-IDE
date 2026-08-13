@@ -4,52 +4,39 @@ Topics are grouped by subsystem. Each constant is a dotted string
 matching the pattern ``<subsystem>.<event>``.
 """
 
-# ── Work Artifact lifecycle ────────────────────────────────────────────────────
-WORK_ARTIFACT_CREATED = "work_artifact.created"
-WORK_ARTIFACT_UPDATED = "work_artifact.updated"
-WORK_ARTIFACT_ITEM_READY = "work_artifact.item_ready"
-WORK_ARTIFACT_ITEM_COMPLETED = "work_artifact.item_completed"
-
-# ── Worker / tool execution ─────────────────────────────────────────────────
-WORKER_TOOL_STARTED = "worker.tool_started"
-WORKER_TOOL_FINISHED = "worker.tool_finished"
-WORKER_FILE_CHANGED = "worker.file_changed"
-WORKER_COMMAND_STARTED = "worker.command_started"
-WORKER_COMMAND_FINISHED = "worker.command_finished"
-WORKER_VALIDATION_STARTED = "worker.validation_started"
-WORKER_VALIDATION_FINISHED = "worker.validation_finished"
-WORKER_FINAL_REPORT_STARTED = "worker.final_report_started"
-WORKER_FINAL_REPORT_FINISHED = "worker.final_report_finished"
-WORKER_FAILED = "worker.failed"
-WORKER_TODO_UPDATED = "worker.todo_updated"
+# ── Execution / tool execution ─────────────────────────────────────────────────
+EXECUTION_TOOL_STARTED = "execution.tool_started"
+EXECUTION_TOOL_FINISHED = "execution.tool_finished"
+EXECUTION_FILE_CHANGED = "execution.file_changed"
+EXECUTION_COMMAND_STARTED = "execution.command_started"
+EXECUTION_COMMAND_FINISHED = "execution.command_finished"
+EXECUTION_VALIDATION_STARTED = "execution.validation_started"
+EXECUTION_VALIDATION_FINISHED = "execution.validation_finished"
+EXECUTION_FINAL_REPORT_STARTED = "execution.final_report_started"
+EXECUTION_FINAL_REPORT_FINISHED = "execution.final_report_finished"
+EXECUTION_FAILED = "execution.failed"
+TASK_CHECKLIST_UPDATED = "task_checklist.updated"
 
 # ── Lifecycle gate events ──────────────────────────────────────────────────
-WORKER_PRE_TOOL_GATE_DECIDED = "worker.pre_tool_gate_decided"
+EXECUTION_PRE_TOOL_GATE_DECIDED = "execution.pre_tool_gate_decided"
 
 # ── Wildcard — matches every event ──────────────────────────────────────────
 ALL = "*"
 
 # ── Convenience groupings for validation / introspection ────────────────────
-WORK_ARTIFACT_TOPICS = frozenset({
-    WORK_ARTIFACT_CREATED,
-    WORK_ARTIFACT_UPDATED,
-    WORK_ARTIFACT_ITEM_READY,
-    WORK_ARTIFACT_ITEM_COMPLETED,
+EXECUTION_TOPICS = frozenset({
+    EXECUTION_TOOL_STARTED,
+    EXECUTION_TOOL_FINISHED,
+    EXECUTION_FILE_CHANGED,
+    EXECUTION_COMMAND_STARTED,
+    EXECUTION_COMMAND_FINISHED,
+    EXECUTION_VALIDATION_STARTED,
+    EXECUTION_VALIDATION_FINISHED,
+    EXECUTION_FINAL_REPORT_STARTED,
+    EXECUTION_FINAL_REPORT_FINISHED,
+    EXECUTION_FAILED,
+    TASK_CHECKLIST_UPDATED,
+    EXECUTION_PRE_TOOL_GATE_DECIDED,
 })
 
-WORKER_TOPICS = frozenset({
-    WORKER_TOOL_STARTED,
-    WORKER_TOOL_FINISHED,
-    WORKER_FILE_CHANGED,
-    WORKER_COMMAND_STARTED,
-    WORKER_COMMAND_FINISHED,
-    WORKER_VALIDATION_STARTED,
-    WORKER_VALIDATION_FINISHED,
-    WORKER_FINAL_REPORT_STARTED,
-    WORKER_FINAL_REPORT_FINISHED,
-    WORKER_FAILED,
-    WORKER_TODO_UPDATED,
-    WORKER_PRE_TOOL_GATE_DECIDED,
-})
-
-ALL_TOPICS = WORK_ARTIFACT_TOPICS | WORKER_TOPICS
+ALL_TOPICS = EXECUTION_TOPICS

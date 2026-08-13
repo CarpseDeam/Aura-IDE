@@ -18,7 +18,6 @@ from aura.drones.store import DroneStore, RunHistoryStore
 from aura.sandbox import SandboxExecutor
 
 if TYPE_CHECKING:
-    from aura.bridge.harness_lap_bridge import HarnessLapBridge
     from aura.drones.probes import ProbeFinding
 
 
@@ -222,7 +221,7 @@ class DroneRunner(QObject):
 
         import datetime as dt
 
-        from aura.conversation.worker_outcome import WorkerOutcomeStatus
+        from aura.conversation.execution_outcome import ExecutionOutcomeStatus
         from aura.git_ops import (
             changes_since,
             clean_untracked_paths,
@@ -277,9 +276,9 @@ class DroneRunner(QObject):
                         produced_artifact={
                             "has_work": False,
                             "changed_files": [],
-                            "worker_ok": False,
-                            "worker_status": "skipped_dirty_tree",
-                            "worker_errors": [],
+                            "execution_ok": False,
+                            "execution_status": "skipped_dirty_tree",
+                            "execution_errors": [],
                             "policy_violations": [f"unrelated dirty files: {sorted(unknown)}"],
                             "rollback_status": None,
                         },
@@ -314,9 +313,9 @@ class DroneRunner(QObject):
                         produced_artifact={
                             "has_work": False,
                             "changed_files": [],
-                            "worker_ok": False,
-                            "worker_status": "skipped_dirty_tree",
-                            "worker_errors": [],
+                            "execution_ok": False,
+                            "execution_status": "skipped_dirty_tree",
+                            "execution_errors": [],
                             "policy_violations": ["working tree is dirty"],
                             "rollback_status": None,
                         },
@@ -363,15 +362,15 @@ class DroneRunner(QObject):
         want = self._build_harness_lap_want()
         if self._lap_target:
             self.contentDelta.emit(f"**Target:** `{self._lap_target}`")
-        self.contentDelta.emit("Running planner → worker lap…")
+        self.contentDelta.emit("Running production harness lap…")
         lap_result = self._harness_bridge.run_one_lap(want)
         self.contentDelta.emit("Lap complete. Checking results…")
 
         # 5. Collect outcomes
         changed_files = list(lap_result.changed_files)
-        worker_ok = lap_result.worker_ok
-        worker_status = lap_result.worker_status
-        worker_errors = list(lap_result.worker_errors)
+        execution_ok = lap_result.execution_ok
+        execution_status = lap_result.execution_status
+        execution_errors = list(lap_result.execution_errors)
         self._run_owned_files.update(changed_files)
 
         # --- Repair loop: bounded retry on validation failure ---
@@ -382,7 +381,7 @@ class DroneRunner(QObject):
         previous_changed: set[str] | None = None
 
         lap_is_validation_failure = (
-            worker_status == WorkerOutcomeStatus.validation_failed.value
+            execution_status == ExecutionOutcomeStatus.validation_failed.value
             and bool(changed_files)
         )
 
@@ -394,7 +393,7 @@ class DroneRunner(QObject):
 
             # Gather failure details from validation_results
             vr_list = list(getattr(lap_result, 'validation_results', []))
-            validation_errors = [e for e in worker_errors if "validation" in e.lower() or "Validation command failed" in e]
+            validation_errors = [e for e in execution_errors if "validation" in e.lower() or "Validation command failed" in e]
 
             # Build failure fingerprint
             failure_parts = []
@@ -478,27 +477,27 @@ class DroneRunner(QObject):
             # Re-detect outcomes for loop check
             has_work, repair_changed = changes_since(workspace_root, repair_pre_sha)
             changed_files = list(lap_result.changed_files)
-            worker_ok = lap_result.worker_ok
-            worker_status = lap_result.worker_status
-            worker_errors = list(lap_result.worker_errors)
+            execution_ok = lap_result.execution_ok
+            execution_status = lap_result.execution_status
+            execution_errors = list(lap_result.execution_errors)
             self._run_owned_files.update(changed_files)
 
             terminal_statuses = {
-                WorkerOutcomeStatus.scope_mismatch.value,
-                WorkerOutcomeStatus.harness_error.value,
-                WorkerOutcomeStatus.edit_mechanics_blocked.value,
+                ExecutionOutcomeStatus.scope_mismatch.value,
+                ExecutionOutcomeStatus.harness_error.value,
+                ExecutionOutcomeStatus.edit_mechanics_blocked.value,
             }
-            if worker_status in terminal_statuses:
-                repair_attempts_log[-1]["worker_stopped"] = True
-                repair_attempts_log[-1]["worker_status"] = worker_status
+            if execution_status in terminal_statuses:
+                repair_attempts_log[-1]["execution_stopped"] = True
+                repair_attempts_log[-1]["execution_status"] = execution_status
                 break
 
             lap_is_validation_failure = (
-                worker_status == WorkerOutcomeStatus.validation_failed.value
+                execution_status == ExecutionOutcomeStatus.validation_failed.value
                 or (
-                    not worker_ok
-                    and worker_errors
-                    and any("Validation command failed" in e for e in worker_errors)
+                    not execution_ok
+                    and execution_errors
+                    and any("Validation command failed" in e for e in execution_errors)
                 )
             )
 
@@ -513,15 +512,15 @@ class DroneRunner(QObject):
         changed_files = list(all_changed)
         # --- End repair loop ---
 
-        # 6. Determine if lap failed based on worker outcome
+        # 6. Determine if lap failed based on execution outcome
         hard_failure_statuses = {
-            WorkerOutcomeStatus.validation_failed.value,
-            WorkerOutcomeStatus.edit_mechanics_blocked.value,
-            WorkerOutcomeStatus.harness_error.value,
-            WorkerOutcomeStatus.scope_mismatch.value,
-            WorkerOutcomeStatus.approval_rejected.value,
+            ExecutionOutcomeStatus.validation_failed.value,
+            ExecutionOutcomeStatus.edit_mechanics_blocked.value,
+            ExecutionOutcomeStatus.harness_error.value,
+            ExecutionOutcomeStatus.scope_mismatch.value,
+            ExecutionOutcomeStatus.approval_rejected.value,
         }
-        lap_failed = not worker_ok or worker_status in hard_failure_statuses or bool(worker_errors)
+        lap_failed = not execution_ok or execution_status in hard_failure_statuses or bool(execution_errors)
 
         if not lap_failed and not changed_files:
             # Empty lap -- not a failure, but no work done
@@ -625,7 +624,7 @@ class DroneRunner(QObject):
         # 9. Build summary
         if lap_failed:
             violations_str = "; ".join(policy_violations) if policy_violations else ""
-            errors_str = "; ".join(worker_errors) if worker_errors else ""
+            errors_str = "; ".join(execution_errors) if execution_errors else ""
             parts = [s for s in [violations_str, errors_str] if s]
             combined = " | ".join(parts)
             summary = f"Harness-lap failed: {combined}" if combined else "Harness-lap failed."
@@ -642,9 +641,9 @@ class DroneRunner(QObject):
         artifact: dict[str, Any] = {
             "has_work": bool(changed_files),
             "changed_files": changed_files,
-            "worker_ok": worker_ok,
-            "worker_status": worker_status,
-            "worker_errors": worker_errors,
+            "execution_ok": execution_ok,
+            "execution_status": execution_status,
+            "execution_errors": execution_errors,
             "policy_violations": policy_violations,
             "rollback_status": rollback_status,
             "dirty_files_owned": list(self._run_owned_files),
@@ -664,7 +663,7 @@ class DroneRunner(QObject):
             ended_at=dt.datetime.now(tz=dt.timezone.utc).isoformat(),
             summary=summary,
             produced_artifact=artifact,
-            errors=worker_errors if lap_failed else [],
+            errors=execution_errors if lap_failed else [],
             elapsed_seconds=self._run.elapsed_seconds,
         )
         RunHistoryStore.save_run(workspace_root, receipt)

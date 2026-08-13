@@ -8,22 +8,17 @@ the return to idle.
 
 It owns execution activity only.  The assistant's conversational prose belongs
 to the chat transcript and is routed there by ``ConversationBridge``; this
-session never re-emits it as Worker activity.
+session never re-emits it as Execution activity.
 
-It deliberately reuses the existing execution machinery rather than growing a
-second workflow engine:
+Its focused collaborators are:
 
-* ``WorkerEventRelay`` is the single authoritative execution ledger.
-* ``WorkerActivityController`` projects the activity heartbeat.
-* ``WorkerTodoProjector`` projects the live TODO snapshot.
-* ``create_worker_relay`` performs the signal wiring.
+* ``ExecutionEventRelay`` is the single authoritative execution ledger.
+* ``ExecutionActivityController`` projects the activity heartbeat.
+* ``TaskChecklistProjector`` projects the live task checklist snapshot.
+* ``create_execution_relay`` performs the signal wiring.
 
-The ``worker*`` signal names are retained as compatibility aliases so the
-existing ``WorkerEventHandler`` / ``AuraPlayground`` projection binds unchanged.
-
-This session never invokes a model, generates a plan, creates a SpecCard,
-constructs a Worker capsule, parses prose to infer state, or depends on
-``_DispatchProxy`` lifecycle state.
+This session projects an existing model run; it does not invoke the model or
+parse prose to infer state.
 """
 
 from __future__ import annotations
@@ -34,13 +29,13 @@ from typing import Any
 
 from PySide6.QtCore import QObject, Signal
 
+from aura.bridge.execution_activity import ExecutionActivityController
+from aura.bridge.execution_relay_factory import create_execution_relay
 from aura.bridge.production_receipt import (
     ProductionReceipt,
     ProductionRunEvidence,
     build_production_receipt,
 )
-from aura.bridge.worker_activity import WorkerActivityController
-from aura.bridge.worker_relay_factory import create_worker_relay
 from aura.client import (
     AgentProcessFinished,
     AgentProcessOutput,
@@ -48,7 +43,7 @@ from aura.client import (
     Event,
 )
 from aura.events import EventBus
-from aura.worker_todo import WorkerTodoProjector
+from aura.task_checklist import TaskChecklistProjector
 
 _log = logging.getLogger(__name__)
 
@@ -62,52 +57,50 @@ class ProductionExecutionSession(QObject):
     """Owns the execution identity, ledger, and projection for one production run."""
 
     # Lifecycle
-    workerStarted = Signal(str)                        # run_id
-    workerFinished = Signal(str, bool, str, bool, str)  # run_id, ok, summary, needs_followup, status
-    workerCancelled = Signal(str)                      # run_id
+    executionStarted = Signal(str)                        # run_id
+    executionFinished = Signal(str, bool, str, bool, str)  # run_id, ok, summary, needs_followup, status
+    executionCancelled = Signal(str)                      # run_id
 
-    # Stream / tool projection (names match the historical Worker family so the
-    # existing workspace projection binds without change).
-    workerReasoningDelta = Signal(str, str)
-    workerContentDelta = Signal(str, str)
-    workerToolCallStart = Signal(str, str, str)
-    workerToolCallArgs = Signal(str, str, str)
-    workerToolCallEnd = Signal(str, str)
-    workerToolResult = Signal(str, str, str, bool, str, dict)
-    workerDiffDecided = Signal(str, str, str, str, str, str, bool)
-    workerStreamDone = Signal(str, str, dict)
-    workerApiError = Signal(str, int, str)
-    workerUsage = Signal(str, str, int, int, int, int)
-    workerTerminalOutput = Signal(str, str, str)
-    workerAgentProcessStarted = Signal(str, str, str, str)
-    workerAgentProcessOutput = Signal(str, str, str)
-    workerAgentProcessFinished = Signal(str, str, object)
+    # Stream and tool projection for the active execution.
+    executionReasoningDelta = Signal(str, str)
+    executionContentDelta = Signal(str, str)
+    executionToolCallStart = Signal(str, str, str)
+    executionToolCallArgs = Signal(str, str, str)
+    executionToolCallEnd = Signal(str, str)
+    executionToolResult = Signal(str, str, str, bool, str, dict)
+    executionDiffDecided = Signal(str, str, str, str, str, str, bool)
+    executionStreamDone = Signal(str, str, dict)
+    executionApiError = Signal(str, int, str)
+    executionUsage = Signal(str, str, int, int, int, int)
+    executionTerminalOutput = Signal(str, str, str)
+    executionAgentProcessStarted = Signal(str, str, str, str)
+    executionAgentProcessOutput = Signal(str, str, str)
+    executionAgentProcessFinished = Signal(str, str, object)
 
     # Projected snapshots
-    workerActivityUpdated = Signal(str, list)
-    workerTodoUpdated = Signal(str, list)
+    executionActivityUpdated = Signal(str, list)
+    taskChecklistUpdated = Signal(str, list)
 
     def __init__(self, approval_proxy: Any, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._approval_proxy = approval_proxy
         self._event_bus = EventBus()
-        self._activity_controller = WorkerActivityController(self._event_bus)
+        self._activity_controller = ExecutionActivityController(self._event_bus)
         self._activity_controller.set_on_change(self._on_activity_changed)
-        self._todo_projector = WorkerTodoProjector(self._event_bus)
-        self._todo_projector.set_on_change(self._on_todo_changed)
+        self._checklist_projector = TaskChecklistProjector(self._event_bus)
+        self._checklist_projector.set_on_change(self._on_checklist_changed)
 
         # One authoritative execution ledger for the active production run.
         #
         # Assistant prose is deliberately NOT projected here: conversation
         # content is chat-owned and reaches ChatView through the bridge's
         # canonical ``contentDelta`` path.  Projecting it again would put the
-        # answer in the ephemeral Worker Log, where it is cleared on reload.
-        self._relay = create_worker_relay(
+        # answer in the ephemeral Execution Log, where it is cleared on reload.
+        self._relay = create_execution_relay(
             approval_proxy=approval_proxy,
-            worker_model="",
-            dispatch_proxy=self,
+            execution_model="",
+            projection_target=self,
             event_bus=self._event_bus,
-            suppress_workflow_state_updates=True,
             suppress_content_projection=True,
         )
 
@@ -149,11 +142,11 @@ class ProductionExecutionSession(QObject):
         self._relay.reset()
         self._relay.set_model(self._model)
         self._activity_controller.clear()
-        self._todo_projector.clear()
+        self._checklist_projector.clear()
         _log.info(
             "production_run_started run_id=%s model=%s", self._run_id, self._model
         )
-        self.workerStarted.emit(self._run_id)
+        self.executionStarted.emit(self._run_id)
         return self._run_id
 
     def handle_event(self, ev: Event) -> None:
@@ -174,7 +167,7 @@ class ProductionExecutionSession(QObject):
         self._cancelled = True
         self._finished = True
         _log.info("production_run_cancelled run_id=%s", self._run_id)
-        self.workerCancelled.emit(self._run_id)
+        self.executionCancelled.emit(self._run_id)
 
     def finish(
         self,
@@ -194,7 +187,7 @@ class ProductionExecutionSession(QObject):
         self._finished = True
         if self._cancelled:
             _log.info("production_run_cancelled run_id=%s", self._run_id)
-            self.workerCancelled.emit(self._run_id)
+            self.executionCancelled.emit(self._run_id)
             return None
 
         receipt = build_production_receipt(
@@ -209,7 +202,7 @@ class ProductionExecutionSession(QObject):
             "production_run_finished run_id=%s ok=%s status=%s",
             self._run_id, receipt.ok, receipt.status,
         )
-        self.workerFinished.emit(
+        self.executionFinished.emit(
             self._run_id,
             receipt.ok,
             receipt.text,
@@ -251,7 +244,7 @@ class ProductionExecutionSession(QObject):
     def clear(self) -> None:
         """Clear projected state (conversation reset / teardown)."""
         self._activity_controller.clear()
-        self._todo_projector.clear()
+        self._checklist_projector.clear()
         self._relay.reset()
         self._process_results.clear()
         self._result_metadata.clear()
@@ -285,13 +278,13 @@ class ProductionExecutionSession(QObject):
             return
 
     def _on_activity_changed(self, entries: list) -> None:
-        self.workerActivityUpdated.emit(
+        self.executionActivityUpdated.emit(
             self._run_id,
             [entry.to_dict() for entry in entries],
         )
 
-    def _on_todo_changed(self, run_id: str, items: list[dict[str, str]]) -> None:
-        self.workerTodoUpdated.emit(run_id, items)
+    def _on_checklist_changed(self, run_id: str, items: list[dict[str, str]]) -> None:
+        self.taskChecklistUpdated.emit(run_id, items)
 
 
 __all__ = [

@@ -59,7 +59,7 @@ def _map_phase_from_line(line: str) -> str | None:
         return "preparing"
     if stripped.startswith("Target:"):
         return None  # phase stays the same, target updates
-    if "Running planner → worker lap…" in stripped:
+    if "Running production harness lap…" in stripped:
         return "working"
     if "Validation failed. Starting repair attempt" in stripped:
         return "repairing"
@@ -93,7 +93,7 @@ class DroneRunCard(QFrame):
       │  └──────────────────────────────────────┘     │
       │  ┌─ Timeline ───────────────────────────┐     │
       │  │  Backing up…                         │     │
-      │  │  Running planner → worker lap…       │     │
+      │  │  Running production harness lap…       │     │
       │  └──────────────────────────────────────┘     │
       │  ▶ Show tool output (N calls)    [Cancel]     │
       └──────────────────────────────────────────────┘
@@ -636,7 +636,7 @@ class DroneRunCard(QFrame):
         if rollback and rollback != "no_changes_to_revert":
             labels_data.append((f"↩ Rollback: {rollback}", WARN))
 
-        errors = artifact.get("worker_errors")
+        errors = artifact.get("execution_errors")
         if errors and isinstance(errors, list) and len(errors) > 0:
             labels_data.append((f"❌ Errors: {len(errors)}", DANGER))
 
@@ -731,7 +731,7 @@ class DroneRunCard(QFrame):
                 parts += f", …and {count - 5} more"
             labels_data.append((f"📄 Changed: {count} — {parts}", SUCCESS))
 
-        wstatus = artifact.get("worker_status")
+        wstatus = artifact.get("execution_status")
         if wstatus:
             if wstatus == "completed":
                 wcolor = SUCCESS
@@ -739,9 +739,9 @@ class DroneRunCard(QFrame):
                 wcolor = DANGER
             else:
                 wcolor = WARN
-            labels_data.append((f"Worker: {wstatus}", wcolor))
+            labels_data.append((f"Process: {wstatus}", wcolor))
 
-        errors = artifact.get("worker_errors")
+        errors = artifact.get("execution_errors")
         if errors and isinstance(errors, list) and len(errors) > 0:
             first = str(errors[0])
             truncated = first[:200] + "…" if len(first) > 200 else first

@@ -18,7 +18,7 @@ from aura.config import (
     AppSettings,
     fetch_provider_models,
     get_provider_kind,
-    resolve_role_default_model,
+    resolve_production_default_model,
     save_dynamic_catalog,
 )
 from aura.gui.theme import FG_DIM
@@ -55,10 +55,7 @@ class DiscoveryWorker(QObject):
 class ModelsPage(QWidget):
     """One production configuration: provider, model, thinking, temperature.
 
-    Normal Aura coding runs one continuous production model. The historical
-    Planner/Worker mode toggle and its separate role controls are not part of
-    the normal product and are no longer exposed here. The legacy fields on
-    ``AppSettings`` are preserved untouched for backward compatibility.
+    Normal Aura coding runs one continuous production model.
     """
 
     def __init__(self, settings: AppSettings, parent: QWidget | None = None) -> None:
@@ -270,7 +267,7 @@ class ModelsPage(QWidget):
         provider_id: ProviderId = self._provider_combo.currentData()  # type: ignore[assignment]
         self._populate_models(
             provider_id,
-            resolve_role_default_model(provider_id, "production"),
+            resolve_production_default_model(provider_id),
         )
         self._start_discovery(provider_id)
         self._refresh_btn.setVisible(provider_id == "openrouter")
@@ -306,8 +303,6 @@ class ModelsPage(QWidget):
     def collect_settings(self, settings: AppSettings) -> None:
         """Write the one production configuration back onto *settings*.
 
-        Legacy Planner/Worker fields are intentionally left untouched so old
-        persisted configurations keep round-tripping.
         """
         provider = self._provider_combo.currentData()
         model = self._model_combo.currentData()

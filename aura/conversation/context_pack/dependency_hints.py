@@ -1,4 +1,4 @@
-"""Thin wrappers around existing dependency helpers for the Worker Context Pack."""
+"""Thin wrappers around existing dependency helpers for the Execution Context Pack."""
 
 from __future__ import annotations
 

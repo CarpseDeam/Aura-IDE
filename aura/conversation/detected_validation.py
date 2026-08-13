@@ -1,7 +1,7 @@
 """Derived command policy for detected validation commands.
 
 This module owns *only* the policy rules that bridge detected project-level
-validation commands (from ``ProjectProfile``) into the Worker's command list
+validation commands (from ``ProjectProfile``) into the production command list
 and the behavioral-required enforcement in completion.
 
 Rules:
@@ -141,18 +141,18 @@ def runnable_detected_validation_commands(
 
 
 def merge_validation_commands(
-    planner_commands: list[str] | tuple[str, ...],
+    declared_commands: list[str] | tuple[str, ...],
     detected_commands: list[str] | tuple[str, ...],
 ) -> list[str]:
-    """Merge *planner_commands* and *detected_commands*, deduping while
+    """Merge *declared_commands* and *detected_commands*, deduping while
     preserving order.
 
-    Planner commands come first; detected commands fill in any gaps.
+    Declared commands come first; detected commands fill in any gaps.
     """
     seen: set[str] = set()
     merged: list[str] = []
 
-    for cmd in planner_commands:
+    for cmd in declared_commands:
         normal = normalize_command(cmd)
         if normal not in seen:
             seen.add(normal)

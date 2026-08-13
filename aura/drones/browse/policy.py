@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 @dataclass
 class PolicyResult:
-    verdict: str  # "allow", "needs_planner_decision", "deny_manual"
+    verdict: str  # "allow", "needs_review", "deny_manual"
     reason: str  # human-readable explanation
     matched_text: str | None = None  # the phrase/pattern that triggered
 
@@ -39,7 +39,7 @@ def classify_action(
 
     Ordered priority:
     1. deny_manual — password fields and sensitive patterns
-    2. needs_planner_decision — consequential actions not pre-approved
+    2. needs_review — consequential actions not pre-approved
     3. allow — default for everything else
     """
     # --- 1. deny_manual ---
@@ -61,7 +61,7 @@ def classify_action(
                 phrase,
             )
 
-    # --- 2. needs_planner_decision ---
+    # --- 2. needs_review ---
     allowed = allowed_consequential_actions or []
     for phrase in CONSEQUENTIAL_PHRASES:
         if phrase in label_lower or phrase in href_lower:
@@ -76,8 +76,8 @@ def classify_action(
                         phrase,
                     )
             return PolicyResult(
-                "needs_planner_decision",
-                f"Consequential action \u2014 '{phrase}' requires planner decision",
+                "needs_review",
+                f"Consequential action \u2014 '{phrase}' requires user review",
                 phrase,
             )
 

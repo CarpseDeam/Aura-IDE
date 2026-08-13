@@ -1,4 +1,4 @@
-"""Qt thread-crossing proxy that marshals approval requests from any worker
+"""Qt thread-crossing proxy that marshals approval requests from any background
 thread onto the GUI thread using BlockingQueuedConnection."""
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from aura.gui.diff_dialog import DiffApprovalDialog
 
 
 class _ApprovalProxy(QObject):
-    """Marshals approval requests from any worker thread onto the GUI thread."""
+    """Marshals approval requests from any background thread onto the GUI thread."""
 
     def __init__(self, parent_widget) -> None:
         super().__init__()

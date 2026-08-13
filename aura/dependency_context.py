@@ -87,16 +87,16 @@ def build_dependency_stanza(workspace_root: Path, files: list[str]) -> str:
     return stanza
 
 
-def build_dependent_planner_notice(
+def build_dependent_context_notice(
     workspace_root: Path, files: list[str], force_graph: bool = False
 ) -> str:
-    """Return a planner notice about downstream dependents, or ``""``."""
+    """Return a production-context notice about downstream dependents."""
     sorted_deps = compute_dependents(workspace_root, files, force_graph=force_graph)
     if not sorted_deps:
         return ""
 
     lines: list[str] = [
-        "Planner dependency context:\n",
+        "Dependency context:\n",
         "The files just modified are depended on by:\n",
     ]
     for dep_path in sorted_deps[:15]:

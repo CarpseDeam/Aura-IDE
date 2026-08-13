@@ -340,7 +340,7 @@ class SendHandler(QObject):
                 return
             ok, message = restore_to_snapshot(ws_root, sha)
             if ok:
-                self._bridge.clear_pre_worker_snapshot()
+                self._bridge.clear_pre_execution_snapshot()
                 self._chat.add_info("Restore snapshot", message)
             else:
                 self._chat.add_error("Restore snapshot", message)
@@ -348,10 +348,10 @@ class SendHandler(QObject):
 
         # No sha given — show what can actually be restored to.
         lines = ["Name the snapshot to restore, e.g. `restore snapshot a1b2c3d`."]
-        pre_worker = self._bridge.get_pre_worker_snapshot()
-        if pre_worker:
+        pre_execution = self._bridge.get_pre_execution_snapshot()
+        if pre_execution:
             lines.append(
-                f"\nPre-worker snapshot: {pre_worker} (or use /undo to return to it)."
+                f"\nPre-execution snapshot: {pre_execution} (or use /undo to return to it)."
             )
         ok, log_text, message = recent_commit_log(ws_root)
         if ok and log_text.strip():
@@ -361,7 +361,7 @@ class SendHandler(QObject):
         self._chat.add_info("Restore snapshot", "\n".join(lines))
 
     def _handle_undo(self) -> None:
-        """Handle /undo command — restore to pre-worker snapshot or git reset."""
+        """Handle /undo command — restore to pre-execution snapshot or git reset."""
         ws_root = self._workspace_root
         if self._bridge.is_running():
             self._chat.add_error(
@@ -373,21 +373,21 @@ class SendHandler(QObject):
             self._chat.add_error("Undo", "No workspace root set.")
             return
 
-        # Check for pre-worker snapshot first (more reliable)
-        snapshot_sha = self._bridge.get_pre_worker_snapshot()
+        # Check for pre-execution snapshot first (more reliable)
+        snapshot_sha = self._bridge.get_pre_execution_snapshot()
         if snapshot_sha is not None:
             # Confirm destructive restore
             reply = QMessageBox.question(
                 self._chat,  # parent widget (ChatView is a QWidget)
-                "Restore to Pre-Worker State",
-                "This will discard ALL changes since the worker started "
+                "Restore to Pre-Execution State",
+                "This will discard ALL changes since the execution started "
                 "(including any intervening commits). Continue?",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
             if reply == QMessageBox.Yes:
                 ok, message = restore_to_snapshot(ws_root, snapshot_sha)
-                self._bridge.clear_pre_worker_snapshot()
+                self._bridge.clear_pre_execution_snapshot()
                 if ok:
                     self._chat.add_info("Undo", message)
                 else:

@@ -14,7 +14,7 @@ Aura is an open-source desktop coding harness. Aura turns AI coding into a visib
 [Website](https://carpsedeam.github.io/Aura-IDE/) · [Download](https://github.com/CarpseDeam/Aura-IDE/releases/latest) · [Start Here](https://aura-ide.hashnode.dev/start-here) · [Documentation](docs/README.md) · [Discord](https://discord.gg/aGSthBX2Bg) · [Blog](https://aura-ide.hashnode.dev/)
 
 <p align="center">
-  <img src="media/the-receipt.png" alt="Aura IDE desktop cockpit showing a completed WorkArtifact, workspace files, Worker TODO, Worker Log, and session cost" width="1000">
+  <img src="media/the-receipt.png" alt="Aura IDE desktop cockpit showing a completed WorkArtifact, workspace files, Task Checklist, Execution Log, and session cost" width="1000">
 </p>
 
 <p align="center"><em>Completed work remains inspectable — keep the completion receipt.</em></p>
@@ -41,10 +41,10 @@ These are real states from the current Aura desktop workflow.
 ### Watch bounded work advance live
 
 <p align="center">
-  <img src="media/worker-log.png" alt="Aura Worker Log showing a six-item Worker TODO, live tool activity, active status, and session cost" width="650">
+  <img src="media/execution-log.png" alt="Aura Execution Log showing a six-item Task Checklist, live tool activity, active status, and session cost" width="650">
 </p>
 
-Worker TODO and Worker Log expose the active item, tool activity, progress, and session status while the job runs.
+Task Checklist and Execution Log expose the active item, tool activity, progress, and session status while the job runs.
 
 ### Keep file scope visible
 
@@ -61,7 +61,7 @@ The WorkArtifact retains the job, allowed files, and item state from active exec
   <img src="media/diff-view.png" alt="Aura unified diff review showing proposed code changes before write approval" width="760">
 </p>
 
-The completed cockpit shown at the top keeps the WorkArtifact, Worker TODO, files, validation outcome, and completion receipt inspectable after the run.
+The completed cockpit shown at the top keeps the WorkArtifact, Task Checklist, files, validation outcome, and completion receipt inspectable after the run.
 
 ## Quick start
 
@@ -160,7 +160,7 @@ Drones are useful for recurring research, maintenance, checks, and other project
 Each Drone is folder-backed and defined by a `drone.json` manifest.
 
 - **Command Drones** launch an entrypoint, receive one JSON object on stdin, and return one JSON object on stdout.
-- **Harness-lap Drones** run a bounded job through Aura's Planner/Worker harness.
+- **Harness-lap Drones** run a bounded job through Aura's production conversation harness.
 - Write policies include `read_only`, `ask_before_writes`, and `normal_diff_approval`.
 - Read-only Drones can run in parallel; write-capable Drones share a single write lane so approval flows do not compete.
 - Run receipts are stored per workspace under `.aura/drones/runs/`.

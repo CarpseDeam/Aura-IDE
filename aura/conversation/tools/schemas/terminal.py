@@ -58,7 +58,7 @@ RUN_AND_WATCH_TOOL_DEF: dict[str, Any] = {
             "window expires) is FAILURE — the command must self-terminate. "
             "A crash (Traceback in output) or non-zero exit code is also "
             "failure. This tool takes NO command parameter — the command is "
-            "fixed by the task contract (dispatch_to_worker run_command "
+            "fixed by the task contract (run_command "
             "field). If no run command was declared for this task, it "
             "returns an informational no-op result. Normally you do NOT "
             "need to call this tool yourself — the harness automatically "
@@ -100,7 +100,7 @@ DIAGNOSTIC_TOOL_DEF: dict[str, Any] = {
             "Returns stdout, stderr, exit_code, timed_out, the requested command, and the argv "
             "that ran; a rejected command returns a failure_class, the offending token, and one "
             "concrete correction. Output is truncated at 100KB. "
-            "Use this instead of putting validation commands into Worker dispatch specs."
+            "Use this for a short read-only validation or inspection command."
         ),
         "parameters": {
             "type": "object",

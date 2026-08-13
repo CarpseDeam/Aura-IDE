@@ -1,4 +1,4 @@
-"""Handlers for the production SINGLE exit tools.
+"""Handlers for the production exit tools.
 
 ``report_blocker`` is the exit hatch for an attempt that cannot be carried out.
 ``report_already_satisfied`` is the exit hatch for an attempt the repository
@@ -23,7 +23,7 @@ from aura.conversation.tools._types import ApprovalCallback, ToolExecResult
 
 class BlockerHandlersMixin:
     """Provides ``report_blocker`` / ``report_already_satisfied``, the
-    production SINGLE clean exits."""
+    production clean exits."""
 
     def _handle_report_blocker(
         self,

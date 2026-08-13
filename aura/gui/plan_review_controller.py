@@ -2,8 +2,8 @@
 
 Connects one ``PlanReviewProxy``'s ``reviewRequested`` signal to the chat
 view, and forwards the card's Implement / Edit Plan / Cancel actions back
-through the proxy so the blocked worker thread resumes. One active review at
-a time is sufficient: normal production runs one turn, and the worker thread
+through the proxy so the blocked conversation thread resumes. One active review at
+a time is sufficient: normal production runs one turn, and the conversation thread
 blocks in ``request_review`` until this controller resolves it.
 """
 from __future__ import annotations

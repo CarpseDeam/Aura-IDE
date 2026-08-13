@@ -11,42 +11,40 @@ from aura.context_gearbox.models import (
     ComposedContext,
     ContextLedgerEntry,
     CustomPromptDiagnostics,
-    RuntimeRole,
 )
 from aura.context_gearbox.sources import collect_source_text, iter_registered_sources
-from aura.roles import load_bundled_role_capsule
+from aura.production_prompt import load_production_prompt
 
 CONTEXT_PLACEHOLDER = "{TIER1_CONTEXT}"
 
 # Documented opt-in for full replacement. A custom prompt containing this
 # marker owns the whole system prompt; every other custom prompt is an
-# additive extension of Aura's canonical context and role instructions.
+# additive extension of Aura's canonical context and production instructions.
 FULL_REPLACEMENT_MARKER = "{AURA_REPLACE_CANONICAL_PROMPT}"
 
 CUSTOM_PROMPT_HEADER = "### Custom Instructions"
 
 def _canonical_blocks(context_text: str) -> list[str]:
-    """The blocks canonical composition owns, in prompt order."""
+    """The blocks canonical production composition owns, in prompt order."""
     return [
         context_text,
-        _role_prompt_text(RuntimeRole.SINGLE),
+        _production_prompt_text(),
     ]
 
 
-def _role_prompt_text(runtime_role: RuntimeRole) -> str:
-    capsule = load_bundled_role_capsule(runtime_role)
-    if capsule is None:
-        raise RuntimeError(f"No bundled role capsule for {runtime_role.value}")
-    return capsule.content
+def _production_prompt_text() -> str:
+    prompt = load_production_prompt()
+    if prompt is None:
+        raise RuntimeError("No bundled production prompt")
+    return prompt.content
 
 
-def default_role_prompt(role: RuntimeRole | str) -> str:
-    runtime_role = RuntimeRole.from_value(role)
+def default_production_prompt() -> str:
     blocks = _canonical_blocks(CONTEXT_PLACEHOLDER)
     return "\n\n".join(block for block in blocks if block)
 
 
-SINGLE_SYSTEM_PROMPT = default_role_prompt(RuntimeRole.SINGLE)
+PRODUCTION_SYSTEM_PROMPT = default_production_prompt()
 
 
 def serialize_context_ledger(
@@ -58,7 +56,6 @@ def serialize_context_ledger(
         item: dict[str, Any] = {
             "source_id": entry.source_id,
             "kind": entry.kind,
-            "role": entry.role.value,
             "included": bool(entry.included),
             "reason": entry.reason,
             "char_count": int(entry.char_count),
@@ -241,7 +238,6 @@ def format_context_gearbox_display(metadata: dict[str, Any]) -> list[str]:
 
 
 def build_context_text(
-    role: RuntimeRole | str,
     workspace_root: Path | None,
     *,
     force: bool = False,
@@ -251,14 +247,12 @@ def build_context_text(
     content: str | None = None,
     active_capabilities: frozenset[str] | None = None,
 ) -> ComposedContext:
-    runtime_role = RuntimeRole.from_value(role)
     parts: list[str] = []
     ledger: list[ContextLedgerEntry] = []
     normalized_target_files = tuple(target_files or ())
     for source in iter_registered_sources():
         text, entry, extra_entries = collect_source_text(
             source,
-            runtime_role,
             workspace_root,
             force=force,
             model=model,
@@ -272,7 +266,6 @@ def build_context_text(
         ledger.append(entry)
         ledger.extend(extra_entries)
     return ComposedContext(
-        role=runtime_role,
         system_prompt="",
         context_text="\n\n".join(parts),
         ledger=tuple(ledger),
@@ -280,7 +273,6 @@ def build_context_text(
 
 
 def compose_system_prompt(
-    role: RuntimeRole | str,
     custom_prompt: str | None,
     workspace_root: Path | None,
     *,
@@ -291,9 +283,9 @@ def compose_system_prompt(
     content: str | None = None,
     active_capabilities: frozenset[str] | None = None,
 ) -> ComposedContext:
-    """Compose the one canonical system prompt for *role*.
+    """Compose the one canonical production system prompt.
 
-    Core context, response discipline, and the role capsule always survive.
+    Core context, response discipline, and the production prompt always survive.
     A custom prompt is an additive extension appended under
     ``### Custom Instructions``; text it repeats verbatim from the canonical
     blocks is dropped so nothing is injected twice.  Full replacement is only
@@ -303,9 +295,7 @@ def compose_system_prompt(
     now*, so a capability pack is composed in for exactly the requests whose
     tool list actually carries those tools.
     """
-    runtime_role = RuntimeRole.from_value(role)
     context = build_context_text(
-        runtime_role,
         workspace_root,
         force=force,
         model=model,
@@ -322,12 +312,10 @@ def compose_system_prompt(
         ).strip()
     else:
         system_prompt = _compose_canonical_prompt(
-            runtime_role,
             context.context_text,
             custom,
         )
     return ComposedContext(
-        role=runtime_role,
         system_prompt=system_prompt,
         context_text=context.context_text,
         ledger=context.ledger,
@@ -335,11 +323,10 @@ def compose_system_prompt(
 
 
 def _compose_canonical_prompt(
-    runtime_role: RuntimeRole,
     context_text: str,
     custom: str,
 ) -> str:
-    """Build canonical context + role prompt, then append custom extras."""
+    """Build canonical context + production prompt, then append custom extras."""
     blocks = _canonical_blocks(context_text)
     parts = [block.strip() for block in blocks if block and block.strip()]
     extension = _custom_prompt_extension(custom, blocks)
@@ -351,7 +338,7 @@ def _compose_canonical_prompt(
 def _custom_prompt_extension(custom: str, canonical_blocks: list[str]) -> str:
     """Return only the part of *custom* that canonical composition lacks.
 
-    Custom prompts are usually an edited copy of the default role prompt, so
+    Custom prompts are usually an edited copy of the default production prompt, so
     the placeholder and any verbatim canonical block are removed before the
     remainder is appended.
     """
@@ -370,19 +357,6 @@ def _custom_prompt_extension(custom: str, canonical_blocks: list[str]) -> str:
         collapsed.append(line)
     return "\n".join(collapsed).strip()
 
-
-# Vocabulary from the retired Planner/Worker product. A custom prompt is
-# usually an edited copy of an older default, so these survive long after the
-# runtime stopped having two coding models.
-_LEGACY_ROLE_TERMS: tuple[str, ...] = (
-    "planner",
-    "worker",
-    "dispatch_to_worker",
-    "dispatch to worker",
-    "work artifact",
-    "sub-agent",
-    "subagent",
-)
 
 # Concepts the canonical prompt already owns, and phrasings that indicate a
 # custom prompt is re-stating one. Exact-block removal cannot catch these —
@@ -414,7 +388,7 @@ _CANONICAL_CONCEPT_MARKERS: dict[str, tuple[str, ...]] = {
         "one or two tool calls",
     ),
     "live todo (production capsule)": (
-        "update_worker_todo",
+        "update_task_checklist",
         "checklist",
         "todo list",
     ),
@@ -440,16 +414,14 @@ _CANONICAL_CONCEPT_MARKERS: dict[str, tuple[str, ...]] = {
 
 
 def diagnose_custom_prompt(
-    role: RuntimeRole | str,
     custom_prompt: str | None,
 ) -> CustomPromptDiagnostics:
     """Describe what a custom prompt adds on top of the canonical one.
 
-    Reports size, whether it opted into full replacement, retired
-    Planner/Worker vocabulary, and canonical concepts it appears to restate.
+    Reports size, whether it opts into full replacement, and canonical
+    concepts it appears to restate.
     Purely observational: composition is unchanged by anything measured here.
     """
-    runtime_role = RuntimeRole.from_value(role)
     custom = (custom_prompt or "").strip()
     if not custom:
         return CustomPromptDiagnostics(
@@ -475,25 +447,9 @@ def diagnose_custom_prompt(
         char_count=len(custom),
         appended_char_count=len(appended),
         full_replacement=full_replacement,
-        legacy_terms=_legacy_role_terms(custom),
+        legacy_terms=(),
         repeated_concepts=repeated,
     )
-
-
-# Current tool names that contain retired role vocabulary. Stripped before the
-# legacy scan so a prompt that correctly names today's TODO tool is not
-# reported as carrying Planner/Worker language.
-_CURRENT_NAMES_WITH_LEGACY_WORDS: tuple[str, ...] = (
-    "update_worker_todo",
-    "worker_todo",
-)
-
-
-def _legacy_role_terms(text: str) -> tuple[str, ...]:
-    lowered = text.lower()
-    for name in _CURRENT_NAMES_WITH_LEGACY_WORDS:
-        lowered = lowered.replace(name, "")
-    return tuple(term for term in _LEGACY_ROLE_TERMS if term in lowered)
 
 
 def _repeated_canonical_concepts(appended: str) -> tuple[str, ...]:
@@ -518,11 +474,10 @@ def format_prompt_composition(composed: ComposedContext) -> str:
             continue
         parts.append(f"{entry.source_id}={entry.char_count:,}")
 
-    parts.append(f"role_capsule={len(_role_prompt_text(composed.role)):,}")
+    parts.append(f"production_prompt={len(_production_prompt_text()):,}")
 
     return (
-        f"prompt_composition role={composed.role.value} "
-        f"total={len(composed.system_prompt):,} chars | " + " ".join(parts)
+        f"prompt_composition total={len(composed.system_prompt):,} chars | " + " ".join(parts)
     )
 
 
@@ -547,8 +502,6 @@ def format_custom_prompt_diagnostics(
         parts.append("replaces the canonical prompt entirely")
     else:
         parts.append(f"{diagnostics.appended_char_count:,} appended after de-duplication")
-    if diagnostics.legacy_terms:
-        parts.append("legacy Planner/Worker terms: " + ", ".join(diagnostics.legacy_terms))
     if diagnostics.repeated_concepts:
         parts.append("may restate: " + "; ".join(diagnostics.repeated_concepts))
     if effective_prompt_chars is not None:

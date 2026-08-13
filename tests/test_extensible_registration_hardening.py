@@ -50,8 +50,8 @@ def tool_def(name: str, *, read_only: bool = False) -> dict:
 
 @pytest.fixture
 def registries(tmp_path):
-    a = ToolRegistry(tmp_path / "a", mode="single")
-    b = ToolRegistry(tmp_path / "b", mode="single")
+    a = ToolRegistry(tmp_path / "a")
+    b = ToolRegistry(tmp_path / "b")
     return a, b
 
 
@@ -61,8 +61,8 @@ def registries(tmp_path):
 class TestInstanceOwnership:
 
     def test_a_server_tool_is_not_callable_from_another_registry(self, registries):
-        """Publishing to the process-global handler table let a second window,
-        or a Planner beside its Worker, call a server it never connected."""
+        """A process-global handler table could let a second window call a
+        server it never connected."""
         a, b = registries
         a._mcp_tools.register_tool_def(tool_def("only_on_a"), FakeClient("A"))
 
@@ -266,7 +266,7 @@ class TestDynamicCollisions:
         """A dropped file must not be able to disable the write path."""
         ws, tools = dyn_workspace
         write_tool(tools, "evil.py", "write_file", param="anything")
-        registry = ToolRegistry(ws, mode="single")
+        registry = ToolRegistry(ws)
 
         names = [d["function"]["name"] for d in registry.tool_defs()]
         assert names.count("write_file") == 1
@@ -276,7 +276,7 @@ class TestDynamicCollisions:
         preflight as a schema violation."""
         ws, tools = dyn_workspace
         write_tool(tools, "evil.py", "write_file", param="anything")
-        registry = ToolRegistry(ws, mode="single")
+        registry = ToolRegistry(ws)
 
         schema = exposed_tool_schemas(registry.tool_defs())["write_file"]
         assert "path" in schema["properties"]
@@ -285,14 +285,14 @@ class TestDynamicCollisions:
     def test_a_shadowing_script_is_not_dispatchable(self, dyn_workspace):
         ws, tools = dyn_workspace
         write_tool(tools, "evil.py", "write_file", param="anything")
-        registry = ToolRegistry(ws, mode="single")
+        registry = ToolRegistry(ws)
         assert registry._dynamic_tools.get("write_file") is None
 
     def test_two_scripts_claiming_one_name_resolve_deterministically(self, dyn_workspace):
         ws, tools = dyn_workspace
         write_tool(tools, "b_second.py", "helper", param="y")
         write_tool(tools, "a_first.py", "helper", param="x")
-        registry = ToolRegistry(ws, mode="single")
+        registry = ToolRegistry(ws)
 
         names = [d["function"]["name"] for d in registry.tool_defs()]
         assert names.count("helper") == 1
@@ -304,7 +304,7 @@ class TestDynamicCollisions:
         write_tool(tools, "evil.py", "write_file", param="anything")
         write_tool(tools, "a_first.py", "helper")
         write_tool(tools, "b_second.py", "helper", param="y")
-        registry = ToolRegistry(ws, mode="single")
+        registry = ToolRegistry(ws)
         registry.tool_defs()
 
         reasons = {
@@ -318,7 +318,7 @@ class TestDynamicCollisions:
         ws, tools = dyn_workspace
         write_tool(tools, "evil.py", "write_file", param="anything")
         write_tool(tools, "good.py", "my_own_tool")
-        registry = ToolRegistry(ws, mode="single")
+        registry = ToolRegistry(ws)
 
         names = [d["function"]["name"] for d in registry.tool_defs()]
         assert "my_own_tool" in names
@@ -327,7 +327,7 @@ class TestDynamicCollisions:
         ws, tools = dyn_workspace
         write_tool(tools, "a_first.py", "helper")
         write_tool(tools, "b_second.py", "helper", param="y")
-        registry = ToolRegistry(ws, mode="single")
+        registry = ToolRegistry(ws)
         assert registry._dynamic_tools.get("helper").name == "a_first.py"
 
         (tools / "a_first.py").unlink()
@@ -338,7 +338,7 @@ class TestDynamicCollisions:
 class TestRegistryDisconnectSurface:
 
     def test_the_registry_exposes_disconnect(self, monkeypatch, tmp_path):
-        registry = ToolRegistry(tmp_path, mode="single")
+        registry = ToolRegistry(tmp_path)
         client = FakeClient(tools=[tool_def("alpha")])
         monkeypatch.setattr(
             "aura.conversation.tools.mcp_registry.MCPClient", lambda parsed: client,
@@ -352,6 +352,6 @@ def test_registration_is_isolated_across_temp_workspaces():
     """A registry built on a throwaway workspace leaves no process-wide trace."""
     before = dict(TOOL_HANDLERS)
     with tempfile.TemporaryDirectory() as tmp:
-        reg = ToolRegistry(pathlib.Path(tmp), mode="single")
+        reg = ToolRegistry(pathlib.Path(tmp))
         reg._mcp_tools.register_tool_def(tool_def("scratch_tool"), FakeClient())
     assert dict(TOOL_HANDLERS) == before

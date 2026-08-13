@@ -45,7 +45,7 @@ from aura.companion.protocol import make_envelope
 from aura.companion.replies import build_reply_envelope
 from aura.companion.router import CompanionCommandRouter
 from aura.companion.state import CompanionState
-from aura.settings import AppSettings, resolve_role_default_model
+from aura.settings import AppSettings, resolve_production_default_model
 from aura.version import __version__
 
 logger = logging.getLogger(__name__)
@@ -580,7 +580,7 @@ class CompanionManager(QObject):
         self._state.pending_chat_id = chat_id
         self._state.pending_chat_phone_id = sender_phone_id
         self._bridge.history.append_user_text(text)
-        model = resolve_role_default_model(self._settings.provider, "production")
+        model = resolve_production_default_model(self._settings.provider)
         thinking = self._settings.default_thinking
         self._bridge.send(model=model, thinking=thinking)
 

@@ -6,7 +6,7 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
 
-from aura.context_gearbox.models import ContextLedgerEntry, ContextSource, RuntimeRole
+from aura.context_gearbox.models import ContextLedgerEntry, ContextSource
 from aura.repo_map import generate_repo_summary
 from aura.skills.text import SkillPack, build_skill_pack
 
@@ -197,61 +197,51 @@ CONTEXT_SOURCES: tuple[ContextSource, ...] = (
     ContextSource(
         source_id="core_kernel",
         kind="kernel",
-        roles=(RuntimeRole.SINGLE,),
         reason="baseline runtime posture",
     ),
     ContextSource(
         source_id="project_rules",
         kind="workspace_file",
-        roles=(RuntimeRole.SINGLE,),
         reason="explicit project rules file",
     ),
     ContextSource(
         source_id="repo_map",
         kind="workspace_structure",
-        roles=(RuntimeRole.SINGLE,),
         reason="repository structure overview",
     ),
     ContextSource(
         source_id="target_file_contents",
         kind="workspace_files",
-        roles=(RuntimeRole.SINGLE,),
         reason="edit-surface files (compact manifest of the files this step touches)",
     ),
     ContextSource(
         source_id="gui_rules",
         kind="scoped_coding_pack",
-        roles=(RuntimeRole.SINGLE,),
         reason="target files or task kind match GUI scope",
     ),
     ContextSource(
         source_id="drone_rules",
         kind="scoped_coding_pack",
-        roles=(RuntimeRole.SINGLE,),
         reason="target files or task kind match drone scope",
     ),
     ContextSource(
         source_id="provider_rules",
         kind="scoped_coding_pack",
-        roles=(RuntimeRole.SINGLE,),
         reason="target files or task kind match provider scope",
     ),
     ContextSource(
         source_id="build_pipeline_rules",
         kind="scoped_coding_pack",
-        roles=(RuntimeRole.SINGLE,),
         reason="target files or task kind match build scope",
     ),
     ContextSource(
         source_id="windows_computer_use",
         kind="capability_pack",
-        roles=(RuntimeRole.SINGLE,),
         reason="Windows UI Automation tools are connected for this request",
     ),
     ContextSource(
         source_id="skill_pack",
         kind="skill_pack",
-        roles=(RuntimeRole.SINGLE,),
         reason="terrain-selected skills for this context",
     ),
 )
@@ -261,7 +251,6 @@ def iter_registered_sources() -> tuple[ContextSource, ...]:
 
 def collect_source_text(
     source: ContextSource,
-    role: RuntimeRole,
     workspace_root: Path | None,
     *,
     force: bool = False,
@@ -273,25 +262,22 @@ def collect_source_text(
 ) -> tuple[str, ContextLedgerEntry, list[ContextLedgerEntry]]:
     try:
         pack: SkillPack | None = None
-        if _source_origin_matches_target_file(source, role, target_files, workspace_root):
+        if _source_origin_matches_target_file(source, target_files, workspace_root):
             text, reason = "", "skipped because target file owns this context source"
         elif source.kind == "skill_pack":
-            if role not in source.roles:
-                text, reason = "", f"not scoped to {role.value} role"
-            else:
-                text, reason, pack = _load_skill_pack(
-                    workspace_root,
-                    model,
-                    task_kind,
-                    target_files,
-                    content,
-                )
+            text, reason, pack = _load_skill_pack(
+                workspace_root,
+                model,
+                task_kind,
+                target_files,
+                content,
+            )
         else:
             text, reason = _load_source_text(
                 source,
                 workspace_root,
                 force=force,
-                role=role,
+
                 model=model,
                 task_kind=task_kind,
                 target_files=target_files,
@@ -302,7 +288,6 @@ def collect_source_text(
         entry = ContextLedgerEntry(
             source_id=source.source_id,
             kind=source.kind,
-            role=role,
             reason=reason or source.reason,
             included=included,
             char_count=len(text),
@@ -314,7 +299,6 @@ def collect_source_text(
             entry = ContextLedgerEntry(
                 source_id=source.source_id,
                 kind=source.kind,
-                role=role,
                 reason=reason or source.reason,
                 included=included,
                 char_count=len(text),
@@ -348,7 +332,6 @@ def collect_source_text(
                     ContextLedgerEntry(
                         source_id=candidate.skill_id,
                         kind="individual_skill",
-                        role=role,
                         reason=(
                             f"{candidate.label} [{candidate.provenance}] "
                             f"{candidate.reason}"
@@ -363,7 +346,6 @@ def collect_source_text(
                     ContextLedgerEntry(
                         source_id=record.skill_id,
                         kind="individual_skill",
-                        role=role,
                         reason=f"{record.label} [{record.provenance}] {record.reason}",
                         included=False,
                         char_count=0,
@@ -376,7 +358,6 @@ def collect_source_text(
         return "", ContextLedgerEntry(
             source_id=source.source_id,
             kind=source.kind,
-            role=role,
             reason=source.reason,
             included=False,
             char_count=0,
@@ -388,15 +369,12 @@ def _load_source_text(
     workspace_root: Path | None,
     *,
     force: bool,
-    role: RuntimeRole,
     model: str | None,
     task_kind: str | None,
     target_files: tuple[str, ...] | None,
     content: str | None,
     active_capabilities: frozenset[str] | None = None,
 ) -> tuple[str, str]:
-    if role not in source.roles:
-        return "", f"not scoped to {role.value} role"
     if source.kind == "capability_pack":
         return _load_capability_pack(source, active_capabilities)
     if source.kind == "scoped_coding_pack":
@@ -431,7 +409,7 @@ def _load_source_text(
             return "", "project_rules.md is empty"
         return "### Project Rules\n" + rules, source.reason
     if source.source_id == "repo_map":
-        # Production SINGLE gets the bounded directory index. The full
+        # Production context gets the bounded directory index. The full
         # per-file outline was the single largest block in every turn and
         # truncated arbitrarily; structure detail loads through the search
         # and read tools instead.
@@ -447,7 +425,7 @@ def _load_target_file_manifest(
     workspace_root: Path,
     target_files: tuple[str, ...],
 ) -> tuple[str, str]:
-    """Render the compact target-file manifest for production SINGLE mode.
+    """Render the compact target-file manifest for the production conversation.
 
     Only normalized workspace-relative paths survive — mentioning a file must
     not inject its body into the system prompt. Bodies enter through the
@@ -646,12 +624,9 @@ def _normalize_target_file_paths(
 
 def _source_origin_matches_target_file(
     source: ContextSource,
-    role: RuntimeRole,
     target_files: tuple[str, ...] | None,
     workspace_root: Path | None,
 ) -> bool:
-    if role not in source.roles:
-        return False
     if not source.origin_paths or not target_files:
         return False
     normalized_targets = set(_normalize_target_file_paths(target_files, workspace_root))

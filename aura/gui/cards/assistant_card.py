@@ -22,6 +22,7 @@ from aura.gui.cards._helpers import _CODE_FENCE_RE, _fade_in_widget, _MarkdownTe
 from aura.gui.cards._stream_label import _StreamLabel
 from aura.gui.cards.code_block_card import CodeBlockCard
 from aura.gui.cards.tool_call_card import ToolCallCard
+from aura.gui.execution_log_stream.formatter import normalize_assistant_display_text
 from aura.gui.markdown_renderer import _render_markdown_with_code
 from aura.gui.theme import (
     ACCENT_HOVER,
@@ -33,7 +34,6 @@ from aura.gui.theme import (
     SUCCESS_DIM,
     WARN,
 )
-from aura.gui.worker_log_stream.formatter import normalize_assistant_display_text
 
 if TYPE_CHECKING:
     from aura.gui.chat_view import ChatView

@@ -14,10 +14,10 @@ from PySide6.QtWidgets import (
 )
 
 from aura.conversation.chat_transcript import (
+    assistant_item,
     clone_chat_items,
     error_item,
     plan_review_item,
-    planner_item,
     user_item,
 )
 from aura.gui.cards._helpers import _fade_in_widget
@@ -295,7 +295,7 @@ class ChatView(QScrollArea):
         for item in items:
             if item.get("kind") == "user":
                 self.add_user(str(item.get("text", "")))
-            elif item.get("kind") == "planner":
+            elif item.get("kind") == "assistant":
                 self.begin_assistant()
                 self.append_content(str(item.get("text", "")))
                 self.assistant_done()
@@ -437,13 +437,13 @@ class ChatView(QScrollArea):
     def _remove_failed_write_cards_from_assistant(self, ac: AssistantCard) -> None:
         """Remove failed CodeWriterCards from an assistant card's tool cluster.
 
-        Failed write cards belong in the Worker Log/playground, not the main
+        Failed write cards belong in the Execution Log/playground, not the main
         chat.  This is called:
-        - after dispatch_to_worker completes,
+        - after an execution completes,
         - at the end of each assistant turn (assistant_done).
 
-        Worker write tool calls are routed to the playground, but during
-        conversation replay or single-mode execution a failed write card can
+        Execution write tool calls are routed to the playground, but during
+        conversation replay or a live execution a failed write card can
         appear in the main chat — we remove it here so the main chat ends
         with the assistant summary, not a scary "Failed ✗" card.
         """
@@ -499,7 +499,7 @@ class ChatView(QScrollArea):
         if not ac._content_label.isVisible():
             ac.reasoning_done()
         # On first content delta, ensure the glow is in "thinking" state
-        # (important for planners that don't produce reasoning content).
+        # (important for assistants that don't produce reasoning content).
         if not ac._content_label.isVisible() and self._current_aura is not None:
             self._current_aura.set_glow_state("thinking")
         ac.append_content(text)
@@ -678,7 +678,7 @@ class ChatView(QScrollArea):
         self._record_current_assistant_transcript()
         ac.finalize_content()
         # Clean up any failed CodeWriterCards — write failures belong in
-        # the Worker Log, not the main chat.  Call before stopping the aura
+        # the Execution Log, not the main chat.  Call before stopping the aura
         # so the user sees a clean assistant summary as the final item.
         self._remove_failed_write_cards_from_assistant(ac)
         # Stop the breathing glow — content is complete, no need to pulse anymore.
@@ -714,5 +714,5 @@ class ChatView(QScrollArea):
         text = "".join(self._current_assistant_transcript_parts).strip()
         if not text:
             return
-        self._chat_items.append(planner_item(text))
+        self._chat_items.append(assistant_item(text))
         self._current_assistant_transcript_recorded = True

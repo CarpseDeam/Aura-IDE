@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-def normalize_worker_path(path: str) -> str:
+def normalize_execution_path(path: str) -> str:
     normalized = str(path).strip().replace("\\", "/")
     while normalized.startswith("./"):
         normalized = normalized[2:]
@@ -12,11 +12,11 @@ def normalize_worker_path(path: str) -> str:
     return "/".join(parts)
 
 
-def unique_worker_paths(paths: list[str]) -> list[str]:
+def unique_execution_paths(paths: list[str]) -> list[str]:
     unique: list[str] = []
     seen: set[str] = set()
     for path in paths:
-        normalized = normalize_worker_path(path).strip()
+        normalized = normalize_execution_path(path).strip()
         if not normalized or normalized in seen:
             continue
         unique.append(normalized)
@@ -25,7 +25,7 @@ def unique_worker_paths(paths: list[str]) -> list[str]:
 
 
 def is_validation_scratch_path(path: str) -> bool:
-    normalized = normalize_worker_path(path)
+    normalized = normalize_execution_path(path)
     name = normalized.rsplit("/", 1)[-1]
     if not name.endswith(".py"):
         return False

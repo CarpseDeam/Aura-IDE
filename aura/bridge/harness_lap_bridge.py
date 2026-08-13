@@ -21,9 +21,9 @@ from aura.bridge.production_receipt import (
     ProductionReceipt,
 )
 from aura.config import DEFAULT_THINKING, redact_secrets
+from aura.context_gearbox.runtime import PRODUCTION_SYSTEM_PROMPT
 from aura.conversation import ConversationManager, History
-from aura.conversation.worker_outcome import WorkerOutcomeStatus
-from aura.context_gearbox.runtime import SINGLE_SYSTEM_PROMPT
+from aura.conversation.execution_outcome import ExecutionOutcomeStatus
 from aura.conversation.tools import ToolRegistry
 from aura.git_ops import changes_since, snapshot
 from aura.model_streams import PRODUCTION_STREAM_HOOK, model_streams
@@ -31,30 +31,30 @@ from aura.prompts import (
     build_tier1_context,
     inject_tier1_context,
 )
-from aura.settings import resolve_role_default_model
+from aura.settings import resolve_production_default_model
 
 logger = logging.getLogger(__name__)
 
 
-# Map a production receipt status onto the WorkerOutcomeStatus vocabulary the
+# Map a production receipt status onto the ExecutionOutcomeStatus vocabulary the
 # Drone harness-lap consumers understand. Only the truly-successful receipts
 # map to success; every failure class maps to a real failure status.
-_RECEIPT_STATUS_TO_WORKER: dict[str, str] = {
-    STATUS_COMPLETED: WorkerOutcomeStatus.completed.value,
-    STATUS_COMPLETED_UNVERIFIED: WorkerOutcomeStatus.completed.value,
-    STATUS_VALIDATION_FAILED: WorkerOutcomeStatus.validation_failed.value,
-    STATUS_CANCELLED: WorkerOutcomeStatus.cancelled.value,
-    STATUS_BLOCKED: WorkerOutcomeStatus.harness_error.value,
-    STATUS_HARNESS_ERROR: WorkerOutcomeStatus.harness_error.value,
-    STATUS_PROVIDER_CONTRACT_FAILURE: WorkerOutcomeStatus.harness_error.value,
+_RECEIPT_STATUS_TO_EXECUTION: dict[str, str] = {
+    STATUS_COMPLETED: ExecutionOutcomeStatus.completed.value,
+    STATUS_COMPLETED_UNVERIFIED: ExecutionOutcomeStatus.completed.value,
+    STATUS_VALIDATION_FAILED: ExecutionOutcomeStatus.validation_failed.value,
+    STATUS_CANCELLED: ExecutionOutcomeStatus.cancelled.value,
+    STATUS_BLOCKED: ExecutionOutcomeStatus.harness_error.value,
+    STATUS_HARNESS_ERROR: ExecutionOutcomeStatus.harness_error.value,
+    STATUS_PROVIDER_CONTRACT_FAILURE: ExecutionOutcomeStatus.harness_error.value,
 }
 
 
-class _LapWorker(QObject):
-    """Worker thread object that runs one production single-agent lap.
+class _LapConversationRunner(QObject):
+    """Execution thread object that runs one production conversation lap.
 
     Simplified for headless operation — no GUI signal forwarding. The lap runs
-    the ordinary production SINGLE loop against ``PRODUCTION_STREAM_HOOK`` and
+    the ordinary production conversation loop against ``PRODUCTION_STREAM_HOOK`` and
     collects the run's structured receipt via ``ProductionExecutionSession``.
     """
 
@@ -104,7 +104,7 @@ class _LapWorker(QObject):
             self._already_satisfied = self._manager.last_turn_already_satisfied
         except Exception as exc:
             logger.error(
-                "Harness lap worker error: %s", redact_secrets(str(exc))
+                "Harness lap runner error: %s", redact_secrets(str(exc))
             )
         finally:
             if self._cancel.is_set():
@@ -144,10 +144,7 @@ class HarnessLapBridge(QObject):
         self._system_prompt = system_prompt
 
         self._history = History()
-        self._registry = ToolRegistry(
-            workspace_root=workspace_root,
-            mode="single",
-        )
+        self._registry = ToolRegistry(workspace_root=workspace_root)
         self._manager = ConversationManager(self._history, self._registry)
 
         self._production_backend = APIAgentBackend(provider=provider)
@@ -164,7 +161,7 @@ class HarnessLapBridge(QObject):
         )
 
     def run_one_lap(self, want: str) -> LapResult:
-        """Execute one unattended production single-agent lap.
+        """Execute one unattended production conversation lap.
 
         Saves and restores global hook registration around the lap to avoid
         interfering with any visible ConversationBridge.
@@ -177,11 +174,8 @@ class HarnessLapBridge(QObject):
         model_streams.register(PRODUCTION_STREAM_HOOK, self._production_backend.stream)
 
         old_approve_all = self._approval_proxy._approve_all_session
-        old_registry_mode = self._registry.mode
-
         try:
             self._approval_proxy.set_approve_all_session(True)
-            self._registry.set_mode("single")
 
             # Reset and seed history
             self._history.messages.clear()
@@ -191,7 +185,7 @@ class HarnessLapBridge(QObject):
             base_prompt = (
                 self._system_prompt
                 if self._system_prompt
-                else SINGLE_SYSTEM_PROMPT
+                else PRODUCTION_SYSTEM_PROMPT
             )
             self._manager.configure_runtime_context(
                 base_prompt=base_prompt,
@@ -204,13 +198,13 @@ class HarnessLapBridge(QObject):
             # Git snapshot before lap
             pre_sha = snapshot(workspace_root) if workspace_root is not None else None
 
-            model = resolve_role_default_model(self._provider, "production")
+            model = resolve_production_default_model(self._provider)
             thinking = DEFAULT_THINKING
 
             cancel = threading.Event()
 
             thread = QThread()
-            worker = _LapWorker(
+            runner = _LapConversationRunner(
                 manager=self._manager,
                 approval_proxy=self._approval_proxy,
                 production_session=self._production_session,
@@ -222,39 +216,39 @@ class HarnessLapBridge(QObject):
             )
 
             loop = QEventLoop()
-            worker.finished.connect(loop.quit)
-            worker.finished.connect(thread.quit)
+            runner.finished.connect(loop.quit)
+            runner.finished.connect(thread.quit)
 
-            thread.started.connect(worker.run)
+            thread.started.connect(runner.run)
             thread.start()
             loop.exec()
 
             thread.wait(2000)
             thread.deleteLater()
-            worker.deleteLater()
+            runner.deleteLater()
 
             # Collect production receipt metadata
-            worker_ok = True
-            worker_status = "completed"
-            worker_errors: list[str] = []
+            execution_ok = True
+            execution_status = "completed"
+            execution_errors: list[str] = []
             validation_results: list[dict] = []
-            if worker._receipt is not None:
-                metadata = worker._receipt.metadata
-                worker_status = _RECEIPT_STATUS_TO_WORKER.get(
-                    worker._receipt.status, WorkerOutcomeStatus.harness_error.value
+            if runner._receipt is not None:
+                metadata = runner._receipt.metadata
+                execution_status = _RECEIPT_STATUS_TO_EXECUTION.get(
+                    runner._receipt.status, ExecutionOutcomeStatus.harness_error.value
                 )
-                worker_ok = worker._receipt.ok
-                worker_errors = [
+                execution_ok = runner._receipt.ok
+                execution_errors = [
                     str(message) for message in metadata.get("api_errors") or []
                 ]
-                if worker._receipt.status == STATUS_BLOCKED:
+                if runner._receipt.status == STATUS_BLOCKED:
                     blocked = metadata.get("blocked_reason")
                     if blocked:
-                        worker_errors.append(f"Blocked: {blocked}")
+                        execution_errors.append(f"Blocked: {blocked}")
                 for record in metadata.get("not_applied_writes") or []:
-                    worker_errors.append(f"Write not applied: {record}")
-                if worker._receipt.status == STATUS_PROVIDER_CONTRACT_FAILURE:
-                    worker_errors.append("Provider was unusable for the lap turn.")
+                    execution_errors.append(f"Write not applied: {record}")
+                if runner._receipt.status == STATUS_PROVIDER_CONTRACT_FAILURE:
+                    execution_errors.append("Provider was unusable for the lap turn.")
                 validation_results = [
                     {
                         "command": str(item.get("command", "")),
@@ -294,15 +288,13 @@ class HarnessLapBridge(QObject):
                 has_work=has_work,
                 summary=summary,
                 changed_files=changed_files,
-                worker_ok=worker_ok,
-                worker_status=worker_status,
-                worker_errors=worker_errors,
+                execution_ok=execution_ok,
+                execution_status=execution_status,
+                execution_errors=execution_errors,
                 validation_results=validation_results,
             )
         finally:
             self._approval_proxy._approve_all_session = old_approve_all
-            self._registry.set_mode(old_registry_mode)
-
             # Restore hook handler
             model_streams.unregister(PRODUCTION_STREAM_HOOK)
             if saved_production:

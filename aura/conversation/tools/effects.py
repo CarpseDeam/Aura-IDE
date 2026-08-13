@@ -122,7 +122,7 @@ BUILTIN_TOOL_EFFECTS: dict[str, ToolEffect] = {
     "run_and_watch": ToolEffect.COMMAND,
     "run_diagnostic_command": ToolEffect.COMMAND,
     # --- bookkeeping/control: tracks or controls conversation/tool state ---
-    "update_worker_todo": ToolEffect.BOOKKEEPING,
+    "update_task_checklist": ToolEffect.BOOKKEEPING,
     "report_blocker": ToolEffect.BOOKKEEPING,
     "report_already_satisfied": ToolEffect.BOOKKEEPING,
     "summon_drone": ToolEffect.BOOKKEEPING,

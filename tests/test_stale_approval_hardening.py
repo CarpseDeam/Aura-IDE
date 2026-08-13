@@ -27,7 +27,7 @@ class _Decision:
 
 
 def _registry(root):
-    return ToolRegistry(workspace_root=root, mode="single")
+    return ToolRegistry(workspace_root=root)
 
 
 def test_write_file_applies_when_the_target_is_unchanged(tmp_path) -> None:

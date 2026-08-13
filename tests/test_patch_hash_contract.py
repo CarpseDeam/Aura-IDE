@@ -23,7 +23,7 @@ _APPROVE = lambda _req: ApprovalDecision(action="approve")  # noqa: E731
 
 
 def _registry(root: Path) -> ToolRegistry:
-    return ToolRegistry(workspace_root=root, mode="single")
+    return ToolRegistry(workspace_root=root)
 
 
 # ---------------------------------------------------------------------------

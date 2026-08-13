@@ -16,15 +16,13 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from aura.gui.left_pane import (
     LeftPane,
-    _ThreadRow,
     _ProjectRow,
     _ShowMoreRow,
-    _ElidedLabel,
+    _ThreadRow,
 )
 from aura.projects.models import ProjectSpace, ProjectThread
 
@@ -558,15 +556,15 @@ class TestModelConfigPersistence:
         pane.populate_models(ProviderId("openai"))
 
         # Set specific values
-        planner_combo = pane._planner_model_combo
-        if planner_combo.count() > 0:
-            planner_combo.setCurrentIndex(min(1, planner_combo.count() - 1))
-            planner_model_before = pane.current_planner_model()
+        production_combo = pane._production_model_combo
+        if production_combo.count() > 0:
+            production_combo.setCurrentIndex(min(1, production_combo.count() - 1))
+            production_model_before = pane.current_production_model()
 
             pane.refresh_projects(root)
 
             # Model combo should be unchanged after refresh
-            assert pane.current_planner_model() == planner_model_before
+            assert pane.current_production_model() == production_model_before
 
     def test_thinking_combo_preserved_after_refresh(self, pane, mock_store):
         """The thinking mode dropdown is untouched by refresh_projects."""
@@ -576,8 +574,8 @@ class TestModelConfigPersistence:
         mock_store.list_threads.return_value = []
         mock_store.load_project.return_value = project
 
-        pane.set_planner_thinking("max")
+        pane.set_production_thinking("max")
 
         pane.refresh_projects(root)
 
-        assert pane.current_planner_thinking() == "max"
+        assert pane.current_production_thinking() == "max"

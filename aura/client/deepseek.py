@@ -102,8 +102,8 @@ _RESPONSES_POLL_SECONDS = 0.1
 #: request outright without it — 400 "The `reasoning_content` in the thinking
 #: mode must be passed back to the API".  Aura produces such messages honestly:
 #: the decision checkpoint and the focused action must run with thinking off, a
-#: dispatched worker's synthetic assistant turn never had reasoning, and a
-#: conversation reloaded from disk or replayed after a provider switch can carry
+#: historical assistant turn may never have had reasoning, and a conversation
+#: reloaded from disk or replayed after a provider switch can carry
 #: assistant turns from a model that never emitted any.  The placeholder says
 #: what is true rather than inventing reasoning the model did not do.
 REASONING_REPLAY_PLACEHOLDER = "[No reasoning was recorded for this step.]"
@@ -299,8 +299,8 @@ class DeepSeekClient:
 
         # A thinking-enabled DeepSeek request must replay ``reasoning_content``
         # on every assistant message after the last user message, and Aura
-        # honestly produces messages without it — workers synthesize assistant
-        # turns, and a reloaded conversation can predate the current selection.
+        # honestly produces messages without it — historical turns can predate
+        # the current selection, and a reloaded conversation can lack it.
         # Filling the chain here means the mode the user picked is the mode that
         # gets sent, instead of a 400.
         if self._requires_reasoning_replay and effective_thinking != "off":

@@ -57,10 +57,10 @@ def test_normalize_chat_items_keeps_plan_review_among_other_kinds() -> None:
     items = [
         {"kind": "user", "text": "hi"},
         _item(approved=False, user_edited=False),
-        {"kind": "planner", "text": "done"},
+        {"kind": "assistant", "text": "done"},
     ]
     normalized = normalize_chat_items(items)
-    assert [i["kind"] for i in normalized] == ["user", PLAN_REVIEW, "planner"]
+    assert [i["kind"] for i in normalized] == ["user", PLAN_REVIEW, "assistant"]
     assert normalized[1]["approved"] is False
 
 
@@ -108,7 +108,7 @@ class _FakeChat:
         return object()
 
     def append_content(self, text: str) -> None:
-        self.events.append(("planner", text))
+        self.events.append(("assistant", text))
 
     def assistant_done(self) -> None:
         self.events.append(("assistant_done",))
@@ -148,7 +148,7 @@ def test_replay_renders_a_resolved_non_interactive_card_and_never_executes() -> 
     chat_items = [
         {"kind": "user", "text": "u"},
         _item(approved=True, user_edited=False),
-        {"kind": "planner", "text": "Implemented."},
+        {"kind": "assistant", "text": "Implemented."},
     ]
     chat = _FakeChat()
     cp = _conversation_persistence_with_chat(chat)

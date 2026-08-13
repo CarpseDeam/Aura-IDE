@@ -1,22 +1,20 @@
 """Qt thread-crossing proxy for one active Plan Review request.
 
-Mirrors the synchronization shape ``_ApprovalProxy`` uses for diff approval —
-and the shape the historical dispatch proxy used for SpecCard review — but
-scoped to exactly one thing: pausing the worker thread for a human plan
+Mirrors the synchronization shape ``_ApprovalProxy`` uses for diff approval,
+scoped to exactly one thing: pausing the conversation thread for a human plan
 decision, then resuming it with that decision.
 
-    worker/tool thread
+    conversation/tool thread
       -> emits ``reviewRequested`` (Qt signal, thread-safe to emit)
       -> blocks on a ``threading.Event``
     GUI thread
       -> renders the PlanReviewCard inline in chat
       -> user edits / implements / cancels
       -> calls ``resolve_approved`` / ``resolve_cancelled``
-    worker thread resumes with the ``PlanReviewDecision``
+    conversation thread resumes with the ``PlanReviewDecision``
 
 Normal production runs one turn at a time, so one pending slot is enough —
-this deliberately does not generalize into a map/registry the way the old
-``DispatchPendingMap`` did for concurrent Worker dispatches.
+this deliberately remains a small, direct synchronization point.
 """
 from __future__ import annotations
 
@@ -37,7 +35,7 @@ class _PendingReview:
 
 
 class PlanReviewProxy(QObject):
-    """Marshals one active Plan Review request from the worker thread to the GUI."""
+    """Marshals one active Plan Review request from the conversation thread to the GUI."""
 
     # review_id, goal, files, spec, acceptance, summary
     reviewRequested = Signal(str, str, list, str, str, str)
@@ -47,7 +45,7 @@ class PlanReviewProxy(QObject):
         self._lock = threading.Lock()
         self._pending: _PendingReview | None = None
 
-    # ---- worker-thread side -------------------------------------------------
+    # ---- conversation-thread side ------------------------------------------
 
     def request_review(
         self,
@@ -57,7 +55,7 @@ class PlanReviewProxy(QObject):
         acceptance: str,
         summary: str,
     ) -> PlanReviewDecision:
-        """Called from the worker thread. Blocks until the GUI resolves it.
+        """Called from the conversation thread. Blocks until the GUI resolves it.
 
         No arbitrary timeout: a human review can legitimately take longer
         than an automated wait would allow. The only guaranteed unblock path

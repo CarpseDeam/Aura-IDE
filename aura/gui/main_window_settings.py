@@ -69,7 +69,7 @@ class MainWindowSettingsController(QObject):
         window._send_handler.update_settings(settings)
         window._companion_controller.update_settings(settings)
         window._persistence.update_settings(settings)
-        window._worker_handler.update_settings(settings)
+        window._execution_handler.update_settings(settings)
         window._toolbar.update_settings(settings)
 
         window._left_pane.populate_models(settings.provider)

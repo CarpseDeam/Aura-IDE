@@ -38,6 +38,7 @@ from aura.gui.checkpoint_dialog import CheckpointDialog
 from aura.gui.conv_persistence import ConversationPersistence
 from aura.gui.drones.drone_reports_window import DroneReportsWindow
 from aura.gui.edge_rail_host import ExternalEdgeRailHost
+from aura.gui.execution_handler import ExecutionEventHandler
 from aura.gui.gui_event_probe import install_gui_event_probe
 from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.left_pane import LeftPane
@@ -58,8 +59,7 @@ from aura.gui.status_bar import AuraStatusBar
 from aura.gui.update_dialog import UpdateDialog
 from aura.gui.widgets.aura_glow import AuraWidget
 from aura.gui.window_chrome import WindowChromeMixin
-from aura.gui.worker_handler import WorkerEventHandler
-from aura.prompts import SINGLE_SYSTEM_PROMPT
+from aura.prompts import PRODUCTION_SYSTEM_PROMPT
 
 
 class _ShrinkableStack(QStackedWidget):
@@ -170,7 +170,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         # Plan Review — renders the inline Plan Ready card and forwards the
         # user's Implement/Edit/Cancel decision back through the bridge's
-        # proxy so the blocked worker thread resumes.
+        # proxy so the blocked conversation thread resumes.
         self._plan_review_controller = PlanReviewController(
             proxy=self._bridge.plan_review_proxy,
             chat=self._chat,
@@ -194,7 +194,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # Companion (mobile control plane)
         self._companion_controller = MainWindowCompanionController(self)
 
-        # Right pane: worker activity (embedded, not a separate window)
+        # Right pane: execution activity (embedded, not a separate window)
         self._playground = AuraPlayground(
             parent=self,
             terminal_window_geometry=self._settings.terminal_window_geometry,
@@ -214,14 +214,14 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
 
         # Floating Drone Reports window. Active run cards live here instead of
-        # consuming space in the Worker/workspace area.
+        # consuming space in the production/workspace area.
         self._drone_reports_window = DroneReportsWindow(
             self,
             initial_geometry=self._settings.drone_reports_window_geometry,
         )
-        # Worker event handler — owns session usage, forwards bridge signals
+        # Execution event handler — owns session usage, forwards bridge signals
         # to chat / playground UI components.
-        self._worker_handler = WorkerEventHandler(
+        self._execution_handler = ExecutionEventHandler(
             bridge=self._bridge,
             chat=self._chat,
             playground=self._playground,
@@ -319,8 +319,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         self._tree = self._playground.file_tree()
 
-        # Worker signal wiring (delegated to WorkerEventHandler).
-        self._worker_handler.connect_bridge_signals()
+        # Execution signal wiring (delegated to ExecutionEventHandler).
+        self._execution_handler.connect_bridge_signals()
 
         self._workspace_controller.update_workspace_label()
 
@@ -451,16 +451,16 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     # ----- model / thinking accessors ------------------------------------
 
     def current_model(self) -> str:
-        return self._left_pane.current_planner_model()
+        return self._left_pane.current_production_model()
 
     def current_thinking(self) -> ThinkingMode:
-        return self._left_pane.current_planner_thinking()
+        return self._left_pane.current_production_thinking()
 
     def set_model(self, model: str) -> None:
-        self._left_pane.set_planner_model(model)
+        self._left_pane.set_production_model(model)
 
     def set_thinking(self, thinking: ThinkingMode) -> None:
-        self._left_pane.set_planner_thinking(thinking)
+        self._left_pane.set_production_thinking(thinking)
 
     # ----- status bar -----------------------------------------------------
 
@@ -471,12 +471,12 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             workspace_root=ws,
             model_id=self.current_model(),
             thinking=self.current_thinking(),
-            session_usage=self._worker_handler.session_usage,
+            session_usage=self._execution_handler.session_usage,
             has_provider=has_provider,
         )
 
     def _reset_session_usage(self) -> None:
-        self._worker_handler.reset_session_usage()
+        self._execution_handler.reset_session_usage()
 
     # ----- handlers -------------------------------------------------------
 
@@ -586,13 +586,13 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         dlg.exec()
 
     def _enter_production_mode(self) -> None:
-        """Put the bridge in production single-agent mode (the normal product).
+        """Configure the bridge for the normal production conversation.
 
         One continuous production model owns the user's request end to end and
         projects its execution into the workspace.
         """
-        self._bridge.set_production_mode()
-        prompt = self._settings.system_prompt or SINGLE_SYSTEM_PROMPT
+        self._bridge.refresh_production_prompt()
+        prompt = self._settings.system_prompt or PRODUCTION_SYSTEM_PROMPT
         self._bridge.set_system_prompt(prompt)
         if hasattr(self, "_chat"):
             self._chat.set_compact_tools(True)
@@ -616,7 +616,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._input.focus_editor()
         # Settle the turn, then drain one queued item. Both are deferred so the
         # run's own completion presentation (the receipt flush scheduled by the
-        # worker handler) lands first; the FIFO order guarantees the snapshot is
+        # execution handler) lands first; the FIFO order guarantees the snapshot is
         # taken after this turn is fully finalized and before the next queued
         # turn touches the conversation.
         from PySide6.QtCore import QTimer

@@ -73,21 +73,6 @@ class ToolResult:
 
 
 @dataclass
-class WorkerDispatchRequested:
-    """Emitted by the planner manager before it blocks waiting for a worker
-    dispatch. Signals the GUI to render a SpecCard with Dispatch/Edit/Cancel
-    controls. The dispatch callback (registered via send()) is what actually
-    blocks until the user decides and the worker completes.
-    """
-    tool_call_id: str
-    goal: str
-    files: list[str]
-    spec: str
-    acceptance: str
-    summary: str
-
-
-@dataclass
 class TerminalOutput:
     tool_call_id: str
     text: str  # chunk of stdout/stderr output
@@ -122,7 +107,6 @@ Event = (
     | Done
     | ApiError
     | ToolResult
-    | WorkerDispatchRequested
     | TerminalOutput
     | AgentProcessStarted
     | AgentProcessOutput

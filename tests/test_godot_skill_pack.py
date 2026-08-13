@@ -19,7 +19,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from aura.context_gearbox.models import RuntimeRole
 from aura.context_gearbox.runtime import compose_system_prompt
 from aura.skills.models import Skill, SkillProvenance
 from aura.skills.reader import read_skills
@@ -317,7 +316,6 @@ def test_context_ledger_reports_selected_skills_and_their_character_cost(
     (workspace / "scripts" / "player.gd").write_text("extends Node3D\n", encoding="utf-8")
 
     composed = compose_system_prompt(
-        RuntimeRole.SINGLE,
         "",
         workspace,
         model="deepseek-chat",

@@ -95,31 +95,6 @@ class TestOldSettingsMigration:
         assert settings.provider in provider_registry.ids(), "migrated to a valid provider"
         assert has_usable_provider_configuration(settings.provider) is False
 
-    def test_aura_provider_in_planner_worker_also_migrates(self, tmp_path, monkeypatch) -> None:
-        profile = tmp_path / "profile"
-        profile.mkdir()
-        config = {
-            "provider": "deepseek",
-            "planner_provider": "aura",
-            "worker_provider": "aura",
-            "first_launch_done": True,
-            "restore_last_conversation": False,
-        }
-        (profile / "config.json").write_text(json.dumps(config), encoding="utf-8")
-
-        monkeypatch.setenv("AURA_CONFIG_DIR", str(profile))
-        monkeypatch.setenv("AURA_DATA_DIR", str(profile))
-
-        import aura.paths
-        monkeypatch.setattr(aura.paths, "config_dir", lambda: profile)
-        monkeypatch.setattr(aura.paths, "data_dir", lambda: profile)
-
-        from aura.settings import load_settings
-        settings = load_settings()
-        assert settings.provider != "aura", "main provider migrated"
-        assert settings.planner_provider != "aura", "planner provider migrated"
-        assert settings.worker_provider != "aura", "worker provider migrated"
-
 
 # ---------------------------------------------------------------------------
 # 4.  Obsolete pending claim fields do not affect startup
@@ -179,10 +154,6 @@ class TestCreditsModulesDeleted:
         with pytest.raises(ImportError):
             import aura.gui.credits_panel  # noqa: F401
 
-    def test_credits_worker_module_missing(self) -> None:
-        with pytest.raises(ImportError):
-            import aura.gui.credits_worker  # noqa: F401
-
     def test_balance_fetcher_module_missing(self) -> None:
         with pytest.raises(ImportError):
             import aura.gui.balance_fetcher  # noqa: F401
@@ -198,22 +169,6 @@ class TestCreditsModulesDeleted:
     def test_hosted_debug_report_modules_missing(self) -> None:
         with pytest.raises(ImportError):
             import aura.gui.debug_report_handler  # noqa: F401
-        with pytest.raises(ImportError):
-            import aura.gui.debug_report_worker  # noqa: F401
-
-
-# ---------------------------------------------------------------------------
-# 7.  No checkout or claim endpoint can be called from the GUI
-# ---------------------------------------------------------------------------
-
-class TestCheckoutClaimRemoved:
-    def test_checkout_worker_unimportable(self) -> None:
-        with pytest.raises(ImportError):
-            from aura.gui.credits_worker import CreditsCheckoutWorker  # noqa: F401
-
-    def test_claim_worker_unimportable(self) -> None:
-        with pytest.raises(ImportError):
-            from aura.gui.credits_worker import CreditsClaimWorker  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +182,6 @@ class TestNoStaleLifecycleReferences:
             "_balance_controller",
             "AuraCreditsPanel",
             "credits_popout",
-            "credits_worker",
             "balance_fetcher",
             "main_window_balance",
             "settings_pages.aura_page",
@@ -258,10 +212,10 @@ class TestNoStaleLifecycleReferences:
             "w._input.stop_requested.connect(w._send_handler.handle_stop)" in source
         )
         assert (
-            "w._playground.stop_worker_requested.connect(w._send_handler.handle_stop)"
+            "w._playground.stop_execution_requested.connect(w._send_handler.handle_stop)"
             in source
         )
-        assert "stop_worker_requested.connect(w._bridge.request_cancel)" not in source
+        assert "stop_execution_requested.connect(w._bridge.request_cancel)" not in source
 
 
 # ---------------------------------------------------------------------------

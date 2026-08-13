@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import threading
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -108,7 +107,7 @@ class _ScriptedProxy:
 
 
 def test_approved_review_returns_the_user_edited_plan_and_unblocks_mutation(tmp_path: Path) -> None:
-    registry = ToolRegistry(tmp_path, mode="single")
+    registry = ToolRegistry(tmp_path)
     registry.plan_review.begin_turn(required=True)
 
     edited_plan = ApprovedPlan(
@@ -143,7 +142,7 @@ def test_approved_review_returns_the_user_edited_plan_and_unblocks_mutation(tmp_
 
 
 def test_cancelled_review_leaves_mutation_blocked(tmp_path: Path) -> None:
-    registry = ToolRegistry(tmp_path, mode="single")
+    registry = ToolRegistry(tmp_path)
     registry.plan_review.begin_turn(required=True)
     registry.set_plan_review_proxy(_ScriptedProxy(PlanReviewDecision(approved=False)))
 
@@ -198,7 +197,7 @@ def test_same_model_resumes_with_approved_plan_and_diff_approval_still_applies(
     history = History()
     history.set_system("You are Aura's production coding agent.")
     history.append_user_text("Update notes.md.")
-    registry = ToolRegistry(workspace_root=workspace, mode="single")
+    registry = ToolRegistry(workspace_root=workspace)
     registry.plan_review.begin_turn(required=True)
     edited_plan = ApprovedPlan(
         goal="edited goal", files=("notes.md",), spec="edited spec",
@@ -261,7 +260,7 @@ def test_plan_review_off_preserves_default_production_mutation_behavior(
     history = History()
     history.set_system("You are Aura's production coding agent.")
     history.append_user_text("Update notes.md.")
-    registry = ToolRegistry(workspace_root=workspace, mode="single")
+    registry = ToolRegistry(workspace_root=workspace)
     # Plan Review left at its default (off) — no begin_turn(required=True).
     manager = ConversationManager(history, registry)
 

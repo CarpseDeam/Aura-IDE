@@ -198,6 +198,6 @@ class TestSharedPickerOwnership:
             MockStore.return_value = MagicMock()
             pane = LeftPane(Path("/tmp/test-workspace"))
             try:
-                assert isinstance(pane._planner_model_combo, SearchableModelCombo)
+                assert isinstance(pane._production_model_combo, SearchableModelCombo)
             finally:
                 pane.deleteLater()

@@ -45,12 +45,8 @@ DEFAULT_PROVIDER: ProviderId = "deepseek"
 DEFAULT_SANDBOX_MODE: str = "host"
 
 
-def resolve_role_default_model(provider_id: ProviderId | None, role: str) -> str:
-    """Return the default model for a given provider.
-
-    ``role`` is retained for compatibility; production is the only role and it
-    uses the provider's configured default model.
-    """
+def resolve_production_default_model(provider_id: ProviderId | None) -> str:
+    """Return the configured default model for Aura's production provider."""
     from aura.providers.registry import provider_registry
 
     if not provider_id or not provider_registry.has(provider_id):
@@ -189,11 +185,6 @@ class AppSettings:
             s.onboarding_checklist = data["onboarding_checklist"]
         if isinstance(data.get("onboarding_version"), int):
             s.onboarding_version = data["onboarding_version"]
-        # One-way production settings migration — the generic fields are the
-        # source of truth. Older configs whose meaningful values only exist in
-        # the legacy Planner fields may supply fallbacks here; those legacy
-        # keys are never retained or written again.
-        _migrate_production_settings(s, data)
         return s
 
 
@@ -228,66 +219,6 @@ def _valid_thinking(raw: Any) -> ThinkingMode | None:
     if isinstance(raw, str) and raw in _THINKING_VALUES:
         return cast(ThinkingMode, raw)
     return None
-
-
-def _migrate_production_settings(s: "AppSettings", data: dict[str, Any]) -> None:
-    """Resolve the one production configuration from a persisted config dict.
-
-    Order of preference:
-
-    1. Valid generic production values (``provider``, ``default_model``,
-       ``default_thinking``, ``temperature``).
-    2. For older configurations whose meaningful values only exist in the
-       legacy Planner fields, migrate those into the production settings.
-    3. Safe provider/model defaults.
-
-    Legacy Planner/Worker keys are never retained or written again.
-    """
-    # --- provider -------------------------------------------------------
-    provider = _valid_provider(data.get("provider"))
-    if provider is None:
-        provider = _valid_provider(data.get("planner_provider"))
-        if provider is not None:
-            logger.info(
-                "Migrating planner_provider -> production provider: %s", provider
-            )
-    if provider is None:
-        provider = DEFAULT_PROVIDER
-    s.provider = provider
-
-    # --- model ----------------------------------------------------------
-    model = _valid_model(data.get("default_model"), provider)
-    if model is None:
-        model = _valid_model(data.get("default_planner_model"), provider)
-        if model is not None:
-            logger.info(
-                "Migrating default_planner_model -> production model: %s", model
-            )
-    if model is None:
-        if "default_model" in data or "default_planner_model" in data:
-            logger.warning(
-                "No valid production model in saved settings for provider %s; "
-                "falling back to the provider default",
-                provider,
-            )
-        model = provider_registry.get(provider).default_model
-    s.default_model = model
-
-    # --- thinking -------------------------------------------------------
-    thinking = _valid_thinking(data.get("default_thinking"))
-    if thinking is None:
-        thinking = _valid_thinking(data.get("default_planner_thinking"))
-        if thinking is not None:
-            logger.info(
-                "Migrating default_planner_thinking -> production thinking: %s",
-                thinking,
-            )
-    if thinking is not None:
-        s.default_thinking = thinking
-
-    # Temperature is already a generic field and was parsed above; nothing to
-    # migrate. planner_worker_mode is no longer read — normal startup runs
-    # production single-agent mode regardless of any legacy value.
 
 
 def _provider_from_data(

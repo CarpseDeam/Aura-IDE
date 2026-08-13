@@ -1,7 +1,7 @@
 """Durable chat transcript items.
 
-This module models what the chat should render. API messages and worker
-dispatch records remain runtime/model artifacts and are not transcript source.
+This module models what the chat should render. API messages and execution
+tool-call records remain runtime/model artifacts and are not transcript source.
 """
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ import copy
 from typing import Any
 
 USER = "user"
-PLANNER = "planner"
-WORKER_COMPLETE = "worker_complete"
+ASSISTANT = "assistant"
+EXECUTION_COMPLETE = "execution_complete"
 ERROR = "error"
 PLAN_REVIEW = "plan_review"
 
@@ -22,8 +22,8 @@ def user_item(text: str, image_b64s: list[str] | None = None) -> dict[str, Any]:
     return item
 
 
-def planner_item(text: str) -> dict[str, Any]:
-    return {"kind": PLANNER, "text": str(text)}
+def assistant_item(text: str) -> dict[str, Any]:
+    return {"kind": ASSISTANT, "text": str(text)}
 
 
 def error_item(title: str, message: str, show_retry: bool = False) -> dict[str, Any]:
@@ -40,7 +40,7 @@ def error_item(title: str, message: str, show_retry: bool = False) -> dict[str, 
     }
 
 
-def worker_complete_item(
+def execution_complete_item(
     *,
     tool_call_id: str,
     goal: str,
@@ -50,7 +50,7 @@ def worker_complete_item(
     needs_followup: bool,
 ) -> dict[str, Any]:
     return {
-        "kind": WORKER_COMPLETE,
+        "kind": EXECUTION_COMPLETE,
         "tool_call_id": str(tool_call_id),
         "goal": str(goal),
         "summary": str(summary),
@@ -99,21 +99,21 @@ def normalize_chat_item(data: Any) -> dict[str, Any] | None:
         if isinstance(images, list):
             return user_item(text, [str(v) for v in images if isinstance(v, str)])
         return user_item(text)
-    if kind == PLANNER:
+    if kind == ASSISTANT:
         text = data.get("text", "")
         if not isinstance(text, str):
             return None
-        return planner_item(text)
+        return assistant_item(text)
     if kind == ERROR:
         title = data.get("title", "")
         message = data.get("message", "")
         if not isinstance(title, str) or not isinstance(message, str):
             return None
         return error_item(title, message, bool(data.get("show_retry", False)))
-    if kind == WORKER_COMPLETE:
-        return worker_complete_item(
+    if kind == EXECUTION_COMPLETE:
+        return execution_complete_item(
             tool_call_id=str(data.get("tool_call_id", "")),
-            goal=str(data.get("goal", "Worker task")),
+            goal=str(data.get("goal", "Execution task")),
             summary=str(data.get("summary", "")),
             status=(
                 str(data.get("status"))
@@ -157,8 +157,8 @@ def legacy_chat_items_from_messages(messages: list[dict[str, Any]]) -> list[dict
     """Build a narrow legacy transcript from API messages.
 
     This is only for old conversation files that do not have ``chat_items``.
-    It intentionally skips tool messages, internal messages, and worker
-    dispatch records.
+    It intentionally skips tool messages, internal messages, and execution
+    tool-call records.
     """
     items: list[dict[str, Any]] = []
     for msg in messages:
@@ -175,7 +175,7 @@ def legacy_chat_items_from_messages(messages: list[dict[str, Any]]) -> list[dict
         elif role == "assistant":
             text = _content_text(content)
             if text:
-                items.append(planner_item(text))
+                items.append(assistant_item(text))
     return items
 
 

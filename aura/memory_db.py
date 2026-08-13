@@ -1,7 +1,7 @@
 """SQLite/FTS5 database for archival project memory (Tier 2).
 
 Provides on-demand RAG-style retrieval over past dispatch records and
-explicitly saved documentation, exposed as Planner-only tools.
+explicitly saved documentation, exposed through project-memory tools.
 """
 from __future__ import annotations
 

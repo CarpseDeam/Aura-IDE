@@ -1,7 +1,7 @@
 """Append-only outcome-join writer.
 
-Phase 1 of the outcome-join capture: writes one row per completed worker
-dispatch joining the loaded-context ledger with the dispatch outcome.
+Phase 1 of the outcome-join capture: writes one row per completed production
+run, joining the loaded-context ledger with its outcome.
 Nothing reads this table yet — Phase 2 builds the reader.
 
 Contract: silently degrades to no-op on any failure, never propagates.
@@ -27,7 +27,7 @@ def record_outcome_join(
     *,
     tool_call_id: str,
     status: str,
-    worker_model: str,
+    execution_model: str,
     task_kind: str | None,
     target_files: list[str],
     ledger: dict[str, Any] | None,
@@ -68,7 +68,7 @@ def record_outcome_join(
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     tool_call_id TEXT NOT NULL,
                     status TEXT NOT NULL,
-                    worker_model TEXT NOT NULL,
+                    execution_model TEXT NOT NULL,
                     task_kind TEXT,
                     target_files TEXT NOT NULL,
                     included_source_ids TEXT NOT NULL,
@@ -83,14 +83,14 @@ def record_outcome_join(
 
             conn.execute(
                 """INSERT INTO outcome_joins
-                   (tool_call_id, status, worker_model, task_kind,
+                   (tool_call_id, status, execution_model, task_kind,
                     target_files, included_source_ids,
                     schema_version, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     tool_call_id,
                     status,
-                    worker_model,
+                    execution_model,
                     task_kind,
                     json.dumps(sorted(target_files)),
                     json.dumps(included_source_ids),

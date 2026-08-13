@@ -32,7 +32,7 @@ class GodotEditorHandlersMixin:
                         "bridge_installed": False,
                         "suggested_next_tool": "install_godot_editor_bridge",
                         "suggested_next_action": (
-                            "Dispatch a Worker to call the bundled installer; do not author a new addon."
+                            "Call the bundled installer; do not author a new addon."
                         ),
                     }
                 )

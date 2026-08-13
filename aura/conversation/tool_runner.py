@@ -6,23 +6,22 @@ import logging
 import threading
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from aura.client import (
     TerminalOutput,
     ToolResult,
 )
-from aura.config import load_settings, redact_secrets
+from aura.config import load_settings
 from aura.conversation.command_normalizer import normalize_command
 from aura.conversation.history import History
 from aura.conversation.tool_runner_terminal_policy import (
-    matches_explicit_validation,
     resolve_terminal_timeout,
 )
 from aura.conversation.validation_orchestrator import (
-    MALFORMED_VALIDATION_COMMAND,
     VALIDATION_COMMAND_UNRUNNABLE,
     ValidationCommand,
+    ValidationCommandSpec,
     classify_command_outcome,
     classify_terminal_run,
     classify_validation_run,
@@ -35,13 +34,12 @@ from aura.project_env import (
     workspace_relative_cwd,
 )
 from aura.sandbox import SandboxExecutor, SandboxResult, WatchResult
-from aura.conversation.validation_orchestrator import ValidationCommandSpec
 
 _log = logging.getLogger(__name__)
 
 
 class ToolRunner:
-    """Owns execution of terminal tools for production SINGLE."""
+    """Owns execution of terminal tools for the production conversation."""
 
     def __init__(
         self,
@@ -197,8 +195,8 @@ class ToolRunner:
         )
         command = command_plan.command
         original_command = command_plan.original_command or requested_command
-        # Production single-agent mode owns its own validation, so its
-        # terminal results carry the same validation classification the Worker
+        # The production conversation owns its own validation, so its
+        # terminal results carry the same validation classification the Execution
         # path produced. Without this, a genuinely passing validation has no
         # pass label and cannot be reported as proof.
         explicit = False

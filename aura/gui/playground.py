@@ -29,15 +29,15 @@ CODE_ANIMATION_TOOLS = frozenset({"write_file", *PATCH_TOOL_NAMES})
 
 class AuraPlayground(QWidget):
     """Right-side workspace panel with code editor (top), info hub (middle),
-    and worker log.
+    and execution log.
 
     Uses a vertical QSplitter to divide the space between a tabbed code editor
-    pane and a tabbed info hub pane (Worker Log). Terminal output is routed to
+    pane and a tabbed info hub pane (Execution Log). Terminal output is routed to
     a floating TerminalWindow so it does not participate in this layout.
     """
 
     focused_action_requested = Signal(str)
-    stop_worker_requested = Signal()
+    stop_execution_requested = Signal()
 
     def __init__(self, parent=None, terminal_window_geometry: str = "", outer_splitter_sizes: list[int] | None = None, vertical_splitter_sizes: list[int] | None = None):
         super().__init__(parent)
@@ -66,7 +66,7 @@ class AuraPlayground(QWidget):
         self._close_all_btn.setText("Close All")
         self._close_all_btn.setObjectName("closeAllBtn")
         self._close_all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._close_all_btn.setToolTip("Close all workspace tabs and clear worker output.")
+        self._close_all_btn.setToolTip("Close all workspace tabs and clear execution output.")
         self._close_all_btn.setAccessibleName("Close all workspace output")
         self._close_all_btn.clicked.connect(self.clear)
         header_layout.addWidget(self._close_all_btn)
@@ -91,7 +91,7 @@ class AuraPlayground(QWidget):
         self._code_editor.focused_action_requested.connect(
             self.focused_action_requested.emit
         )
-        self._info_hub.stop_worker_requested.connect(self.stop_worker_requested.emit)
+        self._info_hub.stop_execution_requested.connect(self.stop_execution_requested.emit)
 
         self._splitter.addWidget(self._code_editor)
         self._splitter.addWidget(self._info_hub)
@@ -141,18 +141,18 @@ class AuraPlayground(QWidget):
         layout.addWidget(self._stack, 1)
 
         # Floating terminal window. It is intentionally not added to this
-        # layout, so terminal output never consumes worker/workspace space.
+        # layout, so terminal output never consumes execution/workspace space.
         self._terminal_window = TerminalWindow(
             self.window(),
             initial_geometry=terminal_window_geometry,
         )
 
-        # Tool stream controllers keyed by worker_tool_id
+        # Tool stream controllers keyed by execution_tool_id
         self._controllers: dict[str, ToolStreamController] = {}
         self._controller_parents: dict[str, str] = {}
-        self._worker_code_paths: dict[str, str] = {}
-        self._worker_code_tool_names: dict[str, str] = {}
-        self._pending_worker_code_content: dict[str, str] = {}
+        self._execution_code_paths: dict[str, str] = {}
+        self._execution_code_tool_names: dict[str, str] = {}
+        self._pending_execution_code_content: dict[str, str] = {}
         self._workspace_root: Path | None = None
 
         # Active drone run card (shown below the stack widget)
@@ -275,7 +275,7 @@ class AuraPlayground(QWidget):
     def is_terminal_window_open(self) -> bool:
         return self._terminal_window.is_open()
 
-    # Public API (backward-compatible with worker_handler.py)
+    # Public API (backward-compatible with execution_handler.py)
 
     def begin_assistant(self):
         """Reset the workspace for a new assistant run (log text, code tabs, terminal).
@@ -283,14 +283,14 @@ class AuraPlayground(QWidget):
         _log.info(
             "DIAGNOSTIC AuraPlayground.begin_assistant called — clearing code tabs, log, terminal"
         )
-        self._code_editor.close_worker_tabs()
+        self._code_editor.close_execution_tabs()
         self._info_hub.clear_log()
         self._terminal_window.clear()
         self._controllers.clear()
         self._controller_parents.clear()
-        self._worker_code_paths.clear()
-        self._worker_code_tool_names.clear()
-        self._pending_worker_code_content.clear()
+        self._execution_code_paths.clear()
+        self._execution_code_tool_names.clear()
+        self._pending_execution_code_content.clear()
 
     def append_reasoning(self, text: str):
         self._info_hub.append_reasoning(text)
@@ -298,51 +298,51 @@ class AuraPlayground(QWidget):
     def append_content(self, text: str):
         self._info_hub.append_content(text)
 
-    def add_tool_call(self, worker_tool_id: str, name: str, parent_tool_id: str | None = None):
-        self._info_hub.flush_worker_log()
-        self._info_hub.mark_worker_log_boundary()
+    def add_tool_call(self, execution_tool_id: str, name: str, parent_tool_id: str | None = None):
+        self._info_hub.flush_execution_log()
+        self._info_hub.mark_execution_log_boundary()
 
         c = ToolStreamController(name, self)
-        self._controllers[worker_tool_id] = c
-        self._controller_parents[worker_tool_id] = parent_tool_id or ""
+        self._controllers[execution_tool_id] = c
+        self._controller_parents[execution_tool_id] = parent_tool_id or ""
 
         if name in CODE_ANIMATION_TOOLS:
-            self._worker_code_tool_names[worker_tool_id] = name
+            self._execution_code_tool_names[execution_tool_id] = name
             c.path_resolved.connect(
-                lambda path, tid=worker_tool_id: self._on_code_path_resolved(
+                lambda path, tid=execution_tool_id: self._on_code_path_resolved(
                     tid, path
                 )
             )
             c.content_updated.connect(
-                lambda content, tid=worker_tool_id: self._on_code_content_updated(
+                lambda content, tid=execution_tool_id: self._on_code_content_updated(
                     tid, content
                 )
             )
 
         if name == "run_terminal_command":
             c.command_resolved.connect(
-                lambda cmd, tid=worker_tool_id: self._terminal_window.set_command(tid, cmd)
+                lambda cmd, tid=execution_tool_id: self._terminal_window.set_command(tid, cmd)
             )
 
-    def append_tool_args(self, worker_tool_id: str, fragment: str) -> None:
-        controller = self._controllers.get(worker_tool_id)
+    def append_tool_args(self, execution_tool_id: str, fragment: str) -> None:
+        controller = self._controllers.get(execution_tool_id)
         if controller is None:
             return
         controller.append_fragment(fragment)
 
-    def set_tool_result(self, worker_tool_id: str, ok: bool, result: str):
-        self._controller_parents.pop(worker_tool_id, "")
-        self._info_hub.flush_worker_log()
-        self._info_hub.mark_worker_log_boundary()
-        controller = self._controllers.pop(worker_tool_id, None)
+    def set_tool_result(self, execution_tool_id: str, ok: bool, result: str):
+        self._controller_parents.pop(execution_tool_id, "")
+        self._info_hub.flush_execution_log()
+        self._info_hub.mark_execution_log_boundary()
+        controller = self._controllers.pop(execution_tool_id, None)
         if controller is not None:
             controller.finalize(ok, result)
 
         # Finalize code editor tab if this was a file tool
-        self._code_editor.finalize_tab(worker_tool_id)
-        self._worker_code_paths.pop(worker_tool_id, None)
-        self._worker_code_tool_names.pop(worker_tool_id, None)
-        self._pending_worker_code_content.pop(worker_tool_id, None)
+        self._code_editor.finalize_tab(execution_tool_id)
+        self._execution_code_paths.pop(execution_tool_id, None)
+        self._execution_code_tool_names.pop(execution_tool_id, None)
+        self._pending_execution_code_content.pop(execution_tool_id, None)
 
         # Finalize terminal window if this was a terminal tool.
         exit_code = 0
@@ -352,52 +352,52 @@ class AuraPlayground(QWidget):
                 exit_code = parsed.get("exit_code", 0)
         except Exception:
             pass
-        self._terminal_window.set_result(worker_tool_id, exit_code)
+        self._terminal_window.set_result(execution_tool_id, exit_code)
 
     def update_activity(self, entries: list, tool_call_id: str | None = None) -> None:
-        """Render a Worker Activity snapshot in the info hub."""
+        """Render a Execution Activity snapshot in the info hub."""
         self._info_hub.update_activity(entries)
 
-    def update_worker_todo(self, items: list[dict[str, str]], tool_call_id: str | None = None) -> None:
-        """Render the latest Worker TODO snapshot in the info hub."""
-        self._info_hub.update_worker_todo(items)
+    def update_task_checklist(self, items: list[dict[str, str]], tool_call_id: str | None = None) -> None:
+        """Render the latest Task Checklist snapshot in the info hub."""
+        self._info_hub.update_task_checklist(items)
 
-    def _on_code_path_resolved(self, worker_tool_id: str, path: str) -> None:
-        self._worker_code_paths[worker_tool_id] = path
-        self._code_editor.open_or_focus_tab(worker_tool_id, path)
-        tool_name = self._worker_code_tool_names.get(worker_tool_id)
+    def _on_code_path_resolved(self, execution_tool_id: str, path: str) -> None:
+        self._execution_code_paths[execution_tool_id] = path
+        self._code_editor.open_or_focus_tab(execution_tool_id, path)
+        tool_name = self._execution_code_tool_names.get(execution_tool_id)
         if tool_name in PATCH_TOOL_NAMES:
             current_content = self._read_workspace_text(path)
             if current_content is not None:
-                self._code_editor.set_content(worker_tool_id, current_content)
-        pending_content = self._pending_worker_code_content.pop(worker_tool_id, None)
+                self._code_editor.set_content(execution_tool_id, current_content)
+        pending_content = self._pending_execution_code_content.pop(execution_tool_id, None)
         if pending_content is not None and tool_name not in PATCH_TOOL_NAMES:
-            self._code_editor.stream_content(worker_tool_id, pending_content)
+            self._code_editor.stream_content(execution_tool_id, pending_content)
 
-    def _on_code_content_updated(self, worker_tool_id: str, content: str) -> None:
-        tool_name = self._worker_code_tool_names.get(worker_tool_id)
+    def _on_code_content_updated(self, execution_tool_id: str, content: str) -> None:
+        tool_name = self._execution_code_tool_names.get(execution_tool_id)
         if tool_name in PATCH_TOOL_NAMES:
             return
-        if worker_tool_id not in self._worker_code_paths:
-            self._pending_worker_code_content[worker_tool_id] = content
+        if execution_tool_id not in self._execution_code_paths:
+            self._pending_execution_code_content[execution_tool_id] = content
             return
-        self._code_editor.stream_content(worker_tool_id, content)
+        self._code_editor.stream_content(execution_tool_id, content)
 
     def show_code_diff(
         self,
-        worker_tool_id: str,
+        execution_tool_id: str,
         rel_path: str,
         old: str,
         new: str,
         decision: str,
     ) -> None:
-        path = self._worker_code_paths.get(worker_tool_id, rel_path)
-        self._worker_code_paths[worker_tool_id] = path
-        self._code_editor.open_or_focus_tab(worker_tool_id, path)
+        path = self._execution_code_paths.get(execution_tool_id, rel_path)
+        self._execution_code_paths[execution_tool_id] = path
+        self._code_editor.open_or_focus_tab(execution_tool_id, path)
         if decision in ("approve", "approve_all"):
-            self._code_editor.animate_content_transition(worker_tool_id, old, new)
+            self._code_editor.animate_content_transition(execution_tool_id, old, new)
         else:
-            self._code_editor.set_content(worker_tool_id, old)
+            self._code_editor.set_content(execution_tool_id, old)
 
     def _read_workspace_text(self, path: str) -> str | None:
         candidate = Path(path)
@@ -412,7 +412,7 @@ class AuraPlayground(QWidget):
 
     def add_diff_card(
         self,
-        worker_tool_id: str,
+        execution_tool_id: str,
         rel_path: str,
         old: str,
         new: str,
@@ -427,34 +427,34 @@ class AuraPlayground(QWidget):
     def start_terminal_process(self, process_id: str, command: str) -> None:
         self._terminal_window.set_command(process_id, command)
 
-    def append_terminal_output(self, worker_tool_id: str, text: str) -> None:
-        self._terminal_window.append_output(worker_tool_id, text)
+    def append_terminal_output(self, execution_tool_id: str, text: str) -> None:
+        self._terminal_window.append_output(execution_tool_id, text)
 
     def finish_terminal_process(self, process_id: str, exit_code: int) -> None:
         self._terminal_window.set_result(process_id, exit_code)
 
-    def worker_finished(self, ok: bool, summary: str, needs_followup: bool = False, status: str | None = None) -> None:
+    def execution_finished(self, ok: bool, summary: str, needs_followup: bool = False, status: str | None = None) -> None:
         self._code_editor.close_all_tabs()
         self._controllers.clear()
         self._controller_parents.clear()
-        self._worker_code_paths.clear()
-        self._worker_code_tool_names.clear()
-        self._pending_worker_code_content.clear()
+        self._execution_code_paths.clear()
+        self._execution_code_tool_names.clear()
+        self._pending_execution_code_content.clear()
         self._info_hub.show_final_summary(ok, summary, needs_followup=needs_followup, status=status)
-        self._info_hub.set_worker_running(False)
+        self._info_hub.set_execution_running(False)
 
-    def worker_cancelled(self):
+    def execution_cancelled(self):
         self._code_editor.close_all_tabs()
         self._controllers.clear()
         self._controller_parents.clear()
-        self._worker_code_paths.clear()
-        self._worker_code_tool_names.clear()
-        self._pending_worker_code_content.clear()
-        self._info_hub.show_final_summary(False, "Worker stopped by user.", status="cancelled")
-        self._info_hub.set_worker_running(False)
+        self._execution_code_paths.clear()
+        self._execution_code_tool_names.clear()
+        self._pending_execution_code_content.clear()
+        self._info_hub.show_final_summary(False, "Execution stopped by user.", status="cancelled")
+        self._info_hub.set_execution_running(False)
 
-    def set_worker_running(self, running: bool):
-        self._info_hub.set_worker_running(running)
+    def set_execution_running(self, running: bool):
+        self._info_hub.set_execution_running(running)
 
     def clear(self):
         _log.info("DIAGNOSTIC AuraPlayground.clear called — full workspace reset")
@@ -463,9 +463,9 @@ class AuraPlayground(QWidget):
         self._terminal_window.clear()
         self._controllers.clear()
         self._controller_parents.clear()
-        self._worker_code_paths.clear()
-        self._worker_code_tool_names.clear()
-        self._pending_worker_code_content.clear()
+        self._execution_code_paths.clear()
+        self._execution_code_tool_names.clear()
+        self._pending_execution_code_content.clear()
 
     def add_mermaid_artifact(self, code: str):
         pass

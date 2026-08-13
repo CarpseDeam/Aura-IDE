@@ -364,7 +364,3 @@ DEFAULT_MODEL: str = "deepseek-v4-flash"
 #: Default for *new or unset* production settings only. An explicit saved
 #: off/high/max selection is preserved verbatim and never migrated to "auto".
 DEFAULT_THINKING: ThinkingMode = "auto"
-DEFAULT_PLANNER_MODEL: str = "deepseek-v4-flash"
-DEFAULT_WORKER_MODEL: str = "deepseek-v4-pro"
-DEFAULT_PLANNER_THINKING: ThinkingMode = "off"
-DEFAULT_WORKER_THINKING: ThinkingMode = "high"

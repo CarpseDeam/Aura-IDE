@@ -7,10 +7,9 @@ Settings are stored in `~/.config/Aura/config.json` (platform-specific via platf
 ## Production Settings
 
 Normal Aura coding runs **one continuous production model**. It receives your
-original conversation and owns the whole job — repository inspection, the live
-TODO, edits, terminal execution, diagnosis, repair, validation rerun, and one
-factual completion receipt. There is no Planner-to-Worker handoff in the normal
-product.
+original conversation and owns the whole job — repository inspection, a concise
+checklist when useful, edits, terminal execution, diagnosis, repair, validation
+rerun, and one factual completion receipt.
 
 Four settings define it:
 
@@ -22,14 +21,6 @@ Four settings define it:
 | `temperature`      | float | `0.7`                 | Sampling temperature (0.0–2.0)            |
 
 These are what the Models settings page and the left sidebar edit.
-
-### Migrating from older configurations
-
-Old configs that only carried Planner values still load. On startup Aura prefers
-valid generic production values; when they are absent it migrates the Planner
-provider, model, and thinking mode into the production settings. Legacy fields
-are preserved in `config.json` and are never destroyed on load. `planner_worker_mode`
-is read but not acted on — startup always enters production single-agent mode.
 
 ## Settings Table
 
@@ -51,16 +42,6 @@ is read but not acted on — startup always enters production single-agent mode.
 | `companion_display_name`      | str     | `""`                     | Display name for this desktop                             |
 | `companion_web_url`           | str     | `"http://localhost:5173"`| Web UI URL for companion                                  |
 | `first_launch_done`           | bool    | `false`                  | Whether onboarding has completed                          |
-
-### Legacy fields
-
-These remain in `config.json` for backward compatibility. They are loaded and
-preserved, but the normal product does not use them: `planner_provider`,
-`worker_provider`, `planner_backend`, `worker_backend`, `default_planner_model`,
-`default_worker_model`, `default_planner_thinking`, `default_worker_thinking`,
-`worker_temperature`, `planner_system_prompt`, `worker_system_prompt`,
-`planner_worker_mode`, `show_planner_reasoning`, `auto_dispatch`,
-`auto_commit_enabled`.
 
 ## Settings Dialog
 
@@ -93,11 +74,9 @@ Docker sandbox constraints:
 
 ## Custom System Prompts
 
-- **Single** — The production model's prompt. This is the one normal coding uses.
-- **Planner** / **Worker** — Legacy role prompts, retained for backward
-  compatibility with older configurations. Not used by the normal product.
+- **Production** — The production model's prompt.
 
-Each supports `{tier1_context}` and `{private_worker_style}` template variables.
+Each supports `{tier1_context}` and `{private_execution_style}` template variables.
 
 ## Session Cost Tracking
 

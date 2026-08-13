@@ -1,4 +1,4 @@
-"""Info hub pane: Worker Log tab with activity and final report."""
+"""Info hub pane: Execution Log tab with activity and final report."""
 
 from __future__ import annotations
 
@@ -20,14 +20,14 @@ from PySide6.QtWidgets import (
 from aura.gui.cards._helpers import _mono_font
 from aura.gui.cards.diff_card import DiffCard
 from aura.gui.cards.error_card import ErrorCard
+from aura.gui.execution_log_stream import ExecutionLogStreamBuffer
 from aura.gui.scrollbar_style import aura_scrollbar_qss
 from aura.gui.theme import ACCENT, BG, BORDER, FG, FG_MUTED, SUCCESS
-from aura.gui.widgets.worker_todo import WorkerTodoWidget
-from aura.gui.worker_log_stream import WorkerLogStreamBuffer
+from aura.gui.widgets.task_checklist import TaskChecklistWidget
 
 _log = logging.getLogger(__name__)
 
-#: Worker Log status chip texts. The chip is the UI's only claim about whether a
+#: Execution Log status chip texts. The chip is the UI's only claim about whether a
 #: run is still going, so the three states are named rather than spelled inline:
 #: a run that has stopped must never be left reading ``LIVE``.
 _CHIP_IDLE = "Idle"
@@ -36,20 +36,20 @@ _CHIP_RECEIPT = "● Receipt"
 
 
 class InfoHubPane(QWidget):
-    """Bottom pane with permanent Worker Log tab.
+    """Bottom pane with permanent Execution Log tab.
 
     Public API:
         append_reasoning(text) -> None
         append_content(text) -> None
         add_diff_card(rel_path, old, new, decision, is_new_file) -> None
         add_error(message) -> None
-        flush_worker_log() -> None
-        mark_worker_log_boundary() -> None
+        flush_execution_log() -> None
+        mark_execution_log_boundary() -> None
         show_final_summary(ok, summary) -> None
         clear() -> None
     """
 
-    stop_worker_requested = Signal()
+    stop_execution_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -71,7 +71,7 @@ class InfoHubPane(QWidget):
 
         layout.addWidget(self._tabs)
 
-        # ---- Worker Log tab (permanent, index 0) ----
+        # ---- Execution Log tab (permanent, index 0) ----
         self._log_tab = QWidget(self)
         self._log_tab.setMinimumSize(0, 0)
         self._log_tab.setSizePolicy(
@@ -82,20 +82,20 @@ class InfoHubPane(QWidget):
         log_layout.setContentsMargins(0, 0, 0, 0)
         log_layout.setSpacing(0)
 
-        # Worker Log header row
+        # Execution Log header row
         self._log_header = QWidget(self._log_tab)
         header_layout = QHBoxLayout(self._log_header)
         header_layout.setContentsMargins(10, 4, 10, 4)
         header_layout.setSpacing(8)
 
         # Title
-        header_title = QLabel("WORKER LOG")
+        header_title = QLabel("EXECUTION LOG")
         header_title.setObjectName("paneTitleWorkspace")
         header_layout.addWidget(header_title)
 
         # Status chip
         self._status_chip = QLabel("")
-        self._status_chip.setObjectName("workerLogStatusChip")
+        self._status_chip.setObjectName("executionLogStatusChip")
         header_layout.addWidget(self._status_chip)
 
         header_layout.addStretch(1)
@@ -110,21 +110,21 @@ class InfoHubPane(QWidget):
         header_layout.addWidget(self._copy_receipt_btn)
 
         # Stop button (cancels active run, clears queue, preserves draft)
-        self._stop_worker_btn = QPushButton("Stop")
-        self._stop_worker_btn.setObjectName("danger")
-        self._stop_worker_btn.setMinimumSize(44, 36)
-        self._stop_worker_btn.setVisible(False)
-        self._stop_worker_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._stop_worker_btn.clicked.connect(self._on_stop_worker_clicked)
-        header_layout.addWidget(self._stop_worker_btn)
+        self._stop_execution_btn = QPushButton("Stop")
+        self._stop_execution_btn.setObjectName("danger")
+        self._stop_execution_btn.setMinimumSize(44, 36)
+        self._stop_execution_btn.setVisible(False)
+        self._stop_execution_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._stop_execution_btn.clicked.connect(self._on_stop_execution_clicked)
+        header_layout.addWidget(self._stop_execution_btn)
 
         # Insert header at the top of the log tab layout
         log_layout.insertWidget(0, self._log_header, 0)
 
-        self._todo_widget = WorkerTodoWidget(self._log_tab)
+        self._todo_widget = TaskChecklistWidget(self._log_tab)
         log_layout.addWidget(self._todo_widget, 0)
 
-        # Worker log text area: activity/tool calls first, final report last.
+        # Execution log text area: activity/tool calls first, final report last.
         self._log_view = QPlainTextEdit(self._log_tab)
         self._log_view.setReadOnly(True)
         self._log_view.setMinimumSize(0, 0)
@@ -143,9 +143,9 @@ class InfoHubPane(QWidget):
             {aura_scrollbar_qss("QPlainTextEdit")}
             """
         )
-        self._log_view.setPlaceholderText("Worker output will appear here.")
+        self._log_view.setPlaceholderText("Execution output will appear here.")
         log_layout.addWidget(self._log_view, 1)
-        self._log_stream = WorkerLogStreamBuffer(self._append_worker_log_batch, parent=self)
+        self._log_stream = ExecutionLogStreamBuffer(self._append_execution_log_batch, parent=self)
         self._activity_entry_count = 0
         self._receipt_text: str = ""
 
@@ -160,29 +160,29 @@ class InfoHubPane(QWidget):
         log_layout.setStretch(2, 1)  # log view
         log_layout.setStretch(3, 0)  # cards
 
-        self._tabs.addTab(self._log_tab, "Worker Log")
+        self._tabs.addTab(self._log_tab, "Execution Log")
         self._tabs.tabBar().setVisible(False)
 
-    # Public API — Worker Log
+    # Public API — Execution Log
 
     def append_reasoning(self, text: str) -> None:
-        """Append reasoning prose to the Worker Log through the stream buffer."""
+        """Append reasoning prose to the Execution Log through the stream buffer."""
         self._log_stream.append("reasoning", text)
 
     def append_content(self, text: str) -> None:
-        """Append content prose to the Worker Log through the stream buffer."""
+        """Append content prose to the Execution Log through the stream buffer."""
         self._log_stream.append("content", text)
 
-    def flush_worker_log(self) -> None:
-        """Flush any pending Worker Log prose immediately."""
+    def flush_execution_log(self) -> None:
+        """Flush any pending Execution Log prose immediately."""
         self._log_stream.flush()
 
-    def mark_worker_log_boundary(self) -> None:
-        """Make the next Worker prose append start after a paragraph boundary."""
+    def mark_execution_log_boundary(self) -> None:
+        """Make the next Execution prose append start after a paragraph boundary."""
         self._log_stream.mark_boundary()
 
-    def _append_worker_log_batch(self, text: str) -> None:
-        """Insert one buffered Worker Log prose batch and scroll once."""
+    def _append_execution_log_batch(self, text: str) -> None:
+        """Insert one buffered Execution Log prose batch and scroll once."""
         cursor = self._log_view.textCursor()
         cursor.movePosition(cursor.MoveOperation.End)
         self._log_view.setTextCursor(cursor)
@@ -191,7 +191,7 @@ class InfoHubPane(QWidget):
         sb.setValue(sb.maximum())
 
     def update_activity(self, entries: list[dict]) -> None:
-        """Append new Worker Activity entries to the single Worker Log stream."""
+        """Append new Execution Activity entries to the single Execution Log stream."""
         if not entries:
             self._activity_entry_count = 0
             return
@@ -211,10 +211,10 @@ class InfoHubPane(QWidget):
 
         self._log_stream.flush()
         prefix = "\n" if self._log_view.toPlainText() else ""
-        self._append_worker_log_batch(prefix + "\n".join(lines) + "\n")
+        self._append_execution_log_batch(prefix + "\n".join(lines) + "\n")
 
-    def update_worker_todo(self, items: list[dict[str, str]]) -> None:
-        """Render the latest Worker TODO snapshot."""
+    def update_task_checklist(self, items: list[dict[str, str]]) -> None:
+        """Render the latest Task Checklist snapshot."""
         self._todo_widget.update_snapshot(items)
 
     def add_diff_card(
@@ -225,21 +225,21 @@ class InfoHubPane(QWidget):
         decision: str,
         is_new_file: bool,
     ) -> None:
-        """Create a DiffCard and add it to the Worker Log's dynamic cards area."""
-        self.flush_worker_log()
+        """Create a DiffCard and add it to the Execution Log's dynamic cards area."""
+        self.flush_execution_log()
         card = DiffCard(rel_path, old, new, decision, is_new_file, parent=self._log_tab)
         self._cards_layout.addWidget(card)
-        self.mark_worker_log_boundary()
+        self.mark_execution_log_boundary()
 
     def add_error(self, message: str) -> None:
-        """Create an ErrorCard and add it to the Worker Log's dynamic cards area."""
-        self.flush_worker_log()
-        card = ErrorCard("Worker Error", message, parent=self._log_tab)
+        """Create an ErrorCard and add it to the Execution Log's dynamic cards area."""
+        self.flush_execution_log()
+        card = ErrorCard("Execution Error", message, parent=self._log_tab)
         self._cards_layout.addWidget(card)
-        self.mark_worker_log_boundary()
+        self.mark_execution_log_boundary()
 
     def show_final_summary(self, ok: bool, summary: str, needs_followup: bool = False, status: str | None = None) -> None:
-        """Append a formatted summary block to the Worker Log text.
+        """Append a formatted summary block to the Execution Log text.
 
         Flushes buffered prose immediately so the summary is ordered correctly.
         """
@@ -273,7 +273,7 @@ class InfoHubPane(QWidget):
         self._copy_receipt_btn.setEnabled(True)
 
     def clear(self) -> None:
-        """Reset the Worker Log: clear text, activity, and dynamic cards."""
+        """Reset the Execution Log: clear text, activity, and dynamic cards."""
         _log.info("DIAGNOSTIC InfoHubPane.clear called")
         self.clear_log()
         self.update_activity([])
@@ -295,33 +295,33 @@ class InfoHubPane(QWidget):
             if item and item.widget():
                 item.widget().deleteLater()
 
-    def _on_stop_worker_clicked(self) -> None:
+    def _on_stop_execution_clicked(self) -> None:
         """Click handler: disable button, show stopping text, emit signal."""
-        self._stop_worker_btn.setEnabled(False)
-        self._stop_worker_btn.setText("Stopping...")
-        self.stop_worker_requested.emit()
+        self._stop_execution_btn.setEnabled(False)
+        self._stop_execution_btn.setText("Stopping...")
+        self.stop_execution_requested.emit()
 
-    def set_worker_running(self, running: bool) -> None:
+    def set_execution_running(self, running: bool) -> None:
         """Show/hide the Stop button and own the Live claim on the status chip.
 
         Stopping is the authoritative end of the Live state: whatever path got
-        here — receipt, surfaced error, mismatch, cancellation, or a worker
+        here — receipt, surfaced error, mismatch, cancellation, or a execution
         thread that simply exited — the chip must stop claiming the run is
         going. A terminal chip already written by :meth:`show_final_summary` is
         left alone so the truthful outcome survives, which also makes repeated
         calls idempotent.
         """
-        self._stop_worker_btn.setVisible(running)
+        self._stop_execution_btn.setVisible(running)
         if running:
-            self._stop_worker_btn.setEnabled(True)
-            self._stop_worker_btn.setText("Stop")
+            self._stop_execution_btn.setEnabled(True)
+            self._stop_execution_btn.setText("Stop")
             self._status_chip.setText(_CHIP_LIVE)
             self._status_chip.setStyleSheet(f"color: {SUCCESS}; font-size: 10px; font-weight: 600;")
             self._copy_receipt_btn.setVisible(False)
         else:
-            self._stop_worker_btn.setVisible(False)
-            self._stop_worker_btn.setEnabled(True)
-            self._stop_worker_btn.setText("Stop")
+            self._stop_execution_btn.setVisible(False)
+            self._stop_execution_btn.setEnabled(True)
+            self._stop_execution_btn.setText("Stop")
             if self._status_chip.text() == _CHIP_LIVE:
                 self._set_chip_idle()
 
@@ -380,26 +380,26 @@ def _final_summary_label(
     needs_followup: bool = False,
     status: str | None = None,
 ) -> str:
-    from aura.conversation.worker_outcome import WorkerOutcomeStatus, normalize_outcome_status
+    from aura.conversation.execution_outcome import ExecutionOutcomeStatus, normalize_outcome_status
 
     normalized = normalize_outcome_status(status)
-    if normalized == WorkerOutcomeStatus.cancelled.value:
+    if normalized == ExecutionOutcomeStatus.cancelled.value:
         return "Cancelled."
-    if normalized == WorkerOutcomeStatus.approval_rejected.value:
+    if normalized == ExecutionOutcomeStatus.approval_rejected.value:
         return "Changes rejected."
-    if normalized == WorkerOutcomeStatus.harness_error.value:
-        return "Worker Error."
+    if normalized == ExecutionOutcomeStatus.harness_error.value:
+        return "Execution Error."
     if normalized in {
-        WorkerOutcomeStatus.completed.value,
-        WorkerOutcomeStatus.completed_with_caveats.value,
-        WorkerOutcomeStatus.validation_failed.value,
-        WorkerOutcomeStatus.edit_mechanics_blocked.value,
-        WorkerOutcomeStatus.scope_mismatch.value,
+        ExecutionOutcomeStatus.completed.value,
+        ExecutionOutcomeStatus.completed_with_caveats.value,
+        ExecutionOutcomeStatus.validation_failed.value,
+        ExecutionOutcomeStatus.edit_mechanics_blocked.value,
+        ExecutionOutcomeStatus.scope_mismatch.value,
     }:
-        return "Worker Report."
+        return "Execution Report."
     if ok and not needs_followup:
-        return "Worker Report."
-    return "Worker Report."
+        return "Execution Report."
+    return "Execution Report."
 
 
 _SUPPRESSED_ACTIVITY_KINDS = frozenset(
@@ -416,7 +416,7 @@ _SUPPRESSED_ACTIVITY_KINDS = frozenset(
 
 
 def _activity_log_line(entry: dict) -> str:
-    """Return the user-visible Worker Log line for one activity entry."""
+    """Return the user-visible Execution Log line for one activity entry."""
     if not isinstance(entry, dict):
         return ""
     kind = str(entry.get("kind") or "")

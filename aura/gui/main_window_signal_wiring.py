@@ -21,7 +21,7 @@ class MainWindowSignalWiring:
     * Does NOT create widgets
     * Does NOT own workflow state
     * Does NOT subscribe to EventBus
-    * Does NOT dispatch Worker/Planner work
+    * Does NOT dispatch production/Production work
     * Does NOT add lifecycle hooks
     * Does NOT change runtime behavior
     """
@@ -50,8 +50,8 @@ class MainWindowSignalWiring:
         w._left_pane.change_root_requested.connect(w._workspace_controller.on_change_root)
         w._left_pane.project_selected.connect(w._workspace_controller._on_project_selected)
         w._left_pane.new_project_requested.connect(w._workspace_controller.on_create_new_project)
-        w._left_pane.planner_model_changed.connect(lambda: w._refresh_status_bar())
-        w._left_pane.planner_thinking_changed.connect(lambda: w._refresh_status_bar())
+        w._left_pane.production_model_changed.connect(lambda: w._refresh_status_bar())
+        w._left_pane.production_thinking_changed.connect(lambda: w._refresh_status_bar())
         w._left_pane.drone_selected.connect(lambda folder: w._drone_controller.on_drone_folder_selected(folder.name))
         w._left_pane.new_drone_requested.connect(w._drone_controller.on_create_drone)
 
@@ -74,10 +74,10 @@ class MainWindowSignalWiring:
         w.droneStatusChangedOnUiThread.connect(w._drone_controller.on_drone_status_changed)
         w.droneReceiptReadyOnUiThread.connect(w._drone_controller.on_drone_receipt)
 
-        # ---- group 9: worker handler + playground ----
-        w._worker_handler.usage_updated.connect(w._refresh_status_bar)
-        w._playground.stop_worker_requested.connect(w._send_handler.handle_stop)
-        w._worker_handler.worker_running_changed.connect(w._playground.set_worker_running)
+        # ---- group 9: execution handler + playground ----
+        w._execution_handler.usage_updated.connect(w._refresh_status_bar)
+        w._playground.stop_execution_requested.connect(w._send_handler.handle_stop)
+        w._execution_handler.execution_running_changed.connect(w._playground.set_execution_running)
 
         # ---- group 10: persistence ----
         w._persistence.needs_status_refresh.connect(w._refresh_status_bar)

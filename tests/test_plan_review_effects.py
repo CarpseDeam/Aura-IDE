@@ -11,8 +11,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from aura.conversation.plan_review import ApprovedPlan
 from aura.conversation.tools.effects import SCHEMA_EFFECT_KEY, ToolEffect
 from aura.conversation.tools.registry import ToolRegistry
@@ -29,7 +27,7 @@ class _FakeMCPClient:
 
 def test_observation_tool_remains_callable_before_plan_approval(tmp_path: Path) -> None:
     (tmp_path / "a.txt").write_text("hello", encoding="utf-8")
-    registry = ToolRegistry(tmp_path, mode="single")
+    registry = ToolRegistry(tmp_path)
     registry.plan_review.begin_turn(required=True)
 
     result = registry.execute("read_file", {"path": "a.txt"}, approval_cb=None)
@@ -38,7 +36,7 @@ def test_observation_tool_remains_callable_before_plan_approval(tmp_path: Path) 
 
 
 def test_command_effect_tool_blocked_before_plan_approval(tmp_path: Path) -> None:
-    registry = ToolRegistry(tmp_path, mode="single")
+    registry = ToolRegistry(tmp_path)
     registry.plan_review.begin_turn(required=True)
     assert registry.tool_effect("run_diagnostic_command") is ToolEffect.COMMAND
 
@@ -51,7 +49,7 @@ def test_command_effect_tool_blocked_before_plan_approval(tmp_path: Path) -> Non
 
 
 def test_command_effect_tool_allowed_once_approved(tmp_path: Path) -> None:
-    registry = ToolRegistry(tmp_path, mode="single")
+    registry = ToolRegistry(tmp_path)
     registry.plan_review.begin_turn(required=True)
     registry.plan_review.approve(
         ApprovedPlan(goal="g", files=(), spec="s", acceptance="a")
@@ -66,7 +64,7 @@ def test_command_effect_tool_allowed_once_approved(tmp_path: Path) -> None:
 def test_bookkeeping_review_tool_itself_is_never_gated(tmp_path: Path) -> None:
     """``review_implementation_plan`` is BOOKKEEPING, not MUTATION — it must
     be callable while the gate is active, or the model could never satisfy it."""
-    registry = ToolRegistry(tmp_path, mode="single")
+    registry = ToolRegistry(tmp_path)
     registry.plan_review.begin_turn(required=True)
     assert registry.tool_effect("review_implementation_plan") is ToolEffect.BOOKKEEPING
 
@@ -83,7 +81,7 @@ def test_mutation_tool_rejected_before_plan_approval_without_running_handler(
 
     monkeypatch.setattr(ToolRegistry, "_handle_write_file", spy)
 
-    registry = ToolRegistry(tmp_path, mode="single")
+    registry = ToolRegistry(tmp_path)
     registry.plan_review.begin_turn(required=True)
 
     result = registry.execute(
@@ -98,7 +96,7 @@ def test_mutation_tool_rejected_before_plan_approval_without_running_handler(
 
 
 def test_extensible_mutation_tool_obeys_the_same_effect_based_gate(tmp_path: Path) -> None:
-    registry = ToolRegistry(tmp_path, mode="single")
+    registry = ToolRegistry(tmp_path)
     registry.plan_review.begin_turn(required=True)
     registry._mcp_tools.register_tool_def(
         {
@@ -123,7 +121,7 @@ def test_extensible_mutation_tool_obeys_the_same_effect_based_gate(tmp_path: Pat
 
 def test_mutation_allowed_once_plan_review_is_not_required(tmp_path: Path) -> None:
     """Sanity check: the gate is Plan-Review-specific, not a general block."""
-    registry = ToolRegistry(tmp_path, mode="single")
+    registry = ToolRegistry(tmp_path)
     assert registry.plan_review.required is False
 
     from aura.conversation.tools._types import ApprovalDecision

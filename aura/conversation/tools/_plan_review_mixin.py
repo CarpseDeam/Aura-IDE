@@ -5,7 +5,7 @@ approved (possibly user-edited) plan as an ordinary tool result, so the same
 model resumes the same turn through the normal history/tool-result path. No
 synthetic second user message, no second conversation.
 
-The actual worker-thread <-> GUI synchronization lives behind a
+The actual execution-thread <-> GUI synchronization lives behind a
 ``PlanReviewProxy``-shaped object the registry is wired to via
 ``set_plan_review_proxy`` (see ``aura/bridge/plan_review_proxy.py``). Without
 one connected — e.g. a headless registry in a test — the call fails closed

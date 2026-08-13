@@ -1,6 +1,6 @@
 # Drone Construction Spec
 
-You are building a **Drone** — a single-verb, reusable worker that lives as a folder on disk. A Drone does one job, reads JSON from stdin, writes JSON to stdout, and leaves a receipt that proves what it did.
+You are building a **Drone** — a single-verb, reusable process that lives as a folder on disk. A Drone does one job, reads JSON from stdin, writes JSON to stdout, and leaves a receipt that proves what it did.
 
 ## Folder structure
 
@@ -54,7 +54,7 @@ Two different things flow into a Drone. Don't confuse them.
 - **id**: lowercase slug, hyphens only. Must match the folder name.
 - **name**: human-readable, title case.
 - **description**: one sentence. What it does, not how.
-- **instructions**: operational detail. What the goal string should contain, what formats it accepts, what the output shape means. The runner and the planner both read this to know how to invoke the Drone.
+- **instructions**: operational detail. What the goal string should contain, what formats it accepts, what the output shape means. The runner and the production model both read this to know how to invoke the Drone.
 - **write_policy**: `read_only` for pure reads/analysis. `normal_diff_approval` for anything that modifies files, pushes, or has side effects. `ask_before_writes` for sensitive writes that need per-action confirmation.
 - **input_contract**: optional JSON Schema describing expected input shape. Do NOT include runtime fields (`goal`, `workspace_root`, `drone_id`, `upstream`) — the runner always injects those; they are never part of a contract.
 - **cargo_contract**: optional JSON Schema describing structured intermediate data. This is informational metadata, not a routing contract.
@@ -126,7 +126,7 @@ if __name__ == "__main__":
 
 1. **Single verb.** The Drone does one thing. If you're tempted to add a mode switch or a flag that changes behavior, you need two Drones.
 
-2. **Parse the goal string for parameters.** The goal is prose from the planner or user. Extract structured values from it using simple line parsing (e.g. `target_file: path/to/file`). Document what goal lines you expect in the manifest's `instructions` field.
+2. **Parse the goal string for parameters.** The goal is prose from the model or user. Extract structured values from it using simple line parsing (e.g. `target_file: path/to/file`). Document what goal lines you expect in the manifest's `instructions` field.
 
 3. **Workspace-relative paths only.** Resolve everything against `workspace_root`. Validate that resolved paths don't escape the workspace (path traversal check).
 

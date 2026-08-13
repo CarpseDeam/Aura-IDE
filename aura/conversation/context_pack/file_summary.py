@@ -1,4 +1,4 @@
-"""Read-only target-file summaries for the Worker Context Pack."""
+"""Read-only target-file summaries for the Execution Context Pack."""
 
 from __future__ import annotations
 

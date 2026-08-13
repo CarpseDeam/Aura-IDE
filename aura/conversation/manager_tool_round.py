@@ -32,10 +32,9 @@ from aura.conversation.tool_runner import ToolRunner
 from aura.conversation.tools._types import ApprovalCallback
 from aura.conversation.tools.effects import ToolEffect
 from aura.conversation.tools.registry import ToolRegistry
-from aura.events import EventBus
-from aura.lifecycle import LifecycleHooks
-from aura.skills.turn_state import SkillTurnState
 from aura.conversation.validation_orchestrator import ValidationCommandSpec
+from aura.events import EventBus
+from aura.skills.turn_state import SkillTurnState
 
 EventCallback = Callable[[Event], None]
 
@@ -187,13 +186,11 @@ class ToolRoundRunner:
         history: History,
         tools: ToolRegistry,
         tool_runner: ToolRunner,
-        lifecycle: LifecycleHooks | None = None,
         event_bus: EventBus | None = None,
     ) -> None:
         self._history = history
         self._tools = tools
         self._tool_runner = tool_runner
-        self._lifecycle = lifecycle
         self._event_bus = event_bus
         # Approval bookkeeping: the user answered "reject all writes" for the
         # current turn. Not policy — it is the user's own decision, relayed.
@@ -319,7 +316,7 @@ class ToolRoundRunner:
                 # Last-resort containment: an unexpected exception from any
                 # task processor (executor, terminal) becomes one redacted
                 # internal error result instead of crashing the round or the
-                # worker.
+                # execution.
                 from aura.config import redact_secrets
 
                 redacted = redact_secrets(f"{type(exc).__name__}: {exc}")
@@ -493,7 +490,7 @@ class ToolRoundRunner:
             )
         except Exception as exc:
             # A handler bug must never escape the tool round or crash the
-            # worker: it becomes a redacted internal error result for this one
+            # execution: it becomes a redacted internal error result for this one
             # call.  Only the exception type is exposed to the model; the
             # message is redacted of known secrets.
             from aura.config import redact_secrets

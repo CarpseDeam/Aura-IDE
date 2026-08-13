@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
 )
 
 from aura.config import AppSettings
-from aura.context_gearbox.models import RuntimeRole
 from aura.context_gearbox.runtime import (
     diagnose_custom_prompt,
     format_custom_prompt_diagnostics,
@@ -25,7 +24,7 @@ class PromptsPage(QWidget):
         super().__init__(parent)
         self._settings = settings
 
-        from aura.prompts import SINGLE_SYSTEM_PROMPT as _SINGLE_PROMPT
+        from aura.prompts import PRODUCTION_SYSTEM_PROMPT
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -51,11 +50,9 @@ class PromptsPage(QWidget):
         note.setWordWrap(True)
         form.addRow("", note)
 
-        # The normal product has one production agent. Legacy Planner/Worker
-        # prompt fields remain persisted but are intentionally not exposed.
         self._single_prompt_edit = QPlainTextEdit()
         self._single_prompt_edit.setFixedHeight(120)
-        self._single_prompt_edit.setPlaceholderText(_SINGLE_PROMPT[:80] + "...")
+        self._single_prompt_edit.setPlaceholderText(PRODUCTION_SYSTEM_PROMPT[:80] + "...")
         self._single_prompt_edit.setPlainText(self._settings.system_prompt)
         single_reset_btn = QPushButton("Reset")
         single_reset_btn.clicked.connect(lambda: self._single_prompt_edit.clear())
@@ -82,7 +79,7 @@ class PromptsPage(QWidget):
 
     def _refresh_diagnostics(self) -> None:
         diagnostics = diagnose_custom_prompt(
-            RuntimeRole.SINGLE, self._single_prompt_edit.toPlainText()
+            self._single_prompt_edit.toPlainText()
         )
         self._diagnostics_label.setText(format_custom_prompt_diagnostics(diagnostics))
 

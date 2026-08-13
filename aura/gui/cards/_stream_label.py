@@ -6,9 +6,9 @@ import html as _html
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QLabel, QSizePolicy
 
+from aura.gui.execution_log_stream.formatter import normalize_assistant_display_text
 from aura.gui.markdown_renderer import _render_markdown_with_code
 from aura.gui.theme import FG, FG_ITALIC
-from aura.gui.worker_log_stream.formatter import normalize_assistant_display_text
 
 
 class _StreamLabel(QLabel):

@@ -1,4 +1,4 @@
-"""Dataclasses for Worker Context Pack sections and results."""
+"""Dataclasses for Execution Context Pack sections and results."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 @dataclass
 class ContextPackSection:
-    """A single named section within a Worker Context Pack."""
+    """A single named section within a Execution Context Pack."""
 
     heading: str
     body_lines: list[str]
@@ -16,7 +16,7 @@ class ContextPackSection:
 
 @dataclass
 class ContextPackResult:
-    """The assembled result of building a Worker Context Pack."""
+    """The assembled result of building a Execution Context Pack."""
 
     sections: list[ContextPackSection] = field(default_factory=list)
     truncated: bool = False

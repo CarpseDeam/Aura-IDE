@@ -41,7 +41,7 @@ CAPABILITY_TOOLS: dict[str, frozenset[str]] = {
     CORE_SEARCH: frozenset({"grep_search", "search_codebase"}),
     CORE_EDIT: frozenset({"write_file", "patch_file", "delete_file"}),
     CORE_TERMINAL: frozenset({"run_terminal_command", "run_and_watch"}),
-    CORE_TODO: frozenset({"update_worker_todo"}),
+    CORE_TODO: frozenset({"update_task_checklist"}),
     CORE_WEB: frozenset({"web_search"}),
     # Superseded by read_file's offset/limit and by parallel read_file calls.
     BULK_READ: frozenset({

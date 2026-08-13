@@ -3,7 +3,6 @@ from aura.conversation.tools._types import (
     ApprovalDecision,
     ApprovalFileChange,
     ApprovalRequest,
-    RegistryMode,
     ToolExecResult,
 )
 
@@ -20,6 +19,5 @@ __all__ = [
     "ApprovalDecision",
     "ApprovalFileChange",
     "ApprovalRequest",
-    "RegistryMode",
     "ToolExecResult",
 ]

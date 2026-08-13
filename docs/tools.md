@@ -54,20 +54,12 @@ Each tool call goes through a circuit breaker that tracks consecutive timeouts o
 |-------------------------|----------------------------------------------|---------------------------------------|
 | `run_terminal_command`  | Execute a read-only diagnostic command       | `command`, `timeout`, `description`    |
 
-This tool is available to the Planner and Drones. Worker may also use it. Output is truncated at 100 KB. Rejects mutating or dangerous commands.
+The production model uses this tool for workspace commands. Output is truncated at 100 KB. Rejects mutating or dangerous commands.
 
-## Worker Display
+## Execution Display
 
 | Tool                 | Description                                  | Parameters |
 |----------------------|----------------------------------------------|------------|
-| `update_worker_todo` | (Worker only) Publish the live TODO snapshot | `items`    |
+| `update_task_checklist` | Publish the live task checklist snapshot | `items`    |
 
-The TODO snapshot is display-only. It does not gate execution, decide completion, or persist as the Worker receipt.
-
-## Dispatch
-
-| Tool                 | Description                                           | Parameters                                                   |
-|----------------------|-------------------------------------------------------|--------------------------------------------------------------|
-| `dispatch_to_worker` | (Planner only) Dispatch a spec to the Worker          | `goal`, `files`, `spec`, `acceptance`, `summary`, plus optional structured fields |
-
-Only available to the Planner agent. Triggers the full Worker cycle with its own tool budget.
+The checklist is display-only progress tracking for one continuous request. It does not gate execution, partition reasoning, or decide completion.

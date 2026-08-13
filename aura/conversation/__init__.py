@@ -1,10 +1,10 @@
 """Conversation history and the tool-loop manager."""
 
-from aura.conversation.history import History
-from aura.conversation.worker_outcome import (
-    WorkerOutcomeStatus,
+from aura.conversation.execution_outcome import (
+    ExecutionOutcomeStatus,
     normalize_outcome_status,
 )
+from aura.conversation.history import History
 
 
 def __getattr__(name: str):
@@ -18,6 +18,6 @@ def __getattr__(name: str):
 __all__ = [
     "History",
     "ConversationManager",
-    "WorkerOutcomeStatus",
+    "ExecutionOutcomeStatus",
     "normalize_outcome_status",
 ]

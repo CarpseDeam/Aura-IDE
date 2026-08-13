@@ -1,4 +1,4 @@
-"""Structured parsing and classification for Worker validation commands."""
+"""Structured parsing and classification for Execution validation commands."""
 from __future__ import annotations
 
 import re
@@ -109,7 +109,7 @@ class ValidationCommand:
     command: str
     cwd: str = ""
     expected_outcome: str = ""
-    source: str = "worker_command"
+    source: str = "execution_command"
     normalized: bool = False
     normalization_reason: str = ""
 
@@ -145,7 +145,7 @@ class ValidationRunResult:
     counts_as_product_failure: bool = False
     user_action: str = ACTION_RETRY
     expected_outcome: str = ""
-    source: str = "worker_command"
+    source: str = "execution_command"
     normalized: bool = False
     normalization_reason: str = ""
     command_outcome_classification: str = ""
@@ -214,7 +214,7 @@ class TerminalRunClassification:
         }
 
 
-def parse_validation_command(raw_text: str, *, source: str = "worker_command") -> ValidationCommand:
+def parse_validation_command(raw_text: str, *, source: str = "execution_command") -> ValidationCommand:
     raw = str(raw_text or "").strip()
     if not raw:
         return ValidationCommand(raw_text=raw, command="", source=source, normalization_reason="empty validation text")
@@ -303,7 +303,7 @@ def classify_validation_run(
             user_action=ACTION_FIX_VALIDATION_COMMAND,
         )
 
-    if failure_class in {"source_inspection_command_blocked", "worker_terminal_not_validation"}:
+    if failure_class in {"source_inspection_command_blocked", "execution_terminal_not_validation"}:
         return _result(validation_command, exit_code, output_text, POLICY_BLOCKED, user_action=ACTION_FIX_VALIDATION_COMMAND)
     if failure_class == VALIDATION_COMMAND_UNRUNNABLE:
         return _result(
@@ -401,7 +401,7 @@ def classify_validation_run(
 def classify_validation_payload(payload: dict[str, Any]) -> ValidationRunResult:
     raw_text = str(payload.get("validation_raw_text") or payload.get("raw_text") or payload.get("requested_command") or payload.get("command") or "")
     command_text = str(payload.get("command") or "")
-    parsed = parse_validation_command(raw_text, source=str(payload.get("validation_source") or "worker_command"))
+    parsed = parse_validation_command(raw_text, source=str(payload.get("validation_source") or "execution_command"))
     if command_text:
         parsed = ValidationCommand(
             raw_text=parsed.raw_text or raw_text,
@@ -554,7 +554,7 @@ class CommandOutcome:
     """Structured classification of a terminal command outcome.
 
     Provides stable, contextual classification that downstream logic
-    (Worker, finalization, event relay) can use without re-parsing
+    (conversation execution, finalization, event relay) can use without re-parsing
     raw terminal output.
 
     Attributes:

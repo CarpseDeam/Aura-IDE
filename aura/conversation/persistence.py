@@ -1,14 +1,9 @@
 """Conversation persistence — JSON files in `<workspace>/.aura/conversations/`.
 
 Schema:
-- Single-model conversation. {version, model, thinking, system_prompt,
+- One-model conversation. {version, model, thinking, system_prompt,
   messages, chat_items, provider, ...}.
 
-Old v2 files may carry planner_worker_mode, planner_model, worker_model,
-planner_thinking, worker_thinking, planner_provider, worker_provider, and
-worker_dispatches. Those legacy keys are ignored on load and never written
-again — old conversations are preserved by their messages, chat_items,
-provider, model, and thinking.
 """
 from __future__ import annotations
 
@@ -19,8 +14,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
-from aura.paths import safe_is_relative_to
 
 from aura.config import (
     DEFAULT_MODEL,
@@ -34,6 +27,7 @@ from aura.conversation.chat_transcript import (
 )
 from aura.conversation.history import History
 from aura.git_ops import ensure_aura_gitignored
+from aura.paths import safe_is_relative_to
 from aura.providers.base import THINKING_MODES
 from aura.providers.registry import provider_registry
 
@@ -180,11 +174,6 @@ def load_conversation(path: Path) -> LoadedConversation:
     provider: ProviderId = "deepseek"
     if isinstance(provider_raw, str) and provider_registry.has(provider_raw):
         provider = provider_raw  # type: ignore[assignment]
-
-    # Obsolete Planner/Worker keys (planner_worker_mode, planner_model,
-    # worker_model, planner_thinking, worker_thinking, planner_provider,
-    # worker_provider, worker_dispatches) are deliberately ignored: old
-    # conversations load by their single-model fields only.
 
     return LoadedConversation(
         history=history,

@@ -9,7 +9,7 @@ from collections import Counter, deque
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QObject, QEvent, QTimer, Qt
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer
 from PySide6.QtWidgets import QApplication, QWidget
 
 from aura.startup_logging import logs_dir
@@ -87,32 +87,17 @@ class GuiEventProbe(QObject):
         self.mark(name, **payload)
         self._schedule_dump(name)
 
-    def on_worker_activity(self, tool_call_id: str, entries: list) -> None:
-        if not isinstance(entries, list):
-            return
-        new_entries = entries[self._seen_activity :]
-        self._seen_activity = len(entries)
-        for entry in new_entries:
-            if not isinstance(entry, dict):
-                continue
-            kind = str(entry.get("kind") or "")
-            if kind in {"artifact_item_ready", "artifact_item_completed", "artifact_item_blocked", "artifact_item_done"}:
-                self.mark_and_dump(
-                    f"activity_{kind}",
-                    tool_call_id=tool_call_id,
-                    artifact_item_id=entry.get("artifact_item_id", ""),
-                    artifact_id=entry.get("artifact_id", ""),
-                    message=entry.get("message", ""),
-                )
+    def on_execution_activity(self, tool_call_id: str, entries: list) -> None:
+        self._seen_activity = len(entries) if isinstance(entries, list) else 0
 
-    def on_worker_todo(self, tool_call_id: str, items: list) -> None:
+    def on_task_checklist(self, tool_call_id: str, items: list) -> None:
         self.mark_and_dump(
-            "worker_todo_updated",
+            "task_checklist_updated",
             tool_call_id=tool_call_id,
             item_count=len(items) if isinstance(items, list) else -1,
         )
 
-    def on_worker_usage(
+    def on_execution_usage(
         self,
         tool_call_id: str,
         model: str,
@@ -122,7 +107,7 @@ class GuiEventProbe(QObject):
         miss: int,
     ) -> None:
         self.mark_and_dump(
-            "worker_usage",
+            "execution_usage",
             tool_call_id=tool_call_id,
             model=model,
             prompt=prompt,
@@ -207,17 +192,17 @@ def install_gui_event_probe(window: QWidget, bridge: QObject) -> GuiEventProbe |
     probe = GuiEventProbe(window, parent=window)
     probe.install()
 
-    _connect_if_present(bridge, "workerStarted", lambda tid: probe.mark_and_dump("worker_started", tool_call_id=tid))
-    _connect_if_present(bridge, "workerFinished", lambda tid, ok, summary, followup, status: probe.mark_and_dump(
-        "worker_finished",
+    _connect_if_present(bridge, "executionStarted", lambda tid: probe.mark_and_dump("execution_started", tool_call_id=tid))
+    _connect_if_present(bridge, "executionFinished", lambda tid, ok, summary, followup, status: probe.mark_and_dump(
+        "execution_finished",
         tool_call_id=tid,
         ok=ok,
         needs_followup=followup,
         status=status,
     ))
-    _connect_if_present(bridge, "workerActivityUpdated", probe.on_worker_activity)
-    _connect_if_present(bridge, "workerTodoUpdated", probe.on_worker_todo)
-    _connect_if_present(bridge, "workerUsage", probe.on_worker_usage)
+    _connect_if_present(bridge, "executionActivityUpdated", probe.on_execution_activity)
+    _connect_if_present(bridge, "taskChecklistUpdated", probe.on_task_checklist)
+    _connect_if_present(bridge, "executionUsage", probe.on_execution_usage)
     return probe
 
 

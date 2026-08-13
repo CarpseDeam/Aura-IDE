@@ -31,7 +31,7 @@ Enable **Aura Editor Bridge** in Godot afterward. The bridge listens only on
 6. `capture_godot_asset_preview` validates a live editor viewport capture and returns bounded local
    structural evidence without putting image bytes into conversation history.
 7. A personal, unpackaged `.aura/tools` integration may optionally ask loopback Ollama for aesthetic
-   observations; the existing Worker remains the decision owner.
+   observations; the existing Execution remains the decision owner.
 8. `edit_godot_editor` with `action: "save"` saves the active scene only when explicitly requested.
 9. Aura inspects again and compares the resulting live state.
 

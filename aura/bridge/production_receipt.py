@@ -1,7 +1,7 @@
 """Completion receipt for one direct production execution turn.
 
 The receipt is built from structured execution evidence collected by
-``WorkerEventRelay`` (the authoritative execution ledger) — applied and
+``ExecutionEventRelay`` (the authoritative execution ledger) — applied and
 rejected writes, commands run, validation classification, external process
 exit status, cancellation, and the final model response.
 

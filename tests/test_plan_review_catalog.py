@@ -19,18 +19,18 @@ def _tool_names(tool_defs: list[dict]) -> set[str]:
 
 
 def test_production_catalog_omits_review_tool_by_default(tmp_path: Path) -> None:
-    registry = ToolRegistry(tmp_path, mode="single")
+    registry = ToolRegistry(tmp_path)
     assert TOOL_NAME not in _tool_names(registry.tool_defs())
 
 
 def test_production_catalog_exposes_review_tool_when_plan_review_required(tmp_path: Path) -> None:
-    registry = ToolRegistry(tmp_path, mode="single")
+    registry = ToolRegistry(tmp_path)
     registry.plan_review.begin_turn(required=True)
     assert TOOL_NAME in _tool_names(registry.tool_defs())
 
 
 def test_read_only_catalog_never_exposes_review_tool(tmp_path: Path) -> None:
-    registry = ToolRegistry(tmp_path, mode="single", read_only=True)
+    registry = ToolRegistry(tmp_path, read_only=True)
     registry.plan_review.begin_turn(required=True)
     assert TOOL_NAME not in _tool_names(registry.tool_defs())
 
@@ -50,7 +50,7 @@ def test_catalog_exposure_tracks_the_frozen_turn_flag_not_a_live_toggle(tmp_path
     ``test_plan_review_tool_flow.py``). Here we only prove the catalog
     reflects whatever the frozen flag currently says.
     """
-    registry = ToolRegistry(tmp_path, mode="single")
+    registry = ToolRegistry(tmp_path)
     registry.plan_review.begin_turn(required=True)
     assert TOOL_NAME in _tool_names(registry.tool_defs())
     registry.plan_review.begin_turn(required=False)

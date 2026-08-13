@@ -6,8 +6,8 @@ bus event emission for classified vs unclassified validation commands.
 
 from __future__ import annotations
 
-from aura.bridge.event_relay_terminal_tracking import EventRelayTerminalTracker
-from aura.events import WORKER_COMMAND_FINISHED, WORKER_VALIDATION_FINISHED
+from aura.bridge.execution_event_terminal_tracking import EventRelayTerminalTracker
+from aura.events import EXECUTION_COMMAND_FINISHED, EXECUTION_VALIDATION_FINISHED
 
 
 def _make_tracker() -> tuple[EventRelayTerminalTracker, list[tuple[str, dict]]]:
@@ -45,10 +45,10 @@ class TestEventRelayTerminalTracker:
         # Check bus events — both command finished and validation finished
         assert len(events) == 2
         cmd_topic, cmd_payload = events[0]
-        assert cmd_topic == WORKER_COMMAND_FINISHED
+        assert cmd_topic == EXECUTION_COMMAND_FINISHED
         assert cmd_payload["ok"] is True
         val_topic, val_payload = events[1]
-        assert val_topic == WORKER_VALIDATION_FINISHED
+        assert val_topic == EXECUTION_VALIDATION_FINISHED
         assert val_payload["ok"] is True
 
     def test_failing_classified_validation(self) -> None:
@@ -74,7 +74,7 @@ class TestEventRelayTerminalTracker:
 
         # Bus event — validation finished with ok=False
         val_topic, val_payload = events[1]
-        assert val_topic == WORKER_VALIDATION_FINISHED
+        assert val_topic == EXECUTION_VALIDATION_FINISHED
         assert val_payload["ok"] is False
 
     def test_non_validation_command_skipped(self) -> None:
@@ -99,10 +99,10 @@ class TestEventRelayTerminalTracker:
         # Bus event — validation_finished should only fire if the heuristic
         # detected it; if it didn't, there's only 1 event.  Either way the
         # validation_ok must not be True.
-        cmd_events = [(t, p) for t, p in events if t == WORKER_COMMAND_FINISHED]
+        cmd_events = [(t, p) for t, p in events if t == EXECUTION_COMMAND_FINISHED]
         assert len(cmd_events) == 1
         for t, p in events:
-            if t == WORKER_VALIDATION_FINISHED:
+            if t == EXECUTION_VALIDATION_FINISHED:
                 assert p["ok"] is False
 
     def test_passing_with_command_outcome_classification(self) -> None:

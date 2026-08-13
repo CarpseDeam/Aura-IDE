@@ -146,7 +146,7 @@ class ToolExecutor:
             )
         except Exception as exc:
             # A handler bug must never escape the tool round or crash a
-            # worker: it becomes a redacted internal error result for this
+            # execution: it becomes a redacted internal error result for this
             # one call.  The model learns the failure class and that an
             # exception happened; the exception type name is the only detail
             # surfaced and the message is redacted of known secrets.

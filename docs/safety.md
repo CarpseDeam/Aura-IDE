@@ -23,10 +23,10 @@ Before every write operation, the existing file is backed up to `.aura/backups/<
 
 ## Git Integration
 
-- **Auto-commit** — After each Worker cycle, changed files are committed with an AI-generated message (enabled by default)
-- **`/undo`** — Soft-resets the last commit and restores the pre-worker snapshot. Type `/undo` in the input panel.
+- **Auto-commit** — After each Execution cycle, changed files are committed with an AI-generated message (enabled by default)
+- **`/undo`** — Soft-resets the last commit and restores the pre-execution snapshot. Type `/undo` in the input panel.
 - **`git_init`** — Initialize a git repo in the workspace if one doesn't exist
-- **Snapshot/Restore** — Pre-worker snapshots are created automatically. Use `/undo` to restore.
+- **Snapshot/Restore** — Pre-execution snapshots are created automatically. Use `/undo` to restore.
 - **`.gitignore`** — Aura adds `.aura/` to `.gitignore` automatically on workspace open
 
 ## Read-Only Mode
@@ -45,4 +45,4 @@ Environment variables take precedence over encrypted storage. If both exist, the
 
 ## Philosophy
 
-Aura treats AI-generated code changes like a teammate's pull request. Every change is visible, reversible, and understandable. The guardrails (diff approval, backups, encryption, read-only mode) exist to protect your work without getting in the way. If you trust the model, you can reduce friction (auto-approve, auto-dispatch). If you're exploring, you can lock everything down (read-only mode, manual approval).
+Aura treats AI-generated code changes like a teammate's pull request. Every change is visible, reversible, and understandable. The guardrails (diff approval, backups, encryption, read-only mode) exist to protect your work without getting in the way. If you trust the model, you can reduce friction with auto-approve. If you're exploring, you can lock everything down with read-only mode and manual approval.

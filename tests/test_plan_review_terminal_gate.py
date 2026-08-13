@@ -50,7 +50,7 @@ def tool_call(call_id: str, name: str, args: dict[str, Any]) -> dict[str, Any]:
 def make_runner(tmp_path: Path) -> tuple[ToolRoundRunner, ToolRegistry, History]:
     history = History()
     history.set_system("You are Aura's production coding agent.")
-    tools = ToolRegistry(workspace_root=tmp_path, mode="single")
+    tools = ToolRegistry(workspace_root=tmp_path)
     tool_runner = ToolRunner(history=history, workspace_root=tmp_path)
     runner = ToolRoundRunner(history=history, tools=tools, tool_runner=tool_runner)
     return runner, tools, history

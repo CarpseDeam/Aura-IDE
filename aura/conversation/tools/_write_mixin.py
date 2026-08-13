@@ -3,7 +3,6 @@
 Expected on self:
     _root: Path  (workspace root)
     _read_only: bool
-    _mode: RegistryMode
     _resolve_in_root(path: str) -> Path  (method on ToolRegistry)
     _refresh_code_intel_paths(paths) -> None  (method on ToolRegistry)
 
@@ -17,7 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from aura.conversation.path_utils import normalize_worker_path as _shared_normalize_worker_path
+from aura.conversation.path_utils import normalize_execution_path as _shared_normalize_execution_path
 
 # Import the registry module so we can look up functions at call time.
 # This creates a circular import, but Python handles it because
@@ -88,7 +87,6 @@ _AURA_DELETE_PROTECTED_PATHS = (
     ".aura/hazards.db",
     ".aura/handoffs",
     ".aura/memory.db",
-    ".aura/planner.txt",
     ".aura/project.json",
     ".aura/project_blueprint.md",
     ".aura/secrets",
@@ -113,7 +111,7 @@ _AURA_DELETE_PROTECTED_PREFIXES = (
 
 
 def _is_delete_protected_path(rel_path: str) -> bool:
-    normalized = _normalize_worker_path(rel_path).lstrip("/")
+    normalized = _normalize_execution_path(rel_path).lstrip("/")
     name = normalized.rsplit("/", 1)[-1]
     if normalized == ".git" or normalized.startswith(".git/"):
         return True
@@ -169,12 +167,12 @@ def _is_new_root_validation_scratch(root: Path, target: Path) -> bool:
 
 
 
-def _normalize_worker_path(path: str) -> str:
-    return _shared_normalize_worker_path(path)
+def _normalize_execution_path(path: str) -> str:
+    return _shared_normalize_execution_path(path)
 
 
 def _is_validation_scratch_path(path: str) -> bool:
-    normalized = _normalize_worker_path(path)
+    normalized = _normalize_execution_path(path)
     name = normalized.rsplit("/", 1)[-1]
     if not name.endswith(".py"):
         return False
@@ -184,7 +182,7 @@ def _is_validation_scratch_path(path: str) -> bool:
 
 
 def _is_aura_tmp_scratch_path(path: str) -> bool:
-    normalized = _normalize_worker_path(path)
+    normalized = _normalize_execution_path(path)
     return normalized.startswith(".aura/tmp/") and _is_validation_scratch_path(normalized)
 
 

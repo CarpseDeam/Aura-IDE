@@ -1,6 +1,5 @@
-"""``write_file``/``patch_file`` schema descriptions must match production SINGLE.
+"""``write_file``/``patch_file`` schema descriptions must match production.
 
-Production is one SINGLE coding agent now — no Planner/Worker/Craft modes.
 These tests prove the model-facing write-tool schemas describe only real
 runtime capabilities and constraints: no stale multi-mode wording, and no
 parameters that carry a documented rule the handlers don't actually enforce.
@@ -16,7 +15,7 @@ from aura.conversation.tools.schemas.write import FILESYSTEM_WRITE_TOOL_DEFS
 
 _APPROVE = lambda _req: ApprovalDecision(action="approve")  # noqa: E731
 
-_STALE_MODE_WORDS = ("worker mode", "craft", "planner")
+_STALE_MODE_WORDS = ("multiple modes", "separate execution role")
 
 
 def _tool_def(name: str) -> dict:
@@ -64,7 +63,7 @@ def test_write_file_overwrites_an_existing_file_with_only_path_and_content(
     are required to overwrite — prove the handler actually agrees."""
     target = tmp_path / "a.py"
     target.write_text("old = 1\n", encoding="utf-8")
-    reg = ToolRegistry(workspace_root=tmp_path, mode="single")
+    reg = ToolRegistry(workspace_root=tmp_path)
 
     result = reg._handle_write_file(
         {"path": "a.py", "content": "new = 2\n"},

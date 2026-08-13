@@ -2,29 +2,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
-
-
-class RuntimeRole(str, Enum):
-    SINGLE = "single"
-
-    @classmethod
-    def from_value(cls, value: "RuntimeRole | str") -> "RuntimeRole":
-        if isinstance(value, cls):
-            return value
-        normalized = str(value or "").strip().lower()
-        # "all", "default", and the retired Planner/Worker names all resolve to
-        # the one production role — old prompts and configs never fail to load.
-        if normalized in {"all", "default", "planner", "worker"}:
-            normalized = cls.SINGLE.value
-        return cls(normalized)
 
 
 @dataclass(frozen=True)
 class ContextSource:
     source_id: str
     kind: str
-    roles: tuple[RuntimeRole, ...]
     reason: str
     origin_paths: tuple[str, ...] = ()
 
@@ -33,7 +16,6 @@ class ContextSource:
 class ContextLedgerEntry:
     source_id: str
     kind: str
-    role: RuntimeRole
     reason: str
     included: bool
     char_count: int
@@ -67,7 +49,6 @@ class CustomPromptDiagnostics:
 
 @dataclass(frozen=True)
 class ComposedContext:
-    role: RuntimeRole
     system_prompt: str
     context_text: str
     ledger: tuple[ContextLedgerEntry, ...]

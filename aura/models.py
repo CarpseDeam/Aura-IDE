@@ -6,24 +6,9 @@ exists so that existing imports continue to work without changes.
 
 from __future__ import annotations
 
-from aura.providers.base import ModelInfo, ProviderId, ThinkingMode, ProviderSpec as ProviderConfig
-from aura.providers.catalog import (
-    PROVIDER_CATALOG as PROVIDERS_RAW,
-    DEEPSEEK_MODELS,
-    DEEPSEEK_PRICING,
-    OPENAI_MODELS,
-    OPENAI_PRICING,
-    ANTHROPIC_MODELS,
-    ANTHROPIC_PRICING,
-    OPENROUTER_MODELS,
-    OPENROUTER_PRICING,
-    DEFAULT_MODEL,
-    DEFAULT_THINKING,
-    DEFAULT_PLANNER_MODEL,
-    DEFAULT_WORKER_MODEL,
-    DEFAULT_PLANNER_THINKING,
-    DEFAULT_WORKER_THINKING,
-)
+from aura.providers.base import ProviderId, ThinkingMode  # noqa: F401
+from aura.providers.base import ProviderSpec as ProviderConfig
+from aura.providers.catalog import DEFAULT_MODEL, DEFAULT_THINKING  # noqa: F401
 from aura.providers.registry import provider_registry
 
 ModelId = str  # Any model string from any provider

@@ -5,10 +5,16 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal, QThread
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
-    QDialog, QFileDialog, QHBoxLayout, QLabel,
-    QLineEdit, QMessageBox, QPushButton, QVBoxLayout,
+    QDialog,
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
 )
 
 from aura.config import save_settings, save_workspace_root
@@ -402,7 +408,6 @@ class MainWindowWorkspaceController(QObject):
 
     def on_create_demo_project(self) -> None:
         """Create a tiny demo project suitable for first-time users."""
-        window = self._window
         home = Path.home()
         projects_root = home / "Documents" / "Aura Projects"
         demo_dir = projects_root / "hello-aura"
@@ -412,9 +417,9 @@ class MainWindowWorkspaceController(QObject):
         readme_content = (
             "# Hello, Aura\n\n"
             "This is a safe demo project for trying the "
-            "Planner \u2192 Worker \u2192 Diff \u2192 Validation loop.\n\n"
+            "Inspect \u2192 change \u2192 diff \u2192 validation loop.\n\n"
             "Use the input panel to ask Aura to add a small feature, "
-            "then review the diff and let the Worker validate it.\n"
+            "then review the diff and let the Execution validate it.\n"
         )
         (demo_dir / "README.md").write_text(readme_content, encoding="utf-8")
 

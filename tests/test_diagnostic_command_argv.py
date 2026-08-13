@@ -509,7 +509,7 @@ class TestStructuredRejectionPayload:
 class TestRegisteredDiagnosticExecution:
 
     def _registry(self, root: Path) -> ToolRegistry:
-        return ToolRegistry(workspace_root=root, mode="single")
+        return ToolRegistry(workspace_root=root)
 
     def test_a_real_venv_command_executes_from_a_path_with_spaces(
         self, tmp_path

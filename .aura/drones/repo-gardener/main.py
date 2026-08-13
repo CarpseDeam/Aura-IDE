@@ -8,24 +8,29 @@ import sys
 import traceback
 from pathlib import Path
 
+from caps import Appetite, is_editable, within_budget
 from mapper import (
     Candidate,
     FileHealth,
-    walk,
-    compute_file_health,
+    _collect_module_to_file,
+    _file_health_to_dict,
+    _resolve_from_module,
     build_import_graph,
+    compute_file_health,
     detect_unused_imports,
     rank_files,
-    _file_health_to_dict,
-    _collect_module_to_file,
-    _resolve_from_module,
+    walk,
 )
+from method_extractor import extract_method
 from picker import Chosen, pick, pick_refactor
-from caps import RUNTIME_SKIP, Appetite, is_editable, within_budget
-from planner import EditPlan, build_packet, request_plan, ExtractPlan, build_extract_packet, request_extract_plan
-from method_extractor import extract_method, ExtractResult
+from proposal import (
+    build_edit_request,
+    build_extract_request,
+    request_edit_proposal,
+    request_extract_proposal,
+)
 from remover import strip_import
-from verify import py_compile_check, import_resolves
+from verify import import_resolves, py_compile_check
 from writer import write_with_revert
 
 
@@ -347,7 +352,6 @@ def main() -> None:
             health = compute_file_health(rel_path, source, tree, fan_in, fan_out)
             health_map.append(health)
 
-            rel_stem = str(f.relative_to(target_root))
             candidates = detect_unused_imports(
                 f, source, tree,
                 exported_names=file_exported_map.get(str(f), frozenset()),
@@ -541,8 +545,8 @@ def main() -> None:
                 if src:
                     if tier2_chosen.kind == "simplify_function":
                         # --- Extract-method path (model identifies, deterministic moves) ---
-                        extract_packet = build_extract_packet(tier2_chosen, src)
-                        extract_plan = request_extract_plan(extract_packet)
+                        extract_packet = build_extract_request(tier2_chosen, src)
+                        extract_plan = request_extract_proposal(extract_packet)
                         model_calls = 1
                         tier2_plan = extract_plan
                         tier2_diffs = {}
@@ -629,8 +633,8 @@ def main() -> None:
                         # Find call sites (grep for the target detail)
                         call_sites = _find_call_sites(tier2_chosen, target_root)
 
-                        packet = build_packet(tier2_chosen, src, import_lines, call_sites)
-                        plan = request_plan(packet)
+                        packet = build_edit_request(tier2_chosen, src, import_lines, call_sites)
+                        plan = request_edit_proposal(packet)
                         model_calls = 1
                         tier2_plan = plan
 

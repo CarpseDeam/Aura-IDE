@@ -67,7 +67,6 @@ _CONTENT_STOPWORDS = {
     "verify",
     "when",
     "with",
-    "worker",
 }
 
 

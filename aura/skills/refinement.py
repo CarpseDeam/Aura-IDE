@@ -1,7 +1,7 @@
 """Reflective-refinement loop for the skills system.
 
-Derives candidates from outcome-join failures, calls the planner-tier
-LLM to reflect with hazard traces, and persists improved guard text
+Derives candidates from outcome-join failures, calls a reflector
+LLM with hazard traces, and persists improved guard text
 to .aura/skills/refined/ as new Skill entries.
 """
 
@@ -143,7 +143,7 @@ def _call_reflector(
     provider: str | None = None,
     model: str | None = None,
 ) -> str | None:
-    """Call the planner-tier LLM to reflect on a skill and failure traces.
+    """Call the reflector LLM to reflect on a skill and failure traces.
 
     Returns the rewritten guard text string on success, None on failure.
     """
@@ -301,7 +301,7 @@ def reflect_on_candidate(
     provider: str | None = None,
     model: str | None = None,
 ) -> str | None:
-    """Reflect on a single candidate using the planner LLM and hazard traces.
+    """Reflect on a single candidate using the reflector LLM and hazard traces.
 
     Returns the rewritten guard text string or None on failure.
     """

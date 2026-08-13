@@ -19,7 +19,6 @@ from dataclasses import dataclass
 
 import pytest
 
-from aura.context_gearbox.models import RuntimeRole
 from aura.context_gearbox.runtime import compose_system_prompt
 from aura.context_gearbox.sources import WINDOWS_COMPUTER_USE_CONTEXT
 from aura.conversation.tools import mcp_registry as mcp_registry_module
@@ -127,7 +126,7 @@ def fake_client(monkeypatch):
 
 @pytest.fixture
 def registry(tmp_path):
-    return ToolRegistry(tmp_path, mode="single")
+    return ToolRegistry(tmp_path)
 
 
 @dataclass
@@ -364,7 +363,7 @@ class TestConnection:
     def test_read_only_mode_exposes_only_the_observations(
         self, tmp_path, fake_client
     ):
-        registry = ToolRegistry(tmp_path, read_only=True, mode="single")
+        registry = ToolRegistry(tmp_path, read_only=True)
         manager = WindowsComputerUseManager(
             registry, install_resolver=lambda c, **kw: LOCAL_TEST_COMMAND
         )
@@ -565,7 +564,7 @@ class TestCollisions:
             "    return query\n",
             encoding="utf-8",
         )
-        registry = ToolRegistry(tmp_path, mode="single")
+        registry = ToolRegistry(tmp_path)
         assert "ui_find" in registry._dynamic_tools.scan()
 
         class Colliding(FakeMCPClient):
@@ -584,7 +583,7 @@ class TestCollisions:
     def test_a_dynamic_script_claiming_a_connected_server_name_is_refused(
         self, tmp_path, fake_client
     ):
-        registry = ToolRegistry(tmp_path, mode="single")
+        registry = ToolRegistry(tmp_path)
         manager = WindowsComputerUseManager(
             registry, install_resolver=lambda c, **kw: LOCAL_TEST_COMMAND
         )
@@ -641,7 +640,6 @@ class TestConnectedOnlyContext:
 
     def _prompt(self, tmp_path, capabilities):
         return compose_system_prompt(
-            RuntimeRole.SINGLE,
             "",
             tmp_path,
             active_capabilities=capabilities,

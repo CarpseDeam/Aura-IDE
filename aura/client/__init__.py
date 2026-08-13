@@ -1,10 +1,10 @@
 """DeepSeek streaming client and event types."""
 from aura.client.deepseek import DeepSeekClient
 from aura.client.events import (
-    ApiError,
     AgentProcessFinished,
     AgentProcessOutput,
     AgentProcessStarted,
+    ApiError,
     ContentDelta,
     Done,
     Event,
@@ -15,7 +15,6 @@ from aura.client.events import (
     ToolCallStart,
     ToolResult,
     Usage,
-    WorkerDispatchRequested,
 )
 
 __all__ = [
@@ -30,7 +29,6 @@ __all__ = [
     "Done",
     "ApiError",
     "ToolResult",
-    "WorkerDispatchRequested",
     "TerminalOutput",
     "AgentProcessStarted",
     "AgentProcessOutput",

@@ -1,4 +1,4 @@
-"""Deterministic Worker edit strategy selection and retry bookkeeping."""
+"""Deterministic Execution edit strategy selection and retry bookkeeping."""
 from __future__ import annotations
 
 import re
@@ -7,7 +7,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from aura.conversation.path_utils import normalize_worker_path
+from aura.conversation.path_utils import normalize_execution_path
 
 
 class EditMode(str, Enum):
@@ -48,7 +48,7 @@ class FileEditProfile:
         exists: bool = True,
         readable: bool = True,
     ) -> "FileEditProfile":
-        normalized_path = normalize_worker_path(path)
+        normalized_path = normalize_execution_path(path)
         char_count = len(content)
         line_count = content.count("\n") + (1 if content else 0)
         escape_score = _escape_score(content)
@@ -83,7 +83,7 @@ class FileEditProfile:
     @classmethod
     def unknown(cls, path: str, *, exists: bool = False, reason: str = "unknown") -> "FileEditProfile":
         return cls(
-            path=normalize_worker_path(path),
+            path=normalize_execution_path(path),
             exists=exists,
             readable=False,
             whole_file_allowed=not exists,
@@ -131,7 +131,7 @@ class EditRetryLedger:
         error: str = "",
     ) -> None:
         edit_mode = _coerce_mode(mode)
-        normalized_path = normalize_worker_path(path)
+        normalized_path = normalize_execution_path(path)
         normalized_failure = str(failure_class or "").strip()
         if edit_mode is None or not normalized_path or not normalized_failure:
             return
@@ -146,17 +146,17 @@ class EditRetryLedger:
         )
 
     def clear_path(self, path: str) -> None:
-        normalized_path = normalize_worker_path(path)
+        normalized_path = normalize_execution_path(path)
         self.records = [
             record for record in self.records if record.path != normalized_path
         ]
 
     def failures_for(self, path: str) -> list[EditFailureRecord]:
-        normalized_path = normalize_worker_path(path)
+        normalized_path = normalize_execution_path(path)
         return [record for record in self.records if record.path == normalized_path]
 
     def latest_failure(self, path: str) -> EditFailureRecord | None:
-        normalized_path = normalize_worker_path(path)
+        normalized_path = normalize_execution_path(path)
         for record in reversed(self.records):
             if record.path == normalized_path:
                 return record
@@ -261,7 +261,7 @@ def strategy_decision_for_attempt(
             path=path,
             failure_class="edit_strategy_exhausted",
             error=(
-                "Edit strategy is exhausted for this file. The Worker already used the "
+                "Edit strategy is exhausted for this file. The Execution already used the "
                 f"{latest.mode.value} strategy after {latest.failure_class}; stop and report the exact blocker."
             ),
             attempted_mode=attempted_mode,
@@ -310,7 +310,7 @@ def strategy_decision_for_attempt(
 
 
 def load_file_edit_profile(workspace_root: str | Path, path: str) -> FileEditProfile:
-    normalized_path = normalize_worker_path(path)
+    normalized_path = normalize_execution_path(path)
     if not normalized_path:
         return FileEditProfile.unknown(path, reason="missing_path")
     try:
@@ -347,8 +347,8 @@ def _decision(
 ) -> EditStrategyDecision:
     suggested_tool, suggested_action = _suggestion_for_mode(next_mode, path, profile)
     repair_context: dict[str, Any] = {
-        "path": normalize_worker_path(path),
-        "file": normalize_worker_path(path),
+        "path": normalize_execution_path(path),
+        "file": normalize_execution_path(path),
         "attempted_mode": attempted_mode.value,
         "next_mode": next_mode.value if next_mode else "none",
         "file_profile": {
@@ -368,7 +368,7 @@ def _decision(
             "error": latest.error,
         }
     return EditStrategyDecision(
-        path=normalize_worker_path(path),
+        path=normalize_execution_path(path),
         failure_class=failure_class,
         error=error,
         suggested_next_tool=suggested_tool,
@@ -395,7 +395,7 @@ def _suggestion_for_mode(
             "patch_file",
             (
                 "Make one focused repair on "
-                f"{normalize_worker_path(path)} using only the changed file and exact failure context."
+                f"{normalize_execution_path(path)} using only the changed file and exact failure context."
             ),
         )
     if mode == EditMode.WHOLE_FILE:

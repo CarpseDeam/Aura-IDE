@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .checklist import TASK_CHECKLIST_TOOL_DEF
 from .code_intel import (
     CODE_INTEL_AUDIT_TOOL_DEF,
     CODE_INTEL_DEPENDENTS_TOOL_DEF,
@@ -31,12 +32,11 @@ from .search import SEARCH_TOOL_DEFS
 from .skills import LOAD_SKILLS_TOOL_DEF
 from .snapshot import WORKSPACE_SNAPSHOT_TOOL_DEF
 from .terminal import DIAGNOSTIC_TOOL_DEF, RUN_AND_WATCH_TOOL_DEF, TERMINAL_TOOL_DEF
-from .todo import WORKER_TODO_TOOL_DEF
 from .web import WEB_SEARCH_TOOL_DEF
 from .write import FILESYSTEM_WRITE_TOOL_DEFS
 
-# These compositions retain the legacy model-facing order. Capability modules
-# own the definitions; this module only assembles the stable public lists.
+# Capability modules own the definitions; this module only assembles the
+# stable public lists.
 READ_TOOL_DEFS: list[dict[str, Any]] = [
     *GODOT_READ_TOOL_DEFS,
     *CORE_READ_TOOL_DEFS,
@@ -64,5 +64,5 @@ __all__ = [
     "REVIEW_IMPLEMENTATION_PLAN_TOOL_DEF",
     "RUN_AND_WATCH_TOOL_DEF", "RUN_READ_ONLY_DRONE_TOOL_DEF", "SEARCH_TOOL_DEFS",
     "SUMMON_DRONE_TOOL_DEF", "TERMINAL_TOOL_DEF", "WEB_SEARCH_TOOL_DEF",
-    "WORKER_TODO_TOOL_DEF", "WORKSPACE_SNAPSHOT_TOOL_DEF", "WRITE_TOOL_DEFS",
+    "TASK_CHECKLIST_TOOL_DEF", "WORKSPACE_SNAPSHOT_TOOL_DEF", "WRITE_TOOL_DEFS",
 ]

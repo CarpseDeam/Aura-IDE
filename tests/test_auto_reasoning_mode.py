@@ -279,17 +279,9 @@ class TestSettingsPersistence:
             "an explicit saved selection must survive verbatim"
         )
 
-    def test_legacy_planner_thinking_migrates_to_its_own_value_not_auto(self) -> None:
-        loaded = AppSettings.from_dict({"default_planner_thinking": "max"})
-        assert loaded.default_thinking == "max"
-
     def test_unset_deepseek_settings_default_to_auto(self) -> None:
         loaded = AppSettings.from_dict({"provider": "deepseek"})
         assert loaded.default_thinking == "auto"
-
-    def test_legacy_worker_thinking_values_still_load(self) -> None:
-        loaded = AppSettings.from_dict({"default_worker_thinking": "high"})
-        assert loaded.default_worker_thinking == "high"
 
 
 class TestConversationPersistence:

@@ -1,4 +1,4 @@
-"""Bridge between the (sync) ConversationManager worker thread and Qt's GUI thread.
+"""Bridge between the production ConversationManager thread and Qt's GUI thread.
 
 Normal Aura coding is one continuous production run:
 
@@ -13,7 +13,7 @@ Normal Aura coding is one continuous production run:
 - Every event is projected into the workspace through
   ``ProductionExecutionSession`` under one stable run id.
 - The approval callback is bridged via QMetaObject.invokeMethod with
-  Qt.BlockingQueuedConnection — the worker thread blocks until the user clicks
+  Qt.BlockingQueuedConnection — the conversation thread blocks until the user clicks
   in the modal dialog on the main thread.
 
 There is exactly one backend, one provider, one system prompt, one model, one
@@ -25,7 +25,6 @@ import copy
 import logging
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from PySide6.QtCore import (
     QObject,
@@ -51,9 +50,8 @@ from aura.config import (
     ProviderId,
     ThinkingMode,
 )
-from aura.context_gearbox.models import RuntimeRole
 from aura.context_gearbox.runtime import (
-    SINGLE_SYSTEM_PROMPT,
+    PRODUCTION_SYSTEM_PROMPT,
     compose_system_prompt,
     context_gearbox_metadata,
     diagnose_custom_prompt,
@@ -76,8 +74,8 @@ from aura.windows_mcp import WindowsComputerUseManager
 _log = logging.getLogger(__name__)
 
 
-class _Worker(QObject):
-    """Lives on the worker thread. Runs the production conversation loop."""
+class _ConversationRunner(QObject):
+    """Runs the production conversation loop on its dedicated Qt thread."""
 
     reasoningDelta = Signal(str)
     contentDelta = Signal(str)
@@ -153,10 +151,10 @@ class _Worker(QObject):
 
         Assistant prose is chat-owned and must reach ChatView through exactly
         one signal path, so ``ContentDelta`` surfaces here and is *not* also
-        projected into the workspace Worker Log.  Reasoning, tool calls, usage
+        projected into the workspace Execution Log.  Reasoning, tool calls, usage
         accounting, and every other execution fact stay workspace-owned: usage
         reaches the GUI accumulator once, through the execution ledger's
-        ``workerUsage`` path.
+        ``executionUsage`` path.
         """
         if isinstance(ev, ContentDelta):
             self.contentDelta.emit(ev.text)
@@ -187,29 +185,27 @@ class ConversationBridge(QObject):
     started = Signal()
     finished = Signal()
 
-    # Workspace projection signals (worker* names are compatibility aliases —
-    # the production execution session re-emits these so the existing
-    # WorkerEventHandler / AuraPlayground projection binds unchanged).
-    workerStarted = Signal(str)
-    workerFinished = Signal(str, bool, str, bool, str)
-    workerCancelled = Signal(str)
-    workerReasoningDelta = Signal(str, str)
-    workerContentDelta = Signal(str, str)
-    workerToolCallStart = Signal(str, str, str)
-    workerToolCallArgs = Signal(str, str, str)
-    workerToolCallEnd = Signal(str, str)
-    workerToolResult = Signal(str, str, str, bool, str, dict)
-    workerDiffDecided = Signal(str, str, str, str, str, str, bool)
-    workerApiError = Signal(str, int, str)
-    workerUsage = Signal(str, str, int, int, int, int)
-    workerActivityUpdated = Signal(str, list)  # Activity entries (append-only execution heartbeat)
-    workerTodoUpdated = Signal(str, list)  # Full Worker TODO snapshot
-    workerTerminalOutput = Signal(str, str, str)  # parent_tool_id, worker_tool_id, text
-    workerAgentProcessStarted = Signal(str, str, str, str)
-    workerAgentProcessOutput = Signal(str, str, str)
-    workerAgentProcessFinished = Signal(str, str, object)
+    # Workspace projection signals for the active production execution.
+    executionStarted = Signal(str)
+    executionFinished = Signal(str, bool, str, bool, str)
+    executionCancelled = Signal(str)
+    executionReasoningDelta = Signal(str, str)
+    executionContentDelta = Signal(str, str)
+    executionToolCallStart = Signal(str, str, str)
+    executionToolCallArgs = Signal(str, str, str)
+    executionToolCallEnd = Signal(str, str)
+    executionToolResult = Signal(str, str, str, bool, str, dict)
+    executionDiffDecided = Signal(str, str, str, str, str, str, bool)
+    executionApiError = Signal(str, int, str)
+    executionUsage = Signal(str, str, int, int, int, int)
+    executionActivityUpdated = Signal(str, list)  # Activity entries (append-only execution heartbeat)
+    taskChecklistUpdated = Signal(str, list)  # Full Task Checklist snapshot
+    executionTerminalOutput = Signal(str, str, str)  # parent_tool_id, execution_tool_id, text
+    executionAgentProcessStarted = Signal(str, str, str, str)
+    executionAgentProcessOutput = Signal(str, str, str)
+    executionAgentProcessFinished = Signal(str, str, object)
 
-    # Terminal output (single mode)
+    # Terminal output
     terminalOutput = Signal(str, str)  # tool_call_id, text
     agentProcessStarted = Signal(str, str, str)
     agentProcessOutput = Signal(str, str)
@@ -229,7 +225,7 @@ class ConversationBridge(QObject):
         model_streams.register(PRODUCTION_STREAM_HOOK, self._production_backend.stream)
 
         self._history = History()
-        self._registry = ToolRegistry(workspace_root=_dummy_root(), mode="single")
+        self._registry = ToolRegistry(workspace_root=_dummy_root())
         self._manager = ConversationManager(self._history, self._registry)
         # Owned here because this is where the production ToolRegistry lives —
         # the manager drives that registry's MCP seam and adds no table of its
@@ -254,7 +250,7 @@ class ConversationBridge(QObject):
 
         self._cancel: threading.Event = threading.Event()
         self._thread: QThread | None = None
-        self._worker: _Worker | None = None
+        self._conversation_runner: _ConversationRunner | None = None
         self._index_to_id: dict[int, str] = {}
         self._index_to_name: dict[int, str] = {}
         self._last_proposed_tool_call_id: str | None = None
@@ -264,9 +260,8 @@ class ConversationBridge(QObject):
         self._single_system_prompt: str = ""
         self._tier1_context: str = ""
         self._context_gearbox_metadata: dict = {}
-        self._custom_prompt_diagnostics = diagnose_custom_prompt(RuntimeRole.SINGLE, "")
-        self._pre_worker_sha: str | None = None
-        self._active_prompt_mode: str | None = None
+        self._custom_prompt_diagnostics = diagnose_custom_prompt("")
+        self._pre_execution_sha: str | None = None
         # Skill-selection terrain no longer carries a task kind: Aura does not
         # classify the request. Kept as a None-valued argument so the skill
         # pack simply applies no task-kind filter.
@@ -277,24 +272,24 @@ class ConversationBridge(QObject):
         # Re-emit production session signals on the same bridge signals so the
         # polished workspace projection binds once and stays role-neutral.
         session = self._production_session
-        session.workerStarted.connect(self.workerStarted)
-        session.workerFinished.connect(self.workerFinished)
-        session.workerCancelled.connect(self.workerCancelled)
-        session.workerReasoningDelta.connect(self.workerReasoningDelta)
-        session.workerContentDelta.connect(self.workerContentDelta)
-        session.workerToolCallStart.connect(self.workerToolCallStart)
-        session.workerToolCallArgs.connect(self.workerToolCallArgs)
-        session.workerToolCallEnd.connect(self.workerToolCallEnd)
-        session.workerToolResult.connect(self.workerToolResult)
-        session.workerDiffDecided.connect(self.workerDiffDecided)
-        session.workerApiError.connect(self.workerApiError)
-        session.workerUsage.connect(self.workerUsage)
-        session.workerActivityUpdated.connect(self.workerActivityUpdated)
-        session.workerTodoUpdated.connect(self.workerTodoUpdated)
-        session.workerTerminalOutput.connect(self.workerTerminalOutput)
-        session.workerAgentProcessStarted.connect(self.workerAgentProcessStarted)
-        session.workerAgentProcessOutput.connect(self.workerAgentProcessOutput)
-        session.workerAgentProcessFinished.connect(self.workerAgentProcessFinished)
+        session.executionStarted.connect(self.executionStarted)
+        session.executionFinished.connect(self.executionFinished)
+        session.executionCancelled.connect(self.executionCancelled)
+        session.executionReasoningDelta.connect(self.executionReasoningDelta)
+        session.executionContentDelta.connect(self.executionContentDelta)
+        session.executionToolCallStart.connect(self.executionToolCallStart)
+        session.executionToolCallArgs.connect(self.executionToolCallArgs)
+        session.executionToolCallEnd.connect(self.executionToolCallEnd)
+        session.executionToolResult.connect(self.executionToolResult)
+        session.executionDiffDecided.connect(self.executionDiffDecided)
+        session.executionApiError.connect(self.executionApiError)
+        session.executionUsage.connect(self.executionUsage)
+        session.executionActivityUpdated.connect(self.executionActivityUpdated)
+        session.taskChecklistUpdated.connect(self.taskChecklistUpdated)
+        session.executionTerminalOutput.connect(self.executionTerminalOutput)
+        session.executionAgentProcessStarted.connect(self.executionAgentProcessStarted)
+        session.executionAgentProcessOutput.connect(self.executionAgentProcessOutput)
+        session.executionAgentProcessFinished.connect(self.executionAgentProcessFinished)
 
     # ---- config -----------------------------------------------------------
 
@@ -324,10 +319,6 @@ class ConversationBridge(QObject):
         """Role-neutral result metadata accessor for the active execution."""
         return self._production_session.result_metadata(run_id)
 
-    def worker_result_metadata(self, tool_call_id: str) -> dict:
-        """Compatibility alias for ``execution_result_metadata``."""
-        return self.execution_result_metadata(tool_call_id)
-
     def context_gearbox_metadata(self) -> dict:
         return copy.deepcopy(self._context_gearbox_metadata)
 
@@ -356,27 +347,21 @@ class ConversationBridge(QObject):
     def set_system_prompt(self, prompt: str) -> None:
         """Store the custom production system prompt and reapply composition."""
         self._single_system_prompt = prompt or ""
-        composed = self._compose_prompt(self._active_runtime_role(), self._single_system_prompt)
+        composed = self._compose_prompt(self._single_system_prompt)
         self._history.set_system(composed.system_prompt)
 
     def refresh_tier1_context(self, force_repo_map: bool = False) -> None:
         """Refresh workspace context and reapply the active system prompt."""
-        role = self._active_runtime_role()
         composed = self._compose_prompt(
-            role,
             self._single_system_prompt,
             force_repo_map=force_repo_map,
         )
         self._history.set_system(composed.system_prompt)
 
-    def set_production_mode(self) -> None:
-        """Put the bridge in production single-agent mode (the normal product)."""
-        mode_key = "single"
-        self._registry.set_mode(mode_key)
-        role = self._active_runtime_role()
-        composed = self._compose_prompt(role, self._single_system_prompt)
+    def refresh_production_prompt(self) -> None:
+        """Recompose Aura's one production prompt."""
+        composed = self._compose_prompt(self._single_system_prompt)
         self._history.set_system(composed.system_prompt)
-        self._active_prompt_mode = mode_key
 
     def set_temperature(self, temperature: float) -> None:
         self._temperature = temperature
@@ -389,7 +374,7 @@ class ConversationBridge(QObject):
     def apply_windows_computer_use(self, settings) -> None:
         """Bring the Windows MCP connection in line with *settings*.
 
-        Returns immediately; connecting happens on the manager's worker.
+        Returns immediately; connecting happens on the manager's execution.
         """
         self._windows_computer_use.apply_settings(settings)
 
@@ -408,20 +393,14 @@ class ConversationBridge(QObject):
         """
         self._review_plan_before_changes = bool(enabled)
 
-    def _active_runtime_role(self) -> RuntimeRole:
-        """Normal coding always runs the production single-agent role."""
-        return RuntimeRole.SINGLE
-
     def _compose_prompt(
         self,
-        role: RuntimeRole,
         custom_prompt: str,
         *,
         force_repo_map: bool = False,
     ):
         """The one place a production system prompt is built and cached."""
         composed = compose_system_prompt(
-            role,
             custom_prompt,
             self._registry.workspace_root,
             force=force_repo_map,
@@ -434,10 +413,9 @@ class ConversationBridge(QObject):
         self._context_gearbox_metadata = context_gearbox_metadata(
             composed.ledger, workspace_root=self._registry.workspace_root,
         )
-        self._custom_prompt_diagnostics = diagnose_custom_prompt(role, custom_prompt)
+        self._custom_prompt_diagnostics = diagnose_custom_prompt(custom_prompt)
         _log.info(
-            "prompt_composed role=%s %s",
-            role.value,
+            "prompt_composed %s",
             format_custom_prompt_diagnostics(
                 self._custom_prompt_diagnostics,
                 effective_prompt_chars=len(composed.system_prompt),
@@ -489,14 +467,14 @@ class ConversationBridge(QObject):
             return thread.isRunning()
         except RuntimeError:
             self._thread = None
-            self._worker = None
+            self._conversation_runner = None
             return False
 
-    def get_pre_worker_snapshot(self) -> str | None:
-        return self._pre_worker_sha
+    def get_pre_execution_snapshot(self) -> str | None:
+        return self._pre_execution_sha
 
-    def clear_pre_worker_snapshot(self) -> None:
-        self._pre_worker_sha = None
+    def clear_pre_execution_snapshot(self) -> None:
+        self._pre_execution_sha = None
 
     # ---- send / cancel ----------------------------------------------------
 
@@ -524,9 +502,9 @@ class ConversationBridge(QObject):
         # Capture pre-run snapshot for reliable /undo.
         if self._registry.workspace_root is not None:
             from aura.git_ops import snapshot
-            self._pre_worker_sha = snapshot(self._registry.workspace_root)
+            self._pre_execution_sha = snapshot(self._registry.workspace_root)
         else:
-            self._pre_worker_sha = None
+            self._pre_execution_sha = None
         self._cancel = threading.Event()
         self._index_to_id.clear()
         self._index_to_name.clear()
@@ -534,12 +512,11 @@ class ConversationBridge(QObject):
             base_prompt = (
                 self._single_system_prompt
                 if self._single_system_prompt
-                else SINGLE_SYSTEM_PROMPT
+                else PRODUCTION_SYSTEM_PROMPT
             )
             self._manager.configure_runtime_context(
                 base_prompt=base_prompt,
                 workspace_root=self._registry.workspace_root,
-                role=RuntimeRole.SINGLE,
                 model=self._active_model or None,
                 task_kind=self._turn_task_kind,
                 content=self._turn_content or None,
@@ -550,7 +527,7 @@ class ConversationBridge(QObject):
         self._production_session.begin(model=str(model))
 
         self._thread = QThread()
-        self._worker = _Worker(
+        self._conversation_runner = _ConversationRunner(
             manager=self._manager,
             approval_proxy=self._approval_proxy,
             cancel_event=self._cancel,
@@ -560,23 +537,23 @@ class ConversationBridge(QObject):
             workspace_root=self._registry.workspace_root,
             production_session=self._production_session,
         )
-        self._worker.moveToThread(self._thread)
+        self._conversation_runner.moveToThread(self._thread)
 
-        self._worker.reasoningDelta.connect(self.reasoningDelta)
-        self._worker.contentDelta.connect(self.contentDelta)
-        self._worker.toolCallStart.connect(self._on_tool_call_start)
-        self._worker.toolCallArgs.connect(self._on_tool_call_args)
-        self._worker.toolCallEnd.connect(self._on_tool_call_end)
-        self._worker.apiError.connect(self.apiError)
-        self._worker.streamDone.connect(self.streamDone)
-        self._worker.toolResultEmitted.connect(self._on_tool_result)
-        self._worker.terminalOutput.connect(self.terminalOutput)
-        self._worker.agentProcessStarted.connect(self.agentProcessStarted)
-        self._worker.agentProcessOutput.connect(self.agentProcessOutput)
-        self._worker.agentProcessFinished.connect(self.agentProcessFinished)
-        self._worker.finished.connect(self._on_finished)
+        self._conversation_runner.reasoningDelta.connect(self.reasoningDelta)
+        self._conversation_runner.contentDelta.connect(self.contentDelta)
+        self._conversation_runner.toolCallStart.connect(self._on_tool_call_start)
+        self._conversation_runner.toolCallArgs.connect(self._on_tool_call_args)
+        self._conversation_runner.toolCallEnd.connect(self._on_tool_call_end)
+        self._conversation_runner.apiError.connect(self.apiError)
+        self._conversation_runner.streamDone.connect(self.streamDone)
+        self._conversation_runner.toolResultEmitted.connect(self._on_tool_result)
+        self._conversation_runner.terminalOutput.connect(self.terminalOutput)
+        self._conversation_runner.agentProcessStarted.connect(self.agentProcessStarted)
+        self._conversation_runner.agentProcessOutput.connect(self.agentProcessOutput)
+        self._conversation_runner.agentProcessFinished.connect(self.agentProcessFinished)
+        self._conversation_runner.finished.connect(self._on_finished)
 
-        self._thread.started.connect(self._worker.run)
+        self._thread.started.connect(self._conversation_runner.run)
         self.started.emit()
         self._thread.start()
 
@@ -635,9 +612,9 @@ class ConversationBridge(QObject):
     @Slot()
     def _on_finished(self) -> None:
         thread = self._thread
-        worker = self._worker
+        runner = self._conversation_runner
         self._thread = None
-        self._worker = None
+        self._conversation_runner = None
 
         # Exactly one completion receipt per production turn, built from the
         # run's structured execution evidence, then back to idle. A successful
@@ -647,11 +624,11 @@ class ConversationBridge(QObject):
         # Structured ``report_already_satisfied`` evidence and the turn's
         # production-action route are carried so the completion contract can
         # report truthfully.
-        blocked_reason = worker._blocked_reason if worker is not None else ""
+        blocked_reason = runner._blocked_reason if runner is not None else ""
         provider_contract_failure = (
-            worker._provider_contract_failure if worker is not None else False
+            runner._provider_contract_failure if runner is not None else False
         )
-        already_satisfied = worker._already_satisfied if worker is not None else False
+        already_satisfied = runner._already_satisfied if runner is not None else False
         try:
             self._production_session.finish(
                 blocked_reason=blocked_reason,
@@ -674,14 +651,14 @@ class ConversationBridge(QObject):
             _log.exception("Failed to surface skill activation ledger")
 
         try:
-            if worker is not None:
-                worker.deleteLater()
+            if runner is not None:
+                runner.deleteLater()
             if thread is not None:
                 thread.quit()
                 thread.wait(2000)
                 thread.deleteLater()
         except Exception:
-            _log.exception("Failed to clean up production worker thread")
+            _log.exception("Failed to clean up production conversation thread")
         finally:
             # Reference authorization is a production-turn capability, never
             # a session setting. Clear the root and its dedicated index before
@@ -699,8 +676,7 @@ class ConversationBridge(QObject):
         self._turn_content = _latest_user_text(self._history)
         if self._registry.workspace_root is None:
             return
-        role = self._active_runtime_role()
-        composed = self._compose_prompt(role, self._single_system_prompt)
+        composed = self._compose_prompt(self._single_system_prompt)
         self._history.set_system(composed.system_prompt)
         _log.info(
             "context_gearbox_turn_summary %s",

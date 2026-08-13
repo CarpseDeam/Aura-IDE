@@ -26,10 +26,9 @@ class EventBus:
         bus = EventBus()
 
         def on_artifact(event: AuraEvent) -> None:
-            print(f"  artifact {event.artifact_id} item {event.artifact_item_id}")
 
         unsub = bus.subscribe("work_artifact.item_ready", on_artifact)
-        bus.emit(AuraEvent(topic="work_artifact.item_ready", artifact_id="art-1", artifact_item_id="item-1"))
+        bus.emit(AuraEvent(topic="execution.tool_started", run_id="prod-1"))
         unsub()
     """
 

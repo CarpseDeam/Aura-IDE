@@ -1,6 +1,6 @@
-"""Tabbed code editor pane with syntax highlighting and worker edit animation.
+"""Tabbed code editor pane with syntax highlighting and execution edit animation.
 
-Each tab represents a file being written/edited by the worker.  Content is
+Each tab represents a file being written/edited by the execution.  Content is
 revealed progressively via QTimer-driven typing, and full-file edits animate
 as line-aware delete/retype transitions.
 """
@@ -105,7 +105,7 @@ class CodeEditorPane(QWidget):
         self._editors: dict[str, QPlainTextEdit] = {}
         self._typing_state: dict[str, dict] = {}
         self._tool_aliases: dict[str, str] = {}
-        self._worker_tabs_by_path: dict[str, str] = {}
+        self._execution_tabs_by_path: dict[str, str] = {}
         # Map tab index -> tool_id so we can clean up on close
         self._tab_index_to_tool_id: dict[int, str] = {}
         self._file_tabs: dict[Path, QPlainTextEdit] = {}
@@ -169,7 +169,7 @@ class CodeEditorPane(QWidget):
         """Create a new tab for *file_path* or focus an existing one.
 
         Args:
-            tool_id: Unique identifier for this tool call (worker_tool_id).
+            tool_id: Unique identifier for this tool call (execution_tool_id).
             file_path: Absolute or relative path to the file being edited.
         """
         # If a tab for this tool_id already exists, just focus it
@@ -180,10 +180,10 @@ class CodeEditorPane(QWidget):
                 self._tabs.setCurrentIndex(idx)
             return
 
-        path_key = self._worker_path_key(file_path)
+        path_key = self._execution_path_key(file_path)
         basename = Path(file_path).name
         language = language_from_path(file_path)
-        existing_tool_id = self._worker_tabs_by_path.get(path_key)
+        existing_tool_id = self._execution_tabs_by_path.get(path_key)
         existing_editor = (
             self._editors.get(existing_tool_id) if existing_tool_id is not None else None
         )
@@ -216,7 +216,7 @@ class CodeEditorPane(QWidget):
 
         self._editors[tool_id] = editor
         self._tool_aliases[tool_id] = tool_id
-        self._worker_tabs_by_path[path_key] = tool_id
+        self._execution_tabs_by_path[path_key] = tool_id
         self._tab_index_to_tool_id[idx] = tool_id
 
         streamer = SmoothCodeStreamer(editor, self)
@@ -258,7 +258,7 @@ class CodeEditorPane(QWidget):
         self._update_empty_state()
 
     def set_content(self, tool_id: str, content: str) -> None:
-        """Immediately show full content for an existing worker tab."""
+        """Immediately show full content for an existing execution tab."""
         canonical_tool_id = self._canonical_tool_id(tool_id)
         state = self._typing_state.get(canonical_tool_id)
         editor = self._editors.get(canonical_tool_id)
@@ -275,7 +275,7 @@ class CodeEditorPane(QWidget):
     def animate_content_transition(
         self, tool_id: str, old_content: str, new_content: str
     ) -> None:
-        """Animate a full-file transition for an existing worker tab."""
+        """Animate a full-file transition for an existing execution tab."""
         canonical_tool_id = self._canonical_tool_id(tool_id)
         state = self._typing_state.get(canonical_tool_id)
         editor = self._editors.get(canonical_tool_id)
@@ -349,7 +349,7 @@ class CodeEditorPane(QWidget):
         toward the new target.
 
         Args:
-            tool_id: The worker_tool_id previously passed to open_or_focus_tab.
+            tool_id: The execution_tool_id previously passed to open_or_focus_tab.
             content: The latest full content of the file.
         """
         canonical_tool_id = self._canonical_tool_id(tool_id)
@@ -368,7 +368,7 @@ class CodeEditorPane(QWidget):
         """Flush remaining characters immediately and mark the tab as done.
 
         Args:
-            tool_id: The worker_tool_id previously passed to open_or_focus_tab.
+            tool_id: The execution_tool_id previously passed to open_or_focus_tab.
         """
         canonical_tool_id = self._canonical_tool_id(tool_id)
         state = self._typing_state.get(canonical_tool_id)
@@ -404,7 +404,7 @@ class CodeEditorPane(QWidget):
         self._typing_state.clear()
         self._editors.clear()
         self._tool_aliases.clear()
-        self._worker_tabs_by_path.clear()
+        self._execution_tabs_by_path.clear()
         self._tab_index_to_tool_id.clear()
         self._file_tabs.clear()
         self._editor_file_paths.clear()
@@ -417,23 +417,23 @@ class CodeEditorPane(QWidget):
         self._tabs.blockSignals(False)
         self._update_empty_state()
 
-    def close_worker_tabs(self) -> None:
-        """Remove streaming worker tabs while preserving user-opened file tabs."""
+    def close_execution_tabs(self) -> None:
+        """Remove streaming execution tabs while preserving user-opened file tabs."""
         for state in self._typing_state.values():
             timer: QTimer = state["timer"]
             timer.stop()
             timer.deleteLater()
             state["streamer"].stop()
             state["streamer"].deleteLater()
-        worker_editors = list(dict.fromkeys(self._editors.values()))
+        execution_editors = list(dict.fromkeys(self._editors.values()))
         self._typing_state.clear()
         self._editors.clear()
         self._tool_aliases.clear()
-        self._worker_tabs_by_path.clear()
+        self._execution_tabs_by_path.clear()
         self._tab_index_to_tool_id.clear()
 
         self._tabs.blockSignals(True)
-        for editor in worker_editors:
+        for editor in execution_editors:
             idx = self._tabs.indexOf(editor)
             if idx >= 0:
                 self._tabs.removeTab(idx)
@@ -520,7 +520,7 @@ class CodeEditorPane(QWidget):
     def _canonical_tool_id(self, tool_id: str) -> str:
         return self._tool_aliases.get(tool_id, tool_id)
 
-    def _worker_path_key(self, file_path: str) -> str:
+    def _execution_path_key(self, file_path: str) -> str:
         return Path(file_path).as_posix()
 
     def _on_editor_context_menu(self, editor: QPlainTextEdit, pos) -> None:
@@ -663,7 +663,7 @@ class CodeEditorPane(QWidget):
                 timer.deleteLater()
                 state["streamer"].stop()
                 state["streamer"].deleteLater()
-                self._worker_tabs_by_path.pop(state.get("path_key", ""), None)
+                self._execution_tabs_by_path.pop(state.get("path_key", ""), None)
             aliases = [
                 tid for tid, canonical in self._tool_aliases.items()
                 if canonical == tool_id

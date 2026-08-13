@@ -1,4 +1,4 @@
-"""Deterministic character-budget helpers for assembling a Worker Context Pack."""
+"""Deterministic character-budget helpers for assembling a Execution Context Pack."""
 
 from __future__ import annotations
 
