@@ -28,10 +28,9 @@ from aura.conversation.tools.schemas.drones import RUN_READ_ONLY_DRONE_TOOL_DEF
 # Read and search tools the production catalog no longer offers.
 #
 # Every one of these is reachable through a tool that remains: line windows via
-# ``read_file``'s offset/limit, multi-file reads via several ``read_file`` calls
-# in one round, directory listing via ``glob``, and symbol/structure lookup via
-# ``grep_search``. Presenting all of them made the model choose an approach
-# before it could choose an action.
+# ``read_file``'s offset/limit, directory listing via ``glob``, and
+# symbol/structure lookup via ``grep_search``. Presenting all of them made the
+# model choose an approach before it could choose an action.
 #
 # ``search_codebase`` is deliberately not in this set: it now returns ranked
 # structural retrieval documents (bounded source regions with symbol/kind/

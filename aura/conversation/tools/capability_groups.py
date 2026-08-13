@@ -33,7 +33,7 @@ DRONES = "drones"
 GODOT = "godot"
 
 CAPABILITY_TOOLS: dict[str, frozenset[str]] = {
-    CORE_READ: frozenset({"read_file", "glob"}),
+    CORE_READ: frozenset({"read_file", "read_files", "glob"}),
     # ``grep_search`` is exact lexical/regex matching. ``search_codebase`` is
     # ranked conceptual/keyword retrieval over structure-aware retrieval
     # documents — bounded source regions with symbol/kind/parent metadata,
@@ -43,9 +43,8 @@ CAPABILITY_TOOLS: dict[str, frozenset[str]] = {
     CORE_TERMINAL: frozenset({"run_terminal_command", "run_and_watch"}),
     CORE_TODO: frozenset({"update_task_checklist"}),
     CORE_WEB: frozenset({"web_search"}),
-    # Superseded by read_file's offset/limit and by parallel read_file calls.
+    # Targeted/context read helpers that stay outside the production surface.
     BULK_READ: frozenset({
-        "read_files",
         "read_file_range",
         "read_file_outline",
         "read_task_context",

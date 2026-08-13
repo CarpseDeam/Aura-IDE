@@ -9,11 +9,13 @@ CORE_READ_TOOL_DEFS: list[dict[str, Any]] = [
             "function": {
                 "name": "read_file",
                 "description": (
-                    "Read a UTF-8 text file from the workspace. By default returns the full contents "
+                    "Read one known UTF-8 text file from the workspace, or one targeted line window "
+                    "from that file. By default returns the full contents "
                     "(capped at 200KB). Pass offset/limit to read a specific window of lines instead — "
                     "far more context-efficient than re-reading a whole file when you already know which "
                     "lines you need, and it can reach any line in a file too large to return in full. "
-                    "To read several files, issue several read_file calls in the same round. "
+                    "When several known files are needed, use read_files to gather them in one evidence batch. "
+                    "This reads the specified path; it does not discover files. "
                     "The path argument MUST be relative to the workspace root."
                 ),
                 "parameters": {
@@ -41,7 +43,9 @@ CORE_READ_TOOL_DEFS: list[dict[str, Any]] = [
             "function": {
                 "name": "read_files",
                 "description": (
-                    "Batched version of read_file — read multiple files in a single call. "
+                    "Read several already-known relevant files in one coherent evidence batch. "
+                    "Use this to gather one evidence packet before the next reasoning step; it reads "
+                    "specified paths rather than performing repository discovery. "
                     "EVERY requested path always comes back with metadata, even when its "
                     "content did not fit: path, file_size, content_hash, line_count, "
                     "status (complete | summarized | truncated | omitted | error), reason, "
@@ -137,11 +141,12 @@ CORE_READ_TOOL_DEFS: list[dict[str, Any]] = [
             "function": {
                 "name": "glob",
                 "description": (
-                    "Find files and directories matching a glob pattern relative to the workspace "
+                    "Discover workspace paths by finding files and directories matching a glob pattern relative to the workspace "
                     "root. '*' matches within one path segment, '**' recurses: use '**/*.gd' or "
                     "'scripts/**/*.py' to walk the tree, and '*' or 'aura/gui/*' to list one "
                     "directory's immediate contents. Returns 'matches' (files) and 'directories' "
-                    "(trailing slash), capped at 200 entries total."
+                    "(trailing slash), capped at 200 entries total. Use read_file or read_files "
+                    "after discovery to retrieve file contents."
                 ),
                 "parameters": {
                     "type": "object",

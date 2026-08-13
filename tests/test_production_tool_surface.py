@@ -3,7 +3,7 @@
 Two defects lived in the schema, not in the loop:
 
 * the catalog offered a long tail of wrappers — six git subcommand wrappers,
-  bulk-read helpers, a diagnostic runner, a workspace snapshot, drone tools,
+  specialized read helpers, a diagnostic runner, a workspace snapshot, drone tools,
   the old CODE_INTEL wrapper group — every one of them reachable through a
   tool that stayed, and every one of them another approach the model had to
   rule out before it could pick an action;
@@ -36,6 +36,7 @@ from aura.conversation.tools.registry import ToolRegistry
 EXPECTED_PRODUCTION_TOOLS: frozenset[str] = frozenset({
     # read / search
     "read_file",
+    "read_files",
     "glob",
     "grep_search",
     # ranked structural retrieval over the workspace's BM25 index
@@ -76,7 +77,6 @@ EXPECTED_PRODUCTION_TOOLS: frozenset[str] = frozenset({
 #: Redundant surface removed from the production catalog. Each is reachable
 #: through a tool that stayed, or is unrelated to normal implementation.
 REMOVED_PRODUCTION_TOOLS: frozenset[str] = frozenset({
-    "read_files",
     "read_file_range",
     "read_file_outline",
     "read_task_context",
@@ -173,7 +173,7 @@ def test_removed_observations_stay_callable_for_transcript_replay(tmp_path) -> N
     registry = ToolRegistry(workspace_root=tmp_path)
     replayable = set(_names(registry.replayable_tool_defs()))
 
-    for withheld in ("find_usages", "read_files", "list_directory", "git_log"):
+    for withheld in ("find_usages", "list_directory", "git_log"):
         assert withheld in replayable, withheld
     # ``search_codebase`` is directly exposed now, not withheld-but-callable —
     # it must not appear in the replay-only set.
@@ -188,7 +188,7 @@ def test_catalog_has_no_runtime_mode_dimension() -> None:
     catalog = ToolCatalog()
     names = set(_names(catalog.build_tool_defs(read_only=False)))
 
-    assert not (names & {"git_log", "git_show", "git_log_file", "read_files", "list_directory"})
+    assert not (names & {"git_log", "git_show", "git_log_file", "list_directory"})
 
 
 # ── 2. web_search is per-turn and stable within the turn ────────────────────
@@ -251,12 +251,8 @@ def test_every_production_tool_still_describes_itself() -> None:
 
 
 def test_the_production_schema_shrank() -> None:
-    """Measured against the surface this repair was diagnosed on: 35 tools and
-    35,768 characters of JSON. ``inspect_code``, later re-exposing
-    ``search_codebase`` as a distinct capability, and later still
-    ``record_implementation_decision`` each account for a one-tool,
-    one-description bump over the original repair's numbers."""
+    """The production surface stays bounded after restoring batched reads."""
     defs = _production_defs(web_search=True)
 
-    assert len(defs) <= 27
+    assert len(defs) <= 28
     assert len(json.dumps(defs)) < 34_000

@@ -68,6 +68,7 @@ def test_catalog_composition_preserves_read_only_and_production_order() -> None:
         "inspect_godot_api",
         "inspect_godot_editor",
         "read_file",
+        "read_files",
         "glob",
         "grep_search",
         "search_codebase",
