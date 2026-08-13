@@ -37,15 +37,11 @@ DRONES_DEST_REL = Path(".aura") / "drones"
 BUILTIN_DRONES_SOURCE_REL = Path("aura") / "drones" / "bundled"
 BUILTIN_DRONES_DEST_REL = Path("aura") / "drones" / "bundled"
 
-ROLE_CAPSULES_SOURCE_REL = Path("aura") / "roles" / "bundled"
-ROLE_CAPSULES_DEST_REL = Path("aura") / "roles" / "bundled"
+PRODUCTION_PROMPT_SOURCE_REL = Path("aura") / "production_prompt.md"
+PRODUCTION_PROMPT_DEST_REL = Path("aura") / "production_prompt.md"
 
 BUNDLED_SKILLS_SOURCE_REL = Path("aura") / "skills" / "bundled"
 BUNDLED_SKILLS_DEST_REL = Path("aura") / "skills" / "bundled"
-
-REQUIRED_ROLE_CAPSULE_FILES = [
-    "single.md",
-]
 
 SUPPORTED_GRAMMARS = [
     "javascript", "typescript", "tsx", "go", "rust",
@@ -206,18 +202,13 @@ def validate_project_paths(root: Path) -> None:
         root / PACKAGE_NAME,
         root / PACKAGE_NAME / "__main__.py",
         root / UPDATER_HELPER_SOURCE,
+        root / PRODUCTION_PROMPT_SOURCE_REL,
         root / ICON_PATH,
         root / MEDIA_DIR,
     ]
     missing = [path for path in required_paths if not path.exists()]
     media_dir = root / MEDIA_DIR
     missing.extend(media_dir / filename for filename in REQUIRED_MEDIA_FILES if not (media_dir / filename).is_file())
-    capsule_dir = root / ROLE_CAPSULES_SOURCE_REL
-    missing.extend(
-        capsule_dir / filename
-        for filename in REQUIRED_ROLE_CAPSULE_FILES
-        if not (capsule_dir / filename).is_file()
-    )
     skills_dir = root / BUNDLED_SKILLS_SOURCE_REL
     if not skills_dir.is_dir():
         missing.append(skills_dir)
@@ -488,8 +479,7 @@ def prewarm_grammars(final_dist_dir: Path, python_exe: Path) -> None:
         print(output)
     except subprocess.CalledProcessError as exc:
         print(f"Grammar prewarm failed:\n{exc.output.decode()}")
-        print("Warning: tree-sitter grammar prewarm failed; continuing release build.")
-        return
+        raise SystemExit("Tree-sitter grammar prewarm failed; aborting release build.") from exc
 
     # Verify the grammar directory is non-empty
     entries = list(grammar_dir.rglob("*"))
@@ -584,6 +574,57 @@ def find_iscc() -> Path | None:
         if path.exists():
             return path
     return None
+
+
+def validate_release_prerequisites(
+    installer_flag: bool | None,
+    github_release: bool,
+) -> None:
+    """Fail before compilation when release-only external tools are unavailable."""
+    tesseract = find_tesseract_install()
+    if tesseract is None:
+        tried = "\n".join(f"  - {label}: {path}" for label, path in _tesseract_root_candidates())
+        raise SystemExit(
+            "Tesseract runtime not found for release build.\n"
+            "Install Tesseract OCR or set AURA_TESSERACT_ROOT/AURA_TESSERACT_CMD.\n"
+            f"Tried:\n{tried}"
+        )
+    tesseract_missing = _missing_tesseract_files(tesseract)
+    if tesseract_missing:
+        details = "\n".join(f"  - {tesseract / rel_path}" for rel_path in tesseract_missing)
+        raise SystemExit(f"Tesseract install is missing required release files:\n{details}")
+    print(f"Tesseract found: {tesseract}")
+
+    if github_release and installer_flag is False:
+        raise SystemExit(
+            "--github-release requires an installer. Remove --no-installer and ensure Inno Setup is available."
+        )
+
+    if installer_flag is True or github_release:
+        iscc = find_iscc()
+        if iscc is None:
+            raise SystemExit(
+                "Cannot create installer: iscc.exe not found. Install Inno Setup 6 or ensure iscc.exe is on PATH."
+            )
+        print(f"Inno Setup found: {iscc}")
+
+    if github_release:
+        if not shutil.which("gh"):
+            raise SystemExit(
+                "GitHub CLI (gh) not found.\n"
+                "Install it from https://cli.github.com/ and ensure it's on your PATH."
+            )
+        auth_result = subprocess.run(
+            ["gh", "auth", "status"],
+            capture_output=True,
+            text=True,
+        )
+        if auth_result.returncode != 0:
+            raise SystemExit(
+                "GitHub CLI is not authenticated. Run 'gh auth login' first.\n"
+                f"Error: {auth_result.stderr.strip()}"
+            )
+        print("GitHub CLI authentication verified.")
 
 
 def create_installer(dist_dir: Path, version: str, installer_flag: bool | None) -> Path | None:
@@ -681,8 +722,8 @@ def create_nuitka_command(
     fast: bool = False,
 ) -> list[str]:
     """Create the Nuitka command used for release builds."""
-    if jobs == 0:
-        raise SystemExit("--jobs cannot be 0.")
+    if jobs <= 0:
+        raise SystemExit("--jobs must be greater than 0.")
     python_exe = python_exe or Path(sys.executable)
 
     cmd = [
@@ -694,7 +735,7 @@ def create_nuitka_command(
         "--windows-console-mode=disable",
         f"--windows-icon-from-ico={ICON_PATH}",
         f"--include-data-dir={MEDIA_DIR}={MEDIA_DIR}",
-        f"--include-data-dir={ROLE_CAPSULES_SOURCE_REL}={ROLE_CAPSULES_DEST_REL}",
+        f"--include-data-file={PRODUCTION_PROMPT_SOURCE_REL}={PRODUCTION_PROMPT_DEST_REL}",
         f"--include-data-dir={BUNDLED_SKILLS_SOURCE_REL}={BUNDLED_SKILLS_DEST_REL}",
         "--include-package=aura",
         "--include-package-data=aura",
@@ -781,24 +822,27 @@ def build(
     root = Path(__file__).resolve().parent.parent
     os.chdir(root)
 
-    # 1. Versioning
+    # 1. Validation & release prerequisites
+    validate_project_paths(root)
+    validate_release_prerequisites(installer, github_release)
+
+    # 2. Versioning
     new_version = resolve_build_version(
         root,
         version,
         skip_version_update=skip_version_update,
     )
 
-    # 2. Validation & Cleanup
-    validate_project_paths(root)
+    # 3. Validation & Cleanup
     clean_previous_dist_dirs(root)
 
-    # 3. Build Environment
+    # 4. Build Environment
     python_exe = create_build_venv(root, fast=fast, refresh_build_venv=refresh_build_venv)
 
-    # 4. Nuitka Command
+    # 5. Nuitka Command
     cmd = create_nuitka_command(python_exe, low_memory=low_memory, jobs=jobs, fast=fast)
 
-    # 5. Run Build
+    # 6. Run Build
     print(f"\nStarting Nuitka build for version {new_version}...")
     try:
         run(cmd)
@@ -806,7 +850,7 @@ def build(
         print("\nBuild failed.")
         sys.exit(1)
 
-    # 6. Package & Deploy
+    # 7. Package & Deploy
     dist_dir = find_created_dist_dir(root)
     final_dist_dir = normalize_dist_dir(root, dist_dir)
 
@@ -912,13 +956,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Disable Nuitka low-memory mode. This may be faster but can trigger MSVC heap exhaustion.",
     )
-    parser.add_argument(
+    installer_group = parser.add_mutually_exclusive_group()
+    installer_group.add_argument(
         "--installer",
         action="store_true",
         default=None,
         help="Enable installer creation. Auto-detects if iscc.exe is available.",
     )
-    parser.add_argument(
+    installer_group.add_argument(
         "--no-installer",
         action="store_true",
         help="Explicitly skip installer creation.",
