@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,7 @@ from aura.code_intel.index import CodeIntelIndex
 from aura.code_intel.inspection import CodeInspector
 from aura.codebase_index.indexer import CodebaseIndex  # noqa: F401
 from aura.codebase_index.tool import search_codebase as _search_codebase  # noqa: F401
+from aura.conversation.plan_review import PlanReviewState, blocked_tool_payload
 from aura.conversation.tools._blocker_mixin import BlockerHandlersMixin
 from aura.conversation.tools._code_intel_mixin import CodeIntelHandlersMixin
 from aura.conversation.tools._decision_mixin import DecisionHandlersMixin
@@ -51,7 +53,7 @@ from aura.conversation.tools.grep import grep_files  # noqa: F401
 from aura.conversation.tools.mcp_registry import MCPToolRegistry
 from aura.conversation.tools.reference_root import ReferenceRootAccess
 from aura.conversation.tools.task_context import TaskContextHandlersMixin
-from aura.conversation.plan_review import PlanReviewState, blocked_tool_payload
+from aura.paths import safe_relative_to
 
 TOOL_HANDLERS: dict[str, Any] = {}
 
@@ -152,6 +154,27 @@ class ToolRegistry(
         # A Reference Folder authorized for the old workspace must never
         # remain reachable once the active workspace changes.
         self._reference_root.set_workspace_root(self._root)
+
+    def _refresh_code_intel_paths(self, paths: str | Iterable[str]) -> None:
+        """Target-refresh the canonical CodeIntel index for known mutations."""
+        raw_paths = (paths,) if isinstance(paths, str) else paths
+        changed_files: list[str] = []
+        seen: set[str] = set()
+        for raw_path in raw_paths:
+            if not isinstance(raw_path, str):
+                continue
+            try:
+                target = self._resolve_in_root(raw_path)
+            except ValueError:
+                continue
+            rel_path = safe_relative_to(target, self._root).as_posix()
+            if rel_path in seen:
+                continue
+            seen.add(rel_path)
+            changed_files.append(rel_path)
+
+        if changed_files:
+            self._code_intel_index.refresh(changed_files=changed_files)
 
     @property
     def read_only(self) -> bool:

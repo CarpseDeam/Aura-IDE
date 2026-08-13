@@ -5,6 +5,7 @@ Expected on self:
     _read_only: bool
     _mode: RegistryMode
     _resolve_in_root(path: str) -> Path  (method on ToolRegistry)
+    _refresh_code_intel_paths(paths) -> None  (method on ToolRegistry)
 
 Functions are looked up through *registry* at call time so that
 ``unittest.mock.patch("aura.conversation.tools.registry.<name>")``
@@ -16,26 +17,27 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from aura.conversation.path_utils import normalize_worker_path as _shared_normalize_worker_path
+
+# Import the registry module so we can look up functions at call time.
+# This creates a circular import, but Python handles it because
+# `registry` is already in sys.modules by the time this module is loaded.
+from aura.conversation.tools import registry as _reg
 from aura.conversation.tools._types import ApprovalFileChange, ApprovalRequest, ToolExecResult
 from aura.conversation.tools.fs_write import (
     _raw_sha256,
-    atomic_write_bytes as _atomic_write_bytes,
     stale_approval_reason,
 )
-from aura.conversation.tools.write_payloads import _mark_not_applied, _mark_delete_not_applied
+from aura.conversation.tools.fs_write import (
+    atomic_write_bytes as _atomic_write_bytes,
+)
+from aura.conversation.tools.write_payloads import _mark_delete_not_applied, _mark_not_applied
 from aura.conversation.tools.write_transaction import (
     commit_patch_transaction,
     normalize_patch_args,
     propose_patch_transaction,
 )
-from aura.conversation.path_utils import normalize_worker_path as _shared_normalize_worker_path
 from aura.paths import safe_relative_to
-
-# Import the registry module so we can look up functions at call time.
-# This creates a circular import, but Python handles it because
-# `registry` is already in sys.modules by the time this module is loaded.
-
-from aura.conversation.tools import registry as _reg
 
 PATCH_FILE_REPAIR_ACTION = (
     "Re-read the current file and inspect proposed_context. Treat joined Python statements "
@@ -293,6 +295,15 @@ class WriteHandlersMixin:
         ok = bool(result.get("ok"))
         if ok:
             result.setdefault("applied_tool", "patch_file")
+            self._refresh_code_intel_paths(
+                entry.get("rel_path") or entry.get("path", "")
+                for entry in result.get("files", [])
+                if isinstance(entry, dict)
+            )
+        elif result.get("workspace_state") == "potentially_partial":
+            self._refresh_code_intel_paths(result.get("attempted_written_files", []))
+        elif result.get("rolled_back") is True:
+            self._refresh_code_intel_paths(result.get("rolled_back_files", []))
         return ToolExecResult(
             ok=ok,
             payload=result if ok else _mark_not_applied(result),
@@ -507,6 +518,7 @@ class WriteHandlersMixin:
         self._capture_before_write(self, rel_path)
         backup_path = _reg.backup_existing(self._root, target)
         target.unlink()
+        self._refresh_code_intel_paths([rel_path])
 
         rel_backup = (
             safe_relative_to(backup_path, self._root).as_posix() if backup_path is not None else None
@@ -615,6 +627,7 @@ class WriteHandlersMixin:
                 is_new_file = not target.exists()
                 target.parent.mkdir(parents=True, exist_ok=True)
                 _atomic_write_bytes(target, content.encode("utf-8"))
+                self._refresh_code_intel_paths([rel_path])
                 return ToolExecResult(
                     ok=True,
                     payload={
@@ -722,6 +735,7 @@ class WriteHandlersMixin:
         target.parent.mkdir(parents=True, exist_ok=True)
         backup_path = _reg.backup_existing(self._root, target)
         _atomic_write_bytes(target, req.new_content.encode("utf-8"))
+        self._refresh_code_intel_paths([req.rel_path])
 
         rel_backup = (
             safe_relative_to(backup_path, self._root).as_posix() if backup_path is not None else None

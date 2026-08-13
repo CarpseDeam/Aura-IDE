@@ -394,6 +394,9 @@ class CodeIntelIndex:
             norm = path_str.replace("\\", "/")
             self._evict_file(norm)
 
+            if not passes_canonical_policy(norm):
+                continue
+
             # Re-parse
             abs_path = self._root / norm
             if not abs_path.is_file():
