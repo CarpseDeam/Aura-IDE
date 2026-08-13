@@ -20,14 +20,15 @@ from PySide6.QtWidgets import (
 
 from aura.config import (
     DEFAULT_PLANNER_THINKING,
-    ModelInfo,
     ProviderId,
     ThinkingMode,
 )
 from aura.gui.theme import ACCENT, BG_ALT, BG_RAISED, BORDER, FG_DIM, FG_MUTED, LABEL_PROJECTS, LABEL_THREAD
 from aura.gui.widgets.no_wheel_combo import NoWheelComboBox
+from aura.gui.widgets.searchable_model_combo import SearchableModelCombo
 from aura.projects.store import ProjectStore
 from aura.providers.base import THINKING_MODES
+from aura.providers.model_presentation import build_model_picker_items
 from aura.providers.registry import provider_registry
 
 #: Display labels for the reasoning selector, in THINKING_MODES order.
@@ -404,7 +405,7 @@ class LeftPane(QFrame):
         planner_model_label = QLabel("Model:")
         planner_model_label.setStyleSheet(f"color: {FG_DIM};")
         planner_model_row.addWidget(planner_model_label)
-        self._planner_model_combo = NoWheelComboBox()
+        self._planner_model_combo = SearchableModelCombo()
         self._planner_model_combo.currentIndexChanged.connect(
             lambda: self.planner_model_changed.emit(self.current_planner_model())
         )
@@ -455,11 +456,19 @@ class LeftPane(QFrame):
         provider: ProviderId,
     ) -> None:
         """Populate the production model list."""
-        self._planner_model_combo.blockSignals(True)
-        self._planner_model_combo.clear()
-        for mid, info in _models_with_default(provider).items():
-            self._planner_model_combo.addItem(info.label, mid)
-        self._planner_model_combo.blockSignals(False)
+        cfg = provider_registry.get(provider)
+        extra_compat_ids: tuple[str, ...] = ()
+        if provider == "deepseek":
+            from aura.providers.catalog import DEFAULT_WORKER_MODEL
+
+            extra_compat_ids = (DEFAULT_WORKER_MODEL,)
+        items = build_model_picker_items(
+            provider,
+            cfg.models,
+            default_model=cfg.default_model,
+            extra_compat_ids=extra_compat_ids,
+        )
+        self._planner_model_combo.set_items(items, cfg.default_model)
 
     def current_planner_model(self) -> str:
         return self._planner_model_combo.currentData()
@@ -783,27 +792,3 @@ class LeftPane(QFrame):
 
     def refresh_drones(self, active_root: Path | None) -> None:
         return
-
-def _models_with_default(provider: ProviderId) -> dict[str, ModelInfo]:
-    spec = provider_registry.get(provider)
-    models = dict(spec.models)
-    if spec.default_model not in models:
-        models[spec.default_model] = ModelInfo(
-            id=spec.default_model,
-            label=spec.default_model.split("/")[-1].replace("-", " ").title(),
-            **{chr(105)+chr(110)+chr(112)+chr(117)+chr(116)+"_per_m_usd": 0.0},
-            output_per_m_usd=0.0,
-            cache_hit_per_m_usd=0.0,
-        )
-    if provider == "deepseek":
-        from aura.providers.catalog import DEFAULT_WORKER_MODEL
-
-        if DEFAULT_WORKER_MODEL not in models:
-            models[DEFAULT_WORKER_MODEL] = ModelInfo(
-                id=DEFAULT_WORKER_MODEL,
-                label=DEFAULT_WORKER_MODEL,
-                **{chr(105)+chr(110)+chr(112)+chr(117)+chr(116)+"_per_m_usd": 0.0},
-                output_per_m_usd=0.0,
-                cache_hit_per_m_usd=0.0,
-            )
-    return models

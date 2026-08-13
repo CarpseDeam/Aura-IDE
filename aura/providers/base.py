@@ -33,6 +33,11 @@ class ModelInfo:
     # before these fields existed.
     context_window_tokens: int = 0
     max_output_tokens: int = 0
+    # Upstream model-creation timestamp (unix seconds), as OpenRouter's
+    # ``created`` field reports it. None means unknown/not provided — every
+    # provider other than OpenRouter leaves this unset. Presentation code uses
+    # it to order OpenRouter's list newest-first; nothing else reads it.
+    created: int | None = None
 
 
 @dataclass

@@ -23,7 +23,9 @@ from aura.config import (
 )
 from aura.gui.theme import FG_DIM
 from aura.gui.widgets.no_wheel_combo import NoWheelComboBox
+from aura.gui.widgets.searchable_model_combo import SearchableModelCombo
 from aura.providers.base import ProviderId
+from aura.providers.model_presentation import build_model_picker_items
 from aura.providers.registry import provider_registry
 
 logger = logging.getLogger(__name__)
@@ -97,7 +99,7 @@ class ModelsPage(QWidget):
             }.get(kind, kind)
             self._provider_combo.addItem(f"{spec.label} ({kind_label})", pid)
 
-        self._model_combo = NoWheelComboBox()
+        self._model_combo = SearchableModelCombo()
 
         self._refresh_btn = QPushButton("↻ Refresh")
         self._refresh_btn.setFixedHeight(20)
@@ -234,10 +236,27 @@ class ModelsPage(QWidget):
         if error:
             logger.warning("Model discovery failed for %s: %s", provider_id, error)
             return
+        if not models:
+            logger.warning(
+                "Model discovery for %s returned no models; keeping existing catalog.",
+                provider_id,
+            )
+            return
 
         cfg = provider_registry.get(provider_id)  # type: ignore[arg-type]
-        cfg.models.update(models)
-        cfg.pricing.update(pricing)
+        if provider_id == "openrouter":
+            # A successful OpenRouter response is a current snapshot, not an
+            # incremental patch — replace the runtime set in place (same dict
+            # objects; provider_registry shares these references) so a model
+            # OpenRouter has removed upstream disappears here too, instead of
+            # lingering forever because .update() never deletes stale keys.
+            cfg.models.clear()
+            cfg.models.update(models)
+            cfg.pricing.clear()
+            cfg.pricing.update(pricing)
+        else:
+            cfg.models.update(models)
+            cfg.pricing.update(pricing)
         save_dynamic_catalog(provider_id, models, pricing)  # type: ignore[arg-type]
 
         active: ProviderId = self._provider_combo.currentData()  # type: ignore[assignment]
@@ -269,35 +288,13 @@ class ModelsPage(QWidget):
             return
 
         cfg = provider_registry.get(provider_id)
-        combo.blockSignals(True)
-        combo.clear()
-
-        seen: set[str] = set()
-        items: list[tuple[str, str]] = []  # (label, id)
-
-        def add_model(mid: str, label: str = "") -> None:
-            if not mid or mid in seen:
-                return
-            seen.add(mid)
-            items.append((label or mid, mid))
-
-        for info in cfg.models.values():
-            add_model(info.id, info.label)
-
-        add_model(cfg.default_model)
-        if current_selection:
-            add_model(current_selection)
-
-        for label, mid in items:
-            combo.addItem(label, mid)
-
-        idx = combo.findData(current_selection) if current_selection else -1
-        if idx < 0:
-            idx = combo.findData(cfg.default_model)
-        if idx >= 0:
-            combo.setCurrentIndex(idx)
-
-        combo.blockSignals(False)
+        items = build_model_picker_items(
+            provider_id,
+            cfg.models,
+            default_model=cfg.default_model,
+            current_selection=current_selection,
+        )
+        combo.set_items(items, current_selection or cfg.default_model)
 
     def _set_combo_to_data(self, combo: QComboBox, value: str) -> None:
         idx = combo.findData(value)

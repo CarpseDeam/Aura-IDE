@@ -219,6 +219,12 @@ def fetch_provider_models(provider_id: str) -> tuple[dict[str, ModelInfo], dict[
             if isinstance(top_provider, dict):
                 max_out = _coerce_token_count(top_provider.get("max_completion_tokens"))
 
+            # OpenRouter's own upstream creation timestamp, kept for
+            # newest-first presentation ordering. None (never 0/guessed) when
+            # absent or unusable, so ordering can tell "no metadata" apart from
+            # "created at the epoch".
+            created = _coerce_token_count(m.get("created")) or None
+
             models[mid] = ModelInfo(
                 id=mid,
                 label=name,
@@ -228,6 +234,7 @@ def fetch_provider_models(provider_id: str) -> tuple[dict[str, ModelInfo], dict[
                 supports_vision=supports_vision,
                 context_window_tokens=ctx_tokens,
                 max_output_tokens=max_out,
+                created=created,
             )
             pricing[mid] = {"in_miss": in_m, "in_hit": hit_m, "out": out_m}
     else:
@@ -509,14 +516,25 @@ def load_dynamic_catalog() -> None:
         cached_pricing = entry.get("pricing", {})
 
         if pid == "openrouter":
-            # OpenRouter pricing is authoritative — never overwrite zero pricing
-            # with seed defaults (free models are genuinely free).
-            for mid, m_data in cached_models.items():
-                cfg.models[mid] = _model_info_from_cache(
-                    m_data, cfg.models.get(mid), trust_cached_capacity=True
-                )
-            for mid, p_data in cached_pricing.items():
-                cfg.pricing[mid] = p_data
+            # A saved OpenRouter cache entry is a full discovered snapshot (see
+            # save_dynamic_catalog / ModelsPage discovery), not an incremental
+            # patch — so loading it must *replace* the seeded catalog rather
+            # than merge into it, or a model OpenRouter has removed upstream
+            # would survive forever just because it was once hardcoded in
+            # OPENROUTER_MODELS. An empty cache entry is left alone so startup
+            # still has the seed catalog to fall back on.
+            if cached_models:
+                existing_before = dict(cfg.models)
+                cfg.models.clear()
+                for mid, m_data in cached_models.items():
+                    cfg.models[mid] = _model_info_from_cache(
+                        m_data, existing_before.get(mid), trust_cached_capacity=True
+                    )
+                # OpenRouter pricing is authoritative — never overwrite zero
+                # pricing with seed defaults (free models are genuinely free).
+                cfg.pricing.clear()
+                for mid, p_data in cached_pricing.items():
+                    cfg.pricing[mid] = p_data
         else:
             for mid, m_data in cached_models.items():
                 if mid in cfg.models:
