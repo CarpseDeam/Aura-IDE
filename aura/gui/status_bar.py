@@ -24,6 +24,13 @@ def _format_footer_cost(known_cost: float, unknown_count: int, total_models: int
     return cost_str
 
 
+def _format_cache_percentage(total_hit: int, total_miss: int) -> str:
+    """Format the session prompt-cache hit percentage (output tokens excluded)."""
+    if total_hit + total_miss == 0:
+        return "—"
+    return f"{total_hit / (total_hit + total_miss) * 100:.1f}"
+
+
 class _StatusResizeGrip(QSizeGrip):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -190,7 +197,8 @@ class AuraStatusBar(QStatusBar):
 
         total_models = len(session_usage)
 
-        usage_text = f"{total_hit:,} hit · {total_miss:,} miss · {total_out:,} out"
+        cache_pct = _format_cache_percentage(total_hit, total_miss)
+        usage_text = f"{total_hit:,} hit · {total_miss:,} miss · {total_out:,} out · cache {cache_pct}%"
         cost_str = _format_footer_cost(known_cost, unknown_count, total_models)
         self._status_cache.setText(usage_text)
         self._status_session.setText(f"Session {cost_str}")
