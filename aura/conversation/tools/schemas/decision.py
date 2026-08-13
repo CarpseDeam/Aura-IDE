@@ -8,17 +8,18 @@ RECORD_IMPLEMENTATION_DECISION_TOOL_DEF: dict[str, Any] = {
     "function": {
         "name": "record_implementation_decision",
         "description": (
-            "Record the current working implementation decision once repository "
-            "evidence supports a concrete choice. The record stands as the "
-            "working decision going forward; ordinary additional information "
-            "does not by itself invalidate it. Reopen or revise it when later "
-            "evidence materially contradicts its basis, satisfies a "
-            "reconsideration condition, an implementation or validation result "
-            "disproves it, or the user changes the request — calling this tool "
-            "again then records a newer decision that supersedes the earlier "
-            "one. Performs no mutation, forces no next action, does not "
-            "restrict which tools are available, and does not end discovery or "
-            "change execution mode."
+            "Bookkeeping: record a durable working decision/bookmark once repository "
+            "evidence supports a concrete implementation choice. The record stands as "
+            "the working decision going forward; ordinary adjacent information does "
+            "not reopen it. Reopen or revise it when later evidence materially "
+            "contradicts its basis, satisfies a reconsideration condition, an "
+            "implementation or validation result disproves it, or the user changes "
+            "the request — calling this tool again then records a newer decision "
+            "that supersedes the earlier one. Performs no mutation, forces no next "
+            "action, does not restrict which tools are available, and does not end "
+            "discovery or change execution mode. When another independent action is "
+            "already ready in the same model response, this bookkeeping may be "
+            "issued alongside it rather than requiring a bookkeeping-only step."
         ),
         "parameters": {
             "type": "object",

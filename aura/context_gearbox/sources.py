@@ -12,7 +12,8 @@ from aura.skills.text import SkillPack, build_skill_pack
 
 CORE_KERNEL_TEXT = """Core kernel:
 - Work inside the selected workspace.
-- Do not make claims about repository contents you have not verified.
+- Verify repository facts before relying on them for an implementation decision. Investigate a fact only when it could materially change the implementation, correctness, edit scope, or validation — adjacent uncertainty does not require investigation.
+- Once evidence supports a concrete implementation choice, record it with `record_implementation_decision` and continue from it. Reopen it only when later evidence materially contradicts its basis, a reconsideration condition is met, an implementation or validation result disproves it, or the user changes the request.
 - Keep the response and any changes scoped to the user's request."""
 
 GUI_RULES = """### gui_rules
@@ -212,7 +213,7 @@ CONTEXT_SOURCES: tuple[ContextSource, ...] = (
     ContextSource(
         source_id="target_file_contents",
         kind="workspace_files",
-        reason="edit-surface files (compact manifest of the files this step touches)",
+        reason="user-mentioned files (compact manifest of paths the user named)",
     ),
     ContextSource(
         source_id="gui_rules",
@@ -445,12 +446,14 @@ def _load_target_file_manifest(
     if not resolved:
         return "", "no readable target files"
     lines = [
-        "### Target files (manifest)",
-        "This step's edit surface. Contents are not preloaded; read each "
-        "file you will edit with the read tools before changing it.",
+        "### User-mentioned files (manifest)",
+        "Context anchors the user named explicitly, not automatically files "
+        "that need editing. Contents are not preloaded; inspect or edit only "
+        "the ones materially relevant to the requested change, reading each "
+        "with the read tools first.",
     ]
     lines.extend(f"- {relpath}" for relpath in resolved)
-    return "\n".join(lines), "manifest of target files; contents load through read tools"
+    return "\n".join(lines), "manifest of user-mentioned files; contents load through read tools"
 
 def loaded_target_files(
     workspace_root: Path | None,

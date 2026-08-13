@@ -25,9 +25,12 @@ def test_target_files_are_a_compact_manifest_for_the_one_production_context(
 
     assert extra == []
     assert entry.included is True
-    assert entry.reason == "manifest of target files; contents load through read tools"
+    assert entry.reason == "manifest of user-mentioned files; contents load through read tools"
     assert "aura/feature.py" in text
     assert "VALUE = 42" not in text
+    assert "User-mentioned files" in text
+    assert "edit surface" not in text.lower()
+    assert "context anchors" in text.lower()
 
 
 def test_context_ledger_has_no_runtime_role_dimension(tmp_path: Path) -> None:

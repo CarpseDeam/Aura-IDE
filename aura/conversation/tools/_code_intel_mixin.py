@@ -83,6 +83,6 @@ class CodeIntelHandlersMixin:
         except ValueError as e:
             return ToolExecResult(ok=False, payload={"ok": False, "error": str(e)})
         result = self._code_inspector.inspect(
-            target, line=line, symbol=(symbol or None), cancel_event=self.active_cancel_event
+            target, line=line, symbol=(symbol or None)
         )
         return ToolExecResult(ok=bool(result.get("ok", False)), payload=result)

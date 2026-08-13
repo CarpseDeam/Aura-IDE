@@ -8,11 +8,12 @@ TASK_CHECKLIST_TOOL_DEF: dict[str, Any] = {
     "function": {
         "name": "update_task_checklist",
         "description": (
-            "Maintain a concise checklist for the overall user request as a full snapshot, "
-            "replacing the previous one. Use it when work has multiple meaningful steps and "
-            "update it as progress changes. Entries are progress markers within one continuous "
-            "task, not separate assignments or context boundaries. This tool only displays "
-            "progress; it never completes, blocks, or gates the task."
+            "Display/progress bookkeeping for the overall user request: maintain a concise "
+            "checklist as a full snapshot, replacing the previous one. Use it when work has "
+            "multiple meaningful steps and update it as progress changes. Entries are progress "
+            "markers within one continuous task, not phases, separate assignments, or context "
+            "boundaries. This tool only displays progress; it never completes, blocks, or gates "
+            "the task."
         ),
         "parameters": {
             "type": "object",

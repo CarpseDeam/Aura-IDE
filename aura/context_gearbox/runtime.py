@@ -358,6 +358,27 @@ def _custom_prompt_extension(custom: str, canonical_blocks: list[str]) -> str:
     return "\n".join(collapsed).strip()
 
 
+# Vocabulary from the retired Planner/Worker architecture. AppSettings.system_prompt
+# persists across Aura versions, so a saved custom prompt started as an edited
+# copy of an older default can still carry this terminology long after the
+# runtime collapsed to a single production role. Kept conservative: matched
+# terms are specific tool/type names or role-labeled phrases, not bare words
+# like "planner" or "worker" that could appear in an unrelated custom prompt.
+_LEGACY_ARCHITECTURE_TERMS: tuple[str, ...] = (
+    "runtimerole",
+    "registrymode",
+    "update_worker_todo",
+    "worker todo",
+    "planner role",
+    "worker role",
+)
+
+
+def _legacy_architecture_terms(text: str) -> tuple[str, ...]:
+    lowered = text.lower()
+    return tuple(term for term in _LEGACY_ARCHITECTURE_TERMS if term in lowered)
+
+
 # Concepts the canonical prompt already owns, and phrasings that indicate a
 # custom prompt is re-stating one. Exact-block removal cannot catch these —
 # they are paraphrases, which is precisely why they need to be visible.
@@ -418,9 +439,10 @@ def diagnose_custom_prompt(
 ) -> CustomPromptDiagnostics:
     """Describe what a custom prompt adds on top of the canonical one.
 
-    Reports size, whether it opts into full replacement, and canonical
-    concepts it appears to restate.
-    Purely observational: composition is unchanged by anything measured here.
+    Reports size, whether it opts into full replacement, retired-architecture
+    terminology it still carries, and canonical concepts it appears to
+    restate. Purely observational: composition is unchanged by anything
+    measured here, and the user's saved prompt is never modified.
     """
     custom = (custom_prompt or "").strip()
     if not custom:
@@ -447,7 +469,7 @@ def diagnose_custom_prompt(
         char_count=len(custom),
         appended_char_count=len(appended),
         full_replacement=full_replacement,
-        legacy_terms=(),
+        legacy_terms=_legacy_architecture_terms(custom),
         repeated_concepts=repeated,
     )
 
@@ -504,6 +526,10 @@ def format_custom_prompt_diagnostics(
         parts.append(f"{diagnostics.appended_char_count:,} appended after de-duplication")
     if diagnostics.repeated_concepts:
         parts.append("may restate: " + "; ".join(diagnostics.repeated_concepts))
+    if diagnostics.legacy_terms:
+        parts.append(
+            "retired architecture terms: " + ", ".join(diagnostics.legacy_terms)
+        )
     if effective_prompt_chars is not None:
         parts.append(f"effective system prompt {effective_prompt_chars:,} chars")
     return " | ".join(parts) + "."

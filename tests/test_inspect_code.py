@@ -91,13 +91,8 @@ def test_python_symbol_resolution_returns_bounded_source_and_truthful_target(
     assert target["kind"] == "function"
     assert target["declaration_line"] == 8
     assert target["provenance"] == "aura_parser"
-    # Python's ast exposes an honest end range for this function, so the
-    # blanket "we never know a body end" limitation must not be implied here.
+    # Python's ast exposes an honest end range for this function.
     assert target["declaration_end_line"] == 9
-    assert "exact_body_range_unavailable" not in payload["limitations"]
-    assert "resolved_references_unavailable" in payload["limitations"]
-    assert "call_graph_unavailable" in payload["limitations"]
-    assert "type_resolution_unavailable" in payload["limitations"]
 
     excerpt = payload["source_excerpt"]
     assert excerpt["path"] == "app.py"
@@ -141,10 +136,21 @@ def test_unresolvable_anchor_still_returns_source(tmp_path: Path) -> None:
     assert payload["source_excerpt"]["text"] != ""
 
 
-# ── 7/8: lexical occurrences are labeled and bounded ────────────────────
+# ── 7/8: inspect_code owns local structural evidence only ──────────────
 
 
-def test_occurrences_are_labeled_lexical_and_bounded(tmp_path: Path) -> None:
+def test_inspect_code_does_not_search_the_workspace_for_occurrences(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Global lexical discovery belongs to grep_search / search_codebase, not inspect_code."""
+
+    def _guard(*args, **kwargs):
+        raise AssertionError("inspect_code must not call find_usages")
+
+    monkeypatch.setattr(
+        "aura.conversation.tools.find_usages.find_usages", _guard, raising=False
+    )
+
     registry = ToolRegistry(workspace_root=tmp_path)
     _write(
         tmp_path / "app.py",
@@ -157,33 +163,25 @@ def test_occurrences_are_labeled_lexical_and_bounded(tmp_path: Path) -> None:
 
     payload = _inspect(registry, path="app.py", symbol="shared_name")
 
-    occurrences = payload["occurrences"]
-    assert occurrences["provenance"] == "lexical_search"
-    assert occurrences["returned"] <= 20
-    assert occurrences["total"] >= occurrences["returned"]
-    if occurrences["total"] > occurrences["returned"]:
-        assert occurrences["truncated"] is True
-    for item in occurrences["items"]:
-        assert set(item) == {"path", "line", "context"}
-    assert "occurrences_are_lexical" in payload["limitations"]
+    assert payload["ok"] is True
+    assert "occurrences" not in payload
+    assert "limitations" not in payload
+    assert set(payload) == {"ok", "path", "target", "source_excerpt", "diagnostics"}
 
 
-def test_no_symbol_no_occurrences(tmp_path: Path) -> None:
-    registry = ToolRegistry(workspace_root=tmp_path)
-    # A bare comment produces no top-level symbol, so line 1 resolves to
-    # nothing and there is no symbol name to search occurrences for.
-    _write(tmp_path / "app.py", "# just a comment\n")
-
-    payload = _inspect(registry, path="app.py", line=1)
-
-    assert payload["occurrences"] is None
-    assert "occurrences_are_lexical" not in payload["limitations"]
+def test_grep_search_and_search_codebase_remain_the_global_discovery_owners() -> None:
+    names = {
+        d["function"]["name"]
+        for d in ToolCatalog().build_tool_defs(read_only=False)
+    }
+    assert "grep_search" in names
+    assert "search_codebase" in names
 
 
 # ── 9: graceful degradation for a language without a rich adapter ──────
 
 
-def test_unsupported_language_still_returns_source_and_states_limitations(
+def test_unsupported_language_still_returns_truthful_local_evidence(
     tmp_path: Path,
 ) -> None:
     registry = ToolRegistry(workspace_root=tmp_path)
@@ -194,7 +192,9 @@ def test_unsupported_language_still_returns_source_and_states_limitations(
     assert payload["ok"] is True
     assert payload["source_excerpt"]["text"] != ""
     assert payload["target"]["language"] in ("text", "unknown")
-    assert "exact_body_range_unavailable" in payload["limitations"]
+    assert payload["target"]["declaration_end_line"] is None
+    assert payload["source_excerpt"]["parser_bounded"] is False
+    assert payload["source_excerpt"]["bounded_window"] is True
 
 
 # ── 11/12/13/14: parser-owned declaration ranges ─────────────────────────
@@ -215,8 +215,8 @@ def test_resolved_python_target_reports_exact_parser_owned_range(
     assert target["declaration_line"] == 1
     assert target["declaration_end_line"] == 3
     assert target["declaration_end_column"] == len("    return y")
-    # An exact range is now known, so the blanket limitation must not appear.
-    assert "exact_body_range_unavailable" not in payload["limitations"]
+    # An exact range is now known and truthfully reflected in the excerpt facts.
+    assert payload["source_excerpt"]["parser_bounded"] is True
 
 
 def test_inspect_code_uses_parser_bounded_source_when_exact_range_known(
@@ -279,7 +279,6 @@ def test_fallback_text_target_does_not_claim_a_body_range(tmp_path: Path) -> Non
     excerpt = payload["source_excerpt"]
     assert excerpt["parser_bounded"] is False
     assert excerpt["bounded_window"] is True
-    assert "exact_body_range_unavailable" in payload["limitations"]
 
 
 # ── 10: workspace-root change re-binds the inspector ────────────────────

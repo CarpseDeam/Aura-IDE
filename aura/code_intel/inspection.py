@@ -3,13 +3,17 @@
 Assembles a bounded, language-neutral neighborhood around one source
 location or symbol from what :mod:`aura.code_intel` already knows: the
 per-workspace :class:`~aura.code_intel.index.CodeIntelIndex` for symbols and
-parser diagnostics, the filesystem for a bounded source excerpt, and
-``find_usages`` for lexical occurrences. It does not add semantic
-capabilities the underlying adapters lack — it packages what they already
-provide and states plainly what they do not: no resolved references, no call
-graph, no type inference. A declaration end range is reported only when the
-resolving adapter genuinely parsed one (see ``SymbolInfo.end_line`` /
-``end_column``); otherwise the result says so rather than implying one.
+parser diagnostics, and the filesystem for a bounded source excerpt. This is
+local structural evidence only — resolved declaration/target, bounded source
+excerpt, parser diagnostics, and provenance for one file. It does not search
+the workspace for other occurrences of a symbol; ``grep_search`` and
+``search_codebase`` own that global discovery. Uncertainty is represented
+truthfully through structured fields rather than a blanket capability list:
+``resolution``, ``provenance``, null declaration ranges, ``bounded_window``,
+``parser_bounded``, and ``truncated``. A declaration end range is reported
+only when the resolving adapter genuinely parsed one (see
+``SymbolInfo.end_line`` / ``end_column``); otherwise the result says so
+rather than implying one.
 """
 
 from __future__ import annotations
@@ -28,22 +32,8 @@ EXCERPT_MAX_LINES = 160
 #: Character cap on the excerpt text, independent of line count (long lines).
 EXCERPT_MAX_CHARS = 9000
 
-#: Internal search depth used to count lexical occurrences.
-OCCURRENCE_SEARCH_CAP = 200
-#: Occurrences actually returned to the model.
-OCCURRENCE_RETURN_CAP = 20
-
 #: Parser diagnostics returned for the target file.
 DIAGNOSTIC_RETURN_CAP = 20
-
-#: Limitations that hold for every result: this is a parser/lexical layer,
-#: never an LSP, so these capabilities are never available regardless of
-#: which adapter served the request.
-_BASE_LIMITATIONS: tuple[str, ...] = (
-    "resolved_references_unavailable",
-    "call_graph_unavailable",
-    "type_resolution_unavailable",
-)
 
 #: Provenance label for a resolved symbol / diagnostics, by adapter language
 #: id. Anything not listed here comes from the generic tree-sitter adapter.
@@ -117,7 +107,6 @@ class CodeInspector:
         *,
         line: int | None,
         symbol: str | None,
-        cancel_event: Any | None = None,
     ) -> dict[str, Any]:
         if not abs_path.exists():
             return {"ok": False, "error": f"file not found: {abs_path.name}"}
@@ -135,19 +124,13 @@ class CodeInspector:
 
         resolved, resolution = _resolve_target(symbols, line, symbol)
         anchor_line = resolved.line if resolved is not None else (line if line is not None else 1)
-        has_exact_range = resolved is not None and resolved.end_line is not None
-
-        occurrence_symbol = symbol or (resolved.name if resolved is not None else None)
-        occurrences = self._find_occurrences(occurrence_symbol, cancel_event)
 
         return {
             "ok": True,
             "path": rel_path,
             "target": self._build_target(rel_path, language, line, symbol, resolved, resolution),
             "source_excerpt": self._build_excerpt(abs_path, rel_path, anchor_line, resolved),
-            "occurrences": occurrences,
             "diagnostics": self._build_diagnostics(diagnostics, language),
-            "limitations": self._limitations(occurrences is not None, has_exact_range),
         }
 
     # -- section builders -----------------------------------------------
@@ -256,49 +239,6 @@ class CodeInspector:
             "provenance": "filesystem",
         }
 
-    def _find_occurrences(
-        self, symbol_name: str | None, cancel_event: Any | None
-    ) -> dict[str, Any] | None:
-        if not symbol_name:
-            return None
-
-        from aura.conversation.tools.find_usages import find_usages
-
-        result = find_usages(
-            self._root,
-            symbol_name,
-            max_results=OCCURRENCE_SEARCH_CAP,
-            cancel_event=cancel_event,
-        )
-        if not result.get("ok"):
-            return {
-                "symbol": symbol_name,
-                "total": 0,
-                "returned": 0,
-                "truncated": False,
-                "items": [],
-                "provenance": "lexical_search",
-                "error": result.get("error"),
-            }
-
-        matches = result.get("matches", [])
-        total_found = len(matches)
-        engine_truncated = bool(result.get("truncated"))
-        returned = matches[:OCCURRENCE_RETURN_CAP]
-        items = [
-            {"path": m["path"], "line": m["line_number"], "context": m["line"]}
-            for m in returned
-        ]
-        return {
-            "symbol": symbol_name,
-            "total": total_found,
-            "total_is_lower_bound": engine_truncated,
-            "returned": len(items),
-            "truncated": bool(engine_truncated or total_found > len(items)),
-            "items": items,
-            "provenance": "lexical_search",
-        }
-
     def _build_diagnostics(self, diagnostics: list[Any], language: str) -> dict[str, Any]:
         capped = diagnostics[:DIAGNOSTIC_RETURN_CAP]
         return {
@@ -311,11 +251,3 @@ class CodeInspector:
             ],
             "provenance": _parser_provenance(language),
         }
-
-    def _limitations(self, has_occurrences: bool, has_exact_range: bool) -> list[str]:
-        items = list(_BASE_LIMITATIONS)
-        if not has_exact_range:
-            items.append("exact_body_range_unavailable")
-        if has_occurrences:
-            items.append("occurrences_are_lexical")
-        return items
