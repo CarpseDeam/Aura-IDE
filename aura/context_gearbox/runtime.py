@@ -24,6 +24,26 @@ FULL_REPLACEMENT_MARKER = "{AURA_REPLACE_CANONICAL_PROMPT}"
 
 CUSTOM_PROMPT_HEADER = "### Custom Instructions"
 
+# Compact interaction hint appended to the effective system prompt when the
+# turn is a frozen Read Only collaborative turn. It is an interaction hint, not
+# a second production prompt or a large mode-specific policy document: the
+# model keeps its ordinary loop and tool catalog, and only the conversational
+# intent changes.
+READ_ONLY_COLLABORATION_INSTRUCTION = (
+    "Read-only collaboration mode is active. Work with the user conversationally "
+    "to investigate, reason, answer questions, brainstorm, and plan. Use available "
+    "read/search/research tools when they materially help. Treat implementation as "
+    "a topic for discussion rather than an action to perform."
+)
+
+
+def _append_read_only_instruction(system_prompt: str) -> str:
+    """Append the compact Read Only collaboration hint to a composed prompt."""
+    if not system_prompt.strip():
+        return READ_ONLY_COLLABORATION_INSTRUCTION
+    return f"{system_prompt.rstrip()}\n\n{READ_ONLY_COLLABORATION_INSTRUCTION}"
+
+
 def _canonical_blocks(context_text: str) -> list[str]:
     """The blocks canonical production composition owns, in prompt order."""
     return [
@@ -282,6 +302,7 @@ def compose_system_prompt(
     target_files: tuple[str, ...] | None = None,
     content: str | None = None,
     active_capabilities: frozenset[str] | None = None,
+    read_only: bool = False,
 ) -> ComposedContext:
     """Compose the one canonical production system prompt.
 
@@ -294,6 +315,10 @@ def compose_system_prompt(
     ``active_capabilities`` names the extensible surfaces connected *right
     now*, so a capability pack is composed in for exactly the requests whose
     tool list actually carries those tools.
+
+    ``read_only`` marks a frozen Read Only collaborative turn and appends the
+    compact collaboration instruction to the effective system prompt. It is an
+    interaction hint only — the model keeps its ordinary loop and catalog.
     """
     context = build_context_text(
         workspace_root,
@@ -315,6 +340,8 @@ def compose_system_prompt(
             context.context_text,
             custom,
         )
+    if read_only:
+        system_prompt = _append_read_only_instruction(system_prompt)
     return ComposedContext(
         system_prompt=system_prompt,
         context_text=context.context_text,

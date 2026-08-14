@@ -39,6 +39,7 @@ from aura.backends import (
 from aura.bridge.approval_proxy import _ApprovalProxy
 from aura.bridge.plan_review_proxy import PlanReviewProxy
 from aura.bridge.production_execution import ProductionExecutionSession
+from aura.bridge.read_only_routing import emit_read_only_facts
 from aura.client import (
     ApiError,
     ContentDelta,
@@ -89,6 +90,12 @@ class _ConversationRunner(QObject):
     agentProcessStarted = Signal(str, str, str)  # process_id, label, command
     agentProcessOutput = Signal(str, str)  # process_id, text
     agentProcessFinished = Signal(str, object)  # process_id, exit_code
+    # The single authoritative accounting path for provider Usage on a
+    # Read Only collaborative turn. Normal turns account usage through the
+    # production session's relay; a Read Only turn routes the same Usage facts
+    # here so conversation telemetry still receives them exactly once without
+    # projecting any production worker activity.
+    usage = Signal(str, str, int, int, int, int)  # tool_id, model, prompt, comp, hit, miss
     finished = Signal()
 
     def __init__(
@@ -101,6 +108,7 @@ class _ConversationRunner(QObject):
         temperature: float = 0.7,
         workspace_root: Path | None = None,
         production_session: "ProductionExecutionSession | None" = None,
+        read_only_turn: bool = False,
     ) -> None:
         super().__init__()
         self._manager = manager
@@ -111,6 +119,7 @@ class _ConversationRunner(QObject):
         self._temperature = temperature
         self._workspace_root = workspace_root
         self._production_session = production_session
+        self._read_only_turn = read_only_turn
         self._blocked_reason: str = ""
         self._provider_contract_failure: bool = False
         self._already_satisfied: bool = False
@@ -137,6 +146,16 @@ class _ConversationRunner(QObject):
             self.finished.emit()
 
     def _on_event(self, ev: Event) -> None:
+        if self._read_only_turn:
+            # Read Only collaborative turn: assistant reasoning, prose, and
+            # read/search/research tool calls all belong in the chat
+            # experience. Nothing is projected into the workspace, and the
+            # right-side worker presentation stays idle. Usage is a
+            # conversation fact and still reaches telemetry exactly once via
+            # the single accounting signal (see read_only_routing).
+            emit_read_only_facts(self, ev, str(self._model))
+            return
+
         session = self._production_session
         if session is not None:
             # Production *execution* projects into the workspace; the
@@ -268,6 +287,12 @@ class ConversationBridge(QObject):
         self._turn_task_kind: str | None = None
         self._turn_content: str = ""
         self._turn_target_files: tuple[str, ...] = ()
+        # The frozen Read Only collaborative-turn intent for the active turn,
+        # set at the start of send() from ToolRegistry.read_only. A toolbar
+        # toggle during an active response never mutates it; it applies to the
+        # next turn. False is also the default for prompt re-composition
+        # outside a live turn (settings refresh), which stays production.
+        self._turn_read_only: bool = False
 
         # Re-emit production session signals on the same bridge signals so the
         # polished workspace projection binds once and stays role-neutral.
@@ -409,6 +434,7 @@ class ConversationBridge(QObject):
             target_files=self._turn_target_files,
             content=self._turn_content or None,
             active_capabilities=self._registry.active_capabilities(),
+            read_only=self._turn_read_only,
         )
         self._context_gearbox_metadata = context_gearbox_metadata(
             composed.ledger, workspace_root=self._registry.workspace_root,
@@ -495,6 +521,11 @@ class ConversationBridge(QObject):
         # a toolbar toggle flipped while the turn is running cannot mutate
         # the tool catalog or gate it already exposed.
         self._registry.plan_review.begin_turn(required=self._review_plan_before_changes)
+        # Freeze whether this real user turn is a Read Only collaborative turn.
+        # A toolbar toggle during an active response never mutates it; the new
+        # state applies to the next turn. This frozen value drives prompt
+        # composition and presentation for the whole turn.
+        self._turn_read_only = self._registry.read_only
         # The active model is terrain for skill selection, so it must be known
         # before the turn's system prompt is composed.
         self._active_model = str(model)
@@ -523,8 +554,12 @@ class ConversationBridge(QObject):
                 target_files=self._turn_target_files,
             )
 
-        # One stable execution identity for this production turn.
-        self._production_session.begin(model=str(model))
+        # A Read Only collaborative turn stays conversation-first: no
+        # production workspace session is begun, so the right-side worker
+        # presentation (start, activity, live TODO, completion receipt) stays
+        # visually idle. Normal turns begin one stable execution identity.
+        if not self._turn_read_only:
+            self._production_session.begin(model=str(model))
 
         self._thread = QThread()
         self._conversation_runner = _ConversationRunner(
@@ -536,6 +571,7 @@ class ConversationBridge(QObject):
             temperature=self._temperature,
             workspace_root=self._registry.workspace_root,
             production_session=self._production_session,
+            read_only_turn=self._turn_read_only,
         )
         self._conversation_runner.moveToThread(self._thread)
 
@@ -551,6 +587,11 @@ class ConversationBridge(QObject):
         self._conversation_runner.agentProcessStarted.connect(self.agentProcessStarted)
         self._conversation_runner.agentProcessOutput.connect(self.agentProcessOutput)
         self._conversation_runner.agentProcessFinished.connect(self.agentProcessFinished)
+        # The single authoritative usage accounting path. Normal turns reach
+        # it through the production session's relay; a Read Only turn routes
+        # the same Usage facts here so conversation telemetry counts them
+        # exactly once without projecting production worker activity.
+        self._conversation_runner.usage.connect(self.executionUsage)
         self._conversation_runner.finished.connect(self._on_finished)
 
         self._thread.started.connect(self._conversation_runner.run)
@@ -629,14 +670,18 @@ class ConversationBridge(QObject):
             runner._provider_contract_failure if runner is not None else False
         )
         already_satisfied = runner._already_satisfied if runner is not None else False
-        try:
-            self._production_session.finish(
-                blocked_reason=blocked_reason,
-                provider_contract_failure=provider_contract_failure,
-                already_satisfied=already_satisfied,
-            )
-        except Exception:
-            _log.exception("Failed to build production completion receipt")
+        # A Read Only collaborative turn never began a production session, so
+        # there is no execution receipt to build — the turn is presented
+        # conversationally and returns straight to idle.
+        if not self._turn_read_only:
+            try:
+                self._production_session.finish(
+                    blocked_reason=blocked_reason,
+                    provider_contract_failure=provider_contract_failure,
+                    already_satisfied=already_satisfied,
+                )
+            except Exception:
+                _log.exception("Failed to build production completion receipt")
 
         # Surface the turn's skill activation ledger on the same metadata the
         # Context Gearbox exposes, so activations that happened *during* the

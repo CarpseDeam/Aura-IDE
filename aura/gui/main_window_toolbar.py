@@ -155,13 +155,17 @@ class MainWindowToolbar(QToolBar):
 
     def _update_read_only_state(self, checked: bool) -> None:
         if checked:
-            self._read_only_btn.setText("Read-Only")
-            self._read_only_btn.setToolTip("Read-only mode is ON — files cannot be edited")
+            self._read_only_btn.setText("Read Only")
+            self._read_only_btn.setToolTip(
+                "Read Only: discuss, investigate, and plan without changing the workspace"
+            )
             self._read_only_btn.setStyleSheet(f"color: {LABEL_READ_ONLY};")
             self._read_only_badge.setText("READ-ONLY")
         else:
             self._read_only_btn.setText("Read Only")
-            self._read_only_btn.setToolTip("Toggle read-only mode to prevent file edits")
+            self._read_only_btn.setToolTip(
+                "Read Only: discuss, investigate, and plan without changing the workspace"
+            )
             self._read_only_btn.setStyleSheet("")
             self._read_only_badge.setText("")
 
