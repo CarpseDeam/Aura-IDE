@@ -76,7 +76,6 @@ class MainWindowSignalWiring:
 
         # ---- group 9: execution handler + playground ----
         w._execution_handler.usage_updated.connect(w._refresh_status_bar)
-        w._execution_handler.execution_running_changed.connect(w._status_bar.set_execution_active)
         w._playground.stop_execution_requested.connect(w._send_handler.handle_stop)
         w._execution_handler.execution_running_changed.connect(w._playground.set_execution_running)
 

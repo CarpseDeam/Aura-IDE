@@ -250,7 +250,7 @@ class AuraStatusBar(QStatusBar):
         self._resize_grip.setEnabled(visible)
 
     def set_execution_active(self, active: bool) -> None:
-        """Disable Handoff for the duration of a production run."""
+        """Reflect whether the main conversation currently has a turn."""
         self._handoff_btn.setEnabled(not active)
 
     def refresh(

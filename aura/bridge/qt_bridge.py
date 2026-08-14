@@ -288,11 +288,14 @@ class ConversationBridge(QObject):
         self._turn_content: str = ""
         self._turn_target_files: tuple[str, ...] = ()
         # The frozen Read Only collaborative-turn intent for the active turn,
-        # set at the start of send() from ToolRegistry.read_only. A toolbar
-        # toggle during an active response never mutates it; it applies to the
-        # next turn. False is also the default for prompt re-composition
-        # outside a live turn (settings refresh), which stays production.
+        # set at the start of send(). A toolbar toggle during an active response
+        # never mutates it; it applies to the next turn.
         self._turn_read_only: bool = False
+        # Keep the toolbar request separate from the active-turn capability.
+        # ConversationBridge owns when the request is copied into ToolRegistry;
+        # ToolRegistry remains the authority used by every model/tool round.
+        self._requested_read_only: bool = self._registry.read_only
+        self._turn_active: bool = False
 
         # Re-emit production session signals on the same bridge signals so the
         # polished workspace projection binds once and stays role-neutral.
@@ -357,7 +360,24 @@ class ConversationBridge(QObject):
         self.refresh_tier1_context()
 
     def set_read_only(self, value: bool) -> None:
-        self._registry.set_read_only(value)
+        """Set the toolbar mode for the next real user turn.
+
+        During a turn this only records the requested mode. The registry must
+        keep the frozen turn's capability policy until the bridge finishes.
+        """
+        self._requested_read_only = bool(value)
+        if not self._turn_active:
+            self._registry.set_read_only(self._requested_read_only)
+
+    @property
+    def requested_read_only(self) -> bool:
+        """The toolbar mode selected for the next real user turn."""
+        return self._requested_read_only
+
+    @property
+    def active_turn_read_only(self) -> bool:
+        """Whether the currently active bridge turn is frozen Read Only."""
+        return self._turn_active and self._turn_read_only
 
     # ---- turn-scoped external reference ------------------------------------
 
@@ -517,15 +537,16 @@ class ConversationBridge(QObject):
         """
         if self.is_running():
             return
+        # Freeze the requested toolbar mode before composing the prompt or
+        # starting the worker. The registry remains at this value for the
+        # entire model/tool loop, including every later round.
+        self._turn_read_only = self._requested_read_only
+        self._registry.set_read_only(self._turn_read_only)
+        self._turn_active = True
         # Freeze Plan Review's required/approved state for this turn now, so
         # a toolbar toggle flipped while the turn is running cannot mutate
         # the tool catalog or gate it already exposed.
         self._registry.plan_review.begin_turn(required=self._review_plan_before_changes)
-        # Freeze whether this real user turn is a Read Only collaborative turn.
-        # A toolbar toggle during an active response never mutates it; the new
-        # state applies to the next turn. This frozen value drives prompt
-        # composition and presentation for the whole turn.
-        self._turn_read_only = self._registry.read_only
         # The active model is terrain for skill selection, so it must be known
         # before the turn's system prompt is composed.
         self._active_model = str(model)
@@ -707,8 +728,13 @@ class ConversationBridge(QObject):
         finally:
             # Reference authorization is a production-turn capability, never
             # a session setting. Clear the root and its dedicated index before
-            # the bridge announces that the turn is finished.
+            # the bridge announces that the turn is finished. Apply the latest
+            # toolbar request only after the active turn has released the
+            # registry, so it is ready for the next send without changing any
+            # remaining round of this one.
             self.clear_reference_authorization()
+            self._registry.set_read_only(self._requested_read_only)
+            self._turn_active = False
             self.finished.emit()
 
     def _prepare_turn_context(self) -> None:

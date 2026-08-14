@@ -598,14 +598,22 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     def _on_started(self) -> None:
         self._final_stream_message = {}
         self._input.set_execution_active(True)
-        # Switch from Drone Bay to workspace so the user sees the run —
-        # but do NOT switch away from the Chain Editor (Workflow Studio).
-        if not self._drone_controller.is_workbay_open():
+        # Handoff follows the main conversation lifecycle, including
+        # conversation-first Read Only turns that have no production session.
+        self._status_bar.set_execution_active(True)
+        # Production turns switch from Drone Bay to workspace so the user sees
+        # the run — but collaborative Read Only turns keep the current chat /
+        # playground presentation, including Workflow Studio if it is open.
+        if (
+            not self._bridge.active_turn_read_only
+            and not self._drone_controller.is_workbay_open()
+        ):
             self._playground.switch_to_workspace()
         self._drone_controller.sync_drone_tab_checked()
 
     def _on_finished(self) -> None:
         self._input.set_execution_active(False)
+        self._status_bar.set_execution_active(False)
         # Closes the assistant card and records its transcript. By this point
         # ConversationManager has committed the final assistant message to
         # History, so chat and model history agree.

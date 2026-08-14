@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import time
 
 import pytest
 
@@ -84,7 +85,10 @@ def _install_stream(events):
     previous = model_streams.get_handler(PRODUCTION_STREAM_HOOK)
 
     def stream(**kwargs):
-        yield from events
+        if callable(events):
+            yield from events(**kwargs)
+        else:
+            yield from events
 
     model_streams.unregister(PRODUCTION_STREAM_HOOK)
     model_streams.register(PRODUCTION_STREAM_HOOK, stream)
@@ -340,3 +344,128 @@ def test_toggle_after_freeze_does_not_change_active_turn_prompt(tmp_path) -> Non
     prompt = bridge._compose_prompt("").system_prompt
     assert READ_ONLY_COLLABORATION_INSTRUCTION not in prompt
 
+
+# ---- bridge-owned turn capability freeze ----------------------------------
+
+
+def _catalog_names(tool_defs):
+    return {
+        tool["function"]["name"]
+        for tool in tool_defs
+        if isinstance(tool, dict) and isinstance(tool.get("function"), dict)
+    }
+
+
+def _wait_for_bridge_finished(bridge, qapp) -> None:
+    finished = []
+    bridge.finished.connect(lambda: finished.append(True))
+    deadline = time.monotonic() + 5
+    while not finished and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+    assert finished, "ConversationBridge did not finish within the test timeout"
+    qapp.processEvents()
+
+
+@pytest.mark.parametrize(
+    ("initial_mode", "requested_during_turn"),
+    [(True, False), (False, True)],
+    ids=["read-only-to-normal", "normal-to-read-only"],
+)
+def test_bridge_freezes_tool_capabilities_across_rounds_and_adopts_next_turn(
+    qapp, initial_mode, requested_during_turn
+) -> None:
+    """A toolbar toggle during round one cannot alter round two's catalog."""
+    from aura.bridge.qt_bridge import ConversationBridge
+
+    bridge = ConversationBridge(parent_widget=None, provider="test")
+    bridge.set_read_only(initial_mode)
+    bridge.history.append_user_text("Inspect the workspace and explain the result.")
+
+    active_catalogs = []
+    stream_calls = 0
+
+    def multi_round_stream(**kwargs):
+        nonlocal stream_calls
+        active_catalogs.append(_catalog_names(kwargs["tools"]))
+        if stream_calls == 0:
+            # This is the user changing the toolbar while the first model
+            # response is active. The registry must still expose the frozen
+            # turn's catalog when the loop starts round two.
+            bridge.set_read_only(requested_during_turn)
+            assert bridge.requested_read_only is requested_during_turn
+            assert bridge.registry.read_only is initial_mode
+            yield ToolCallStart(index=0, id="call-1", name="read_file")
+            yield ToolCallArgsDelta(index=0, args_chunk='{"path": "missing.txt"}')
+            yield ToolCallEnd(index=0)
+            yield Done(
+                finish_reason="tool_calls",
+                full_message={
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": '{"path": "missing.txt"}',
+                            },
+                        }
+                    ],
+                },
+            )
+        else:
+            yield ContentDelta(text="The inspection is complete.")
+            yield Done(
+                finish_reason="stop",
+                full_message={
+                    "role": "assistant",
+                    "content": "The inspection is complete.",
+                },
+            )
+        stream_calls += 1
+
+    restore = _install_stream(multi_round_stream)
+    try:
+        bridge.send(model="test-model", thinking="off")
+        _wait_for_bridge_finished(bridge, qapp)
+    finally:
+        restore()
+
+    assert len(active_catalogs) == 2
+    assert active_catalogs[0] == active_catalogs[1]
+    if initial_mode:
+        assert "write_file" not in active_catalogs[0]
+        assert "read_file" in active_catalogs[0]
+    else:
+        assert "write_file" in active_catalogs[0]
+    # Completion hands the registry to the newly requested mode.
+    assert bridge.requested_read_only is requested_during_turn
+    assert bridge.registry.read_only is requested_during_turn
+
+    # A real next turn consumes that requested mode, rather than the previous
+    # turn's frozen mode.
+    bridge.history.append_user_text("Now answer the follow-up.")
+    next_catalogs = []
+
+    def next_turn_stream(**kwargs):
+        next_catalogs.append(_catalog_names(kwargs["tools"]))
+        yield ContentDelta(text="Follow-up complete.")
+        yield Done(
+            finish_reason="stop",
+            full_message={"role": "assistant", "content": "Follow-up complete."},
+        )
+
+    restore = _install_stream(next_turn_stream)
+    try:
+        bridge.send(model="test-model", thinking="off")
+        _wait_for_bridge_finished(bridge, qapp)
+    finally:
+        restore()
+
+    assert len(next_catalogs) == 1
+    if requested_during_turn:
+        assert "write_file" not in next_catalogs[0]
+    else:
+        assert "write_file" in next_catalogs[0]
