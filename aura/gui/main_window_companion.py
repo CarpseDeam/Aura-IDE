@@ -100,7 +100,6 @@ class MainWindowCompanionController(QObject):
             self._window._persistence.load_and_apply(conversation_path)
             self._window._send_handler.clear_queue()
             self._window._input.set_queued_messages(0)
-            self._window._reset_session_usage()
             self._companion.complete_conversation_select(True)
         except Exception as _err:
             QMessageBox.warning(self._window, APP_NAME, f"Could not open conversation:\n{_err}")

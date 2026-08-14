@@ -238,6 +238,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             input_panel=self._input,
             left_pane=self._left_pane,
             settings=self._settings,
+            get_conversation_telemetry=lambda: self._execution_handler.conversation_telemetry,
+            restore_conversation_telemetry=self._execution_handler.restore_conversation_telemetry,
+            reset_conversation_usage=self._execution_handler.reset_conversation_usage,
             parent=self,
         )
         # Handoff flow controller
@@ -250,7 +253,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             get_workspace_root=lambda: self._workspace_root,
             get_model=self.current_model,
             get_thinking=self.current_thinking,
-            reset_session_usage=self._reset_session_usage,
             parent_widget=self,
             parent=self,
         )
@@ -471,12 +473,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             workspace_root=ws,
             model_id=self.current_model(),
             thinking=self.current_thinking(),
-            session_usage=self._execution_handler.session_usage,
+            conversation_usage=self._execution_handler.conversation_usage,
+            latest_context=self._execution_handler.conversation_telemetry.latest_context,
             has_provider=has_provider,
         )
-
-    def _reset_session_usage(self) -> None:
-        self._execution_handler.reset_session_usage()
 
     # ----- handlers -------------------------------------------------------
 
@@ -507,7 +507,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._input.set_text("")
         self._input.set_attachments([])
         self._input.set_queued_messages(0)
-        self._reset_session_usage()
         self._companion_controller.set_current_conversation("")
 
     def _on_open_conversation(self) -> None:
@@ -520,7 +519,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if loaded is not None:
             self._send_handler.clear_queue()
             self._input.set_queued_messages(0)
-            self._reset_session_usage()
 
     def open_api_settings(self) -> None:
         """Open settings dialog directly to the API Keys tab."""
@@ -738,7 +736,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._persistence.load_and_apply(conversation_path)
             self._send_handler.clear_queue()
             self._input.set_queued_messages(0)
-            self._reset_session_usage()
         except Exception as _err:
             QMessageBox.warning(self, APP_NAME, f"Could not open conversation:\n{_err}")
 

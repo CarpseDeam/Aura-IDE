@@ -49,6 +49,11 @@ LABEL_READ_ONLY = "#e0af68"     # amber/warm — read-only badge
 LABEL_THREAD = "#a8aebb"        # dim gray — thread titles (same as FG_DIM)
 LABEL_THREAD_HOVER = "#eaecef"  # bright — thread title on hover (same as FG)
 
+# Footer telemetry — kept semantic so compact footer components share the theme.
+STATUS_TELEMETRY = "#7dcfff"
+STATUS_CONTEXT = "#a8aebb"
+STATUS_METER = "#7aa2f7"
+
 def apply_theme(app: QApplication) -> None:
     """Apply Fusion + dark palette + global stylesheet."""
     app.setStyle("Fusion")

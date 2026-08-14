@@ -1,14 +1,33 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizeGrip, QSizePolicy, QStatusBar, QWidget
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QProgressBar,
+    QPushButton,
+    QSizeGrip,
+    QSizePolicy,
+    QStatusBar,
+    QWidget,
+)
 
 from aura.config import ThinkingMode, cost_usd
+from aura.conversation.telemetry import LatestContext, context_window_for_model
+from aura.gui.theme import (
+    BG_RAISED,
+    BORDER,
+    BORDER_STRONG,
+    FG_DIM,
+    STATUS_CONTEXT,
+    STATUS_METER,
+    STATUS_TELEMETRY,
+)
 
 
 def _format_footer_cost(known_cost: float, unknown_count: int, total_models: int) -> str:
-    """Format session cost for human-readable footer display (not raw precision)."""
+    """Format conversation cost for human-readable footer display."""
     if total_models == 0:
         return "$—"
     if unknown_count == total_models:
@@ -25,10 +44,34 @@ def _format_footer_cost(known_cost: float, unknown_count: int, total_models: int
 
 
 def _format_cache_percentage(total_hit: int, total_miss: int) -> str:
-    """Format the session prompt-cache hit percentage (output tokens excluded)."""
+    """Format the conversation prompt-cache hit percentage (output excluded)."""
     if total_hit + total_miss == 0:
         return "—"
     return f"{total_hit / (total_hit + total_miss) * 100:.1f}"
+
+
+def _format_compact_tokens(tokens: int) -> str:
+    """Format token values compactly while retaining useful context precision."""
+    tokens = max(0, int(tokens))
+    if tokens >= 1_000_000:
+        return f"{tokens / 1_000_000:.1f}M"
+    if tokens >= 1_000:
+        return f"{tokens / 1_000:.0f}k"
+    return str(tokens)
+
+
+def _format_context_occupancy(input_tokens: int, context_window_tokens: int) -> tuple[str, int | None]:
+    """Return display text and a tenths-percent meter value for a context snapshot."""
+    input_tokens = max(0, int(input_tokens))
+    context_window_tokens = max(0, int(context_window_tokens))
+    if context_window_tokens == 0:
+        return f"Context {_format_compact_tokens(input_tokens)} / unknown · —", None
+    percentage = input_tokens / context_window_tokens * 100
+    return (
+        f"Context {_format_compact_tokens(input_tokens)} / "
+        f"{_format_compact_tokens(context_window_tokens)} · {percentage:.1f}%",
+        min(1000, round(percentage * 10)),
+    )
 
 
 class _StatusResizeGrip(QSizeGrip):
@@ -95,6 +138,8 @@ class _ElidingLabel(QLabel):
 
 
 class AuraStatusBar(QStatusBar):
+    handoff_requested = Signal()
+
     def __init__(self, parent=None, show_resize_grip: bool = True) -> None:
         super().__init__(parent)
 
@@ -111,7 +156,7 @@ class AuraStatusBar(QStatusBar):
         self._status_left.setMaximumWidth(360)
         self.addWidget(self._status_left, 0)
 
-        # Center: cache and session telemetry only
+        # Center: conversation usage, latest context occupancy, and handoff.
         center_widget = QWidget(self)
         center_widget.setSizePolicy(
             QSizePolicy.Policy.Expanding,
@@ -119,7 +164,7 @@ class AuraStatusBar(QStatusBar):
         )
         center_widget.setMinimumWidth(0)
         center_widget.setToolTip(
-            "Session cache usage and estimated cost — does not reflect actual provider billing."
+            "Conversation cache usage, context occupancy, and estimated cost — does not reflect actual provider billing."
         )
         center_layout = QHBoxLayout(center_widget)
         center_layout.setContentsMargins(8, 0, 8, 0)
@@ -137,17 +182,54 @@ class AuraStatusBar(QStatusBar):
         )
         self._status_cache.setMinimumWidth(0)
         self._status_cache.setStyleSheet(
-            "color: #7dcfff; font-weight: 600; padding: 0 2px;"
+            f"color: {STATUS_TELEMETRY}; font-weight: 600; padding: 0 2px;"
         )
         center_layout.addWidget(self._status_cache, 1)
 
+        self._status_context_separator = QLabel("│")
+        self._status_context_separator.setStyleSheet(f"color: {BORDER_STRONG}; padding: 0 2px;")
+        center_layout.addWidget(self._status_context_separator)
+
+        self._status_context = _ElidingLabel("")
+        self._status_context.setFont(telemetry_font)
+        self._status_context.setStyleSheet(f"color: {STATUS_CONTEXT}; padding: 0 2px;")
+        self._status_context.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+        center_layout.addWidget(self._status_context)
+
+        self._context_meter = QProgressBar()
+        self._context_meter.setRange(0, 1000)
+        self._context_meter.setTextVisible(False)
+        self._context_meter.setFixedWidth(52)
+        self._context_meter.setFixedHeight(7)
+        self._context_meter.setToolTip("Latest provider-confirmed context-window occupancy")
+        self._context_meter.setStyleSheet(
+            f"QProgressBar {{ background: {BG_RAISED}; border: 1px solid {BORDER}; border-radius: 3px; }}"
+            f"QProgressBar::chunk {{ background: {STATUS_METER}; border-radius: 2px; }}"
+        )
+        center_layout.addWidget(self._context_meter)
+
+        self._handoff_btn = QPushButton("Handoff")
+        self._handoff_btn.setToolTip(
+            "Continue in Fresh Chat — summarize this conversation and continue with a fresh context window."
+        )
+        self._handoff_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._handoff_btn.setFixedHeight(24)
+        self._handoff_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {FG_DIM}; border: 1px solid {BORDER}; "
+            "border-radius: 5px; padding: 2px 8px; font-weight: 600; }"
+            f"QPushButton:hover {{ background: {BG_RAISED}; border-color: {BORDER_STRONG}; }}"
+        )
+        self._handoff_btn.clicked.connect(self.handoff_requested.emit)
+        center_layout.addWidget(self._handoff_btn)
+
         self._status_separator = QLabel("│")
-        self._status_separator.setStyleSheet("color: #4b5369; padding: 0 2px;")
+        self._status_separator.setStyleSheet(f"color: {BORDER_STRONG}; padding: 0 2px;")
         center_layout.addWidget(self._status_separator)
 
         self._status_session = QLabel("")
         self._status_session.setFont(telemetry_font)
-        self._status_session.setStyleSheet("color: #a8aebb; padding: 0 2px;")
+        self._status_session.setObjectName("statusCost")
+        self._status_session.setStyleSheet(f"color: {FG_DIM}; padding: 0 2px;")
         self._status_session.setSizePolicy(
             QSizePolicy.Policy.Maximum,
             QSizePolicy.Policy.Preferred,
@@ -167,12 +249,17 @@ class AuraStatusBar(QStatusBar):
         self._resize_grip.setVisible(visible)
         self._resize_grip.setEnabled(visible)
 
+    def set_execution_active(self, active: bool) -> None:
+        """Disable Handoff for the duration of a production run."""
+        self._handoff_btn.setEnabled(not active)
+
     def refresh(
         self, 
         workspace_root: str, 
         model_id: str, 
         thinking: ThinkingMode,
-        session_usage: dict[str, dict[str, int]],
+        conversation_usage: dict[str, dict[str, int]],
+        latest_context: LatestContext | None = None,
         has_provider: bool = False,
     ) -> None:
         # Workspace path truncation (left side)
@@ -182,23 +269,32 @@ class AuraStatusBar(QStatusBar):
         self._status_left.setText(ws)
 
         # Usage and Cost
-        total_hit = sum(u["hit"] for u in session_usage.values())
-        total_miss = sum(u["miss"] for u in session_usage.values())
-        total_out = sum(u["out"] for u in session_usage.values())
+        total_hit = sum(u["hit"] for u in conversation_usage.values())
+        total_miss = sum(u["miss"] for u in conversation_usage.values())
+        total_out = sum(u["out"] for u in conversation_usage.values())
 
         known_cost = 0.0
         unknown_count = 0
-        for m_id, u in session_usage.items():
+        for m_id, u in conversation_usage.items():
             c = cost_usd(m_id, u["hit"], u["miss"], u["out"])
             if c is None:
                 unknown_count += 1
             else:
                 known_cost += c
 
-        total_models = len(session_usage)
+        total_models = len(conversation_usage)
 
         cache_pct = _format_cache_percentage(total_hit, total_miss)
         usage_text = f"{total_hit:,} hit · {total_miss:,} miss · {total_out:,} out · cache {cache_pct}%"
         cost_str = _format_footer_cost(known_cost, unknown_count, total_models)
         self._status_cache.setText(usage_text)
-        self._status_session.setText(f"Session {cost_str}")
+        snapshot = latest_context or LatestContext()
+        context_capacity = snapshot.context_window_tokens or context_window_for_model(
+            snapshot.model_id or model_id
+        )
+        context_text, meter_value = _format_context_occupancy(snapshot.input_tokens, context_capacity)
+        self._status_context.setText(context_text)
+        self._context_meter.setVisible(meter_value is not None)
+        if meter_value is not None:
+            self._context_meter.setValue(meter_value)
+        self._status_session.setText(f"Conversation {cost_str}")

@@ -9,6 +9,7 @@ import copy
 import logging
 import threading
 from pathlib import Path
+from typing import Callable
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 from PySide6.QtWidgets import QFileDialog, QMessageBox
@@ -31,6 +32,7 @@ from aura.conversation.persistence import (
     most_recent_conversation,
     save_conversation,
 )
+from aura.conversation.telemetry import ConversationTelemetry
 from aura.projects.store import ProjectStore
 from aura.settings import AppSettings
 
@@ -83,6 +85,9 @@ class ConversationPersistence(QObject):
         input_panel,
         left_pane,
         settings,
+        get_conversation_telemetry: Callable[[], ConversationTelemetry],
+        restore_conversation_telemetry: Callable[[ConversationTelemetry], None],
+        reset_conversation_usage: Callable[[], None],
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -92,6 +97,9 @@ class ConversationPersistence(QObject):
         self._input = input_panel
         self._left_pane = left_pane
         self._settings = settings
+        self._get_conversation_telemetry = get_conversation_telemetry
+        self._restore_conversation_telemetry = restore_conversation_telemetry
+        self._reset_conversation_usage = reset_conversation_usage
         self._current_conversation_path: Path | None = None
         self._active_replay_id: int = 0
         self._conversation_generation: int = 0
@@ -185,6 +193,9 @@ class ConversationPersistence(QObject):
         # Deep copy data for thread safety
         history_copy = copy.deepcopy(self._bridge.history)
         chat_items_copy = clone_chat_items(getattr(self._chat, "chat_items", []))
+        telemetry_copy = ConversationTelemetry.from_dict(
+            self._get_conversation_telemetry().to_dict()
+        )
         existing_path = self._current_conversation_path
 
         # Guard: if existing_path is not under the current workspace root's
@@ -205,6 +216,7 @@ class ConversationPersistence(QObject):
                     existing_path=existing_path,
                     chat_items=chat_items_copy,
                     provider=provider,
+                    telemetry=telemetry_copy,
                 )
                 self._update_project_thread(workspace_root, path, history_copy)
                 self.save_succeeded.emit(path, generation)
@@ -224,6 +236,7 @@ class ConversationPersistence(QObject):
         self._chat.reset()
         self._playground.clear()
         self._current_conversation_path = None
+        self._reset_conversation_usage()
         self.current_context_changed.emit("", "")
 
     def open_conversation(
@@ -355,6 +368,7 @@ class ConversationPersistence(QObject):
         self._playground.clear()
         self._bridge.clear_pre_execution_snapshot()
         self._render_chat_items(loaded.chat_items)
+        self._restore_conversation_telemetry(loaded.telemetry)
         self.needs_status_refresh.emit()
 
         # Sync companion context after applying a loaded conversation

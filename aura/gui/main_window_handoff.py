@@ -33,7 +33,6 @@ class MainWindowHandoffController(QObject):
         get_workspace_root: Callable[[], Path | None],
         get_model: Callable[[], str],
         get_thinking: Callable[[], ThinkingMode],
-        reset_session_usage: Callable[[], None],
         parent_widget,
         parent=None,
     ) -> None:
@@ -46,7 +45,6 @@ class MainWindowHandoffController(QObject):
         self._get_workspace_root = get_workspace_root
         self._get_model = get_model
         self._get_thinking = get_thinking
-        self._reset_session_usage = reset_session_usage
         self._parent_widget = parent_widget
 
         self._pending_handoff: bool = False
@@ -114,7 +112,6 @@ class MainWindowHandoffController(QObject):
         self._persistence.new_conversation()
         self._send_handler.clear_queue()
         self._input_panel.set_queued_messages(0)
-        self._reset_session_usage()
 
         # Add handoff to bridge history as prior context (no API call)
         self._bridge.history.append_user_text(

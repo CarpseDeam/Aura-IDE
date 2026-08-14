@@ -32,6 +32,14 @@ def test_on_submit_emits_while_idle_and_execution_active(tmp_path) -> None:
     assert panel._editor.toPlainText() == ""
 
 
+def test_input_panel_no_longer_owns_handoff_action(tmp_path) -> None:
+    _app()
+    panel = InputPanel(tmp_path)
+
+    assert not hasattr(panel, "_handoff_btn")
+    assert not hasattr(panel, "handoff_requested")
+
+
 def test_send_button_emits_sent(tmp_path) -> None:
     _app()
     panel = InputPanel(tmp_path)

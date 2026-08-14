@@ -26,12 +26,13 @@ from aura.conversation.chat_transcript import (
     normalize_chat_items,
 )
 from aura.conversation.history import History
+from aura.conversation.telemetry import ConversationTelemetry
 from aura.git_ops import ensure_aura_gitignored
 from aura.paths import safe_is_relative_to
 from aura.providers.base import THINKING_MODES
 from aura.providers.registry import provider_registry
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 CONVERSATIONS_SUBDIR = ".aura/conversations"
 
 
@@ -86,6 +87,7 @@ def save_conversation(
     existing_path: Path | None = None,
     chat_items: list[dict[str, Any]] | None = None,
     provider: ProviderId | None = None,
+    telemetry: ConversationTelemetry | None = None,
 ) -> Path:
     """Write the conversation to disk and return the file path."""
     target_dir = conversations_dir(workspace_root)
@@ -111,6 +113,7 @@ def save_conversation(
         if chat_items is not None
         else legacy_chat_items_from_messages(history.messages),
         "provider": provider or "deepseek",
+        "telemetry": (telemetry or ConversationTelemetry()).to_dict(),
     }
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return path
@@ -141,6 +144,7 @@ class LoadedConversation:
     path: Path
     provider: ProviderId = "deepseek"
     chat_items: list[dict[str, Any]] = field(default_factory=list)
+    telemetry: ConversationTelemetry = field(default_factory=ConversationTelemetry)
 
 
 def load_conversation(path: Path) -> LoadedConversation:
@@ -182,6 +186,7 @@ def load_conversation(path: Path) -> LoadedConversation:
         path=path,
         provider=provider,
         chat_items=chat_items,
+        telemetry=ConversationTelemetry.from_dict(data.get("telemetry")),
     )
 
 

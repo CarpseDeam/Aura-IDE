@@ -76,6 +76,7 @@ class MainWindowSignalWiring:
 
         # ---- group 9: execution handler + playground ----
         w._execution_handler.usage_updated.connect(w._refresh_status_bar)
+        w._execution_handler.execution_running_changed.connect(w._status_bar.set_execution_active)
         w._playground.stop_execution_requested.connect(w._send_handler.handle_stop)
         w._execution_handler.execution_running_changed.connect(w._playground.set_execution_running)
 
@@ -105,10 +106,10 @@ class MainWindowSignalWiring:
         w._bridge.apiError.connect(w._on_api_error)
         w._chat.retry_requested.connect(w._on_retry)
 
-        # ---- group 13: input panel ----
+        # ---- group 13: input panel and footer action ----
         w._input.sent.connect(lambda p: w._send_handler.handle_send(p, w.current_model(), w.current_thinking()))
         w._input.stop_requested.connect(w._send_handler.handle_stop)
-        w._input.handoff_requested.connect(w._on_handoff_requested)
+        w._status_bar.handoff_requested.connect(w._on_handoff_requested)
 
         # ---- group 14: tree + playground ----
         w._tree.file_activated.connect(w._playground.open_file)

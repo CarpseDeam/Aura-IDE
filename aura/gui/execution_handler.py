@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QObject, QTimer, Signal
 
 from aura.config import redact_secrets
+from aura.conversation.telemetry import ConversationTelemetry, context_window_for_model
 
 _log = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ class ExecutionEventHandler(QObject):
     chat view and playground.
 
     Attributes:
-        usage_updated: Emitted when ``_session_usage`` changes so that
+        usage_updated: Emitted when conversation telemetry changes so that
             MainWindow can refresh the status bar.
         execution_started: Emitted at the end of ``_on_execution_started`` so that
             MainWindow can set input streaming state.
@@ -69,7 +70,7 @@ class ExecutionEventHandler(QObject):
         self._chat = chat
         self._playground = playground
         self._settings = settings
-        self._session_usage: dict[str, dict[str, int]] = {}
+        self._conversation_telemetry = ConversationTelemetry()
         self._active_execution_tool_call_id: str | None = None
         self._pending_execution_finish: _PendingExecutionFinish | None = None
         self._pending_execution_finish_generation = 0
@@ -79,15 +80,25 @@ class ExecutionEventHandler(QObject):
     # ---- public property -------------------------------------------------------
 
     @property
-    def session_usage(self) -> dict[str, dict[str, int]]:
+    def conversation_usage(self) -> dict[str, dict[str, int]]:
         """Read-only access to the per-model usage accumulator."""
-        return self._session_usage
+        return self._conversation_telemetry.per_model
+
+    @property
+    def conversation_telemetry(self) -> ConversationTelemetry:
+        """Read-only access to all durable conversation telemetry."""
+        return self._conversation_telemetry
 
     # ---- public methods --------------------------------------------------------
 
-    def reset_session_usage(self) -> None:
+    def reset_conversation_usage(self) -> None:
         """Clear the usage accumulator and notify listeners."""
-        self._session_usage.clear()
+        self._conversation_telemetry = ConversationTelemetry()
+        self.usage_updated.emit()
+
+    def restore_conversation_telemetry(self, telemetry: ConversationTelemetry) -> None:
+        """Replace live telemetry with a normalized persisted snapshot."""
+        self._conversation_telemetry = ConversationTelemetry.from_dict(telemetry.to_dict())
         self.usage_updated.emit()
 
     def update_settings(self, settings: AppSettings) -> None:
@@ -342,14 +353,14 @@ class ExecutionEventHandler(QObject):
     ) -> None:
         """Accumulate per-model token usage and emit update signal."""
 
-        if hit == 0 and miss == 0:
-            miss = prompt
-        bucket = self._session_usage.setdefault(
-            model_id, {"hit": 0, "miss": 0, "out": 0}
+        self._conversation_telemetry.record_usage(
+            model_id=model_id,
+            prompt=prompt,
+            completion=completion,
+            hit=hit,
+            miss=miss,
+            context_window_tokens=context_window_for_model(model_id),
         )
-        bucket["hit"] += hit
-        bucket["miss"] += miss
-        bucket["out"] += completion
         self.usage_updated.emit()
 
     def _on_execution_activity_updated(self, tool_call_id: str, entries: list) -> None:

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PIL import Image
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QIcon, QImage, QPixmap, QTextOption
+from PySide6.QtGui import QColor, QImage, QPixmap, QTextOption
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aura.config import media_path
 from aura.gui.theme import BG_RAISED, BORDER, DANGER, FG, FG_DIM
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
@@ -169,7 +168,6 @@ class InputPanel(QFrame):
 
     sent = Signal(SendPayload)
     stop_requested = Signal()
-    handoff_requested = Signal()
 
     def __init__(self, workspace_root: Path | None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -238,20 +236,6 @@ class InputPanel(QFrame):
         controls = QHBoxLayout()
         controls.setSpacing(10)
 
-        self._handoff_btn = QToolButton()
-        self._handoff_btn.setIcon(QIcon(str(media_path("start_new_chat.svg"))))
-        self._handoff_btn.setText("Fresh Chat")
-        self._handoff_btn.setToolTip("Generate a handoff and continue in a fresh chat")
-        self._handoff_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._handoff_btn.setStyleSheet(
-            f"QToolButton {{ background: transparent; color: {FG}; border: none; "
-            f"padding: 4px 10px; border-radius: 10px; }}"
-            f"QToolButton::menu-indicator {{ image: none; }}"
-            f"QToolButton:hover {{ background: {BG_RAISED}; }}"
-        )
-        self._handoff_btn.clicked.connect(self.handoff_requested.emit)
-        controls.addWidget(self._handoff_btn)
-
         controls.addStretch(1)
 
         self._stop_btn = QPushButton("Stop")
@@ -313,7 +297,6 @@ class InputPanel(QFrame):
         self._stop_btn.setVisible(active)
         self._update_send_button_text()
         self._send_btn.setVisible(True)
-        self._handoff_btn.setEnabled(not active)
 
     def set_placeholder(self, text: str) -> None:
         """Set the editor placeholder text."""
