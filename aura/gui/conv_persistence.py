@@ -335,6 +335,7 @@ class ConversationPersistence(QObject):
             loaded.path,
         )
         self._active_replay_id += 1
+        self._bridge.reset_history()
         # Old conversations may carry legacy Assistant/Execution metadata. They load
         # safely, but the live session always resumes with the production
         # conversation's model fields only.

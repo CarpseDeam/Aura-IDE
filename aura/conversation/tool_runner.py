@@ -1,56 +1,54 @@
-"""ToolRunner - delegates tool execution for ConversationManager."""
+"""Thin terminal-tool facade for the conversation manager."""
+
 from __future__ import annotations
 
 import json
-import logging
 import threading
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from aura.client import (
-    TerminalOutput,
-    ToolResult,
-)
+from aura.client import TerminalCommandStarted, TerminalOutput, ToolResult
 from aura.config import load_settings
 from aura.conversation.command_normalizer import normalize_command
 from aura.conversation.history import History
-from aura.conversation.tool_runner_terminal_policy import (
-    resolve_terminal_timeout,
-)
-from aura.conversation.validation_orchestrator import (
-    VALIDATION_COMMAND_UNRUNNABLE,
-    ValidationCommand,
-    ValidationCommandSpec,
-    classify_command_outcome,
-    classify_terminal_run,
-    classify_validation_run,
-    looks_like_validation_command,
-    parse_validation_command,
-)
-from aura.project_env import (
-    build_project_command_rewrite,
-    resolve_workspace_cwd,
-    workspace_relative_cwd,
-)
-from aura.sandbox import SandboxExecutor, SandboxResult, WatchResult
+from aura.conversation.shell_tool import ShellTool
+from aura.conversation.validation_orchestrator import ValidationCommandSpec
+from aura.sandbox import SandboxExecutor, WatchResult
 
-_log = logging.getLogger(__name__)
+_DEFAULT_SANDBOX_EXECUTOR = SandboxExecutor
 
 
 class ToolRunner:
-    """Owns execution of terminal tools for the production conversation."""
+    """Delegate persistent terminal work and bounded launch watching."""
 
-    def __init__(
-        self,
-        history: History,
-        workspace_root: Path,
-    ) -> None:
+    def __init__(self, history: History, workspace_root: Path) -> None:
         self._history = history
         self._workspace_root = workspace_root
+        legacy_factory = (
+            SandboxExecutor
+            if SandboxExecutor is not _DEFAULT_SANDBOX_EXECUTOR
+            else None
+        )
+        self._shell_tool = ShellTool(
+            history,
+            workspace_root,
+            legacy_executor_factory=legacy_factory,
+            settings_loader=load_settings,
+        )
+
+    @property
+    def shell_tool(self) -> ShellTool:
+        return self._shell_tool
 
     def set_workspace_root(self, root: Path) -> None:
         self._workspace_root = root
+        self._shell_tool.set_workspace_root(root)
+
+    def reset(self) -> None:
+        self._shell_tool.reset()
+
+    def close(self) -> None:
+        self._shell_tool.close()
 
     def handle_terminal_command(
         self,
@@ -60,261 +58,14 @@ class ToolRunner:
         cancel_event: threading.Event,
         explicit_validation_commands: list[ValidationCommandSpec] | None = None,
     ) -> dict[str, Any] | None:
-        command = args.get("command", "")
-        requested_command = str(command or "")
-        if not command:
-            payload = json.dumps({"ok": False, "error": "command is required"})
-            self._history.append_tool_result(tool_call_id, payload)
-            on_event(
-                ToolResult(
-                    tool_call_id=tool_call_id,
-                    name="run_terminal_command",
-                    ok=False,
-                    result=payload,
-                )
-            )
-            return {"_terminal_payload": {"ok": False, "error": "command is required", "command": ""}}
-
-        if "\n" in requested_command or "\r" in requested_command:
-            # A multiline command is a real shell script, not validation
-            # prose.  ``parse_validation_command`` extracts a single command
-            # line from a longer text; applying it here would truncate the
-            # command at its first newline and silently drop the rest.
-            validation_command = ValidationCommand(
-                raw_text=requested_command,
-                command=requested_command,
-                source="single_command",
-            )
-        else:
-            validation_command = parse_validation_command(
-                requested_command,
-                source="single_command",
-            )
-        requested_cwd = str(args.get("cwd") or args.get("working_directory") or "").strip()
-        try:
-            if requested_cwd and validation_command.cwd:
-                parsed_resolved = resolve_workspace_cwd(self._workspace_root, validation_command.cwd)
-                requested_resolved = resolve_workspace_cwd(self._workspace_root, requested_cwd)
-                if parsed_resolved != requested_resolved:
-                    raise ValueError("cwd conflicts with command working directory")
-                resolved_cwd = requested_resolved
-            else:
-                resolved_cwd = resolve_workspace_cwd(
-                    self._workspace_root,
-                    requested_cwd or validation_command.cwd,
-                )
-            relative_cwd = workspace_relative_cwd(self._workspace_root, resolved_cwd)
-        except ValueError as exc:
-            payload_dict = {
-                "ok": False,
-                "exit_code": None,
-                "output": "",
-                "command": validation_command.command,
-                "requested_command": requested_command,
-                "original_command": requested_command,
-                "cwd": requested_cwd or validation_command.cwd,
-                "working_directory": requested_cwd or validation_command.cwd,
-                "failure_class": VALIDATION_COMMAND_UNRUNNABLE,
-                "error": str(exc),
-                "recoverable": True,
-                "suggested_next_tool": "run_terminal_command",
-                "suggested_next_action": (
-                    "Use a workspace-relative cwd/working_directory that stays inside the workspace."
-                ),
-            }
-            payload = json.dumps(payload_dict, ensure_ascii=False)
-            self._history.append_tool_result(tool_call_id, payload)
-            on_event(
-                ToolResult(
-                    tool_call_id=tool_call_id,
-                    name="run_terminal_command",
-                    ok=False,
-                    result=payload,
-                )
-            )
-            return {"_terminal_payload": payload_dict}
-
-        if relative_cwd != validation_command.cwd:
-            validation_command = replace(
-                validation_command,
-                cwd=relative_cwd,
-                normalized=validation_command.normalized or bool(relative_cwd),
-            )
-
-        command = validation_command.command or requested_command
-
-        # Normalize for shell-dialect validation (reject bare cd, export)
-        # before the command reaches the sandbox.  The rewriting that
-        # normalize_command does is redundant with the per-mode rewriting
-        # below — the primary value here is the validity check.
-        normalized = normalize_command(command, self._workspace_root)
-        if not normalized.valid:
-            payload_dict = {
-                "ok": False,
-                "exit_code": None,
-                "output": normalized.validation_error,
-                "command": command,
-                "requested_command": requested_command,
-                "original_command": requested_command,
-                "cwd": relative_cwd,
-                "working_directory": relative_cwd,
-                "failure_class": VALIDATION_COMMAND_UNRUNNABLE,
-                "error": normalized.validation_error,
-                "recoverable": True,
-                "suggested_next_tool": "run_terminal_command",
-                "suggested_next_action": (
-                    "Use the structured 'cwd' / 'working_directory' parameter "
-                    "instead of bare 'cd', or chain the command with '&&'. "
-                    "For environment variables, configure them through the "
-                    "harness settings rather than 'export'."
-                ),
-            }
-            payload = json.dumps(payload_dict, ensure_ascii=False)
-            self._history.append_tool_result(tool_call_id, payload)
-            on_event(
-                ToolResult(
-                    tool_call_id=tool_call_id,
-                    name="run_terminal_command",
-                    ok=False,
-                    result=payload,
-                )
-            )
-            return {"_terminal_payload": payload_dict}
-
-        # Most project-environment rewriting is repeated by
-        # build_project_command below.  Godot validation aliases are different:
-        # they change the engine operation itself, so carry that corrected
-        # command forward to the sandbox instead of validating one string and
-        # accidentally executing the original one.
-        if normalized.normalization_reason:
-            command = normalized.command
-
-        command_plan = build_project_command_rewrite(
-            resolved_cwd,
-            str(command),
-        )
-        command = command_plan.command
-        original_command = command_plan.original_command or requested_command
-        # The production conversation owns its own validation, so its
-        # terminal results carry the same validation classification the Execution
-        # path produced. Without this, a genuinely passing validation has no
-        # pass label and cannot be reported as proof.
-        explicit = False
-        is_ad_hoc_validation = looks_like_validation_command(str(command))
-
-        timeout = resolve_terminal_timeout(
-            command,
-            args.get("timeout"),
-        )
-
-        settings = load_settings()
-        sandbox = SandboxExecutor(
-            mode=settings.sandbox_mode,  # type: ignore[arg-type]
-            workspace_root=self._workspace_root,
-            network_enabled=True,
-        )
-
-        output_lines: list[str] = []
-
-        def on_output_chunk(text: str) -> None:
-            output_lines.append(text)
-            on_event(TerminalOutput(tool_call_id=tool_call_id, text=text))
-
-        result: SandboxResult = sandbox.run_terminal_command(
-            command=command,
-            timeout=timeout,
+        """Preserve the manager-facing API while delegating all shell policy."""
+        return self._shell_tool.handle_terminal_command(
+            tool_call_id=tool_call_id,
+            args=args,
+            on_event=on_event,
             cancel_event=cancel_event,
-            on_output=on_output_chunk,
-            working_directory=resolved_cwd,
+            explicit_validation_commands=explicit_validation_commands,
         )
-
-        full_output = result.stdout
-        ok = result.ok
-        exit_code = result.exit_code
-
-        if not ok and result.stderr and "Docker is not available" in result.stderr:
-            full_output = f"[SANDBOX ERROR] {result.stderr}"
-
-        payload_dict = {
-            "ok": ok,
-            "exit_code": exit_code,
-            "output": full_output,
-            "command": command,
-            "requested_command": requested_command,
-            "original_command": original_command,
-            "cwd": relative_cwd,
-            "working_directory": relative_cwd,
-            "timed_out": result.timed_out,
-            "cancelled": result.cancelled,
-        }
-        if result.failure_class:
-            payload_dict["failure_class"] = result.failure_class
-        if normalized.normalization_reason:
-            payload_dict.update(
-                {
-                    "normalized": True,
-                    "validation_command_normalized": True,
-                    "normalization_reason": normalized.normalization_reason,
-                }
-            )
-        terminal_classification = classify_terminal_run(
-            str(command),
-            exit_code=exit_code,
-            output=full_output,
-            was_timeout=result.timed_out,
-            execution_failed=result.failure_class == "execution_failed",
-            cancelled=result.cancelled,
-        )
-        payload_dict.update(terminal_classification.metadata())
-        if validation_command.normalized:
-            payload_dict.update(validation_command.metadata())
-        # In the structured validation-commands world, we first check
-        # explicit spec matches; if none match, the ad-hoc
-        # ``looks_like_validation_command`` fallback ensures validation
-        # commands like ``python -m py_compile`` still count.
-        should_classify_validation = (
-            explicit or validation_command.normalized or is_ad_hoc_validation
-        )
-        if should_classify_validation:
-            run_result = classify_validation_run(
-                validation_command,
-                exit_code=exit_code,
-                output=full_output,
-                ok=ok,
-                failure_class=result.failure_class or "",
-            )
-            payload_dict.update(run_result.metadata())
-            # Compute contextual command outcome so that the run sees
-            # a classification that accounts for command role (e.g.
-            # "passed" for validation commands that exit 0 despite
-            # intermediate traceback output in a fallback branch).
-            outcome = classify_command_outcome(
-                command,
-                exit_code=exit_code,
-                output=full_output,
-                is_validation_command=True,
-                was_timeout=result.timed_out,
-                execution_failed=result.failure_class == "execution_failed",
-                cancelled=result.cancelled,
-            )
-            payload_dict.update(outcome.metadata())
-            # Override the raw terminal fields with the contextual
-            # outcome so successful validation does not carry a scary
-            # terminal_classification alongside validation_classification.
-            payload_dict["terminal_classification"] = outcome.classification
-            payload_dict["terminal_traceback_detected"] = outcome.traceback_detected
-        payload = json.dumps(payload_dict, ensure_ascii=False)
-
-        self._history.append_tool_result(tool_call_id, payload)
-        on_event(
-            ToolResult(
-                tool_call_id=tool_call_id,
-                name="run_terminal_command",
-                ok=ok,
-                result=payload,
-            )
-        )
-        return {"_terminal_payload": payload_dict}
 
     def handle_run_and_watch(
         self,
@@ -324,6 +75,7 @@ class ToolRunner:
         cancel_event: threading.Event,
         declared_run_command: str,
     ) -> dict[str, Any]:
+        """Run the separate bounded-process capability on SandboxExecutor."""
         if not declared_run_command or not declared_run_command.strip():
             payload_dict = {
                 "ok": False,
@@ -331,17 +83,7 @@ class ToolRunner:
                 "error": "no run command declared for this task",
                 "command": "",
             }
-            payload = json.dumps(payload_dict, ensure_ascii=False)
-            self._history.append_tool_result(tool_call_id, payload)
-            on_event(
-                ToolResult(
-                    tool_call_id=tool_call_id,
-                    name="run_and_watch",
-                    ok=False,
-                    result=payload,
-                )
-            )
-            return {"_terminal_payload": payload_dict}
+            return self._emit_watch_result(tool_call_id, on_event, payload_dict)
 
         window_seconds = 10
         raw_window = args.get("window_seconds")
@@ -351,11 +93,8 @@ class ToolRunner:
             except (TypeError, ValueError):
                 pass
 
-        # Normalize for consistent execution environment.
         normalized = normalize_command(declared_run_command, self._workspace_root)
         declared_run_command = normalized.command
-
-        # Reject ambiguous shell constructs before they reach the sandbox.
         if not normalized.valid:
             payload_dict = {
                 "ok": False,
@@ -363,17 +102,7 @@ class ToolRunner:
                 "error": normalized.validation_error,
                 "command": declared_run_command,
             }
-            payload = json.dumps(payload_dict, ensure_ascii=False)
-            self._history.append_tool_result(tool_call_id, payload)
-            on_event(
-                ToolResult(
-                    tool_call_id=tool_call_id,
-                    name="run_and_watch",
-                    ok=False,
-                    result=payload,
-                )
-            )
-            return {"_terminal_payload": payload_dict}
+            return self._emit_watch_result(tool_call_id, on_event, payload_dict)
 
         sandbox = SandboxExecutor(
             mode="host",
@@ -381,36 +110,39 @@ class ToolRunner:
             network_enabled=True,
         )
 
-        output_lines: list[str] = []
-
         def on_output_chunk(text: str) -> None:
-            output_lines.append(text)
             on_event(TerminalOutput(tool_call_id=tool_call_id, text=text))
 
+        # This bounded capability also owns a real start fact.  It remains
+        # independent from the persistent PowerShell session.
+        on_event(
+            TerminalCommandStarted(
+                tool_call_id=tool_call_id,
+                command=declared_run_command,
+                cwd=str(self._workspace_root),
+            )
+        )
         result: WatchResult = sandbox.run_and_watch(
             command=declared_run_command,
             window_seconds=window_seconds,
             cancel_event=cancel_event,
             on_output=on_output_chunk,
         )
-
-        full_output = result.output
         ok = result.ok and result.exited_early
-        if not ok:
-            if result.cancelled:
-                failure_class = "cancelled"
-            elif result.failure_class == "execution_failed":
-                failure_class = "launch_command_execution_failed"
-            elif result.survived_window and not result.error_detected:
-                failure_class = "launch_command_did_not_exit"
-            elif result.error_detected:
-                failure_class = "launch_command_crashed"
-            elif result.exit_code is not None and result.exit_code != 0:
-                failure_class = "launch_command_nonzero_exit"
-            else:
-                failure_class = "launch_command_failed"
-        else:
+        if ok:
             failure_class = None
+        elif result.cancelled:
+            failure_class = "cancelled"
+        elif result.failure_class == "execution_failed":
+            failure_class = "launch_command_execution_failed"
+        elif result.survived_window and not result.error_detected:
+            failure_class = "launch_command_did_not_exit"
+        elif result.error_detected:
+            failure_class = "launch_command_crashed"
+        elif result.exit_code is not None and result.exit_code != 0:
+            failure_class = "launch_command_nonzero_exit"
+        else:
+            failure_class = "launch_command_failed"
 
         payload_dict = {
             "ok": ok,
@@ -419,20 +151,31 @@ class ToolRunner:
             "exited_early": result.exited_early,
             "error_detected": result.error_detected,
             "exit_code": result.exit_code,
-            "output": full_output,
+            "output": result.output,
             "command": declared_run_command,
             "cancelled": result.cancelled,
         }
-        payload = json.dumps(payload_dict, ensure_ascii=False)
+        return self._emit_watch_result(tool_call_id, on_event, payload_dict, ok=ok)
 
+    def _emit_watch_result(
+        self,
+        tool_call_id: str,
+        on_event: Any,
+        payload_dict: dict[str, Any],
+        *,
+        ok: bool | None = None,
+    ) -> dict[str, Any]:
+        payload = json.dumps(payload_dict, ensure_ascii=False)
         self._history.append_tool_result(tool_call_id, payload)
         on_event(
             ToolResult(
                 tool_call_id=tool_call_id,
                 name="run_and_watch",
-                ok=ok,
+                ok=bool(payload_dict.get("ok")) if ok is None else ok,
                 result=payload,
             )
         )
-
         return {"_terminal_payload": payload_dict}
+
+
+__all__ = ["ToolRunner"]

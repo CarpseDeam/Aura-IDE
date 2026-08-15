@@ -73,6 +73,20 @@ class ExecutionToolEventRouter:
         """Forward terminal output (execution mode) to playground."""
         self._playground.append_terminal_output(execution_tool_id, text)
 
+    def on_execution_terminal_command_started(
+        self,
+        parent_tool_id: str,
+        execution_tool_id: str,
+        command: str,
+        starting_cwd: str,
+    ) -> None:
+        """Open the terminal card only after real execution has started."""
+        self._playground.start_terminal_command(
+            execution_tool_id,
+            command,
+            starting_cwd,
+        )
+
     def on_execution_agent_process_started(
         self, parent_tool_id: str, process_id: str, label: str, command: str
     ) -> None:

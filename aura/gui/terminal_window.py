@@ -49,9 +49,7 @@ class TerminalWindow(QDialog):
         self._geometry_save_timer.timeout.connect(self._save_geometry)
         self.resize(860, 460)
 
-        self._current_tool_id: str | None = None
-        self._terminal_card: TerminalCard | None = None
-        self._last_exit_code: int | None = None
+        self._terminal_cards: dict[str, TerminalCard] = {}
         self._initial_geometry = initial_geometry.strip()
 
         outer = QVBoxLayout(self)
@@ -120,37 +118,34 @@ class TerminalWindow(QDialog):
         self._geometry_restore_done = True
 
     def set_command(self, tool_id: str, command: str) -> None:
-        """Replace current terminal card for a new command."""
-        self._current_tool_id = tool_id
-        self._last_exit_code = None
-        self._remove_card()
-
+        """Add one card for a real command, keyed by its tool-call id."""
+        existing = self._terminal_cards.get(tool_id)
+        if existing is not None:
+            existing.set_command(command)
+            return
         card = TerminalCard(
             command=command,
             parent=self._card_host,
             start_collapsed=False,
         )
-        self._terminal_card = card
+        self._terminal_cards[tool_id] = card
         self._card_layout.insertWidget(0, card)
         self.terminal_started.emit()
 
     def append_output(self, tool_id: str, text: str) -> None:
         """Forward output text to the active card, even while hidden."""
-        if tool_id != self._current_tool_id:
-            return
-        if self._terminal_card is not None:
-            self._terminal_card.append_output(text)
+        card = self._terminal_cards.get(tool_id)
+        if card is not None:
+            card.append_output(text)
 
     def set_result(self, tool_id: str, exit_code: int) -> None:
         """Finalize terminal state; failed commands raise the window."""
-        if tool_id != self._current_tool_id:
+        card = self._terminal_cards.get(tool_id)
+        if card is None:
             return
-        self._last_exit_code = exit_code
-
-        if self._terminal_card is not None:
-            self._terminal_card.set_result(exit_code)
-            if self.isVisible():
-                self._terminal_card.expand()
+        card.set_result(exit_code)
+        if self.isVisible():
+            card.expand()
 
         self.terminal_finished.emit(exit_code)
 
@@ -173,9 +168,10 @@ class TerminalWindow(QDialog):
 
     def clear(self) -> None:
         """Delete the current terminal card and reset state."""
-        self._current_tool_id = None
-        self._last_exit_code = None
-        self._remove_card()
+        for card in self._terminal_cards.values():
+            self._card_layout.removeWidget(card)
+            card.deleteLater()
+        self._terminal_cards.clear()
         self.terminal_cleared.emit()
 
     def hideEvent(self, event) -> None:
@@ -199,13 +195,6 @@ class TerminalWindow(QDialog):
         event.ignore()
         self._save_geometry()
         self.hide()
-
-    def _remove_card(self) -> None:
-        if self._terminal_card is None:
-            return
-        self._card_layout.removeWidget(self._terminal_card)
-        self._terminal_card.deleteLater()
-        self._terminal_card = None
 
     def _restore_geometry(self, geometry: str) -> None:
         if not geometry:

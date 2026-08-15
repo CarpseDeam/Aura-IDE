@@ -69,6 +69,7 @@ class ProductionExecutionSession(QObject):
     executionToolCallEnd = Signal(str, str)
     executionToolResult = Signal(str, str, str, bool, str, dict)
     executionDiffDecided = Signal(str, str, str, str, str, str, bool)
+    executionTerminalCommandStarted = Signal(str, str, str, str)
     executionStreamDone = Signal(str, str, dict)
     executionApiError = Signal(str, int, str)
     executionUsage = Signal(str, str, int, int, int, int)

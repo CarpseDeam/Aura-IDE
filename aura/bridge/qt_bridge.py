@@ -215,6 +215,7 @@ class ConversationBridge(QObject):
     executionToolCallEnd = Signal(str, str)
     executionToolResult = Signal(str, str, str, bool, str, dict)
     executionDiffDecided = Signal(str, str, str, str, str, str, bool)
+    executionTerminalCommandStarted = Signal(str, str, str, str)
     executionApiError = Signal(str, int, str)
     executionUsage = Signal(str, str, int, int, int, int)
     executionActivityUpdated = Signal(str, list)  # Activity entries (append-only execution heartbeat)
@@ -310,6 +311,7 @@ class ConversationBridge(QObject):
         session.executionToolCallEnd.connect(self.executionToolCallEnd)
         session.executionToolResult.connect(self.executionToolResult)
         session.executionDiffDecided.connect(self.executionDiffDecided)
+        session.executionTerminalCommandStarted.connect(self.executionTerminalCommandStarted)
         session.executionApiError.connect(self.executionApiError)
         session.executionUsage.connect(self.executionUsage)
         session.executionActivityUpdated.connect(self.executionActivityUpdated)
@@ -351,12 +353,14 @@ class ConversationBridge(QObject):
         return copy.deepcopy(self._context_gearbox_metadata)
 
     def set_workspace_root(self, root) -> None:
+        self._cancel.set()
         if root is None:
+            self._manager.reset_conversation_runtime()
             self._tier1_context = ""
             self._context_gearbox_metadata = {}
             return
-        self._registry.set_workspace_root(root)
         self._manager.set_workspace_root(root)
+        self._registry.set_workspace_root(root)
         self.refresh_tier1_context()
 
     def set_read_only(self, value: bool) -> None:
@@ -426,6 +430,14 @@ class ConversationBridge(QObject):
     def shutdown_windows_computer_use(self) -> None:
         """Disconnect the Windows MCP server and close its process."""
         self._windows_computer_use.shutdown()
+
+    def shutdown(self) -> None:
+        """Close the conversation shell and all bridge-owned execution state."""
+        self._cancel.set()
+        self._approval_proxy.cancel_active_dialog()
+        self._plan_review_proxy.cancel_active()
+        self._manager.close()
+        self._production_session.clear()
 
     def set_auto_approve(self, enabled: bool) -> None:
         self._approval_proxy.set_approve_all_session(enabled)
@@ -498,6 +510,8 @@ class ConversationBridge(QObject):
 
 
     def reset_history(self) -> None:
+        self._cancel.set()
+        self._manager.reset_conversation_runtime()
         self._history.messages.clear()
         self._index_to_id.clear()
         self._index_to_name.clear()

@@ -278,14 +278,12 @@ class AuraPlayground(QWidget):
     # Public API (backward-compatible with execution_handler.py)
 
     def begin_assistant(self):
-        """Reset the workspace for a new assistant run (log text, code tabs, terminal).
-        """
+        """Prepare the workspace for a new run while retaining terminal history."""
         _log.info(
-            "DIAGNOSTIC AuraPlayground.begin_assistant called — clearing code tabs, log, terminal"
+            "DIAGNOSTIC AuraPlayground.begin_assistant called — clearing code tabs and log"
         )
         self._code_editor.close_execution_tabs()
         self._info_hub.clear_log()
-        self._terminal_window.clear()
         self._controllers.clear()
         self._controller_parents.clear()
         self._execution_code_paths.clear()
@@ -317,11 +315,6 @@ class AuraPlayground(QWidget):
                 lambda content, tid=execution_tool_id: self._on_code_content_updated(
                     tid, content
                 )
-            )
-
-        if name == "run_terminal_command":
-            c.command_resolved.connect(
-                lambda cmd, tid=execution_tool_id: self._terminal_window.set_command(tid, cmd)
             )
 
     def append_tool_args(self, execution_tool_id: str, fragment: str) -> None:
@@ -426,6 +419,15 @@ class AuraPlayground(QWidget):
 
     def start_terminal_process(self, process_id: str, command: str) -> None:
         self._terminal_window.set_command(process_id, command)
+
+    def start_terminal_command(
+        self,
+        tool_call_id: str,
+        command: str,
+        starting_cwd: str = "",
+    ) -> None:
+        """Present a card only after the command was submitted for execution."""
+        self._terminal_window.set_command(tool_call_id, command)
 
     def append_terminal_output(self, execution_tool_id: str, text: str) -> None:
         self._terminal_window.append_output(execution_tool_id, text)

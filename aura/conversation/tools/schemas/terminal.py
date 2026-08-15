@@ -8,16 +8,20 @@ TERMINAL_TOOL_DEF: dict[str, Any] = {
     "function": {
         "name": "run_terminal_command",
         "description": (
-            "Execute a shell command in the workspace or an optional workspace-relative cwd and "
-            "stream its output. The full system shell is available: pipes, redirects, and "
+            "Execute one command in Aura's persistent PowerShell session in the workspace or an "
+            "optional workspace-relative cwd and stream its output. The same PowerShell process "
+            "is reused across commands and user turns in this conversation, so cwd, environment "
+            "variables, and PowerShell variables persist. Each submitted command must still reach "
+            "completion before the next one runs. The full system shell is available: pipes, redirects, and "
             "chaining work, as do linters, type checkers, test suites, build commands, git, "
             "dependency installs (pip install, python -m pip install, uv sync, poetry install, "
             "pdm install), and any command that mutates the workspace. The command runs with the "
-            "workspace as its working directory unless cwd/working_directory is provided. Stdout "
+            "workspace as its initial working directory unless cwd/working_directory is provided. Stdout "
             "and stderr are both captured and streamed in real-time, including periodic status "
             "heartbeats if the command is quiet. Returns the exit code and complete output on "
             "completion. The command must self-terminate: long-running watchers, dev servers, "
-            "REPLs, and commands that wait for interactive input hit the timeout and are killed. "
+            "REPLs, and commands that wait for interactive input hit the timeout; the entire "
+            "PowerShell session is then killed and the next command starts cleanly. "
             "For Python projects the project-local .venv interpreter is selected when present."
         ),
         "parameters": {
@@ -25,12 +29,12 @@ TERMINAL_TOOL_DEF: dict[str, Any] = {
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "The shell command to execute, e.g. 'python -m py_compile aura/app.py' for touched Python files, 'npm test' for a Node project when available/requested, or another focused validation/build command. Executed via the system shell.",
+                    "description": "The PowerShell command to execute, e.g. 'python -m py_compile aura/app.py' for touched Python files, 'npm test' for a Node project when available/requested, or another focused validation/build command.",
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": "Maximum seconds to wait before killing the command. Default: 45. Prefer short focused runs; very large values may be reduced for safety.",
-                    "default": 45,
+                    "description": "Maximum seconds to wait before resetting the persistent session. Default follows Aura's terminal timeout policy; prefer short focused runs.",
+                    "default": 300,
                 },
                 "cwd": {
                     "type": "string",

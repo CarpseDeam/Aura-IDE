@@ -388,6 +388,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._settings.playground_vertical_splitter_sizes = playground_vert
         save_settings(self._settings)
         self._companion_controller.stop()
+        self._bridge.shutdown()
         # Closes the Windows MCP subprocess. Without this the server outlives
         # the app that launched it.
         self._bridge.shutdown_windows_computer_use()

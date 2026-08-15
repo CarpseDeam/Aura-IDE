@@ -240,6 +240,14 @@ class ConversationManager:
     def set_workspace_root(self, root: Path) -> None:
         self._tool_runner.set_workspace_root(root)
 
+    def reset_conversation_runtime(self) -> None:
+        """Reset conversation-owned execution state without changing history."""
+        self._tool_runner.reset()
+
+    def close(self) -> None:
+        """Close conversation-owned execution resources."""
+        self._tool_runner.close()
+
     def configure_runtime_context(
         self,
         base_prompt: str,

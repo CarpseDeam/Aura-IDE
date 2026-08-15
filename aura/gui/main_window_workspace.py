@@ -312,6 +312,8 @@ class MainWindowWorkspaceController(QObject):
         path = Path(chosen)
         if self._warn_blocked_root(path):
             return None
+        if window._workspace_root is not None and window._workspace_root.resolve() != path.resolve():
+            window._persistence.new_conversation()
         window._workspace_root = path
         window._bridge.set_workspace_root(path)
         window._input.set_workspace_root(path)

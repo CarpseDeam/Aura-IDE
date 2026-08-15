@@ -79,6 +79,20 @@ class TerminalOutput:
 
 
 @dataclass
+class TerminalCommandStarted:
+    """Authoritative start of a real terminal command submission."""
+
+    tool_call_id: str
+    command: str
+    cwd: str
+
+    @property
+    def starting_cwd(self) -> str:
+        """Descriptive alias for the cwd before command submission."""
+        return self.cwd
+
+
+@dataclass
 class AgentProcessStarted:
     process_id: str
     label: str
@@ -107,6 +121,7 @@ Event = (
     | Done
     | ApiError
     | ToolResult
+    | TerminalCommandStarted
     | TerminalOutput
     | AgentProcessStarted
     | AgentProcessOutput

@@ -124,6 +124,9 @@ class ExecutionEventHandler(QObject):
         self._bridge.executionUsage.connect(self._on_execution_usage)
         self._bridge.executionActivityUpdated.connect(self._on_execution_activity_updated)
         self._bridge.taskChecklistUpdated.connect(self._on_task_checklist_updated)
+        self._bridge.executionTerminalCommandStarted.connect(
+            self._tool_router.on_execution_terminal_command_started
+        )
         self._bridge.executionTerminalOutput.connect(self._tool_router.on_execution_terminal_output)
         self._bridge.executionAgentProcessStarted.connect(self._tool_router.on_execution_agent_process_started)
         self._bridge.executionAgentProcessOutput.connect(self._tool_router.on_execution_agent_process_output)

@@ -18,6 +18,7 @@ from aura.client import (
     Done,
     Event,
     ReasoningDelta,
+    TerminalCommandStarted,
     TerminalOutput,
     ToolCallArgsDelta,
     ToolCallEnd,
@@ -57,6 +58,7 @@ class ExecutionEventRelay(QObject):
     apiError = Signal(str, int, str)          # tool_call_id, status_code, message
     toolResult = Signal(str, str, str, bool, str, dict)  # tool_id, execution_tc_id, name, ok, result, extras
     diffDecided = Signal(str, str, str, str, str, str, bool)
+    terminalCommandStarted = Signal(str, str, str, str)  # parent, tool, command, cwd
     terminalOutput = Signal(str, str, str)    # parent_tool_id, execution_tool_id, text
     agentProcessStarted = Signal(str, str, str, str)  # parent_tool_id, process_id, label, command
     agentProcessOutput = Signal(str, str, str)  # parent_tool_id, process_id, text
@@ -92,7 +94,6 @@ class ExecutionEventRelay(QObject):
         self.final_report_text: str = ""          # last assistant content after Done event
         self._active_tool_names: dict[str, str] = {}
         self._tool_arg_fragments: dict[str, str] = {}
-        self._terminal_lifecycle_started: set[str] = set()
         self._validation_lifecycle_started: set[str] = set()
 
     def set_model(self, model: str) -> None:
@@ -206,34 +207,31 @@ class ExecutionEventRelay(QObject):
                     self._tool_arg_fragments.get(wid, "") + ev.args_chunk
                 )
                 self.toolCallArgs.emit(tool_call_id, wid, ev.args_chunk)
+        elif isinstance(ev, TerminalCommandStarted):
+            self.terminalCommandStarted.emit(
+                tool_call_id,
+                ev.tool_call_id,
+                ev.command,
+                ev.cwd,
+            )
+            tool_name = self._active_tool_names.get(ev.tool_call_id, "run_terminal_command")
+            self._emit_bus_event(EXECUTION_COMMAND_STARTED, {
+                "name": tool_name,
+                "command": ev.command,
+                "cwd": ev.cwd,
+                "starting_cwd": ev.cwd,
+                "tool_call_id": ev.tool_call_id,
+            })
+            if tool_name == "run_and_watch" or looks_like_validation_command(ev.command):
+                self._emit_bus_event(EXECUTION_VALIDATION_STARTED, {
+                    "name": tool_name,
+                    "command": ev.command,
+                    "tool_call_id": ev.tool_call_id,
+                })
+                self._validation_lifecycle_started.add(ev.tool_call_id)
         elif isinstance(ev, ToolCallEnd):
             wid = self.index_to_id.get(ev.index, "")
             if wid:
-                tool_name = self._active_tool_names.get(wid, "")
-                if (
-                    tool_name in ("run_terminal_command", "run_and_watch")
-                    and wid not in self._terminal_lifecycle_started
-                ):
-                    command = ""
-                    try:
-                        args = json.loads(self._tool_arg_fragments.get(wid, "") or "{}")
-                    except (json.JSONDecodeError, TypeError):
-                        args = {}
-                    if isinstance(args, dict):
-                        command = str(args.get("command") or "")
-                    self._emit_bus_event(EXECUTION_COMMAND_STARTED, {
-                        "name": tool_name,
-                        "command": command,
-                        "tool_call_id": wid,
-                    })
-                    if tool_name == "run_and_watch" or looks_like_validation_command(command):
-                        self._emit_bus_event(EXECUTION_VALIDATION_STARTED, {
-                            "name": tool_name,
-                            "command": command,
-                            "tool_call_id": wid,
-                        })
-                        self._validation_lifecycle_started.add(wid)
-                    self._terminal_lifecycle_started.add(wid)
                 self.toolCallEnd.emit(tool_call_id, wid)
         elif isinstance(ev, Usage):
             self.usage.emit(
@@ -327,7 +325,6 @@ class ExecutionEventRelay(QObject):
             )
             self._active_tool_names.pop(ev.tool_call_id, None)
             self._tool_arg_fragments.pop(ev.tool_call_id, None)
-            self._terminal_lifecycle_started.discard(ev.tool_call_id)
             if ev.name not in _PASSIVE_DISPLAY_TOOLS:
                 self._emit_bus_event(EXECUTION_TOOL_FINISHED, {
                     "name": ev.name,
@@ -366,7 +363,6 @@ class ExecutionEventRelay(QObject):
         self.final_report_text = ""
         self._active_tool_names.clear()
         self._tool_arg_fragments.clear()
-        self._terminal_lifecycle_started.clear()
         self._validation_lifecycle_started.clear()
 
     def _tool_result_record(self, ev: ToolResult, parsed: Any) -> dict[str, Any]:

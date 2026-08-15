@@ -179,6 +179,7 @@ class HarnessLapBridge(QObject):
 
             # Reset and seed history
             self._history.messages.clear()
+            self._manager.reset_conversation_runtime()
             self._production_session.clear()
             self._history.append_user_text(want)
 
