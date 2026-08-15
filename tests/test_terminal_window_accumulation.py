@@ -22,6 +22,10 @@ def test_terminal_window_accumulates_and_routes_cards() -> None:
         assert "two output" in window._terminal_cards["tool-2"]._output_view.toPlainText()
         assert window._terminal_cards["tool-1"]._state == "done"
         assert window._terminal_cards["tool-2"]._state == "failed"
+        assert window._card_layout.indexOf(window._terminal_cards["tool-1"]) < window._card_layout.indexOf(
+            window._terminal_cards["tool-2"]
+        )
+        assert window.isVisible() is False
     finally:
         window.clear()
         window.deleteLater()

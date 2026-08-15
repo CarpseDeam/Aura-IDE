@@ -8,7 +8,8 @@ Currently handles:
 - Python interpreter rewriting (``python``/``python3``/``py`` → project venv Python).
 - Python module tool rewriting (``pytest``/``ruff``/``mypy`` → ``python -m tool``).
 - Non-Python commands are left as-is.
-- Shell-dialect validation (rejects bare ``cd``, leading ``export`` before execution).
+- Shell-dialect validation (one-shot paths reject bare ``cd``; all paths reject
+  leading ``export`` before execution).
 
 Extend this module when adding new normalization rules; do not scatter
 normalization logic across entry points.
@@ -39,7 +40,12 @@ class NormalizedCommand:
         return not self.validation_error
 
 
-def normalize_command(command: str, workspace_root: Path) -> NormalizedCommand:
+def normalize_command(
+    command: str,
+    workspace_root: Path,
+    *,
+    allow_persistent_cd: bool = False,
+) -> NormalizedCommand:
     """Normalize *command* for consistent execution environment.
 
     Rewrites Python interpreter and module-tool commands to use the project
@@ -57,7 +63,7 @@ def normalize_command(command: str, workspace_root: Path) -> NormalizedCommand:
     """
     plan = build_project_command_rewrite(workspace_root, command)
     rewritten, godot_reason = _rewrite_godot_validation_aliases(plan.command)
-    error = _validate_command_shell(rewritten)
+    error = _validate_command_shell(rewritten, allow_persistent_cd=allow_persistent_cd)
     return NormalizedCommand(
         command=rewritten,
         original_command=plan.original_command,
@@ -67,7 +73,7 @@ def normalize_command(command: str, workspace_root: Path) -> NormalizedCommand:
     )
 
 
-def _validate_command_shell(command: str) -> str:
+def _validate_command_shell(command: str, *, allow_persistent_cd: bool = False) -> str:
     """Check *command* for ambiguous or unsupported shell constructs.
 
     Returns an error message if the command should be rejected, or an
@@ -86,10 +92,9 @@ def _validate_command_shell(command: str) -> str:
     #  chdir dir                → same
     #  cd dir && command        → OK (chained command, & is shell operator)
     #  cd dir; command          → OK (chained command)
-    if _looks_like_bare_cd(stripped):
+    if not allow_persistent_cd and _looks_like_bare_cd(stripped):
         return (
-            "Ambiguous shell construct: bare 'cd' changes the working directory "
-            "only for the current subprocess, which exits immediately. "
+            "Bare 'cd' cannot persist in this one-shot execution path. "
             "Use the structured 'cwd' / 'working_directory' parameter instead, "
             "or chain the command with '&&' (e.g. 'cd dir && command')."
         )

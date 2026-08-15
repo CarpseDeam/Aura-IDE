@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import threading
+from pathlib import Path
+
 from aura.bridge.execution_event_relay import ExecutionEventRelay
-from aura.client import TerminalCommandStarted, ToolCallArgsDelta, ToolCallEnd, ToolCallStart
+from aura.client import TerminalCommandStarted, ToolCallArgsDelta, ToolCallEnd, ToolCallStart, ToolResult
+from aura.conversation.history import History
+from aura.conversation.tool_runner import ToolRunner
 from aura.events import EXECUTION_COMMAND_STARTED, EventBus
 
 
@@ -41,3 +46,41 @@ def test_command_start_is_owned_by_real_start_event() -> None:
             "C:/workspace",
         )
     ]
+
+
+def test_run_and_watch_preexisting_cancellation_has_no_start(tmp_path: Path) -> None:
+    runner = ToolRunner(History(), tmp_path)
+    cancel_event = threading.Event()
+    cancel_event.set()
+    events: list[object] = []
+
+    runner.handle_run_and_watch(
+        "watch-cancelled",
+        {},
+        events.append,
+        cancel_event,
+        "python -c \"print('not launched')\"",
+    )
+
+    assert len(events) == 1
+    assert isinstance(events[0], ToolResult)
+
+
+def test_run_and_watch_launch_failure_has_no_start(tmp_path: Path, monkeypatch) -> None:
+    def fail_launch(*_args, **_kwargs):
+        raise FileNotFoundError("launch failed")
+
+    monkeypatch.setattr("aura.sandbox.SandboxExecutor._launch_host_command", fail_launch)
+    runner = ToolRunner(History(), tmp_path)
+    events: list[object] = []
+
+    runner.handle_run_and_watch(
+        "watch-failed",
+        {},
+        events.append,
+        threading.Event(),
+        "python -c \"print('not launched')\"",
+    )
+
+    assert not any(isinstance(event, TerminalCommandStarted) for event in events)
+    assert len(events) == 1 and isinstance(events[0], ToolResult)

@@ -176,19 +176,24 @@ class TestBareCdRejected:
         root = _make_python_project(tmp_path)
         result = normalize_command("cd src", root)
         assert result.valid is False
-        assert "bare 'cd'" in result.validation_error
+        assert "one-shot execution path" in result.validation_error
 
     def test_bare_chdir_rejected(self, tmp_path: Path) -> None:
         root = _make_python_project(tmp_path)
         result = normalize_command("chdir src", root)
         assert result.valid is False
-        assert "bare 'cd'" in result.validation_error
+        assert "one-shot execution path" in result.validation_error
 
     def test_bare_cd_with_quoted_path_rejected(self, tmp_path: Path) -> None:
         root = _make_python_project(tmp_path)
         result = normalize_command('cd "my dir"', root)
         assert result.valid is False
-        assert "bare 'cd'" in result.validation_error
+        assert "one-shot execution path" in result.validation_error
+
+    def test_bare_cd_allowed_for_persistent_powershell(self, tmp_path: Path) -> None:
+        root = _make_python_project(tmp_path)
+        result = normalize_command("cd src", root, allow_persistent_cd=True)
+        assert result.valid is True
 
     def test_cd_chained_with_and_operator_allowed(self, tmp_path: Path) -> None:
         root = _make_python_project(tmp_path)

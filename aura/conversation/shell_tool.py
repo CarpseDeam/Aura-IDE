@@ -28,11 +28,10 @@ from aura.conversation.validation_orchestrator import (
     parse_validation_command,
 )
 from aura.project_env import (
-    build_project_command_rewrite,
     resolve_workspace_cwd,
     workspace_relative_cwd,
 )
-from aura.shell.powershell_session import PowerShellCommandResult, PowerShellSession
+from aura.shell.powershell_session import PowerShellSession
 
 
 class ShellTool:
@@ -43,14 +42,12 @@ class ShellTool:
         history: History,
         workspace_root: Path,
         *,
-        legacy_executor_factory: Callable[..., Any] | None = None,
-        settings_loader: Callable[[], Any] | None = None,
+        session_factory: Callable[[Path], PowerShellSession] = PowerShellSession,
     ) -> None:
         self._history = history
         self._workspace_root = Path(workspace_root).resolve()
-        self._legacy_executor_factory = legacy_executor_factory
-        self._settings_loader = settings_loader
-        self._session = PowerShellSession(self._workspace_root)
+        self._session_factory = session_factory
+        self._session = session_factory(self._workspace_root)
 
     @property
     def session(self) -> PowerShellSession:
@@ -62,11 +59,12 @@ class ShellTool:
             return
         self.close()
         self._workspace_root = resolved
-        self._session = PowerShellSession(resolved)
+        self._session = self._session_factory(resolved)
 
     def reset(self) -> None:
         """Reset the session at a conversation boundary."""
         self.close()
+        self._session = self._session_factory(self._workspace_root)
 
     def close(self) -> None:
         self._session.close()
@@ -84,7 +82,12 @@ class ShellTool:
             return self._emit_payload(
                 tool_call_id,
                 on_event,
-                {"ok": False, "error": "command is required", "command": ""},
+                self._validation_error_payload(
+                    command="",
+                    requested_command="",
+                    cwd="",
+                    error="command is required",
+                ),
             )
 
         if "\n" in requested_command or "\r" in requested_command:
@@ -120,6 +123,8 @@ class ShellTool:
                 )
             else:
                 resolved_cwd = self._session.current_cwd
+            if not resolved_cwd.is_dir():
+                raise ValueError("cwd must name an existing directory inside the workspace")
             relative_cwd = self._relative_cwd(resolved_cwd)
         except ValueError as exc:
             return self._emit_payload(
@@ -141,7 +146,11 @@ class ShellTool:
             )
 
         command = validation_command.command or requested_command
-        normalized = normalize_command(command, self._workspace_root)
+        normalized = normalize_command(
+            command,
+            self._workspace_root,
+            allow_persistent_cd=True,
+        )
         if not normalized.valid:
             return self._emit_payload(
                 tool_call_id,
@@ -152,36 +161,34 @@ class ShellTool:
                     cwd=relative_cwd,
                     error=normalized.validation_error,
                     next_action=(
-                        "Use the structured 'cwd' / 'working_directory' parameter "
-                        "instead of bare 'cd', or chain the command with '&&'. "
+                        "Use PowerShell syntax supported by the persistent session. "
                         "For environment variables, use PowerShell variables or "
-                        "Set-Item Env:NAME within the persistent session."
+                        "Set-Item Env:NAME."
                     ),
                 ),
             )
 
-        if normalized.normalization_reason:
-            command = normalized.command
-        command_plan = build_project_command_rewrite(self._workspace_root, command)
-        command = command_plan.command
-        original_command = command_plan.original_command or requested_command
+        command = normalized.command
+        original_command = normalized.original_command or command
         timeout = resolve_terminal_timeout(command, args.get("timeout"))
         explicit = self._matches_explicit_validation(
             command, explicit_validation_commands, relative_cwd
         )
         is_ad_hoc_validation = looks_like_validation_command(str(command))
 
-        starting_cwd = str(self._session.current_cwd)
-        prepared_command = self._prepare_command(command, resolved_cwd, starting_cwd)
-        # This is the only production terminal-start fact.  It is emitted after
-        # normalization and immediately before the live session submission.
-        on_event(
-            TerminalCommandStarted(
-                tool_call_id=tool_call_id,
-                command=prepared_command,
-                cwd=starting_cwd,
+        session_cwd = str(self._session.current_cwd)
+        starting_cwd = str(resolved_cwd)
+        prepared_command = self._prepare_command(command, resolved_cwd, session_cwd)
+        was_normalized = normalized.normalized or validation_command.normalized
+        normalization_reasons = [
+            reason
+            for reason in (
+                validation_command.normalization_reason,
+                normalized.normalization_reason,
             )
-        )
+            if reason
+        ]
+        normalization_reason = "; ".join(dict.fromkeys(normalization_reasons))
 
         output_lines: list[str] = []
 
@@ -189,68 +196,52 @@ class ShellTool:
             output_lines.append(text)
             on_event(TerminalOutput(tool_call_id=tool_call_id, text=text))
 
-        if self._legacy_executor_factory is None:
-            result = self._session.execute(
-                prepared_command,
-                timeout=timeout,
-                cancel_event=cancel_event,
-                on_output=on_output_chunk,
+        def on_submitted() -> None:
+            on_event(
+                TerminalCommandStarted(
+                    tool_call_id=tool_call_id,
+                    command=prepared_command,
+                    cwd=starting_cwd,
+                )
             )
-        else:
-            # Compatibility seam for existing unit tests that replace the
-            # old one-shot executor.  It is unreachable in production, where
-            # ToolRunner always supplies the persistent session path.
-            settings = self._settings_loader() if self._settings_loader else None
-            executor = self._legacy_executor_factory(
-                mode=getattr(settings, "sandbox_mode", "host"),
-                workspace_root=self._workspace_root,
-                network_enabled=True,
-            )
-            one_shot = executor.run_terminal_command(
-                command=command,
-                timeout=timeout,
-                cancel_event=cancel_event,
-                on_output=on_output_chunk,
-                working_directory=resolved_cwd,
-            )
-            result = PowerShellCommandResult(
-                ok=bool(one_shot.ok),
-                stdout=str(one_shot.stdout or ""),
-                stderr=str(one_shot.stderr or ""),
-                output=str(one_shot.stdout or ""),
-                exit_code=one_shot.exit_code,
-                cwd=str(resolved_cwd),
-                timed_out=bool(getattr(one_shot, "timed_out", False)),
-                cancelled=bool(getattr(one_shot, "cancelled", False)),
-                failure_class=getattr(one_shot, "failure_class", None),
-            )
+
+        result = self._session.execute(
+            prepared_command,
+            timeout=timeout,
+            cancel_event=cancel_event,
+            on_output=on_output_chunk,
+            on_submitted=on_submitted,
+        )
         full_output = result.output or "".join(output_lines)
         payload_dict: dict[str, Any] = {
             "ok": result.ok,
             "exit_code": result.exit_code,
             "output": full_output,
             "command": command,
+            "normalized_command": command,
             "prepared_command": prepared_command,
+            "executed_command": prepared_command if result.submitted else "",
             "requested_command": requested_command,
             "original_command": original_command,
+            "normalized": was_normalized,
+            "submitted": result.submitted,
             "cwd": self._relative_or_absolute(result.cwd),
             "actual_cwd": result.cwd,
+            "starting_cwd": starting_cwd,
             "working_directory": relative_cwd,
             "timed_out": result.timed_out,
             "cancelled": result.cancelled,
             "session_identity": result.session_id,
+            "session_started": result.session_started,
+            "session_restarted": result.session_restarted,
             "session_reset": result.session_reset,
         }
         if result.failure_class:
             payload_dict["failure_class"] = result.failure_class
-        if normalized.normalization_reason:
-            payload_dict.update(
-                {
-                    "normalized": True,
-                    "validation_command_normalized": True,
-                    "normalization_reason": normalized.normalization_reason,
-                }
-            )
+        if was_normalized:
+            payload_dict["validation_command_normalized"] = True
+        if normalization_reason:
+            payload_dict["normalization_reason"] = normalization_reason
 
         terminal_classification = classify_terminal_run(
             str(command),
@@ -284,6 +275,28 @@ class ShellTool:
             payload_dict.update(outcome.metadata())
             payload_dict["terminal_classification"] = outcome.classification
             payload_dict["terminal_traceback_detected"] = outcome.traceback_detected
+        payload_dict.update(
+            {
+                "cwd": self._relative_or_absolute(result.cwd),
+                "actual_cwd": result.cwd,
+                "starting_cwd": starting_cwd,
+                "working_directory": relative_cwd,
+                "session_identity": result.session_id,
+                "session_started": result.session_started,
+                "session_restarted": result.session_restarted,
+                "session_reset": result.session_reset,
+                "command": command,
+                "normalized_command": command,
+                "prepared_command": prepared_command,
+                "executed_command": prepared_command if result.submitted else "",
+                "requested_command": requested_command,
+                "original_command": original_command,
+                "normalized": was_normalized,
+                "submitted": result.submitted,
+            }
+        )
+        if normalization_reason:
+            payload_dict["normalization_reason"] = normalization_reason
         return self._emit_payload(tool_call_id, on_event, payload_dict, ok=result.ok)
 
     def _emit_payload(
@@ -315,14 +328,24 @@ class ShellTool:
         error: str,
         next_action: str | None = None,
     ) -> dict[str, Any]:
+        actual_cwd = str(self._session.current_cwd)
+        relative_actual_cwd = self._relative_or_absolute(actual_cwd)
         return {
             "ok": False,
             "exit_code": None,
             "output": "",
             "command": command,
+            "normalized_command": command,
+            "prepared_command": "",
+            "executed_command": "",
             "requested_command": requested_command,
             "original_command": requested_command,
-            "cwd": cwd,
+            "normalized": False,
+            "submitted": False,
+            "requested_cwd": cwd,
+            "cwd": relative_actual_cwd,
+            "actual_cwd": actual_cwd,
+            "starting_cwd": actual_cwd,
             "working_directory": cwd,
             "failure_class": VALIDATION_COMMAND_UNRUNNABLE,
             "error": error,
@@ -331,6 +354,8 @@ class ShellTool:
             "suggested_next_action": next_action
             or "Use a workspace-relative cwd/working_directory that stays inside the workspace.",
             "session_identity": self._session.session_id,
+            "session_started": False,
+            "session_restarted": False,
             "session_reset": False,
         }
 
@@ -348,7 +373,7 @@ class ShellTool:
         if str(resolved_cwd) == starting_cwd:
             return command
         quoted = "'" + str(resolved_cwd).replace("'", "''") + "'"
-        return f"Set-Location -LiteralPath {quoted}\n{command}"
+        return f"Set-Location -LiteralPath {quoted} -ErrorAction Stop\n{command}"
 
     @staticmethod
     def _matches_explicit_validation(

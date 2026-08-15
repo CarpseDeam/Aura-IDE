@@ -1,24 +1,30 @@
 from __future__ import annotations
 
-import codecs
-import json
 import logging
 import os
 import queue
 import shutil
 import subprocess
 import threading
-import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 from aura.config import get_subprocess_kwargs
+from aura.shell.powershell_protocol import (
+    BoundaryCollection,
+    OutputCallback,
+    QueueItem,
+    collect_boundaries,
+    frame_command,
+    new_markers,
+    read_pipe,
+)
 from aura.shell.process_tree import terminate_process_tree
 
 _log = logging.getLogger(__name__)
-_POLL_SECONDS = 0.05
+SubmissionCallback = Callable[[], None] | None
 
 
 @dataclass(frozen=True)
@@ -33,11 +39,10 @@ class PowerShellCommandResult:
     cancelled: bool = False
     failure_class: str | None = None
     session_id: str = ""
+    submitted: bool = False
+    session_started: bool = False
+    session_restarted: bool = False
     session_reset: bool = False
-
-
-QueueItem = tuple[str, str | None]
-OutputCallback = Callable[[str], None] | None
 
 
 def resolve_powershell() -> str:
@@ -65,15 +70,17 @@ def resolve_powershell() -> str:
 
 
 class PowerShellSession:
+    """Own one serialized persistent PowerShell process for a conversation."""
+
     def __init__(self, workspace_root: Path) -> None:
         self._workspace_root = Path(workspace_root).resolve()
         self._current_cwd = self._workspace_root
         self._process: subprocess.Popen[bytes] | None = None
         self._job: Any | None = None
-        self._shell_path = ""
         self._session_id = ""
         self._queue: queue.Queue[QueueItem] | None = None
         self._reader_threads: list[threading.Thread] = []
+        self._ever_submitted = False
         self._lock = threading.Lock()
 
     @property
@@ -100,6 +107,7 @@ class PowerShellSession:
         timeout: int,
         cancel_event: Any = None,
         on_output: OutputCallback = None,
+        on_submitted: SubmissionCallback = None,
     ) -> PowerShellCommandResult:
         with self._lock:
             return self._execute_locked(
@@ -107,6 +115,7 @@ class PowerShellSession:
                 timeout=timeout,
                 cancel_event=cancel_event,
                 on_output=on_output,
+                on_submitted=on_submitted,
             )
 
     def close(self) -> None:
@@ -121,46 +130,100 @@ class PowerShellSession:
         timeout: int,
         cancel_event: Any,
         on_output: OutputCallback,
+        on_submitted: SubmissionCallback,
     ) -> PowerShellCommandResult:
         if cancel_event is not None and cancel_event.is_set():
-            return self._reset_result(
-                output="\n[CANCELLED: PowerShell session reset]\n",
-                on_output=on_output,
+            return self._invalidate_result(
+                message="\n[CANCELLED: PowerShell session reset]\n",
                 cancelled=True,
                 failure_class="cancelled",
             )
+
+        process_was_started = False
         try:
-            self._ensure_started()
+            process_was_started = self._ensure_started()
             process = self._process
             output_queue = self._queue
             if process is None or output_queue is None or process.stdin is None:
                 raise RuntimeError("PowerShell session did not start")
-            marker = f"__AURA_PS_DONE_{uuid.uuid4().hex}__"
-            payload = self._protocol_command(command, marker)
+            markers = new_markers()
+            payload = frame_command(command, markers)
             process.stdin.write(payload.encode("utf-8"))
             process.stdin.flush()
-            return self._read_until_marker(
-                process,
-                output_queue,
-                marker,
-                timeout=timeout,
-                cancel_event=cancel_event,
-                on_output=on_output,
-            )
-        except (BrokenPipeError, ConnectionError, OSError, RuntimeError) as exc:
-            _log.warning("PowerShell session failed: %s", exc)
+        except (BrokenPipeError, ConnectionError, OSError, RuntimeError, ValueError) as exc:
+            _log.warning("PowerShell command submission failed: %s", exc)
             self._terminate_locked()
-            message = f"\n[ERROR: PowerShell session failed: {exc}; session reset]\n"
-            return self._reset_result(
-                output=message,
-                on_output=on_output,
+            return self._invalidate_result(
+                message=f"\n[ERROR: PowerShell command was not submitted: {exc}; session reset]\n",
                 exit_code=-1,
                 failure_class="execution_failed",
             )
 
-    def _ensure_started(self) -> None:
+        session_started = process_was_started and not self._ever_submitted
+        session_restarted = process_was_started and self._ever_submitted
+        self._ever_submitted = True
+        identity = self._session_id
+        if on_submitted is not None:
+            on_submitted()
+
+        collection = collect_boundaries(
+            process,
+            output_queue,
+            markers,
+            timeout=timeout,
+            cancel_event=cancel_event,
+            on_output=on_output,
+        )
+        if collection.failure is not None:
+            return self._collection_failure_result(
+                process,
+                collection,
+                identity=identity,
+                session_started=session_started,
+                session_restarted=session_restarted,
+                timeout=timeout,
+                on_output=on_output,
+            )
+
+        record = collection.record
+        if record is None:
+            return self._collection_failure_result(
+                process,
+                BoundaryCollection(
+                    stdout=collection.stdout,
+                    stderr=collection.stderr,
+                    output=collection.output,
+                    failure="malformed_record",
+                ),
+                identity=identity,
+                session_started=session_started,
+                session_restarted=session_restarted,
+                timeout=timeout,
+                on_output=on_output,
+            )
+
+        cwd = str(record.get("cwd") or self._current_cwd)
+        try:
+            self._current_cwd = Path(cwd).resolve()
+        except OSError:
+            pass
+        exit_code = _as_int(record.get("exit_code"), default=1)
+        return PowerShellCommandResult(
+            ok=exit_code == 0,
+            stdout=collection.stdout,
+            stderr=collection.stderr,
+            output=collection.output,
+            exit_code=exit_code,
+            cwd=cwd,
+            session_id=identity,
+            submitted=True,
+            session_started=session_started,
+            session_restarted=session_restarted,
+        )
+
+    def _ensure_started(self) -> bool:
         if self.is_running:
-            return
+            return False
         if self._process is not None:
             self._terminate_locked()
             self._reset_process_state()
@@ -191,7 +254,6 @@ class PowerShellSession:
             kwargs["start_new_session"] = True
         process = subprocess.Popen(**kwargs)
         self._process = process
-        self._shell_path = shell_path
         self._session_id = f"ps-{uuid.uuid4().hex[:12]}"
         self._queue = queue.Queue()
         self._reader_threads = []
@@ -202,7 +264,7 @@ class PowerShellSession:
         for stream, pipe in (("stdout", process.stdout), ("stderr", process.stderr)):
             if pipe is not None:
                 reader = threading.Thread(
-                    target=self._read_pipe,
+                    target=read_pipe,
                     args=(stream, pipe, self._queue),
                     name=f"aura-powershell-{stream}",
                     daemon=True,
@@ -210,10 +272,12 @@ class PowerShellSession:
                 reader.start()
                 self._reader_threads.append(reader)
         self._write_startup_encoding(process)
+        return True
 
-    def _write_startup_encoding(self, process: subprocess.Popen[bytes]) -> None:
+    @staticmethod
+    def _write_startup_encoding(process: subprocess.Popen[bytes]) -> None:
         if process.stdin is None:
-            return
+            raise RuntimeError("PowerShell stdin is unavailable")
         startup = (
             "$OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
             "[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false); "
@@ -222,242 +286,76 @@ class PowerShellSession:
         process.stdin.write(startup.encode("utf-8"))
         process.stdin.flush()
 
-    @staticmethod
-    def _protocol_command(command: str, marker: str) -> str:
-        return (
-            "$global:LASTEXITCODE = 0\n"
-            "$__aura_success = $true\n"
-            "try {\n"
-            f"{command}\n"
-            "$__aura_success = $?\n"
-            "} catch {\n"
-            "  $_ | Out-String | Write-Error\n"
-            "  $__aura_success = $false\n"
-            "}\n"
-            "$__aura_native_exit = $global:LASTEXITCODE\n"
-            "$__aura_exit = if ($__aura_success) { "
-            "if ($null -eq $__aura_native_exit) { 0 } "
-            "else { [int]$__aura_native_exit } "
-            "} elseif ($null -ne $__aura_native_exit -and $__aura_native_exit -ne 0) { "
-            "[int]$__aura_native_exit } else { 1 }\n"
-            "$__aura_cwd = (Get-Location).Path\n"
-            "$__aura_record = @{ exit_code = $__aura_exit; cwd = $__aura_cwd } "
-            "| ConvertTo-Json -Compress\n"
-            f"[Console]::Out.WriteLine('{marker}' + $__aura_record)\n\n"
-        )
-
-    @staticmethod
-    def _read_pipe(
-        stream: str,
-        pipe: Any,
-        output_queue: queue.Queue[QueueItem],
-    ) -> None:
-        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-        try:
-            while True:
-                chunk = pipe.read(4096)
-                if not chunk:
-                    break
-                output_queue.put((stream, decoder.decode(chunk)))
-            tail = decoder.decode(b"", final=True)
-            if tail:
-                output_queue.put((stream, tail))
-        except (OSError, ValueError):
-            pass
-        finally:
-            output_queue.put((stream, None))
-
-    def _read_until_marker(
+    def _collection_failure_result(
         self,
         process: subprocess.Popen[bytes],
-        output_queue: queue.Queue[QueueItem],
-        marker: str,
+        collection: BoundaryCollection,
         *,
+        identity: str,
+        session_started: bool,
+        session_restarted: bool,
         timeout: int,
-        cancel_event: Any,
         on_output: OutputCallback,
     ) -> PowerShellCommandResult:
-        started = time.monotonic()
-        stdout_buffer = ""
-        stdout_parts: list[str] = []
-        stderr_parts: list[str] = []
-        output_parts: list[str] = []
-        record: dict[str, Any] | None = None
-
-        def emit(stream: str, text: str) -> None:
-            if not text:
-                return
-            output_parts.append(text)
-            if stream == "stdout":
-                stdout_parts.append(text)
-            else:
-                stderr_parts.append(text)
-            if on_output is not None:
-                on_output(text)
-
-        def consume(stream: str, text: str | None) -> None:
-            nonlocal stdout_buffer, record
-            if text is None:
-                return
-            if stream != "stdout":
-                emit(stream, text)
-                return
-            if record is not None:
-                return
-            stdout_buffer += text
-            marker_index = stdout_buffer.find(marker)
-            if marker_index < 0:
-                safe_length = max(0, len(stdout_buffer) - len(marker) + 1)
-                if safe_length:
-                    emit("stdout", stdout_buffer[:safe_length])
-                    stdout_buffer = stdout_buffer[safe_length:]
-                return
-            before = stdout_buffer[:marker_index]
-            if before:
-                emit("stdout", before)
-            record_end = stdout_buffer.find("\n", marker_index + len(marker))
-            if record_end < 0:
-                stdout_buffer = stdout_buffer[marker_index:]
-                return
-            raw_record = stdout_buffer[marker_index + len(marker) : record_end].strip()
-            try:
-                parsed = json.loads(raw_record)
-            except json.JSONDecodeError:
-                emit("stdout", stdout_buffer[marker_index : record_end + 1])
-                stdout_buffer = stdout_buffer[record_end + 1 :]
-                return
-            if isinstance(parsed, dict):
-                record = parsed
-            stdout_buffer = ""
-
-        def flush_stdout_buffer() -> None:
-            nonlocal stdout_buffer
-            if stdout_buffer:
-                emit("stdout", stdout_buffer)
-                stdout_buffer = ""
-
-        while record is None:
-            if cancel_event is not None and cancel_event.is_set():
-                self._terminate_locked()
-                self._drain_queue(output_queue, consume)
-                flush_stdout_buffer()
-                return self._reset_result(
-                    output="\n[CANCELLED: PowerShell session reset]\n",
-                    stdout="".join(stdout_parts),
-                    stderr="".join(stderr_parts),
-                    on_output=on_output,
-                    exit_code=-1,
-                    cancelled=True,
-                    failure_class="cancelled",
-                )
-            if time.monotonic() - started >= max(1, timeout):
-                self._terminate_locked()
-                self._drain_queue(output_queue, consume)
-                flush_stdout_buffer()
-                return self._reset_result(
-                    output=(f"\n[ERROR: Command timed out after {timeout} seconds; PowerShell session reset]\n"),
-                    stdout="".join(stdout_parts),
-                    stderr="".join(stderr_parts),
-                    on_output=on_output,
-                    exit_code=124,
-                    timed_out=True,
-                    failure_class="timeout",
-                )
-            try:
-                stream, text = output_queue.get(timeout=_POLL_SECONDS)
-                consume(stream, text)
-            except queue.Empty:
-                if process.poll() is not None:
-                    self._drain_queue(output_queue, consume)
-                    flush_stdout_buffer()
-                    return self._unexpected_exit(
-                        process,
-                        stdout="".join(stdout_parts),
-                        stderr="".join(stderr_parts),
-                        output="".join(output_parts),
-                        on_output=on_output,
-                    )
-        self._drain_queue(output_queue, consume)
-        cwd = str(record.get("cwd") or self._current_cwd)
-        try:
-            self._current_cwd = Path(cwd).resolve()
-        except OSError:
-            pass
-        exit_code = _as_int(record.get("exit_code"), default=1)
-        return PowerShellCommandResult(
-            ok=exit_code == 0,
-            stdout="".join(stdout_parts),
-            stderr="".join(stderr_parts),
-            output="".join(output_parts),
-            exit_code=exit_code,
-            cwd=cwd,
-            session_id=self._session_id,
-        )
-
-    def _unexpected_exit(
-        self,
-        process: subprocess.Popen[bytes],
-        *,
-        stdout: str,
-        stderr: str,
-        output: str,
-        on_output: OutputCallback,
-    ) -> PowerShellCommandResult:
+        failure = collection.failure or "malformed_record"
+        exit_code = -1
+        timed_out = failure == "timeout"
+        cancelled = failure == "cancelled"
+        if timed_out:
+            exit_code = 124
+            message = f"\n[ERROR: Command timed out after {timeout} seconds; PowerShell session reset]\n"
+        elif cancelled:
+            message = "\n[CANCELLED: PowerShell session reset]\n"
+        elif failure == "malformed_record":
+            message = "\n[ERROR: Malformed PowerShell completion record; session reset]\n"
+        else:
+            exit_code = process.returncode if process.returncode is not None else -1
+            message = "\n[ERROR: PowerShell session exited unexpectedly; session reset]\n"
         self._terminate_locked()
-        message = "\n[ERROR: PowerShell session exited unexpectedly; session reset]\n"
         if on_output is not None:
             on_output(message)
         result = PowerShellCommandResult(
             ok=False,
-            stdout=stdout,
-            stderr=stderr,
-            output=output + message,
-            exit_code=process.returncode if process.returncode is not None else -1,
-            cwd=str(self._current_cwd),
-            failure_class="shell_exited",
-            session_id=self._session_id,
-            session_reset=True,
-        )
-        self._reset_process_state()
-        return result
-
-    def _reset_result(
-        self,
-        *,
-        output: str,
-        on_output: OutputCallback,
-        stdout: str = "",
-        stderr: str = "",
-        exit_code: int | None = None,
-        timed_out: bool = False,
-        cancelled: bool = False,
-        failure_class: str | None = None,
-    ) -> PowerShellCommandResult:
-        if on_output is not None:
-            on_output(output)
-        result = PowerShellCommandResult(
-            ok=False,
-            stdout=stdout,
-            stderr=stderr,
-            output=stdout + stderr + output,
+            stdout=collection.stdout,
+            stderr=collection.stderr,
+            output=collection.output + message,
             exit_code=exit_code,
-            cwd=str(self._current_cwd),
+            cwd=str(self._workspace_root),
             timed_out=timed_out,
             cancelled=cancelled,
-            failure_class=failure_class,
-            session_id=self._session_id,
+            failure_class=failure,
+            session_id=identity,
+            submitted=True,
+            session_started=session_started,
+            session_restarted=session_restarted,
             session_reset=True,
         )
         self._reset_process_state()
         return result
 
-    def _drain_queue(self, output_queue: queue.Queue[QueueItem], consume: Callable[..., None]) -> None:
-        while True:
-            try:
-                stream, text = output_queue.get_nowait()
-            except queue.Empty:
-                return
-            consume(stream, text)
+    def _invalidate_result(
+        self,
+        *,
+        message: str,
+        exit_code: int | None = None,
+        cancelled: bool = False,
+        failure_class: str,
+    ) -> PowerShellCommandResult:
+        identity = self._session_id
+        self._terminate_locked()
+        self._reset_process_state()
+        return PowerShellCommandResult(
+            ok=False,
+            stdout="",
+            stderr="",
+            output=message,
+            exit_code=exit_code,
+            cwd=str(self._workspace_root),
+            cancelled=cancelled,
+            failure_class=failure_class,
+            session_id=identity,
+            session_reset=True,
+        )
 
     def _terminate_locked(self) -> None:
         process = self._process
@@ -472,8 +370,8 @@ class PowerShellSession:
         self._queue = None
         self._reader_threads = []
         self._job = None
-        self._shell_path = ""
         self._session_id = ""
+        self._current_cwd = self._workspace_root
 
 
 def _as_int(value: Any, *, default: int) -> int:

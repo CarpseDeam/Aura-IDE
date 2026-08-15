@@ -129,7 +129,8 @@ class TerminalWindow(QDialog):
             start_collapsed=False,
         )
         self._terminal_cards[tool_id] = card
-        self._card_layout.insertWidget(0, card)
+        self._card_layout.insertWidget(self._card_layout.count() - 1, card)
+        QTimer.singleShot(0, lambda: self._scroll.ensureWidgetVisible(card))
         self.terminal_started.emit()
 
     def append_output(self, tool_id: str, text: str) -> None:
@@ -139,7 +140,7 @@ class TerminalWindow(QDialog):
             card.append_output(text)
 
     def set_result(self, tool_id: str, exit_code: int) -> None:
-        """Finalize terminal state; failed commands raise the window."""
+        """Finalize the matching terminal card without changing window visibility."""
         card = self._terminal_cards.get(tool_id)
         if card is None:
             return
@@ -167,7 +168,7 @@ class TerminalWindow(QDialog):
         return self.isVisible()
 
     def clear(self) -> None:
-        """Delete the current terminal card and reset state."""
+        """Delete all terminal cards at a full reset boundary."""
         for card in self._terminal_cards.values():
             self._card_layout.removeWidget(card)
             card.deleteLater()

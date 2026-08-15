@@ -1,4 +1,4 @@
-"""SandboxExecutor — runs terminal commands and dynamic tools in Docker/WASM containers.
+"""SandboxExecutor — runs bounded launch watches and dynamic tools.
 
 Provides true OS-level isolation so AI-generated code cannot harm the host.
 """
@@ -379,54 +379,13 @@ class SandboxExecutor:
                 exit_code=-1,
             )
 
-    def run_terminal_command(
-        self,
-        command: str,
-        timeout: int = 120,
-        cancel_event: Any = None,
-        on_output: Any = None,
-        input_data: str | None = None,
-        working_directory: Path | str | None = None,
-    ) -> SandboxResult:
-        """Execute a shell command in the sandbox, with optional streaming.
-
-        Args:
-            command: The shell command to execute.
-            timeout: Maximum seconds before killing.
-            cancel_event: Optional threading.Event for cancellation.
-            on_output: Optional callable(str) for streaming output chunks.
-            input_data: Optional string to pass to stdin.
-            working_directory: Optional resolved directory inside workspace_root.
-
-        Returns:
-            SandboxResult with ok, stdout, stderr, exit_code.
-        """
-        cwd = self._resolve_working_directory(working_directory)
-        if self._mode == "host":
-            return self._run_host_terminal(command, timeout, cancel_event, on_output, input_data, cwd)
-        elif self._mode == "docker":
-            if not self.docker_available:
-                return SandboxResult(
-                    ok=False,
-                    stdout="",
-                    stderr="Docker is not available. Install Docker or switch sandbox_mode to 'host'.",
-                    exit_code=-1,
-                )
-            return self._run_docker_terminal(command, timeout, cancel_event, on_output, input_data, cwd)
-        elif self._mode == "wasm":
-            return SandboxResult(
-                ok=False,
-                stdout="",
-                stderr="WASM sandbox is not yet implemented. Use 'docker' or 'host' mode.",
-                exit_code=-1,
-            )
-
     def run_and_watch(
         self,
         command: str,
         window_seconds: int = 10,
         cancel_event: Any = None,
         on_output: Any = None,
+        on_started: Any = None,
         *,
         require_survive_window: bool = False,
         working_directory: Path | str | None = None,
@@ -440,8 +399,22 @@ class SandboxExecutor:
         """
         cwd = self._resolve_working_directory(working_directory)
 
+        if cancel_event is not None and cancel_event.is_set():
+            return classify_watch_outcome(
+                still_running=False,
+                exit_code=-1,
+                output="\n[CANCELLED before process launch]\n",
+                window_seconds=window_seconds,
+                require_survive_window=require_survive_window,
+                failure_class="cancelled",
+                cancelled=True,
+            )
+
+        proc: subprocess.Popen[str] | None = None
         try:
             proc = self._launch_host_command(command, cwd=cwd, stdin_enabled=False)
+            if on_started is not None:
+                on_started()
             # Close stdin immediately — safe no-op when stdin is None
             if proc.stdin:
                 proc.stdin.close()
@@ -485,7 +458,9 @@ class SandboxExecutor:
 
         except Exception as exc:
             output = f"\n[ERROR: {type(exc).__name__}: {exc}]\n"
-            if on_output is not None:
+            if proc is not None:
+                self._stop_process_tree(proc)
+            if proc is not None and on_output is not None:
                 on_output(output)
             return classify_watch_outcome(
                 still_running=False,
@@ -597,62 +572,6 @@ class SandboxExecutor:
             stderr=proc.stderr,
             exit_code=proc.returncode,
         )
-
-    def _run_host_terminal(
-        self,
-        command: str,
-        timeout: int,
-        cancel_event: Any = None,
-        on_output: Any = None,
-        input_data: str | None = None,
-        working_directory: Path | None = None,
-    ) -> SandboxResult:
-        """Execute a host command through Aura's explicit platform shell."""
-        cwd = working_directory or self._workspace_root
-
-        try:
-            proc = self._launch_host_command(
-                command,
-                cwd=cwd,
-                stdin_enabled=input_data is not None,
-            )
-            if input_data is not None and proc.stdin:
-                try:
-                    proc.stdin.write(input_data)
-                    proc.stdin.close()
-                except (BrokenPipeError, ConnectionResetError):
-                    # Process likely exited immediately. We'll capture its output below.
-                    try:
-                        proc.stdin.close()
-                    except Exception:
-                        pass
-
-            result = self._stream_subprocess_output(
-                proc,
-                timeout=timeout,
-                cancel_event=cancel_event,
-                on_output=on_output,
-            )
-            if result.exit_code != 0 and _is_missing_executable_output(result.stdout):
-                return SandboxResult(
-                    ok=False,
-                    stdout=result.stdout,
-                    stderr=result.stderr,
-                    exit_code=result.exit_code,
-                    failure_class="execution_failed",
-                )
-            return result
-        except Exception as exc:
-            output = f"\n[ERROR: {type(exc).__name__}: {exc}]\n"
-            if on_output is not None:
-                on_output(output)
-            return SandboxResult(
-                ok=False,
-                stdout=output,
-                stderr="",
-                exit_code=-1,
-                failure_class="execution_failed",
-            )
 
     # ---- Docker execution ---------------------------------------------------
 
@@ -785,68 +704,6 @@ class SandboxExecutor:
             stderr=proc.stderr,
             exit_code=proc.returncode,
         )
-
-    def _run_docker_terminal(
-        self,
-        command: str,
-        timeout: int,
-        cancel_event: Any = None,
-        on_output: Any = None,
-        input_data: str | None = None,
-        working_directory: Path | None = None,
-    ) -> SandboxResult:
-        """Run a terminal command inside a Docker container with streaming.
-
-        The workspace is mounted read-write (needed for pip install, pytest, etc.).
-        """
-        self._ensure_docker_image()
-
-        docker_args = self._build_docker_base_args(
-            read_only_rootfs=False,
-            working_directory=working_directory,
-        )
-        # Run the command via bash -c inside the container
-        cmd = docker_args + ["bash", "-c", command]
-
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                stdin=subprocess.PIPE if input_data else None,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                bufsize=1,
-                **({} if sys.platform != "win32" else {"creationflags": subprocess.CREATE_NO_WINDOW}),
-            )
-
-            if input_data and proc.stdin:
-                try:
-                    proc.stdin.write(input_data)
-                    proc.stdin.close()
-                except (BrokenPipeError, ConnectionResetError):
-                    try:
-                        proc.stdin.close()
-                    except Exception:
-                        pass
-
-            return self._stream_subprocess_output(
-                proc,
-                timeout=timeout,
-                cancel_event=cancel_event,
-                on_output=on_output,
-            )
-        except Exception as exc:
-            output = f"\n[ERROR: {type(exc).__name__}: {exc}]\n"
-            if on_output is not None:
-                on_output(output)
-            return SandboxResult(
-                ok=False,
-                stdout=output,
-                stderr="",
-                exit_code=-1,
-                failure_class="execution_failed",
-            )
 
     def _launch_host_command(
         self,

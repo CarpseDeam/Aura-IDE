@@ -5,35 +5,33 @@ from __future__ import annotations
 import json
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from aura.client import TerminalCommandStarted, TerminalOutput, ToolResult
-from aura.config import load_settings
 from aura.conversation.command_normalizer import normalize_command
 from aura.conversation.history import History
 from aura.conversation.shell_tool import ShellTool
 from aura.conversation.validation_orchestrator import ValidationCommandSpec
 from aura.sandbox import SandboxExecutor, WatchResult
-
-_DEFAULT_SANDBOX_EXECUTOR = SandboxExecutor
+from aura.shell.powershell_session import PowerShellSession
 
 
 class ToolRunner:
     """Delegate persistent terminal work and bounded launch watching."""
 
-    def __init__(self, history: History, workspace_root: Path) -> None:
+    def __init__(
+        self,
+        history: History,
+        workspace_root: Path,
+        *,
+        session_factory: Callable[[Path], PowerShellSession] = PowerShellSession,
+    ) -> None:
         self._history = history
         self._workspace_root = workspace_root
-        legacy_factory = (
-            SandboxExecutor
-            if SandboxExecutor is not _DEFAULT_SANDBOX_EXECUTOR
-            else None
-        )
         self._shell_tool = ShellTool(
             history,
             workspace_root,
-            legacy_executor_factory=legacy_factory,
-            settings_loader=load_settings,
+            session_factory=session_factory,
         )
 
     @property
@@ -113,20 +111,21 @@ class ToolRunner:
         def on_output_chunk(text: str) -> None:
             on_event(TerminalOutput(tool_call_id=tool_call_id, text=text))
 
-        # This bounded capability also owns a real start fact.  It remains
-        # independent from the persistent PowerShell session.
-        on_event(
-            TerminalCommandStarted(
-                tool_call_id=tool_call_id,
-                command=declared_run_command,
-                cwd=str(self._workspace_root),
+        def on_started() -> None:
+            on_event(
+                TerminalCommandStarted(
+                    tool_call_id=tool_call_id,
+                    command=declared_run_command,
+                    cwd=str(self._workspace_root),
+                )
             )
-        )
+
         result: WatchResult = sandbox.run_and_watch(
             command=declared_run_command,
             window_seconds=window_seconds,
             cancel_event=cancel_event,
             on_output=on_output_chunk,
+            on_started=on_started,
         )
         ok = result.ok and result.exited_early
         if ok:
