@@ -255,12 +255,10 @@ PROVIDER_CATALOG: dict[str, dict] = {
         # Ordinary API root — kept intact for model discovery, pricing/catalog
         # work, native Responses web search, and every other non-chat path.
         "base_url": "https://api.deepseek.com",
-        # Chat/tool turns go over DeepSeek's own OpenAI-compatible Chat
-        # Completions API — POST https://api.deepseek.com/chat/completions,
-        # which is ``base_url`` above, so no chat-only root is needed. DeepSeek
-        # continues its own thinking across a tool round, so prior assistant
-        # ``reasoning_content`` is replayed verbatim from canonical history and
-        # the thinking-mode replay rule is enforced before the request goes out.
+        # Direct V4 chat/tool turns use the native stateless Responses API at
+        # this base URL. The client keeps Chat Completions for non-V4 DeepSeek
+        # models for compatibility; other providers retain their own metadata
+        # selected transports. Responses continuations omit prior reasoning.
         "chat_protocol": "openai_chat",
         "requires_reasoning_replay": True,
         "env_key": "DEEPSEEK_API_KEY",

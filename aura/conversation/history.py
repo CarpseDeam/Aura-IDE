@@ -1,24 +1,24 @@
-"""Conversation history — the append-only transcript that is also the request.
+"""Conversation history — the exact, append-only canonical transcript.
 
-ONE RULE — `messages` is canonical, and canonical history is what gets sent.
+ONE RULE — `messages` is canonical; provider clients own the wire projection.
 
 `History.append_assistant(...)` always stores the full assistant message,
 including its ``reasoning_content`` and the provider's ``reasoning_signature``.
 The stored messages stay exact and durable so the transcript, the GUI,
 persistence, and usage evidence always see what really happened.
 
-`for_api()` is not a policy layer. It prepends the system message, deep-copies
-the stored messages so a caller cannot mutate the log through the request, and
-removes the one key that is local bookkeeping rather than wire content
-(``aura_internal``). Nothing else is added, dropped, shortened, summarised, or
-reordered: the request is the transcript. There is no compaction ladder, no
-token budget, no reasoning stripping, and no residency model — a round's own
-plan and reasoning survive to the next round because nothing removes them.
+`for_api()` is the canonical transcript snapshot boundary. It prepends the
+system message, deep-copies the stored messages so a caller cannot mutate the
+log through the snapshot, and removes only local bookkeeping markers. The
+snapshot is not itself a universal wire request: each client/protocol layer may
+project it into its provider's message or item format. There is no compaction
+ladder, token budget, or canonical-history rewrite; a round's own plan and
+reasoning remain durable for UI, persistence, diagnostics, cancellation, and
+replay inspection.
 
-How a given wire protocol *encodes* replayed reasoning — provider-native
-``reasoning_content``, an explicit DeepSeek Off marker, or reconstructed
-Anthropic ``thinking`` blocks — is decided in the client layer, from this
-unchanged canonical history.
+How a given wire protocol encodes the snapshot is decided in the client layer,
+from this unchanged canonical history. DeepSeek Responses deliberately omits
+prior reasoning items and ``reasoning_content`` from every continuation.
 """
 from __future__ import annotations
 
@@ -112,10 +112,11 @@ def repair_tool_call_blocks(messages: list[dict[str, Any]]) -> int:
 
 @dataclass
 class History:
-    """Internal conversation log. Source of truth for the GUI and the API.
+    """Internal conversation log. Source of truth for UI, persistence, and replay.
 
-    Internal entries are exact dicts ready to send. ``for_api()`` returns them
-    as they are, with the system message in front.
+    Internal entries are exact canonical dicts. ``for_api()`` returns a deep
+    copied canonical snapshot with the system message in front; protocol
+    clients own any subsequent wire projection.
     """
 
     system_prompt: str | None = None
@@ -231,12 +232,13 @@ class History:
     # ---- the provider request -----------------------------------------------
 
     def for_api(self) -> list[dict[str, Any]]:
-        """Return the messages array for the next API call.
+        """Return a deep-copied canonical snapshot for a provider client.
 
         The system message (if any) first, then a deep copy of every stored
-        message with the local ``aura_internal`` marker removed. Everything
-        else — content, tool calls, tool results, reasoning content, reasoning
-        signatures — is passed through exactly as stored.
+        message with local bookkeeping markers removed. Everything else in the
+        canonical transcript — content, tool calls, tool results, reasoning
+        content, and provider-specific diagnostic fields — remains durable for
+        inspection. The client/protocol layer decides what belongs on the wire.
         """
         out: list[dict[str, Any]] = []
         if self.system_prompt:

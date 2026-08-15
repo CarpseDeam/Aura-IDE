@@ -325,9 +325,10 @@ MAX_GLOB_RESULTS = 200
 TRUNCATE_TOOL_RESULT_CHARS = 500
 
 # There is no context-window budgeting here, and no working-set cap policy.
-# The send path replays canonical history unchanged (see
-# ``aura.conversation.history.History.for_api``), so nothing resolves a
-# per-request token budget to shape it against. Real model capacity metadata
+# The send path snapshots canonical history (see
+# ``aura.conversation.history.History.for_api``); protocol clients may project
+# that snapshot without mutating it, but nothing resolves a per-request token
+# budget to shape the canonical state against. Real model capacity metadata
 # — context window and max output tokens — stays in the provider catalog
 # (``aura.providers.base.ModelInfo``), where it describes the model rather
 # than governing what Aura sends.

@@ -4,31 +4,25 @@ Yields events; never raises. The reasoning parameters for one request come from
 :func:`aura.client.reasoning.resolve_reasoning_request`, which maps the user's
 ``off · high · max`` selection onto:
 
-- DeepSeek OpenAI-compatible chat: extra_body={"thinking":...}, plus
+- DeepSeek Chat Completions: extra_body={"thinking":...}, plus
   reasoning_effort for explicit high/max.
 - OpenAI etc: reasoning_effort at top level for explicit high/max.
 
-DeepSeek production chat/tool turns use this OpenAI-compatible path: DeepSeek's
-``chat_protocol`` is ``openai_chat``, so they go to DeepSeek's official Chat
-Completions API — ``POST https://api.deepseek.com/chat/completions`` — with
-``stream=True`` and ``stream_options={"include_usage": True}``.  Native
-Anthropic keeps ``anthropic_messages`` and its own transport.  The transport is
-chosen from the provider's chat metadata here — never inferred from the
-provider id.
+Direct DeepSeek V4 production chat/tool turns use the native stateless
+Responses API. Other providers and non-V4 DeepSeek models retain their
+existing transports. Native Anthropic keeps ``anthropic_messages`` and its own
+transport. No production request falls back from Responses to Chat
+Completions.
 
-Canonical history is already in OpenAI shape (``system``/``user``/
-``assistant``/``tool``, with ``tool_calls`` and ``tool_call_id``), so
-``History.for_api`` output is sent as-is: an assistant message that carried tool
-calls replays its complete ``reasoning_content``, ``content``, and
-``tool_calls``, and each tool result carries the matching ``tool_call_id``.
+Canonical History remains exact and durable. The client/protocol layer owns the
+request projection: it maps system instructions and canonical messages/tool
+results to Responses input items, omits prior reasoning items and
+``reasoning_content``, and uses the provider ``call_id`` as Aura's canonical
+tool-call id.
 
-One DeepSeek thinking-mode rule is enforced here rather than trusted to callers,
-because it is rejected with a 400 rather than degraded: a thinking-enabled
-request must replay ``reasoning_content`` on every assistant message after the
-last user message, so the trailing chain is filled in where Aura honestly
-produced none (see ``_ensure_reasoning_replay``).  It is gated on the provider's
-``requires_reasoning_replay`` metadata, not on the provider id, so OpenAI and
-OpenRouter — which do not accept the field — are untouched.
+The legacy Chat Completions path retains its provider-specific reasoning replay
+rule. Responses never replays prior reasoning; DeepSeek controls the new
+continuation with its ``reasoning.effort`` request field.
 
 It is request-local: the user's saved selection is never rewritten, canonical
 history is never touched, and it logs what it changed.
@@ -63,7 +57,9 @@ from aura.client.events import (
 )
 from aura.client.reasoning import resolve_reasoning_request
 from aura.client.responses_stream import (
+    DeepSeekResponsesStreamParser,
     ResponsesStreamParser,
+    build_deepseek_responses_request,
     build_native_web_search_request,
     translate_to_responses_tools,
 )
@@ -252,6 +248,21 @@ class DeepSeekClient:
         cancel_event: threading.Event | None = None,
         temperature: float = 0.7,
     ) -> Iterator[Event]:
+        # DeepSeek V4 is the one production transport that uses the native
+        # stateless Responses projection. Keep the selection here, beside the
+        # provider protocol boundary, so ConversationManager stays unaware of
+        # wire formats and other providers retain their current transports.
+        if self._uses_deepseek_responses(model):
+            yield from self._stream_deepseek_responses(
+                messages=messages,
+                tools=tools,
+                model=model,
+                thinking=thinking,
+                cancel_event=cancel_event,
+                temperature=temperature,
+            )
+            return
+
         # Chat transport is a provider-metadata property, not a provider-name
         # check. DeepSeek (and native Anthropic) speak Anthropic Messages;
         # OpenAI, OpenRouter, and any other ``openai_chat`` provider fall
@@ -273,8 +284,9 @@ class DeepSeekClient:
             )
             return
 
-        # Canonical history is already OpenAI-shaped, so it is sent as-is apart
-        # from keys that belong to the other transport and mean nothing here.
+        # Legacy Chat Completions receives the OpenAI-shaped snapshot as-is,
+        # apart from keys that belong to the other transport and mean nothing
+        # here. DeepSeek V4 has already returned through the Responses branch.
         outbound = _strip_foreign_message_keys(messages)
 
         kwargs: dict[str, Any] = {
@@ -293,7 +305,8 @@ class DeepSeekClient:
         # here overrides it.
         effective_thinking: ThinkingMode = thinking
 
-        # A thinking-enabled DeepSeek request must replay ``reasoning_content``
+        # A thinking-enabled legacy DeepSeek Chat Completions request must replay
+        # ``reasoning_content``
         # on every assistant message after the last user message, and Aura
         # honestly produces messages without it — historical turns can predate
         # the current selection, and a reloaded conversation can lack it.
@@ -622,6 +635,176 @@ class DeepSeekClient:
                         pass
 
         yield Done(finish_reason=finish_reason, full_message=full_message)
+
+    def _uses_deepseek_responses(self, model: str) -> bool:
+        """Return whether this direct DeepSeek V4 turn uses Responses."""
+        return (
+            self._provider == "deepseek"
+            and str(model).lower().startswith("deepseek-v4-")
+        )
+
+    def _stream_deepseek_responses(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        model: str,
+        thinking: ThinkingMode,
+        cancel_event: threading.Event | None,
+        temperature: float,
+    ) -> Iterator[Event]:
+        """Stream one native DeepSeek V4 Responses request.
+
+        The request is stateless and built entirely from a request-local
+        projection. A failed, incomplete, stalled, or cancelled stream never
+        yields a successful tool-bearing ``Done``.
+        """
+        request = build_deepseek_responses_request(
+            messages=messages,
+            tools=tools,
+            model=model,
+            thinking=thinking,
+            temperature=temperature,
+        )
+        _log.info(
+            "deepseek_responses_start model=%s thinking=%s input_items=%d "
+            "tool_count=%d tool_choice=%s previous_response_id=%s conversation=%s",
+            model,
+            thinking,
+            len(request.get("input", [])),
+            len(request.get("tools", [])),
+            request.get("tool_choice", "<none>"),
+            "previous_response_id" in request,
+            "conversation" in request,
+        )
+
+        try:
+            stream = self._client.responses.create(**request)
+        except APIStatusError as exc:
+            yield ApiError(status_code=exc.status_code, message=str(exc))
+            return
+        except APIError as exc:
+            yield ApiError(status_code=None, message=str(exc))
+            return
+        except Exception as exc:  # network errors, ssl, etc.
+            yield ApiError(status_code=None, message=f"{type(exc).__name__}: {exc}")
+            return
+
+        chunk_queue: queue.Queue = queue.Queue()
+
+        def _pump_stream() -> None:
+            try:
+                for event in stream:
+                    chunk_queue.put(("event", event))
+                chunk_queue.put(("sentinel", None))
+            except Exception as exc:  # noqa: BLE001
+                chunk_queue.put(("error", exc))
+
+        pump_thread = threading.Thread(target=_pump_stream, daemon=True)
+        pump_thread.start()
+        parser = DeepSeekResponsesStreamParser()
+        first_read = True
+        wait_started = time.time()
+
+        def _close_stream_quietly() -> None:
+            closer = getattr(stream, "close", None)
+            if closer is None:
+                return
+            try:
+                closer()
+            except Exception:  # noqa: BLE001
+                _log.debug("deepseek_responses_stream_close_failed")
+
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                _close_stream_quietly()
+                parser.cancel()
+                break
+
+            budget = (
+                FIRST_STREAM_EVENT_TIMEOUT_SECONDS
+                if first_read
+                else RESPONSES_INTER_EVENT_TIMEOUT_SECONDS
+            )
+            try:
+                kind, payload = chunk_queue.get(timeout=_RESPONSES_POLL_SECONDS)
+            except queue.Empty:
+                elapsed = time.time() - wait_started
+                if elapsed <= budget:
+                    continue
+                stage = "first" if first_read else "next"
+                _log.info(
+                    "deepseek_responses_stream_timeout model=%s stage=%s elapsed_ms=%d",
+                    model,
+                    stage,
+                    int(elapsed * 1000),
+                )
+                _close_stream_quietly()
+                parser.fail(
+                    f"DeepSeek Responses stream stalled: no {stage} event within "
+                    f"{int(budget)} seconds",
+                    code="stream_timeout",
+                )
+                break
+
+            if first_read:
+                first_read = False
+                wait_started = time.time()
+            else:
+                wait_started = time.time()
+
+            if kind == "sentinel":
+                break
+            if kind == "error":
+                exc = payload
+                if isinstance(exc, APIStatusError):
+                    yield ApiError(status_code=exc.status_code, message=str(exc))
+                elif isinstance(exc, APIError):
+                    yield ApiError(status_code=None, message=str(exc))
+                else:
+                    yield ApiError(status_code=None, message=f"{type(exc).__name__}: {exc}")
+                return
+
+            try:
+                events = parser.push(payload)
+            except Exception as exc:  # noqa: BLE001
+                yield ApiError(
+                    status_code=None,
+                    message=f"DeepSeek Responses stream parse error: {type(exc).__name__}: {exc}",
+                )
+                return
+            yield from events
+            if parser.terminal:
+                break
+
+        if cancel_event is not None and cancel_event.is_set():
+            parser.cancel()
+            # Match the existing cancellation contract: preserve visible
+            # partial reasoning/prose, but never pass an incomplete call to the
+            # manager as executable tool_calls.
+            yield Done(
+                finish_reason="cancelled",
+                full_message=parser.full_message(include_tool_calls=False),
+            )
+            return
+
+        if parser.status in {"failed", "incomplete"}:
+            yield ApiError(status_code=None, message=parser.failure_message())
+            return
+        if not parser.settled:
+            yield ApiError(
+                status_code=None,
+                message=(
+                    "DeepSeek Responses stream ended without a terminal response. "
+                    "No tool calls were executed."
+                ),
+            )
+            return
+
+        yield Done(
+            finish_reason=parser.finish_reason,
+            full_message=parser.full_message(),
+        )
 
     def stream_responses_web_search(
         self,

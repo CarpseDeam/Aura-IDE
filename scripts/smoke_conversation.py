@@ -1,8 +1,8 @@
-"""Smoke 4: full tool-loop with auto-approve, multi-turn replay rule.
+"""Smoke 4: full tool-loop with auto-approve and multi-turn continuation.
 
 Setup: tmp workspace with a README.md. Ask the model to read it and answer.
-Then a follow-up that should trigger another tool call — verifying the multi-turn
-replay rule (no 400 about reasoning_content).
+Then a follow-up that should trigger another tool call — verifying the
+stateless continuation projection does not replay prior reasoning content.
 """
 from __future__ import annotations
 
@@ -122,7 +122,7 @@ def main() -> int:
         )
 
         # Turn 2: triggers another tool call AFTER a tool-call assistant message
-        # exists in history — exercises the multi-turn replay rule.
+        # exists in canonical history — exercises stateless multi-round projection.
         history.append_user_text(
             "Now list the files in the workspace root, and tell me whether main.py is among them."
         )

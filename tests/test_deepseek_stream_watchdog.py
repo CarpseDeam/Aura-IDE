@@ -29,7 +29,6 @@ from aura.client.events import (
     ToolCallStart,
 )
 
-
 # ── Fake transport ──────────────────────────────────────────────────────
 
 
@@ -99,6 +98,8 @@ def _client(stream: _Stream) -> ds.DeepSeekClient:
     client._provider = "deepseek"
     client._api_key = "test"
     client._base_url = "https://api.deepseek.com"
+    client._chat_protocol = "openai_chat"
+    client._requires_reasoning_replay = True
     client._timeout = SimpleNamespace(connect=10.0, read=None)
     client._client = SimpleNamespace(
         chat=SimpleNamespace(
@@ -113,7 +114,9 @@ def _run(client: ds.DeepSeekClient, **kwargs) -> list:
         client.stream(
             messages=[{"role": "user", "content": "go"}],
             tools=None,
-            model="deepseek-v4-flash",
+            # These tests cover the retained legacy Chat Completions watchdog;
+            # direct V4 production streaming is covered by the Responses tests.
+            model="deepseek-chat",
             thinking="high",
             **kwargs,
         )

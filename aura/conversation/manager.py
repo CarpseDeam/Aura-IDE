@@ -331,11 +331,10 @@ class ConversationManager:
             )
             _first_event = True
 
-            # The request is canonical history, unchanged: system prompt, every
-            # stored message, every assistant message's reasoning and signature.
-            # Nothing is compacted, pruned, or shed, so the round's own plan and
-            # reasoning are still there on the next round. How the wire protocol
-            # encodes that reasoning is the client layer's decision.
+            # Pass a deep-copied canonical history snapshot. Nothing is
+            # compacted, pruned, or rewritten here, so the round's own plan and
+            # reasoning remain durable for the UI and replay inspection. The
+            # client/protocol layer owns the provider-specific wire projection.
             request_messages = self._history.for_api()
 
             for ev in model_streams.trigger(

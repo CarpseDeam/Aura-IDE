@@ -66,15 +66,10 @@ class ProviderSpec:
     # ``chat_base_url`` overrides the API root used *only* for chat requests
     # (falls back to ``base_url``), so non-chat paths — model discovery,
     # pricing, native Responses web search — keep using the ordinary base URL.
-    # ``requires_reasoning_replay`` says whether this transport needs prior
-    # assistant reasoning re-encoded into the request to continue its thinking
-    # across a tool round — true for DeepSeek (both transports) and native
-    # Anthropic. It decides the *wire encoding* only, never what exists to
-    # encode: canonical history keeps every assistant message's reasoning and
-    # signature, ``History.for_api`` replays all of it unchanged, and the client
-    # layer renders that same canonical reasoning into whatever the wire format
-    # wants — provider-native ``reasoning_content``, an explicit DeepSeek Off
-    # marker, or reconstructed Anthropic ``thinking`` blocks.
+    # ``requires_reasoning_replay`` applies to transports that still need prior
+    # assistant reasoning re-encoded for a tool round — currently the legacy
+    # DeepSeek Chat Completions path and native Anthropic. Canonical History
+    # remains exact either way; the client layer decides the wire projection.
     chat_protocol: str = "openai_chat"
     chat_base_url: str | None = None
     requires_reasoning_replay: bool = True
