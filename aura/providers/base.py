@@ -4,18 +4,26 @@ from dataclasses import dataclass
 from typing import Any, Iterator, Literal, Protocol, runtime_checkable
 
 ProviderId = str  # Any registered provider key, e.g. "deepseek"
-ThinkingMode = str  # "off" | "auto" | "high" | "max"
+ThinkingMode = str  # "off" | "high" | "max"
 ModelId = str  # Any model string from any provider
 ProviderKind = Literal["api_key", "external_cli", "local"]
 
 #: The reasoning modes the user can pick, in display order.
-#:
-#: ``auto`` means *the provider decides* — Aura sends the provider's own
-#: native automatic/adaptive reasoning mode, or omits the effort parameter so
-#: the provider applies its documented default.  Aura never scores the task,
-#: counts failures, or escalates on its own.  ``off``/``high``/``max`` stay
-#: explicit user instructions and are always sent as selected.
-THINKING_MODES: tuple[str, ...] = ("off", "auto", "high", "max")
+THINKING_MODES: tuple[str, ...] = ("off", "high", "max")
+
+
+def normalize_thinking_mode(raw: object) -> ThinkingMode | None:
+    """Normalize a stored or incoming thinking value.
+
+    ``auto`` was a legacy user-facing mode. It is accepted only at this
+    compatibility boundary and behaves exactly like the new High default.
+    Unknown values remain invalid so callers can choose their own fallback.
+    """
+    if raw == "auto":
+        return "high"
+    if raw in THINKING_MODES:
+        return raw  # type: ignore[return-value]
+    return None
 
 
 @dataclass(frozen=True)

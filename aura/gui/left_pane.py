@@ -27,21 +27,20 @@ from aura.gui.theme import ACCENT, BG_ALT, BG_RAISED, BORDER, FG_DIM, FG_MUTED, 
 from aura.gui.widgets.no_wheel_combo import NoWheelComboBox
 from aura.gui.widgets.searchable_model_combo import SearchableModelCombo
 from aura.projects.store import ProjectStore
-from aura.providers.base import THINKING_MODES
+from aura.providers.base import THINKING_MODES, normalize_thinking_mode
 from aura.providers.model_presentation import build_model_picker_items
 from aura.providers.registry import provider_registry
 
 #: Display labels for the reasoning selector, in THINKING_MODES order.
 _THINKING_LABELS: dict[str, str] = {
     "off": "Off",
-    "auto": "Auto",
     "high": "High",
     "max": "Max",
 }
 
 
 def _populate_thinking_combo(combo: NoWheelComboBox) -> None:
-    """Fill a reasoning selector with Off · Auto · High · Max."""
+    """Fill a reasoning selector with Off · High · Max."""
     for mode in THINKING_MODES:
         combo.addItem(_THINKING_LABELS.get(mode, mode.title()), mode)
 
@@ -49,10 +48,12 @@ def _populate_thinking_combo(combo: NoWheelComboBox) -> None:
 def _select_thinking(combo: NoWheelComboBox, thinking: ThinkingMode) -> None:
     """Select *thinking* if it is a known mode; otherwise leave the combo alone.
 
-    An unknown or legacy value is never silently rewritten to another mode —
-    the selector simply keeps whatever it already shows.
+    The legacy ``auto`` value is normalized to High before it reaches the UI.
     """
-    index = combo.findData(thinking)
+    normalized = normalize_thinking_mode(thinking)
+    if normalized is None:
+        return
+    index = combo.findData(normalized)
     if index >= 0:
         combo.setCurrentIndex(index)
 

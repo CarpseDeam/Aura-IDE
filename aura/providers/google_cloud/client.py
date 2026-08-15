@@ -11,6 +11,7 @@ from aura.client.events import (
     ReasoningDelta,
     Usage,
 )
+from aura.providers.base import normalize_thinking_mode
 from aura.providers.google_cloud.cooldown import CooldownManager
 from aura.providers.google_cloud.errors import classify_error
 from aura.providers.google_cloud.mapping import (
@@ -45,6 +46,7 @@ class GoogleCloudClient:
         """Lazily create and return the google-genai Client."""
         if self._client is None:
             import os
+
             from google import genai  # type: ignore[import-untyped]
             from google.genai import types
 
@@ -319,6 +321,10 @@ class GoogleCloudClient:
 
 def _google_thinking_config(types_module: Any, model: str, thinking: str) -> Any | None:
     """Map Aura thinking modes to Gemini thinking config where supported."""
+    normalized = normalize_thinking_mode(thinking)
+    if normalized is None:
+        return None
+    thinking = normalized
     model_l = model.lower()
     if "gemini-2.5" not in model_l:
         return None
@@ -331,14 +337,6 @@ def _google_thinking_config(types_module: Any, model: str, thinking: str) -> Any
         return types_module.ThinkingConfig(
             thinking_budget=budget,
             include_thoughts=False,
-        )
-    if thinking == "auto":
-        # Gemini 2.5's documented dynamic thinking: budget -1 lets the model
-        # size its own reasoning per request. That native selection is exactly
-        # what "auto" promises, so Aura sends it instead of guessing a budget.
-        return types_module.ThinkingConfig(
-            thinking_budget=-1,
-            include_thoughts=True,
         )
     if thinking == "high":
         return types_module.ThinkingConfig(

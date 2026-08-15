@@ -20,7 +20,7 @@ from aura.models import (
     ThinkingMode,
 )
 from aura.paths import config_dir
-from aura.providers.base import THINKING_MODES
+from aura.providers.base import normalize_thinking_mode
 from aura.providers.registry import provider_registry
 
 # Default-ish old localhost variants that should migrate to hosted
@@ -128,8 +128,9 @@ class AppSettings:
         s.provider = _provider_from_data(data, "provider", s.provider)
         # Models
         s.default_model = _model_from_data(data, "default_model", s.provider)
-        if isinstance(data.get("default_thinking"), str) and data["default_thinking"] in _THINKING_VALUES:
-            s.default_thinking = data["default_thinking"]  # type: ignore[assignment]
+        thinking = normalize_thinking_mode(data.get("default_thinking"))
+        if thinking is not None:
+            s.default_thinking = thinking
         if isinstance(data.get("restore_last_conversation"), bool):
             s.restore_last_conversation = data["restore_last_conversation"]
         # Temperature
@@ -188,11 +189,6 @@ class AppSettings:
         return s
 
 
-#: Accepted reasoning selections. Adding "auto" here is purely additive: an
-#: existing saved "off"/"high"/"max" still validates and is loaded verbatim.
-_THINKING_VALUES = THINKING_MODES
-
-
 def _valid_provider(raw: Any) -> ProviderId | None:
     """Return *raw* as a ProviderId when it names a currently registered provider."""
     if not isinstance(raw, str) or not raw:
@@ -213,12 +209,6 @@ def _valid_model(raw: Any, provider: ProviderId) -> str | None:
     if not provider_registry.has(provider):
         return None
     return raw if raw in provider_registry.get(provider).models else None
-
-
-def _valid_thinking(raw: Any) -> ThinkingMode | None:
-    if isinstance(raw, str) and raw in _THINKING_VALUES:
-        return cast(ThinkingMode, raw)
-    return None
 
 
 def _provider_from_data(

@@ -35,10 +35,9 @@ from aura.client.events import (
 from aura.client.reasoning import (
     EFFORT_EXPLICIT,
     EFFORT_OMITTED_DISABLED,
-    EFFORT_OMITTED_PROVIDER_AUTO,
-    EFFORT_OMITTED_PROVIDER_DEFAULT,
 )
 from aura.config import ThinkingMode
+from aura.providers.base import normalize_thinking_mode
 from aura.providers.registry import provider_registry
 
 _log = logging.getLogger(__name__)
@@ -202,45 +201,33 @@ _ADAPTIVE_THINKING_MODELS: frozenset[str] = frozenset({
 
 def _anthropic_effort_policy(model: str, thinking: ThinkingMode) -> str:
     """Return why the effort parameter was sent or omitted, for the log line."""
-    if thinking == "off":
+    mode = normalize_thinking_mode(thinking) or "high"
+    if mode == "off":
         return EFFORT_OMITTED_DISABLED
-    if thinking != "auto":
-        return EFFORT_EXPLICIT
-    if model in _ADAPTIVE_THINKING_MODELS:
-        return EFFORT_OMITTED_PROVIDER_AUTO
-    return EFFORT_OMITTED_PROVIDER_DEFAULT
+    return EFFORT_EXPLICIT
 
 
 def _anthropic_max_tokens(model: str, thinking: ThinkingMode) -> int:
-    if thinking == "off":
+    mode = normalize_thinking_mode(thinking) or "high"
+    if mode == "off":
         return 8192
     if model in {"claude-opus-4-7", "claude-opus-4-6"}:
         return 32768
-    # "auto" shares the high output ceiling: this is a local output cap, not a
-    # reasoning instruction, and must not quietly buy a max-sized budget.
-    return 20000 if thinking in {"high", "auto"} else 36000
+    return 20000 if mode == "high" else 36000
 
 
 def _anthropic_thinking_config(model: str, thinking: ThinkingMode) -> dict[str, Any]:
-    if thinking == "off":
+    mode = normalize_thinking_mode(thinking) or "high"
+    if mode == "off":
         # Native Anthropic keeps its existing shape: no thinking field at all,
         # with ``temperature`` sent instead by the caller. Unchanged behavior.
         return {}
     if model in _ADAPTIVE_THINKING_MODELS:
-        config: dict[str, Any] = {
+        return {
             "thinking": {"type": "adaptive", "display": "summarized"},
+            "output_config": {"effort": mode},
         }
-        if thinking != "auto":
-            # Explicit user selections are always stated explicitly.
-            config["output_config"] = {
-                "effort": "high" if thinking == "high" else "max"
-            }
-        # "auto" omits output_config so adaptive thinking picks the effort.
-        return config
-    # Older budget-only models have no native automatic mode; "auto" therefore
-    # keeps this provider's existing deterministic default rather than Aura
-    # guessing at task difficulty.
-    budget = 10000 if thinking in {"high", "auto"} else 32000
+    budget = 10000 if mode == "high" else 32000
     return {
         "thinking": {
             "type": "enabled",
@@ -296,9 +283,8 @@ def _deepseek_anthropic_max_tokens(model: str, thinking: ThinkingMode) -> int:
 def _deepseek_anthropic_thinking_config(model: str, thinking: ThinkingMode) -> dict[str, Any]:
     """DeepSeek thinking over the Anthropic Messages transport.
 
-    DeepSeek ignores ``budget_tokens``, so it is never sent. ``auto`` enables
-    thinking and omits ``output_config`` so DeepSeek applies its native effort
-    choice; explicit ``high``/``max`` send that effort verbatim.
+    DeepSeek ignores ``budget_tokens``, so it is never sent. Explicit
+    ``high``/``max`` selections send that effort verbatim.
 
     ``off`` is stated explicitly as ``{"type": "disabled"}`` rather than by
     omitting the field: an absent ``thinking`` selects whatever the endpoint
@@ -306,35 +292,32 @@ def _deepseek_anthropic_thinking_config(model: str, thinking: ThinkingMode) -> d
     off. The user's Off selection has to be a request, not a silence. The
     caller still sends ``temperature`` in this mode.
     """
-    if thinking == "off":
+    mode = normalize_thinking_mode(thinking) or "high"
+    if mode == "off":
         return {"thinking": {"type": "disabled"}}
     config: dict[str, Any] = {"thinking": {"type": "enabled"}}
-    if thinking in {"high", "max"}:
-        config["output_config"] = {"effort": thinking}
+    config["output_config"] = {"effort": mode}
     return config
 
 
 def _deepseek_anthropic_effort_policy(model: str, thinking: ThinkingMode) -> str:
     """Why the effort was sent or omitted, for the DeepSeek Anthropic log line."""
-    if thinking == "off":
+    mode = normalize_thinking_mode(thinking) or "high"
+    if mode == "off":
         return EFFORT_OMITTED_DISABLED
-    if thinking != "auto":
-        return EFFORT_EXPLICIT
-    return EFFORT_OMITTED_PROVIDER_AUTO
+    return EFFORT_EXPLICIT
 
 
 @dataclass(frozen=True)
 class AnthropicThinkingProfile:
     """Provider-aware thinking policy for the Anthropic Messages transport.
 
-    One object owns how a provider maps the user's ``off · auto · high · max``
+    One object owns how a provider maps the user's ``off · high · max``
     onto the Anthropic ``thinking`` / ``output_config`` fields, what output
     budget to allow, and whether prior assistant ``reasoning_content`` in the
     outbound view is reconstructed as ``thinking`` blocks.
 
-    There is deliberately no task scoring, failure counting, or escalation here:
-    ``auto`` means the provider's native choice, and the user's explicit
-    high/max selection is always stated verbatim.
+    The user's explicit high/max selection is always stated verbatim.
     """
 
     provider: str

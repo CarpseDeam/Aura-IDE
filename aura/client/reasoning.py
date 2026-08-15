@@ -1,35 +1,16 @@
-"""Map the user's reasoning selection onto one provider request.
-
-The user picks one of ``off · auto · high · max`` and that selection is sent,
-never reinterpreted. This module is the whole translation layer:
-
-* **off** — reasoning disabled, temperature sent, no effort parameter.
-* **high** / **max** — the effort is stated *explicitly* to the provider.
-* **auto** — the provider decides. Aura either selects the provider's own
-  documented automatic/adaptive mode, or omits the effort parameter so the
-  provider applies its documented default.
-
-There is deliberately no complexity scoring, no failure counting, and no
-escalation ladder here. Aura does not guess how hard a task is; ``auto``
-means the *provider's* native selection, which is the only party that can see
-the prompt at inference time. If a provider has no native automatic mode, its
-existing deterministic default behaviour is used and the log line says so —
-Aura never invents a difficulty estimate to fill the gap.
-"""
+"""Map the user's reasoning selection onto one provider request."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
 
-from aura.providers.base import ThinkingMode
+from aura.providers.base import ThinkingMode, normalize_thinking_mode
 
 #: How the ``reasoning_effort`` parameter was decided for one request. Logged
 #: verbatim so a request can be diagnosed from a normal log file.
 EFFORT_EXPLICIT = "explicit_user_selection"
 EFFORT_OMITTED_DISABLED = "omitted_reasoning_disabled"
-EFFORT_OMITTED_PROVIDER_AUTO = "omitted_provider_native_auto"
-EFFORT_OMITTED_PROVIDER_DEFAULT = "omitted_provider_default"
 
 
 @dataclass(frozen=True)
@@ -69,10 +50,10 @@ def resolve_reasoning_request(
 ) -> ReasoningRequest:
     """Return the reasoning request for *provider* under the user's *thinking*.
 
-    Never raises and never escalates: an unrecognised mode is treated as
-    ``auto`` (let the provider decide) rather than silently promoted to max.
+    Never raises or escalates: a legacy or unrecognised value uses the High
+    default rather than silently promoting to Max.
     """
-    mode = thinking if thinking in {"off", "auto", "high", "max"} else "auto"
+    mode = normalize_thinking_mode(thinking) or "high"
 
     if provider == "deepseek":
         if mode == "off":
@@ -83,18 +64,6 @@ def resolve_reasoning_request(
                 reasoning_effort=None,
                 send_temperature=True,
                 effort_policy=EFFORT_OMITTED_DISABLED,
-            )
-        if mode == "auto":
-            # DeepSeek selects its own effort when thinking is enabled and no
-            # reasoning_effort is supplied. Sending one would override exactly
-            # the native selection the user asked for.
-            return ReasoningRequest(
-                thinking=mode,
-                provider=provider,
-                extra_body={"thinking": {"type": "enabled"}},
-                reasoning_effort=None,
-                send_temperature=False,
-                effort_policy=EFFORT_OMITTED_PROVIDER_AUTO,
             )
         # Per DeepSeek docs, temperature/top_p/penalties are ignored while
         # thinking is enabled, so they are not sent.
@@ -108,9 +77,7 @@ def resolve_reasoning_request(
         )
 
     # OpenAI-compatible providers (openai, openrouter, and anything else routed
-    # through the chat-completions path). None of them expose an "auto" effort
-    # value, but all of them apply a documented default when the parameter is
-    # absent — omission *is* the native automatic behaviour here.
+    # through the chat-completions path).
     if mode == "off":
         return ReasoningRequest(
             thinking=mode,
@@ -119,15 +86,6 @@ def resolve_reasoning_request(
             reasoning_effort=None,
             send_temperature=True,
             effort_policy=EFFORT_OMITTED_DISABLED,
-        )
-    if mode == "auto":
-        return ReasoningRequest(
-            thinking=mode,
-            provider=provider,
-            extra_body=None,
-            reasoning_effort=None,
-            send_temperature=False,
-            effort_policy=EFFORT_OMITTED_PROVIDER_DEFAULT,
         )
     return ReasoningRequest(
         thinking=mode,
@@ -142,8 +100,6 @@ def resolve_reasoning_request(
 __all__ = [
     "EFFORT_EXPLICIT",
     "EFFORT_OMITTED_DISABLED",
-    "EFFORT_OMITTED_PROVIDER_AUTO",
-    "EFFORT_OMITTED_PROVIDER_DEFAULT",
     "ReasoningRequest",
     "resolve_reasoning_request",
 ]

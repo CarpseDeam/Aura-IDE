@@ -29,7 +29,7 @@ from aura.conversation.history import History
 from aura.conversation.telemetry import ConversationTelemetry
 from aura.git_ops import ensure_aura_gitignored
 from aura.paths import safe_is_relative_to
-from aura.providers.base import THINKING_MODES
+from aura.providers.base import normalize_thinking_mode
 from aura.providers.registry import provider_registry
 
 SCHEMA_VERSION = 3
@@ -106,7 +106,7 @@ def save_conversation(
         "version": SCHEMA_VERSION,
         "created_at": _read_created_at(path) or _utc_iso(),
         "model": model,
-        "thinking": thinking,
+        "thinking": normalize_thinking_mode(thinking) or DEFAULT_THINKING,
         "system_prompt": history.system_prompt,
         "messages": copy.deepcopy(history.messages),
         "chat_items": normalize_chat_items(chat_items)
@@ -166,12 +166,10 @@ def load_conversation(path: Path) -> LoadedConversation:
         chat_items = legacy_chat_items_from_messages(history.messages)
 
     # Any string is now valid as a model ID — no hardcoded valid_models list.
-    # THINKING_MODES includes "auto"; older records holding "off"/"high"/"max"
-    # still validate and round-trip unchanged.
-    valid_thinking = THINKING_MODES
-
+    # Legacy records containing "auto" are loaded as High; explicit modes are
+    # kept unchanged.
     model = data.get("model") if isinstance(data.get("model"), str) else DEFAULT_MODEL
-    thinking = data.get("thinking") if data.get("thinking") in valid_thinking else DEFAULT_THINKING
+    thinking = normalize_thinking_mode(data.get("thinking")) or DEFAULT_THINKING
 
     # Provider: default to "deepseek" for backward compat with v1/v2 files.
     provider_raw = data.get("provider")

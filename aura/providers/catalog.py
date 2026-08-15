@@ -265,7 +265,7 @@ PROVIDER_CATALOG: dict[str, dict] = {
         "requires_reasoning_replay": True,
         "env_key": "DEEPSEEK_API_KEY",
         "default_model": "deepseek-v4-flash",
-        "default_thinking": "auto",
+        "default_thinking": "high",
         "models": DEEPSEEK_MODELS,
         "pricing": DEEPSEEK_PRICING,
         "kind": "api_key",
@@ -361,6 +361,6 @@ PROVIDER_CATALOG: dict[str, dict] = {
 # Default model / thinking constants
 
 DEFAULT_MODEL: str = "deepseek-v4-flash"
-#: Default for *new or unset* production settings only. An explicit saved
-#: off/high/max selection is preserved verbatim and never migrated to "auto".
-DEFAULT_THINKING: ThinkingMode = "auto"
+#: Default for new or unset production settings. Explicit saved selections
+#: remain verbatim; the legacy "auto" value is normalized to High at load.
+DEFAULT_THINKING: ThinkingMode = "high"

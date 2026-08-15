@@ -2,14 +2,11 @@
 
 Yields events; never raises. The reasoning parameters for one request come from
 :func:`aura.client.reasoning.resolve_reasoning_request`, which maps the user's
-``off · auto · high · max`` selection onto:
+``off · high · max`` selection onto:
 
 - DeepSeek OpenAI-compatible chat: extra_body={"thinking":...}, plus
-  reasoning_effort only when the user explicitly chose high/max — ``auto``
-  enables thinking and omits reasoning_effort so DeepSeek makes its own native
-  choice.
-- OpenAI etc: reasoning_effort at top level for explicit high/max; omitted for
-  ``auto`` so the provider applies its documented default.
+  reasoning_effort for explicit high/max.
+- OpenAI etc: reasoning_effort at top level for explicit high/max.
 
 DeepSeek production chat/tool turns use this OpenAI-compatible path: DeepSeek's
 ``chat_protocol`` is ``openai_chat``, so they go to DeepSeek's official Chat
