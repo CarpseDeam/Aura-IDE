@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from aura.conversation.tools.capability_groups import BULK_READ, CODE_INTEL, tool_names_for
+from aura.conversation.tools.capability_groups import (
+    BULK_READ,
+    CODE_INTEL,
+    GODOT,
+    tool_names_for,
+)
 from aura.conversation.tools.effects import BUILTIN_TOOL_EFFECTS, ToolEffect
 from aura.conversation.tools.schemas import (
     GIT_TOOL_DEFS,
@@ -42,6 +47,10 @@ from aura.conversation.tools.schemas.drones import RUN_READ_ONLY_DRONE_TOOL_DEF
 PRODUCTION_SUPERSEDED_READ_TOOL_NAMES: frozenset[str] = tool_names_for(
     {BULK_READ, CODE_INTEL}
 )
+
+# Godot remains implemented and registered, but is not part of the ordinary
+# model-facing catalogs.
+GODOT_TOOL_NAMES: frozenset[str] = tool_names_for({GODOT})
 
 #: The git tools the production conversation offers. ``git_status`` and ``git_diff`` are
 #: the two an implementation turn genuinely needs — what changed, and exactly
@@ -102,15 +111,18 @@ class ToolCatalog:
         """
         if read_only:
             tools: list[dict[str, Any]] = (
-                list(READ_TOOL_DEFS)
+                [
+                    tool for tool in READ_TOOL_DEFS
+                    if _tool_name(tool) not in GODOT_TOOL_NAMES
+                ]
                 + [dict(LOAD_SKILLS_TOOL_DEF)]
                 + list(GIT_TOOL_DEFS)
             )
         else:
             # Production: one continuous model owns the whole
             # request.  The catalog is the minimum a normal implementation turn
-            # needs — read/glob/grep, TODO, the write and Godot edit tools, the
-            # terminal, git status/diff, skills, and the two structured exit
+            # needs — read/glob/grep, TODO, the write tools, the terminal,
+            # git status/diff, skills, and the two structured exit
             # tools — and it is stable: the same set on every active request of
             # the turn.  ``web_search`` joins it whenever the search backend is
             # configured, and then for the whole turn.
@@ -122,7 +134,12 @@ class ToolCatalog:
             # before it could pick an action.
             production_read_tools = [
                 tool for tool in READ_TOOL_DEFS
-                if _tool_name(tool) not in PRODUCTION_SUPERSEDED_READ_TOOL_NAMES
+                if _tool_name(tool)
+                not in PRODUCTION_SUPERSEDED_READ_TOOL_NAMES | GODOT_TOOL_NAMES
+            ]
+            production_write_tools = [
+                tool for tool in WRITE_TOOL_DEFS
+                if _tool_name(tool) not in GODOT_TOOL_NAMES
             ]
             production_git_tools = [
                 tool for tool in GIT_TOOL_DEFS
@@ -133,7 +150,7 @@ class ToolCatalog:
                 + [dict(INSPECT_CODE_TOOL_DEF)]
                 + [dict(TASK_CHECKLIST_TOOL_DEF)]
                 + [dict(RECORD_IMPLEMENTATION_DECISION_TOOL_DEF)]
-                + list(WRITE_TOOL_DEFS)
+                + production_write_tools
                 + [dict(REPORT_BLOCKER_TOOL_DEF)]
                 + [dict(REPORT_ALREADY_SATISFIED_TOOL_DEF)]
                 + [dict(TERMINAL_TOOL_DEF)]

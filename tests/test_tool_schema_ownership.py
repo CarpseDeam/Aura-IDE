@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from aura.conversation.tools.capability_groups import GODOT, tool_names_for
 from aura.conversation.tools.catalog import ToolCatalog
 from aura.conversation.tools.schemas import GIT_TOOL_DEFS, READ_TOOL_DEFS, WRITE_TOOL_DEFS
 
 
 def _names(defs: list[dict]) -> list[str]:
     return [tool["function"]["name"] for tool in defs]
+
+
+GODOT_TOOL_NAMES = tool_names_for({GODOT})
 
 
 def test_aggregate_schema_order_matches_the_existing_model_surface() -> None:
@@ -58,15 +62,12 @@ def test_catalog_composition_preserves_read_only_and_production_order() -> None:
     read_only = _names(catalog.build_tool_defs(read_only=True))
     production = _names(catalog.build_tool_defs(read_only=False))
 
-    assert read_only == _names(READ_TOOL_DEFS) + [
+    assert read_only == [
+        name for name in _names(READ_TOOL_DEFS) if name not in GODOT_TOOL_NAMES
+    ] + [
         "load_skills",
     ] + _names(GIT_TOOL_DEFS)
     assert production == [
-        "inspect_godot_assets",
-        "inspect_godot_asset_preview",
-        "capture_godot_asset_preview",
-        "inspect_godot_api",
-        "inspect_godot_editor",
         "read_file",
         "read_files",
         "glob",
@@ -75,10 +76,6 @@ def test_catalog_composition_preserves_read_only_and_production_order() -> None:
         "inspect_code",
         "update_task_checklist",
         "record_implementation_decision",
-        "install_godot_editor_bridge",
-        "edit_godot_editor",
-        "edit_godot_asset_preview",
-        "edit_godot_scene",
         "write_file",
         "delete_file",
         "patch_file",

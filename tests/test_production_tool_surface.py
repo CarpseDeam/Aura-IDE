@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 
+from aura.conversation.tools.capability_groups import GODOT, tool_names_for
 from aura.conversation.tools.catalog import ToolCatalog
 from aura.conversation.tools.registry import ToolRegistry
 
@@ -62,17 +63,9 @@ EXPECTED_PRODUCTION_TOOLS: frozenset[str] = frozenset({
     "git_diff",
     # progressive disclosure
     "load_skills",
-    # Godot production capability (Veridea)
-    "inspect_godot_assets",
-    "inspect_godot_asset_preview",
-    "capture_godot_asset_preview",
-    "inspect_godot_api",
-    "inspect_godot_editor",
-    "edit_godot_scene",
-    "edit_godot_editor",
-    "edit_godot_asset_preview",
-    "install_godot_editor_bridge",
 })
+
+GODOT_TOOL_NAMES = tool_names_for({GODOT})
 
 #: Redundant surface removed from the production catalog. Each is reachable
 #: through a tool that stayed, or is unrelated to normal implementation.
@@ -166,6 +159,14 @@ def test_the_live_registry_exposes_that_same_set(tmp_path) -> None:
     registry = ToolRegistry(workspace_root=tmp_path)
 
     assert set(_names(registry.tool_defs())) == EXPECTED_PRODUCTION_TOOLS
+
+
+def test_regular_catalog_modes_expose_no_godot_capability_tools() -> None:
+    for read_only in (False, True):
+        names = set(
+            _names(ToolCatalog().build_tool_defs(read_only=read_only))
+        )
+        assert not names & GODOT_TOOL_NAMES
 
 
 def test_removed_observations_stay_callable_for_transcript_replay(tmp_path) -> None:

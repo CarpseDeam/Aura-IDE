@@ -291,7 +291,6 @@ class DeepSeekClient:
             # may emit a complete parallel batch. Aura never forces a tool call
             # and never disables parallel tool use.
             kwargs["tools"] = tools
-            kwargs["tool_choice"] = "auto"
 
         # The user's selected thinking mode is the mode that gets sent. Nothing
         # here overrides it.
