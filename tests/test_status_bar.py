@@ -85,7 +85,7 @@ def test_refresh_shows_zero_against_the_selected_model_capacity(qapp) -> None:
             thinking="off",
             conversation_usage={},
         )
-        assert bar._status_context._full_text == "Context 0 / 1.0M · 0.0%"
+        assert bar._status_context.text() == "Context 0 / 1.0M · 0.0%"
         assert bar._context_meter.value() == 0
     finally:
         bar.deleteLater()
@@ -105,9 +105,55 @@ def test_refresh_shows_context_and_conversation_cost(qapp) -> None:
                 context_window_tokens=1_000_000,
             ),
         )
-        assert bar._status_context._full_text == "Context 556k / 1.0M · 55.6%"
+        assert bar._status_context.text() == "Context 556k / 1.0M · 55.6%"
         assert bar._context_meter.value() == 556
         assert bar._status_session.text() == "Conversation $—"
+    finally:
+        bar.deleteLater()
+
+
+def test_context_label_is_not_squeezed_below_its_full_text_width(qapp) -> None:
+    """Regression test: the context percentage must never be visually clipped.
+
+    `_status_context` used to be a shrinkable `_ElidingLabel`, so under footer
+    width pressure (long workspace path + telemetry) the trailing percentage
+    (e.g. "7.7%") could be truncated to an ellipsis before the meter/Handoff
+    button. It must now hold its full natural width regardless of window size,
+    with the cache telemetry and workspace path labels absorbing the squeeze.
+    """
+    bar = AuraStatusBar()
+    try:
+        bar.refresh(
+            workspace_root="/tmp/some/fairly/long/workspace/path/for/the/project/that/is/long",
+            model_id="deepseek-v4-pro",
+            thinking="off",
+            conversation_usage={"deepseek-v4-pro": {"hit": 12_450, "miss": 1_820, "out": 3_204}},
+            latest_context=LatestContext(
+                model_id="deepseek-v4-pro",
+                input_tokens=77_000,
+                context_window_tokens=1_000_000,
+            ),
+        )
+        expected_text = "Context 77k / 1.0M · 7.7%"
+        assert bar._status_context.text() == expected_text
+
+        bar.show()
+        try:
+            for width in (1600, 900, 700, 550):
+                bar.resize(width, 30)
+                qapp.processEvents()
+
+                # The label must still show the complete, un-elided text ...
+                assert bar._status_context.text() == expected_text
+                # ... and must have received enough rendered width to display it,
+                # not merely have the string retained while pixels are clipped.
+                required_width = bar._status_context.fontMetrics().horizontalAdvance(expected_text)
+                assert bar._status_context.width() >= required_width, (
+                    f"at window width {width}: label width "
+                    f"{bar._status_context.width()} < required {required_width}"
+                )
+        finally:
+            bar.close()
     finally:
         bar.deleteLater()
 

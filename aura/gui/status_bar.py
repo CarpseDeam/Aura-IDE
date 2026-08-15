@@ -190,10 +190,14 @@ class AuraStatusBar(QStatusBar):
         self._status_context_separator.setStyleSheet(f"color: {BORDER_STRONG}; padding: 0 2px;")
         center_layout.addWidget(self._status_context_separator)
 
-        self._status_context = _ElidingLabel("")
+        # Non-eliding: this is compact, important footer information (e.g. "7.7%")
+        # that must never be visually truncated. Fixed policy keeps it at its
+        # natural text width; the cache telemetry and workspace path labels are
+        # the footer's pressure-relief regions and absorb any width squeeze instead.
+        self._status_context = QLabel("")
         self._status_context.setFont(telemetry_font)
         self._status_context.setStyleSheet(f"color: {STATUS_CONTEXT}; padding: 0 2px;")
-        self._status_context.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+        self._status_context.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
         center_layout.addWidget(self._status_context)
 
         self._context_meter = QProgressBar()

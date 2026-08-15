@@ -13,7 +13,17 @@ TASK_CHECKLIST_TOOL_DEF: dict[str, Any] = {
             "multiple meaningful steps and update it as progress changes. Entries are progress "
             "markers within one continuous task, not phases, separate assignments, or context "
             "boundaries. This tool only displays progress; it never completes, blocks, or gates "
-            "the task."
+            "the task.\n\n"
+            "Live progress cursor: while meaningful work remains, normally exactly one item is "
+            "'active'. The initial snapshot marks the first meaningful item 'active' and the "
+            "rest 'pending'. When the active item completes, update promptly: one replacement "
+            "snapshot marks it 'done' and activates the next 'pending' item. Do not batch — "
+            "never let several items finish and report them together later. Multiple items may "
+            "become 'done' together only when one genuinely atomic action completed them "
+            "together. Update at meaningful work boundaries, not on a timer. Whenever "
+            "practical, pair a checklist update with the next useful tool call in the same "
+            "response instead of an empty bookkeeping round. At completion, send a final "
+            "snapshot marking the last active item 'done'."
         ),
         "parameters": {
             "type": "object",
