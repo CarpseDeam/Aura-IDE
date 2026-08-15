@@ -10,21 +10,18 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from aura.client.events import (
-    ApiError,
     ContentDelta,
-    Done,
     ToolCallArgsDelta,
     ToolCallEnd,
     ToolCallStart,
     Usage,
 )
-from aura.client.responses_stream import (
+from aura.client.responses_common import translate_to_responses_tools
+from aura.client.responses_web_search import (
     RESPONSES_WEB_SEARCH_TOOL,
     ResponsesStreamParser,
     build_native_web_search_request,
-    translate_to_responses_tools,
 )
-
 
 # ---------------------------------------------------------------------------
 # Tool schema translation

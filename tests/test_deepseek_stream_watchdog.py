@@ -19,7 +19,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from aura.client import chat_completions_transport as ct
 from aura.client import deepseek as ds
+from aura.client import responses_transport as rt
 from aura.client.events import (
     ApiError,
     ContentDelta,
@@ -140,7 +142,7 @@ def _api_errors(events: list) -> list[ApiError]:
 
 
 def test_no_first_chunk_triggers_the_first_event_timeout(monkeypatch, released) -> None:
-    monkeypatch.setattr(ds, "FIRST_STREAM_EVENT_TIMEOUT_SECONDS", 0.0)
+    monkeypatch.setattr(ct, "FIRST_STREAM_EVENT_TIMEOUT_SECONDS", 0.0)
     stream = _Stream([], stall=True)
     released(stream)
 
@@ -158,7 +160,7 @@ def test_no_first_chunk_triggers_the_first_event_timeout(monkeypatch, released) 
 def test_repeated_chunks_keep_the_stream_alive(monkeypatch) -> None:
     """Liveness is per-chunk: many chunks under an aggressive bound still run to
     a normal terminal sentinel."""
-    monkeypatch.setattr(ds, "CHAT_INTER_EVENT_TIMEOUT_SECONDS", 0.0)
+    monkeypatch.setattr(ct, "CHAT_INTER_EVENT_TIMEOUT_SECONDS", 0.0)
     chunks = [_metadata_only_chunk()]
     chunks += [_chunk(content=f"part{i}") for i in range(12)]
     chunks.append(_chunk(finish_reason="stop"))
@@ -179,8 +181,8 @@ def test_empty_first_chunk_then_silence_trips_the_inter_event_timeout(
     monkeypatch, released
 ) -> None:
     """The exact hole: a metadata-only chunk disarmed the first-event watchdog."""
-    monkeypatch.setattr(ds, "FIRST_STREAM_EVENT_TIMEOUT_SECONDS", 60.0)
-    monkeypatch.setattr(ds, "CHAT_INTER_EVENT_TIMEOUT_SECONDS", 0.0)
+    monkeypatch.setattr(ct, "FIRST_STREAM_EVENT_TIMEOUT_SECONDS", 60.0)
+    monkeypatch.setattr(ct, "CHAT_INTER_EVENT_TIMEOUT_SECONDS", 0.0)
     stream = _Stream([_metadata_only_chunk()], stall=True)
     released(stream)
 
@@ -198,7 +200,7 @@ def test_empty_first_chunk_then_silence_trips_the_inter_event_timeout(
 def test_meaningful_reasoning_then_silence_reports_a_stall_without_completion(
     monkeypatch, released
 ) -> None:
-    monkeypatch.setattr(ds, "CHAT_INTER_EVENT_TIMEOUT_SECONDS", 0.0)
+    monkeypatch.setattr(ct, "CHAT_INTER_EVENT_TIMEOUT_SECONDS", 0.0)
     stream = _Stream([_chunk(reasoning="thinking about the fix")], stall=True)
     released(stream)
 
@@ -219,7 +221,7 @@ def test_half_streamed_tool_call_is_not_completed_by_the_timeout(
     monkeypatch, released
 ) -> None:
     """An incomplete tool call must never be presented as ready to execute."""
-    monkeypatch.setattr(ds, "CHAT_INTER_EVENT_TIMEOUT_SECONDS", 0.0)
+    monkeypatch.setattr(ct, "CHAT_INTER_EVENT_TIMEOUT_SECONDS", 0.0)
     stream = _Stream(
         [_chunk(tool_calls=_tool_call_fragment(0, "call-1", "read_file", '{"path":'))],
         stall=True,
@@ -236,8 +238,8 @@ def test_half_streamed_tool_call_is_not_completed_by_the_timeout(
 
 def test_cancellation_wins_over_the_timeout(monkeypatch, released) -> None:
     """A user stop is not a provider stall and must not be reported as one."""
-    monkeypatch.setattr(ds, "CHAT_INTER_EVENT_TIMEOUT_SECONDS", 0.0)
-    monkeypatch.setattr(ds, "FIRST_STREAM_EVENT_TIMEOUT_SECONDS", 0.0)
+    monkeypatch.setattr(ct, "CHAT_INTER_EVENT_TIMEOUT_SECONDS", 0.0)
+    monkeypatch.setattr(ct, "FIRST_STREAM_EVENT_TIMEOUT_SECONDS", 0.0)
     stream = _Stream([], stall=True)
     released(stream)
     cancel = threading.Event()
@@ -249,7 +251,7 @@ def test_cancellation_wins_over_the_timeout(monkeypatch, released) -> None:
 
 
 def test_terminal_sentinel_completes_normally(monkeypatch) -> None:
-    monkeypatch.setattr(ds, "CHAT_INTER_EVENT_TIMEOUT_SECONDS", 0.0)
+    monkeypatch.setattr(ct, "CHAT_INTER_EVENT_TIMEOUT_SECONDS", 0.0)
     usage = SimpleNamespace(
         prompt_tokens=100,
         completion_tokens=20,
@@ -269,7 +271,7 @@ def test_terminal_sentinel_completes_normally(monkeypatch) -> None:
 
 
 def test_producer_exception_still_surfaces(monkeypatch) -> None:
-    monkeypatch.setattr(ds, "CHAT_INTER_EVENT_TIMEOUT_SECONDS", 0.0)
+    monkeypatch.setattr(ct, "CHAT_INTER_EVENT_TIMEOUT_SECONDS", 0.0)
     stream = _Stream([_chunk(content="partial")], raises=RuntimeError("connection reset"))
 
     events = _run(_client(stream))
@@ -284,5 +286,5 @@ def test_producer_exception_still_surfaces(monkeypatch) -> None:
 def test_inter_event_constant_is_its_own_value() -> None:
     """Not accidentally the Responses/web-search bound, whose semantics and
     value are a different contract."""
-    assert ds.CHAT_INTER_EVENT_TIMEOUT_SECONDS != ds.RESPONSES_INTER_EVENT_TIMEOUT_SECONDS
-    assert ds.CHAT_INTER_EVENT_TIMEOUT_SECONDS >= ds.FIRST_STREAM_EVENT_TIMEOUT_SECONDS
+    assert ct.CHAT_INTER_EVENT_TIMEOUT_SECONDS != rt.RESPONSES_INTER_EVENT_TIMEOUT_SECONDS
+    assert ct.CHAT_INTER_EVENT_TIMEOUT_SECONDS >= ct.FIRST_STREAM_EVENT_TIMEOUT_SECONDS

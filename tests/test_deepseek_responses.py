@@ -12,12 +12,13 @@ import pytest
 
 from aura.backends.api import APIAgentBackend
 from aura.client import deepseek as ds
-from aura.client.events import ApiError, Done, ReasoningDelta, ToolCallEnd, ToolCallStart, Usage
-from aura.client.responses_stream import (
+from aura.client import responses_transport as rt
+from aura.client.deepseek_responses import (
     DeepSeekResponsesStreamParser,
     build_deepseek_responses_request,
     project_deepseek_responses_input,
 )
+from aura.client.events import ApiError, Done, ReasoningDelta, ToolCallEnd, ToolCallStart, Usage
 from aura.conversation import ConversationManager, History
 from aura.conversation.tools import ToolRegistry
 from aura.model_streams import PRODUCTION_STREAM_HOOK, ModelStreamRegistry
@@ -389,8 +390,8 @@ def test_responses_watchdog_and_cancellation_never_execute_partial_calls(monkeyp
     client = ds.DeepSeekClient.__new__(ds.DeepSeekClient)
     client._provider = "deepseek"
     client._client = SimpleNamespace(responses=Responses())
-    monkeypatch.setattr(ds, "FIRST_STREAM_EVENT_TIMEOUT_SECONDS", 0.0)
-    monkeypatch.setattr(ds, "RESPONSES_INTER_EVENT_TIMEOUT_SECONDS", 0.0)
+    monkeypatch.setattr(rt, "FIRST_STREAM_EVENT_TIMEOUT_SECONDS", 0.0)
+    monkeypatch.setattr(rt, "RESPONSES_INTER_EVENT_TIMEOUT_SECONDS", 0.0)
 
     stalled = list(client.stream(
         messages=[{"role": "user", "content": "hello"}],
