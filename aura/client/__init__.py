@@ -8,6 +8,8 @@ from aura.client.events import (
     ContentDelta,
     Done,
     Event,
+    FileEditChange,
+    FileEditLifecycle,
     ReasoningDelta,
     TerminalCommandStarted,
     TerminalOutput,
@@ -35,4 +37,6 @@ __all__ = [
     "AgentProcessStarted",
     "AgentProcessOutput",
     "AgentProcessFinished",
+    "FileEditChange",
+    "FileEditLifecycle",
 ]

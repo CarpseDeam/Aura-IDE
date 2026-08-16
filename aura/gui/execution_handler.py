@@ -120,6 +120,9 @@ class ExecutionEventHandler(QObject):
         self._bridge.executionToolCallEnd.connect(lambda _t, _w: None)
         self._bridge.executionToolResult.connect(self._tool_router.on_execution_tool_result)
         self._bridge.executionDiffDecided.connect(self._tool_router.on_execution_diff_decided)
+        self._bridge.executionFileEditLifecycle.connect(
+            self._tool_router.on_execution_file_edit_lifecycle
+        )
         self._bridge.executionApiError.connect(self._on_execution_api_error)
         self._bridge.executionUsage.connect(self._on_execution_usage)
         self._bridge.executionActivityUpdated.connect(self._on_execution_activity_updated)

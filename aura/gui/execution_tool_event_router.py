@@ -64,8 +64,28 @@ class ExecutionToolEventRouter:
         new: str,
         is_new_file: bool,
     ) -> None:
-        """Forward diff decision to playground."""
-        self._playground.show_code_diff(execution_tool_id, rel_path, old, new, decision)
+        """Record the approval decision as a diff card.
+
+        This is an approval-derived record for the user, not proof that the
+        change reached disk -- the workspace editor itself is never driven
+        from here. See ``on_execution_file_edit_lifecycle`` for the
+        authoritative applied-content projection.
+        """
+        self._playground.add_diff_card(execution_tool_id, rel_path, old, new, decision, is_new_file)
+
+    def on_execution_file_edit_lifecycle(
+        self,
+        run_id: str,
+        tool_call_id: str,
+        tool_name: str,
+        phase: str,
+        changes: list,
+        reason: str,
+    ) -> None:
+        """Forward the authoritative file-edit lifecycle to the workspace editor."""
+        self._playground.handle_file_edit_lifecycle(
+            tool_call_id, tool_name, phase, changes, reason
+        )
 
     def on_execution_terminal_output(
         self, parent_tool_id: str, execution_tool_id: str, text: str

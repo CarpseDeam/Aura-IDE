@@ -31,6 +31,10 @@ from aura.conversation.tool_preflight import (
 from aura.conversation.tool_runner import ToolRunner
 from aura.conversation.tools._types import ApprovalCallback
 from aura.conversation.tools.effects import ToolEffect
+from aura.conversation.tools.file_edit_lifecycle import (
+    FILE_EDIT_LIFECYCLE_TOOLS,
+    FileEditLifecycleTracker,
+)
 from aura.conversation.tools.registry import ToolRegistry
 from aura.conversation.validation_orchestrator import ValidationCommandSpec
 from aura.events import EventBus
@@ -479,11 +483,19 @@ class ToolRoundRunner:
                 ),
             }
 
+        lifecycle_tracker: FileEditLifecycleTracker | None = None
+        effective_approval_cb = approval_cb
+        if name in FILE_EDIT_LIFECYCLE_TOOLS:
+            lifecycle_tracker = FileEditLifecycleTracker(
+                tool_call_id=tool_call_id, tool_name=name, on_event=on_event
+            )
+            effective_approval_cb = lifecycle_tracker.wrap_approval_cb(approval_cb)
+
         try:
             exec_result = self._tools.execute(
                 name=name,
                 args=args,
-                approval_cb=approval_cb,
+                approval_cb=effective_approval_cb,
                 reject_all=False,
                 cancel_event=cancel_event,
                 skill_turn_state=skill_turn,
@@ -496,6 +508,8 @@ class ToolRoundRunner:
             from aura.config import redact_secrets
 
             redacted = redact_secrets(f"{type(exc).__name__}: {exc}")
+            if lifecycle_tracker is not None:
+                lifecycle_tracker.emit_outcome_failed(redacted)
             payload = {
                 "ok": False,
                 "error": "internal tool error — the harness could not run this call",
@@ -518,6 +532,9 @@ class ToolRoundRunner:
 
         if exec_result.extras.get("approval") == "reject_all":
             self._reject_all_for_turn = True
+
+        if lifecycle_tracker is not None:
+            lifecycle_tracker.emit_outcome(exec_result)
 
         tool_msg_content = exec_result.to_tool_message_content()
 

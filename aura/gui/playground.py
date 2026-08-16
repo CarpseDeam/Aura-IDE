@@ -18,13 +18,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aura.conversation.edit_orchestrator import PATCH_TOOL_NAMES
-from aura.gui.controllers import ToolStreamController
+from aura.gui.editor.file_edit_projection import FileEditProjection
 from aura.gui.theme import BORDER
 from aura.gui.widgets.aura_glow import AuraWidget
 from aura.gui.workspace_tree import WorkspaceTree
-
-CODE_ANIMATION_TOOLS = frozenset({"write_file", *PATCH_TOOL_NAMES})
 
 
 class AuraPlayground(QWidget):
@@ -147,12 +144,8 @@ class AuraPlayground(QWidget):
             initial_geometry=terminal_window_geometry,
         )
 
-        # Tool stream controllers keyed by execution_tool_id
-        self._controllers: dict[str, ToolStreamController] = {}
-        self._controller_parents: dict[str, str] = {}
-        self._execution_code_paths: dict[str, str] = {}
-        self._execution_code_tool_names: dict[str, str] = {}
-        self._pending_execution_code_content: dict[str, str] = {}
+        # Authoritative applied-write projection into the workspace editor.
+        self._file_edit_projection = FileEditProjection(self._code_editor)
         self._workspace_root: Path | None = None
 
         # Active drone run card (shown below the stack widget)
@@ -284,11 +277,6 @@ class AuraPlayground(QWidget):
         )
         self._code_editor.close_execution_tabs()
         self._info_hub.clear_log()
-        self._controllers.clear()
-        self._controller_parents.clear()
-        self._execution_code_paths.clear()
-        self._execution_code_tool_names.clear()
-        self._pending_execution_code_content.clear()
 
     def append_reasoning(self, text: str):
         self._info_hub.append_reasoning(text)
@@ -300,42 +288,18 @@ class AuraPlayground(QWidget):
         self._info_hub.flush_execution_log()
         self._info_hub.mark_execution_log_boundary()
 
-        c = ToolStreamController(name, self)
-        self._controllers[execution_tool_id] = c
-        self._controller_parents[execution_tool_id] = parent_tool_id or ""
-
-        if name in CODE_ANIMATION_TOOLS:
-            self._execution_code_tool_names[execution_tool_id] = name
-            c.path_resolved.connect(
-                lambda path, tid=execution_tool_id: self._on_code_path_resolved(
-                    tid, path
-                )
-            )
-            c.content_updated.connect(
-                lambda content, tid=execution_tool_id: self._on_code_content_updated(
-                    tid, content
-                )
-            )
-
     def append_tool_args(self, execution_tool_id: str, fragment: str) -> None:
-        controller = self._controllers.get(execution_tool_id)
-        if controller is None:
-            return
-        controller.append_fragment(fragment)
+        """No-op: partial tool-call JSON never drives the workspace editor.
+
+        Kept as a stable forwarding target for ExecutionToolEventRouter; raw
+        argument fragments belong to generic argument/log UI (e.g. the chat
+        transcript's own tool-call display), never to this authoritative
+        editor pane.
+        """
 
     def set_tool_result(self, execution_tool_id: str, ok: bool, result: str):
-        self._controller_parents.pop(execution_tool_id, "")
         self._info_hub.flush_execution_log()
         self._info_hub.mark_execution_log_boundary()
-        controller = self._controllers.pop(execution_tool_id, None)
-        if controller is not None:
-            controller.finalize(ok, result)
-
-        # Finalize code editor tab if this was a file tool
-        self._code_editor.finalize_tab(execution_tool_id)
-        self._execution_code_paths.pop(execution_tool_id, None)
-        self._execution_code_tool_names.pop(execution_tool_id, None)
-        self._pending_execution_code_content.pop(execution_tool_id, None)
 
         # Finalize terminal window if this was a terminal tool.
         exit_code = 0
@@ -355,53 +319,29 @@ class AuraPlayground(QWidget):
         """Render the latest Task Checklist snapshot in the info hub."""
         self._info_hub.update_task_checklist(items)
 
-    def _on_code_path_resolved(self, execution_tool_id: str, path: str) -> None:
-        self._execution_code_paths[execution_tool_id] = path
-        self._code_editor.open_or_focus_tab(execution_tool_id, path)
-        tool_name = self._execution_code_tool_names.get(execution_tool_id)
-        if tool_name in PATCH_TOOL_NAMES:
-            current_content = self._read_workspace_text(path)
-            if current_content is not None:
-                self._code_editor.set_content(execution_tool_id, current_content)
-        pending_content = self._pending_execution_code_content.pop(execution_tool_id, None)
-        if pending_content is not None and tool_name not in PATCH_TOOL_NAMES:
-            self._code_editor.stream_content(execution_tool_id, pending_content)
-
-    def _on_code_content_updated(self, execution_tool_id: str, content: str) -> None:
-        tool_name = self._execution_code_tool_names.get(execution_tool_id)
-        if tool_name in PATCH_TOOL_NAMES:
-            return
-        if execution_tool_id not in self._execution_code_paths:
-            self._pending_execution_code_content[execution_tool_id] = content
-            return
-        self._code_editor.stream_content(execution_tool_id, content)
-
-    def show_code_diff(
+    def handle_file_edit_lifecycle(
         self,
-        execution_tool_id: str,
-        rel_path: str,
-        old: str,
-        new: str,
-        decision: str,
+        tool_call_id: str,
+        tool_name: str,
+        phase: str,
+        changes: list[dict],
+        reason: str,
     ) -> None:
-        path = self._execution_code_paths.get(execution_tool_id, rel_path)
-        self._execution_code_paths[execution_tool_id] = path
-        self._code_editor.open_or_focus_tab(execution_tool_id, path)
-        if decision in ("approve", "approve_all"):
-            self._code_editor.animate_content_transition(execution_tool_id, old, new)
-        else:
-            self._code_editor.set_content(execution_tool_id, old)
+        """Route one authoritative file-edit lifecycle phase to the editor.
 
-    def _read_workspace_text(self, path: str) -> str | None:
-        candidate = Path(path)
-        if not candidate.is_absolute() and self._workspace_root is not None:
-            candidate = self._workspace_root / candidate
-        try:
-            if candidate.exists() and candidate.is_file():
-                return candidate.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return None
-        return None
+        Only ``applied`` ever changes editor content, and only with content
+        the write pipeline already confirmed landed on disk. The workspace
+        tree also gets a nudge to refresh on structural changes (create /
+        delete), since Aura may have written outside the currently expanded
+        directories.
+        """
+        self._file_edit_projection.handle_lifecycle_event(
+            tool_call_id, tool_name, phase, changes, reason
+        )
+        if phase == "applied" and any(
+            change.get("action") in ("create", "delete") for change in changes
+        ):
+            self._tree.refresh()
 
     def add_diff_card(
         self,
@@ -437,21 +377,11 @@ class AuraPlayground(QWidget):
 
     def execution_finished(self, ok: bool, summary: str, needs_followup: bool = False, status: str | None = None) -> None:
         self._code_editor.close_all_tabs()
-        self._controllers.clear()
-        self._controller_parents.clear()
-        self._execution_code_paths.clear()
-        self._execution_code_tool_names.clear()
-        self._pending_execution_code_content.clear()
         self._info_hub.show_final_summary(ok, summary, needs_followup=needs_followup, status=status)
         self._info_hub.set_execution_running(False)
 
     def execution_cancelled(self):
         self._code_editor.close_all_tabs()
-        self._controllers.clear()
-        self._controller_parents.clear()
-        self._execution_code_paths.clear()
-        self._execution_code_tool_names.clear()
-        self._pending_execution_code_content.clear()
         self._info_hub.show_final_summary(False, "Execution stopped by user.", status="cancelled")
         self._info_hub.set_execution_running(False)
 
@@ -463,11 +393,6 @@ class AuraPlayground(QWidget):
         self._code_editor.close_all_tabs()
         self._info_hub.clear()
         self._terminal_window.clear()
-        self._controllers.clear()
-        self._controller_parents.clear()
-        self._execution_code_paths.clear()
-        self._execution_code_tool_names.clear()
-        self._pending_execution_code_content.clear()
 
     def add_mermaid_artifact(self, code: str):
         pass

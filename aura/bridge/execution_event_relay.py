@@ -17,6 +17,7 @@ from aura.client import (
     ContentDelta,
     Done,
     Event,
+    FileEditLifecycle,
     ReasoningDelta,
     TerminalCommandStarted,
     TerminalOutput,
@@ -58,6 +59,8 @@ class ExecutionEventRelay(QObject):
     apiError = Signal(str, int, str)          # tool_call_id, status_code, message
     toolResult = Signal(str, str, str, bool, str, dict)  # tool_id, execution_tc_id, name, ok, result, extras
     diffDecided = Signal(str, str, str, str, str, str, bool)
+    fileEditLifecycle = Signal(str, str, str, str, list, str)
+    # run_id, tool_call_id, tool_name, phase, changes (list[dict]), reason
     terminalCommandStarted = Signal(str, str, str, str)  # parent, tool, command, cwd
     terminalOutput = Signal(str, str, str)    # parent_tool_id, execution_tool_id, text
     agentProcessStarted = Signal(str, str, str, str)  # parent_tool_id, process_id, label, command
@@ -271,6 +274,24 @@ class ExecutionEventRelay(QObject):
                 "error": ev.message,
                 "status_code": ev.status_code,
             })
+        elif isinstance(ev, FileEditLifecycle):
+            self.fileEditLifecycle.emit(
+                tool_call_id,
+                ev.tool_call_id,
+                ev.tool_name,
+                ev.phase,
+                [
+                    {
+                        "change_id": change.change_id,
+                        "path": change.path,
+                        "action": change.action,
+                        "old_content": change.old_content,
+                        "new_content": change.new_content,
+                    }
+                    for change in ev.changes
+                ],
+                ev.reason,
+            )
         elif isinstance(ev, ToolResult):
             approval = (ev.extras or {}).get("approval")
             if approval:

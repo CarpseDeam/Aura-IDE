@@ -111,6 +111,34 @@ class AgentProcessFinished:
     exit_code: int
 
 
+@dataclass(frozen=True)
+class FileEditChange:
+    """One file's identity and content within a file-edit lifecycle event."""
+
+    change_id: str
+    path: str  # normalized, workspace-relative
+    action: str  # "create" | "modify" | "delete"
+    old_content: str = ""
+    new_content: str = ""
+
+
+@dataclass
+class FileEditLifecycle:
+    """One phase of one file-edit's authoritative lifecycle.
+
+    ``phase`` is one of: "proposed", "awaiting_approval", "applied",
+    "rejected", "failed". Only the write owner that actually performed the
+    filesystem operation may emit "applied" -- every other phase must never
+    be mistaken for proof that a change landed on disk.
+    """
+
+    tool_call_id: str
+    tool_name: str
+    phase: str
+    changes: tuple[FileEditChange, ...] = ()
+    reason: str = ""
+
+
 Event = (
     ReasoningDelta
     | ContentDelta
@@ -126,4 +154,5 @@ Event = (
     | AgentProcessStarted
     | AgentProcessOutput
     | AgentProcessFinished
+    | FileEditLifecycle
 )

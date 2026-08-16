@@ -175,6 +175,17 @@ class WorkspaceTree(QWidget):
     def root(self) -> Path | None:
         return self._root
 
+    def refresh(self) -> None:
+        """Force the tree to re-scan the current root from actual disk state.
+
+        ``QFileSystemModel`` watches the filesystem on its own, but a nudge
+        here covers writes outside the currently expanded directories (new
+        files, deletions) so the tree stays a truthful reflection of applied
+        file-edit lifecycle events.
+        """
+        if self._root is not None:
+            self.set_root(self._root)
+
     # ---- handlers ---------------------------------------------------------
 
     def _on_double_clicked(self, proxy_index: QModelIndex) -> None:
