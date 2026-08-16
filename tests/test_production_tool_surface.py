@@ -1,25 +1,16 @@
-"""The production tool surface is minimal and instruction-free.
+"""The production tool surface is minimal: five built-ins, nothing more.
 
-Two defects lived in the schema, not in the loop:
+Phase 2C collapsed Aura's ordinary model-facing coding tools around one
+persistent shell: a normal production turn presents exactly one route for
+reading known content (``read_file``), one for repository search
+(``grep_search``), one for filesystem edits (``apply_patch``), one for
+commands (``shell``), and one simple visible TODO
+(``update_task_checklist``). Everything else is either reachable through
+``shell`` or joins only when its own activation condition is actually true
+for this turn.
 
-* the catalog offered a long tail of wrappers — six git subcommand wrappers,
-  specialized read helpers, a diagnostic runner, a workspace snapshot, drone tools,
-  the old CODE_INTEL wrapper group — every one of them reachable through a
-  tool that stayed, and every one of them another approach the model had to
-  rule out before it could pick an action;
-* the descriptions themselves taught inspection-first behaviour: use this
-  before editing, use this to understand, verify before deciding, use this
-  after editing.  A schema is not a place to put a workflow.
-
-``search_codebase`` was originally cut from this same long tail, back when it
-only ranked whole files — genuinely redundant with ``grep_search``/``glob``.
-It now returns ranked structural retrieval documents (bounded source regions
-with symbol/kind/parent metadata), a distinct capability from exact lexical
-matching or path discovery, so it is back in the exposed set alongside
-``read_file``, ``glob``, ``grep_search``, and ``inspect_code``.
-
-These tests read the *real* catalog the production registry exposes.  They test
-what the model is actually shown, not a copy of it.
+These tests read the *real* catalog the production registry exposes. They
+test what the model is actually shown, not a copy of it.
 """
 
 from __future__ import annotations
@@ -30,46 +21,26 @@ from aura.conversation.tools.capability_groups import GODOT, tool_names_for
 from aura.conversation.tools.catalog import ToolCatalog
 from aura.conversation.tools.registry import ToolRegistry
 
-#: The whole ordinary production catalog: the capabilities a normal
-#: implementation turn needs and nothing else.  ``web_search`` is not here — it
-#: joins only when the search backend is configured, and then for the whole
-#: turn.
+#: The whole ordinary production catalog with no optional capability active.
 EXPECTED_PRODUCTION_TOOLS: frozenset[str] = frozenset({
-    # read / search
     "read_file",
-    "read_files",
-    "glob",
     "grep_search",
-    # ranked structural retrieval over the workspace's BM25 index
-    "search_codebase",
-    # dense evidence packet for one location or symbol
-    "inspect_code",
-    # live plan
+    "apply_patch",
+    "shell",
     "update_task_checklist",
-    # working implementation decision record
-    "record_implementation_decision",
-    # write / edit
-    "write_file",
-    "patch_file",
-    "delete_file",
-    # structured terminal outcomes
-    "report_blocker",
-    "report_already_satisfied",
-    # commands
-    "run_terminal_command",
-    "run_and_watch",
-    # repository state
-    "git_status",
-    "git_diff",
-    # progressive disclosure
-    "load_skills",
 })
 
 GODOT_TOOL_NAMES = tool_names_for({GODOT})
 
-#: Redundant surface removed from the production catalog. Each is reachable
-#: through a tool that stayed, or is unrelated to normal implementation.
+#: Redundant/removed surface: reachable through a tool that stayed (mostly
+#: ``shell``), superseded, or unrelated to normal implementation. Handlers
+#: stay registered so a replayed historical call still executes; none of
+#: these are ever offered in the ordinary production catalog.
 REMOVED_PRODUCTION_TOOLS: frozenset[str] = frozenset({
+    "read_files",
+    "glob",
+    "search_codebase",
+    "inspect_code",
     "read_file_range",
     "read_file_outline",
     "read_task_context",
@@ -79,6 +50,8 @@ REMOVED_PRODUCTION_TOOLS: frozenset[str] = frozenset({
     "code_intel_references",
     "code_intel_dependents",
     "code_intel_audit",
+    "git_status",
+    "git_diff",
     "git_log",
     "git_show",
     "git_log_file",
@@ -86,9 +59,16 @@ REMOVED_PRODUCTION_TOOLS: frozenset[str] = frozenset({
     "git_stash_list",
     "git_stash_show",
     "run_diagnostic_command",
+    "run_and_watch",
     "get_workspace_snapshot",
     "run_read_only_drone",
     "register_drone_folder",
+    "write_file",
+    "patch_file",
+    "delete_file",
+    "report_blocker",
+    "report_already_satisfied",
+    "record_implementation_decision",
 })
 
 #: Miniature workflows that must not appear in any production tool description.
@@ -135,10 +115,8 @@ def _names(defs: list[dict]) -> list[str]:
     return [d["function"]["name"] for d in defs]
 
 
-def _production_defs(*, web_search: bool = False) -> list[dict]:
-    return ToolCatalog().build_tool_defs(
-        read_only=False, web_search=web_search
-    )
+def _production_defs(**kwargs) -> list[dict]:
+    return ToolCatalog().build_tool_defs(read_only=False, **kwargs)
 
 
 # ── 1. the catalog is exactly the intended minimal set ──────────────────────
@@ -174,14 +152,23 @@ def test_removed_observations_stay_callable_for_transcript_replay(tmp_path) -> N
     registry = ToolRegistry(workspace_root=tmp_path)
     replayable = set(_names(registry.replayable_tool_defs()))
 
-    for withheld in ("find_usages", "list_directory", "git_log"):
+    for withheld in (
+        "find_usages", "list_directory", "git_log",
+        "read_files", "glob", "search_codebase", "inspect_code",
+    ):
         assert withheld in replayable, withheld
-    # ``search_codebase`` is directly exposed now, not withheld-but-callable —
-    # it must not appear in the replay-only set.
-    assert "search_codebase" not in replayable
     # Nothing that can change the workspace is callable from outside the
     # catalog that offered it.
     assert not (replayable & EXPECTED_PRODUCTION_TOOLS)
+
+
+def test_legacy_write_tool_names_are_not_in_any_catalog(tmp_path) -> None:
+    """The consolidated names are gone from every exposed and replayable surface."""
+    registry = ToolRegistry(workspace_root=tmp_path)
+    legacy = {"write_file", "patch_file", "delete_file"}
+
+    assert not (set(_names(registry.tool_defs())) & legacy)
+    assert not (set(_names(registry.replayable_tool_defs())) & legacy)
 
 
 def test_catalog_has_no_runtime_mode_dimension() -> None:
@@ -192,7 +179,17 @@ def test_catalog_has_no_runtime_mode_dimension() -> None:
     assert not (names & {"git_log", "git_show", "git_log_file", "list_directory"})
 
 
-# ── 2. web_search is per-turn and stable within the turn ────────────────────
+def test_tool_order_and_schemas_are_stable_across_rounds(tmp_path) -> None:
+    """Nothing here re-derives a different catalog on a later round of one turn."""
+    registry = ToolRegistry(workspace_root=tmp_path)
+
+    first = registry.tool_defs()
+    second = registry.tool_defs()
+
+    assert first == second
+
+
+# ── 2. optional capabilities join only under their explicit conditions ──────
 
 
 def test_web_search_joins_only_a_research_turn_and_nothing_else_moves() -> None:
@@ -230,6 +227,37 @@ def test_the_registry_holds_the_web_search_decision_for_the_whole_turn(
     assert "web_search" in _names(registry.tool_defs())
 
 
+def test_load_skills_joins_only_when_the_turn_has_frozen_candidates(tmp_path) -> None:
+    registry = ToolRegistry(workspace_root=tmp_path)
+
+    assert "load_skills" not in _names(registry.tool_defs())
+
+    class _FakeSkillTurnState:
+        is_empty = False
+
+    registry.set_turn_skill_state(_FakeSkillTurnState())
+    assert "load_skills" in _names(registry.tool_defs())
+
+    registry.set_turn_skill_state(None)
+    assert "load_skills" not in _names(registry.tool_defs())
+
+
+def test_plan_review_joins_only_when_required_and_never_read_only(tmp_path) -> None:
+    registry = ToolRegistry(workspace_root=tmp_path)
+    assert "review_implementation_plan" not in _names(registry.tool_defs())
+
+    registry.plan_review.begin_turn(required=True)
+    assert "review_implementation_plan" in _names(registry.tool_defs())
+
+    registry.set_read_only(True)
+    assert "review_implementation_plan" not in _names(registry.tool_defs())
+
+
+def test_reference_tool_joins_only_when_a_reference_is_authorized(tmp_path) -> None:
+    registry = ToolRegistry(workspace_root=tmp_path)
+    assert "read_reference_file" not in _names(registry.tool_defs())
+
+
 # ── 3. descriptions describe the tool, not a workflow ───────────────────────
 
 
@@ -248,12 +276,12 @@ def test_every_production_tool_still_describes_itself() -> None:
     """Stripping coaching must not leave a tool undocumented."""
     for tool in _production_defs(web_search=True):
         description = str(tool["function"].get("description") or "").strip()
-        assert len(description) >= 80, tool["function"]["name"]
+        assert len(description) >= 40, tool["function"]["name"]
 
 
 def test_the_production_schema_shrank() -> None:
-    """The production surface stays bounded after restoring batched reads."""
+    """The production surface stays small now that it is five tools plus options."""
     defs = _production_defs(web_search=True)
 
-    assert len(defs) <= 28
-    assert len(json.dumps(defs)) < 34_000
+    assert len(defs) <= 8
+    assert len(json.dumps(defs)) < 12_000

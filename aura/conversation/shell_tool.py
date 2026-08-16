@@ -1,4 +1,4 @@
-"""Production ``run_terminal_command`` owner.
+"""Production ``shell`` owner.
 
 Argument validation, command preparation, persistent-session execution,
 validation classification, history, and terminal events live here.  The
@@ -13,7 +13,12 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
-from aura.client import TerminalCommandStarted, TerminalOutput, ToolResult
+from aura.client import (
+    TerminalCommandStarted,
+    TerminalOutput,
+    ToolResult,
+    WorkspaceReconcileRequested,
+)
 from aura.conversation.command_normalizer import normalize_command
 from aura.conversation.history import History
 from aura.conversation.tool_runner_terminal_policy import resolve_terminal_timeout
@@ -212,6 +217,12 @@ class ShellTool:
             on_output=on_output_chunk,
             on_submitted=on_submitted,
         )
+        if result.submitted:
+            # The command actually ran in the workspace -- regardless of exit
+            # code, timeout, or cancellation, files may have changed outside
+            # the file-edit lifecycle (formatters, generators, builds, git).
+            # Request a truth re-sync of the workspace editor.
+            on_event(WorkspaceReconcileRequested(tool_call_id=tool_call_id))
         full_output = result.output or "".join(output_lines)
         payload_dict: dict[str, Any] = {
             "ok": result.ok,
@@ -312,7 +323,7 @@ class ShellTool:
         on_event(
             ToolResult(
                 tool_call_id=tool_call_id,
-                name="run_terminal_command",
+                name="shell",
                 ok=bool(payload_dict.get("ok")) if ok is None else ok,
                 result=payload,
             )
@@ -350,7 +361,7 @@ class ShellTool:
             "failure_class": VALIDATION_COMMAND_UNRUNNABLE,
             "error": error,
             "recoverable": True,
-            "suggested_next_tool": "run_terminal_command",
+            "suggested_next_tool": "shell",
             "suggested_next_action": next_action
             or "Use a workspace-relative cwd/working_directory that stays inside the workspace.",
             "session_identity": self._session.session_id,

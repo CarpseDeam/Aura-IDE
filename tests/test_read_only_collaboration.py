@@ -286,8 +286,7 @@ def test_read_only_catalog_exposes_only_observation_capabilities(tmp_path) -> No
 
     assert "read_file" in names
     assert "grep_search" in names
-    assert "write_file" not in names
-    assert "patch_file" not in names
+    assert "apply_patch" not in names
     assert "edit_godot_scene" not in names
 
     for name in names:
@@ -436,10 +435,10 @@ def test_bridge_freezes_tool_capabilities_across_rounds_and_adopts_next_turn(
     assert len(active_catalogs) == 2
     assert active_catalogs[0] == active_catalogs[1]
     if initial_mode:
-        assert "write_file" not in active_catalogs[0]
+        assert "apply_patch" not in active_catalogs[0]
         assert "read_file" in active_catalogs[0]
     else:
-        assert "write_file" in active_catalogs[0]
+        assert "apply_patch" in active_catalogs[0]
     # Completion hands the registry to the newly requested mode.
     assert bridge.requested_read_only is requested_during_turn
     assert bridge.registry.read_only is requested_during_turn
@@ -466,6 +465,6 @@ def test_bridge_freezes_tool_capabilities_across_rounds_and_adopts_next_turn(
 
     assert len(next_catalogs) == 1
     if requested_during_turn:
-        assert "write_file" not in next_catalogs[0]
+        assert "apply_patch" not in next_catalogs[0]
     else:
-        assert "write_file" in next_catalogs[0]
+        assert "apply_patch" in next_catalogs[0]

@@ -6,7 +6,7 @@ from typing import Any
 TERMINAL_TOOL_DEF: dict[str, Any] = {
     "type": "function",
     "function": {
-        "name": "run_terminal_command",
+        "name": "shell",
         "description": (
             "Execute one command in Aura's persistent PowerShell session in the workspace or an "
             "optional workspace-relative cwd and stream its output. The same PowerShell process "
@@ -45,42 +45,6 @@ TERMINAL_TOOL_DEF: dict[str, Any] = {
                 },
             },
             "required": ["command"],
-        },
-    },
-}
-
-RUN_AND_WATCH_TOOL_DEF: dict[str, Any] = {
-    "type": "function",
-    "function": {
-        "name": "run_and_watch",
-        "description": (
-            "Run the task\'s declared run_command and watch for startup "
-            "behavior. Success means the command exits on its own within the "
-            "watch window with exit code 0 and no traceback. A command that "
-            "survives the window without crashing (still running when the "
-            "window expires) is FAILURE — the command must self-terminate. "
-            "A crash (Traceback in output) or non-zero exit code is also "
-            "failure. This tool takes NO command parameter — the command is "
-            "fixed by the task contract (run_command "
-            "field). If no run command was declared for this task, it "
-            "returns an informational no-op result. Normally you do NOT "
-            "need to call this tool yourself — the harness automatically "
-            "runs launch verification after you finish. Use "
-            "run_terminal_command for your own validation checks."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "window_seconds": {
-                    "type": "integer",
-                    "description": (
-                        "How many seconds to watch the process. Default: 10. "
-                        "Maximum: 60."
-                    ),
-                    "default": 10,
-                },
-            },
-            "required": [],
         },
     },
 }

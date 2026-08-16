@@ -216,6 +216,7 @@ class ConversationBridge(QObject):
     executionToolResult = Signal(str, str, str, bool, str, dict)
     executionDiffDecided = Signal(str, str, str, str, str, str, bool)
     executionFileEditLifecycle = Signal(str, str, str, str, list, str)
+    executionWorkspaceReconcileRequested = Signal(str, str)
     executionTerminalCommandStarted = Signal(str, str, str, str)
     executionApiError = Signal(str, int, str)
     executionUsage = Signal(str, str, int, int, int, int)
@@ -313,6 +314,9 @@ class ConversationBridge(QObject):
         session.executionToolResult.connect(self.executionToolResult)
         session.executionDiffDecided.connect(self.executionDiffDecided)
         session.executionFileEditLifecycle.connect(self.executionFileEditLifecycle)
+        session.executionWorkspaceReconcileRequested.connect(
+            self.executionWorkspaceReconcileRequested
+        )
         session.executionTerminalCommandStarted.connect(self.executionTerminalCommandStarted)
         session.executionApiError.connect(self.executionApiError)
         session.executionUsage.connect(self.executionUsage)

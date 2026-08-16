@@ -20,7 +20,10 @@ def test_production_prompt_expresses_material_evidence_closure(tmp_path) -> None
     assert "do not make claims about repository contents" not in prompt
     assert "materially change the implementation" in prompt
     assert "adjacent uncertainty does not require investigation" in prompt
-    assert "record_implementation_decision" in prompt
+    # record_implementation_decision was removed in Phase 2C: the model
+    # carries its implementation decision in the continuous conversation
+    # instead of serializing it into a bookkeeping tool call.
+    assert "record_implementation_decision" not in prompt
 
 
 def test_review_implementation_plan_guidance_lives_with_its_tool_surface(

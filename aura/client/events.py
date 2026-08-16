@@ -123,6 +123,17 @@ class FileEditChange:
 
 
 @dataclass
+class WorkspaceReconcileRequested:
+    """A shell command finished; the workspace may have changed outside the
+    file-edit lifecycle (formatters, generators, builds, git). Carries no
+    per-file claim -- it only requests a truth re-sync of open editor tabs
+    and the workspace tree from actual disk state.
+    """
+
+    tool_call_id: str
+
+
+@dataclass
 class FileEditLifecycle:
     """One phase of one file-edit's authoritative lifecycle.
 
@@ -155,4 +166,5 @@ Event = (
     | AgentProcessOutput
     | AgentProcessFinished
     | FileEditLifecycle
+    | WorkspaceReconcileRequested
 )

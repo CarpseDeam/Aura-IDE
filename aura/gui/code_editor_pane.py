@@ -46,18 +46,8 @@ logger = logging.getLogger(__name__)
 
 
 class CodeEditorPane(QWidget):
-    """Tabbed, read-only preview of actual workspace file content.
-
-    Public API:
-        open_file(path) -> None
-        resolve_workspace_path(path) -> Path
-        read_disk_text(path) -> str | None
-        path_editor(path) -> QPlainTextEdit | None
-        set_path_content(path, content, *, mark_execution_origin=False) -> QPlainTextEdit
-        pulse_applied(editor, old_text, new_text) -> None
-        close_path(path) -> None
-        close_all_tabs() -> None
-        close_execution_tabs() -> None
+    """Tabbed, read-only preview of actual workspace file content, keyed by
+    resolved path -- see the public methods below for the full API.
     """
 
     focused_action_requested = Signal(str)
@@ -153,6 +143,11 @@ class CodeEditorPane(QWidget):
     def path_editor(self, path: Path) -> QPlainTextEdit | None:
         """Return the open editor for *path*, or None if it has no tab."""
         return self._tabs_by_path.get(self._normalize(path))
+
+    @property
+    def open_paths(self) -> tuple[Path, ...]:
+        """Every workspace path with an open tab, for reconciliation sweeps."""
+        return tuple(self._tabs_by_path)
 
     def open_file(self, file_path: Path) -> None:
         """Open a workspace file in a read-only preview tab."""

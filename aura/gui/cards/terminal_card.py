@@ -1,4 +1,4 @@
-"""Collapsible card showing streaming terminal output from run_terminal_command."""
+"""Collapsible card showing streaming terminal output from the shell tool."""
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
@@ -18,7 +18,7 @@ from aura.gui.theme import ACCENT, BG, BORDER, DANGER, FG, SUCCESS, TERMINAL_BG,
 
 
 class TerminalCard(QFrame):
-    """Collapsible card showing streaming terminal output from run_terminal_command.
+    """Collapsible card showing streaming terminal output from the shell tool.
 
     Header: "$ command" with state indicator: (running), (done ✓), (failed ✗)
     Body: dark monospace output area that auto-scrolls.

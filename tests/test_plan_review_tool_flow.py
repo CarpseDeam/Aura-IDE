@@ -133,8 +133,8 @@ def test_approved_review_returns_the_user_edited_plan_and_unblocks_mutation(tmp_
     assert registry.plan_review.approved is True
 
     write_result = registry.execute(
-        "write_file",
-        {"path": "a.py", "content": "print(1)\n"},
+        "apply_patch",
+        {"operation": "create", "path": "a.py", "content": "print(1)\n"},
         approval_cb=lambda _req: ApprovalDecision(action="approve"),
     )
     assert write_result.ok is True
@@ -160,7 +160,9 @@ def test_cancelled_review_leaves_mutation_blocked(tmp_path: Path) -> None:
         raise AssertionError("must not reach approval after a cancelled review")
 
     write_result = registry.execute(
-        "write_file", {"path": "a.py", "content": "x"}, approval_cb=_fail
+        "apply_patch",
+        {"operation": "create", "path": "a.py", "content": "x"},
+        approval_cb=_fail,
     )
     assert write_result.ok is False
     assert write_result.payload["failure_class"] == "plan_review_required"
@@ -217,7 +219,9 @@ def test_same_model_resumes_with_approved_plan_and_diff_approval_still_applies(
         tool_round([("r1", "review_implementation_plan", {
             "goal": "draft goal", "spec": "draft spec", "acceptance": "draft acceptance",
         })]),
-        tool_round([("w1", "write_file", {"path": "notes.md", "content": "# Notes\n\nupdated\n"})]),
+        tool_round([("w1", "apply_patch", {
+            "operation": "replace", "path": "notes.md", "content": "# Notes\n\nupdated\n",
+        })]),
         final_round("Done."),
     ])
     isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
@@ -244,12 +248,13 @@ def test_same_model_resumes_with_approved_plan_and_diff_approval_still_applies(
 
     assert registry.plan_review.approved is True
 
-    write_result = recorder.results_named("write_file")[0]
+    write_result = recorder.results_named("apply_patch")[0]
     write_payload = json.loads(write_result.result)
     assert write_payload["ok"] is True
     assert "updated" in (workspace / "notes.md").read_text(encoding="utf-8")
 
     # File-diff approval behavior is untouched and independent of Plan Review.
+    # The underlying write owner still records its own internal tool_name.
     assert "write_file" in approvals
 
 
@@ -265,7 +270,9 @@ def test_plan_review_off_preserves_default_production_mutation_behavior(
     manager = ConversationManager(history, registry)
 
     backend = ScriptedBackend([
-        tool_round([("w1", "write_file", {"path": "notes.md", "content": "# Notes\n\ndirect\n"})]),
+        tool_round([("w1", "apply_patch", {
+            "operation": "replace", "path": "notes.md", "content": "# Notes\n\ndirect\n",
+        })]),
         final_round("Done."),
     ])
     isolated_streams.register(PRODUCTION_STREAM_HOOK, backend.stream)
@@ -285,6 +292,6 @@ def test_plan_review_off_preserves_default_production_mutation_behavior(
     }
     assert "review_implementation_plan" not in exposed_names
 
-    write_result = recorder.results_named("write_file")[0]
+    write_result = recorder.results_named("apply_patch")[0]
     assert json.loads(write_result.result)["ok"] is True
     assert "direct" in (workspace / "notes.md").read_text(encoding="utf-8")

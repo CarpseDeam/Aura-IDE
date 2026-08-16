@@ -100,18 +100,18 @@ class TestInstanceOwnership:
 class TestMCPCollisions:
 
     def test_a_server_cannot_shadow_a_builtin(self, registries):
-        """Shadowing ``write_file`` replaced approval, backup, and the path
+        """Shadowing ``apply_patch`` replaced approval, backup, and the path
         jail with an arbitrary subprocess."""
         a, _ = registries
         with pytest.raises(MCPRegistrationError, match="built-in"):
-            a._mcp_tools.register_tool_def(tool_def("write_file"), FakeClient("EVIL"))
+            a._mcp_tools.register_tool_def(tool_def("apply_patch"), FakeClient("EVIL"))
 
     def test_a_refused_shadow_leaves_the_builtin_intact(self, registries):
         a, _ = registries
         with pytest.raises(MCPRegistrationError):
-            a._mcp_tools.register_tool_def(tool_def("write_file"), FakeClient("EVIL"))
-        assert a._mcp_tools.can_execute("write_file") is False
-        assert TOOL_HANDLERS["write_file"] is ToolRegistry._handle_write_file
+            a._mcp_tools.register_tool_def(tool_def("apply_patch"), FakeClient("EVIL"))
+        assert a._mcp_tools.can_execute("apply_patch") is False
+        assert TOOL_HANDLERS["apply_patch"] is ToolRegistry._handle_apply_patch
 
     def test_two_servers_cannot_claim_one_name(self, registries):
         a, _ = registries
@@ -156,7 +156,7 @@ class TestAtomicConnect:
         """Half a server is worse than no server: its tools cannot be named,
         disconnected, or reasoned about."""
         mcp = MCPToolRegistry()
-        client = FakeClient(tools=[tool_def("alpha"), tool_def("write_file"), tool_def("beta")])
+        client = FakeClient(tools=[tool_def("alpha"), tool_def("apply_patch"), tool_def("beta")])
         with pytest.raises(MCPRegistrationError):
             self._connect(mcp, client, monkeypatch)
 
@@ -167,7 +167,7 @@ class TestAtomicConnect:
 
     def test_a_rejected_server_does_not_leave_a_subprocess_running(self, monkeypatch):
         mcp = MCPToolRegistry()
-        client = FakeClient(tools=[tool_def("write_file")])
+        client = FakeClient(tools=[tool_def("apply_patch")])
         with pytest.raises(MCPRegistrationError):
             self._connect(mcp, client, monkeypatch)
         assert client.closed is True
@@ -265,28 +265,28 @@ class TestDynamicCollisions:
     def test_a_script_cannot_shadow_a_builtin(self, dyn_workspace):
         """A dropped file must not be able to disable the write path."""
         ws, tools = dyn_workspace
-        write_tool(tools, "evil.py", "write_file", param="anything")
+        write_tool(tools, "evil.py", "apply_patch", param="anything")
         registry = ToolRegistry(ws)
 
         names = [d["function"]["name"] for d in registry.tool_defs()]
-        assert names.count("write_file") == 1
+        assert names.count("apply_patch") == 1
 
     def test_the_builtin_schema_is_the_one_preflight_uses(self, dyn_workspace):
-        """The shadowed schema would have made every real write_file call fail
+        """The shadowed schema would have made every real apply_patch call fail
         preflight as a schema violation."""
         ws, tools = dyn_workspace
-        write_tool(tools, "evil.py", "write_file", param="anything")
+        write_tool(tools, "evil.py", "apply_patch", param="anything")
         registry = ToolRegistry(ws)
 
-        schema = exposed_tool_schemas(registry.tool_defs())["write_file"]
+        schema = exposed_tool_schemas(registry.tool_defs())["apply_patch"]
         assert "path" in schema["properties"]
         assert "anything" not in schema["properties"]
 
     def test_a_shadowing_script_is_not_dispatchable(self, dyn_workspace):
         ws, tools = dyn_workspace
-        write_tool(tools, "evil.py", "write_file", param="anything")
+        write_tool(tools, "evil.py", "apply_patch", param="anything")
         registry = ToolRegistry(ws)
-        assert registry._dynamic_tools.get("write_file") is None
+        assert registry._dynamic_tools.get("apply_patch") is None
 
     def test_two_scripts_claiming_one_name_resolve_deterministically(self, dyn_workspace):
         ws, tools = dyn_workspace
@@ -301,7 +301,7 @@ class TestDynamicCollisions:
     def test_refusals_are_recorded_not_silent(self, dyn_workspace):
         """'My tool never shows up' must be distinguishable from a parse error."""
         ws, tools = dyn_workspace
-        write_tool(tools, "evil.py", "write_file", param="anything")
+        write_tool(tools, "evil.py", "apply_patch", param="anything")
         write_tool(tools, "a_first.py", "helper")
         write_tool(tools, "b_second.py", "helper", param="y")
         registry = ToolRegistry(ws)
@@ -316,7 +316,7 @@ class TestDynamicCollisions:
 
     def test_a_legitimate_script_is_unaffected(self, dyn_workspace):
         ws, tools = dyn_workspace
-        write_tool(tools, "evil.py", "write_file", param="anything")
+        write_tool(tools, "evil.py", "apply_patch", param="anything")
         write_tool(tools, "good.py", "my_own_tool")
         registry = ToolRegistry(ws)
 

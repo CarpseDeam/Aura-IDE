@@ -127,8 +127,8 @@ def test_mutation_allowed_once_plan_review_is_not_required(tmp_path: Path) -> No
     from aura.conversation.tools._types import ApprovalDecision
 
     result = registry.execute(
-        "write_file",
-        {"path": "x.txt", "content": "hi"},
+        "apply_patch",
+        {"operation": "create", "path": "x.txt", "content": "hi"},
         approval_cb=lambda _req: ApprovalDecision(action="approve"),
     )
     assert result.ok is True

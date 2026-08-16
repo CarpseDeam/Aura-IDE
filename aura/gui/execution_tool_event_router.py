@@ -87,6 +87,17 @@ class ExecutionToolEventRouter:
             tool_call_id, tool_name, phase, changes, reason
         )
 
+    def on_execution_workspace_reconcile_requested(
+        self, run_id: str, tool_call_id: str
+    ) -> None:
+        """Forward a post-shell-command reconciliation request to the workspace.
+
+        No per-file "applied" claim rides along -- this is a truth re-sync of
+        open editor tabs and the workspace tree after an opaque shell command,
+        not a proven authored edit.
+        """
+        self._playground.handle_workspace_reconcile(tool_call_id)
+
     def on_execution_terminal_output(
         self, parent_tool_id: str, execution_tool_id: str, text: str
     ) -> None:

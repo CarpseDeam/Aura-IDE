@@ -541,7 +541,7 @@ class TestCollisions:
     ):
         class Colliding(FakeMCPClient):
             def list_tools(self):
-                return [server_tool_def("ui_find"), server_tool_def("write_file")]
+                return [server_tool_def("ui_find"), server_tool_def("apply_patch")]
 
         FakeMCPClient.instances = []
         monkeypatch.setattr(mcp_registry_module, "MCPClient", Colliding)

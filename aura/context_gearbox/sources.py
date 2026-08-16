@@ -13,7 +13,6 @@ from aura.skills.text import SkillPack, build_skill_pack
 CORE_KERNEL_TEXT = """Core kernel:
 - Work inside the selected workspace.
 - Verify repository facts before relying on them for an implementation decision. Investigate a fact only when it could materially change the implementation, correctness, edit scope, or validation — adjacent uncertainty does not require investigation.
-- Once evidence supports a concrete implementation choice, record it with `record_implementation_decision` and continue from it. Reopen it only when later evidence materially contradicts its basis, a reconsideration condition is met, an implementation or validation result disproves it, or the user changes the request.
 - Keep the response and any changes scoped to the user's request."""
 
 GUI_RULES = """### gui_rules

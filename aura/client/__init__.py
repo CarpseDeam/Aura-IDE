@@ -18,6 +18,7 @@ from aura.client.events import (
     ToolCallStart,
     ToolResult,
     Usage,
+    WorkspaceReconcileRequested,
 )
 
 __all__ = [
@@ -39,4 +40,5 @@ __all__ = [
     "AgentProcessFinished",
     "FileEditChange",
     "FileEditLifecycle",
+    "WorkspaceReconcileRequested",
 ]

@@ -284,9 +284,9 @@ def propose_line_range_edit(
             target,
             f"file not found: {rel}",
             "path_error",
-            suggested_tool="write_file",
-            suggested_next_tool="write_file",
-            suggested_next_action="Use write_file if this file should be created.",
+            suggested_tool="apply_patch",
+            suggested_next_tool="apply_patch",
+            suggested_next_action="Use apply_patch with operation=create if this file should be created.",
         )
     if not target.is_file():
         rel = _rel_path(workspace_root, target)
@@ -353,8 +353,8 @@ def propose_line_range_edit(
                 target,
                 f"replacement produces invalid Python: {exc}",
                 "syntax_invalid",
-                suggested_tool="patch_file",
-                suggested_next_tool="patch_file",
+                suggested_tool="apply_patch",
+                suggested_next_tool="apply_patch",
                 suggested_next_action="Repair the Python syntax in this file before any unrelated tool call.",
                 start_line=start_line,
                 end_line=end_line,
@@ -615,9 +615,9 @@ def propose_edit(
         "error": str(match.get("error") or "old_str not found in file."),
         "failure_class": failure_class,
         "edit_file_failure": True,
-        "suggested_tool": "patch_file",
-        "suggested_next_tool": "patch_file",
-        "suggested_next_action": "Re-read the file to see the actual content, then use patch_file with current exact text.",
+        "suggested_tool": "apply_patch",
+        "suggested_next_tool": "apply_patch",
+        "suggested_next_action": "Re-read the file to see the actual content, then use apply_patch with operation=patch and current exact text.",
     }
     for key in (
         "best_fuzzy_ratio",

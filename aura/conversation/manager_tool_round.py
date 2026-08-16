@@ -15,10 +15,6 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from aura.client import Event, ToolResult
-from aura.conversation._report_tools import (
-    REPORT_ALREADY_SATISFIED,
-    REPORT_BLOCKER,
-)
 from aura.conversation.history import History
 from aura.conversation.plan_review import blocked_tool_payload
 from aura.conversation.tool_names import WRITE_TOOLS
@@ -41,14 +37,6 @@ from aura.events import EventBus
 from aura.skills.turn_state import SkillTurnState
 
 EventCallback = Callable[[Event], None]
-
-
-def _parse_tool_payload(content: Any) -> Any:
-    """Best-effort JSON parse of a tool result payload."""
-    try:
-        return json.loads(content)
-    except (TypeError, json.JSONDecodeError):
-        return None
 
 
 def _reject_tool_call_batch(
@@ -173,12 +161,10 @@ class ToolRoundOutcome:
     """What the manager needs to know after one executed batch.
 
     ``cancelled`` is the only field that affects the loop, and only because the
-    user stopped the run. The two report flags are passive receipt bookkeeping.
+    user stopped the run.
     """
 
     cancelled: bool = False
-    blocker_succeeded: bool = False
-    already_satisfied_succeeded: bool = False
 
 
 class ToolRoundRunner:
@@ -214,7 +200,6 @@ class ToolRoundRunner:
         cleanup_cancelled: Callable[[EventCallback], None],
         skill_turn: SkillTurnState | None = None,
         explicit_validation_commands: list[ValidationCommandSpec] | None = None,
-        declared_run_command: str | None = None,
         tool_defs: list[dict[str, Any]] | None = None,
     ) -> ToolRoundOutcome:
         # The exact tool surface the request that produced these calls offered.
@@ -314,7 +299,6 @@ class ToolRoundRunner:
                     cancel_event=cancel_event,
                     skill_turn=skill_turn,
                     explicit_validation_commands=explicit_validation_commands,
-                    declared_run_command=declared_run_command,
                 )
             except Exception as exc:
                 # Last-resort containment: an unexpected exception from any
@@ -369,19 +353,6 @@ class ToolRoundRunner:
 
         results_by_id = {r.get("id"): r for r in results_to_append if r is not None}
 
-        # Passive bookkeeping for the completion receipt: whether an optional
-        # report tool in this round actually succeeded with its structured
-        # payload. Neither flag changes what happens next in the loop.
-        blocker_succeeded = _report_tool_succeeded(
-            tasks, results_by_id, REPORT_BLOCKER, "blocker_reported"
-        )
-        already_satisfied_succeeded = _report_tool_succeeded(
-            tasks,
-            results_by_id,
-            REPORT_ALREADY_SATISFIED,
-            "already_satisfied_reported",
-        )
-
         # Exactly one result per call, in original call order.
         for task in tasks:
             if cancel_event.is_set():
@@ -399,10 +370,7 @@ class ToolRoundRunner:
                 self._history.append_tool_result(task["id"], res["result_payload"])
                 on_event(res["event"])
 
-        return ToolRoundOutcome(
-            blocker_succeeded=blocker_succeeded,
-            already_satisfied_succeeded=already_satisfied_succeeded,
-        )
+        return ToolRoundOutcome()
 
     def _process_task(
         self,
@@ -413,18 +381,17 @@ class ToolRoundRunner:
         cancel_event: threading.Event,
         skill_turn: SkillTurnState | None,
         explicit_validation_commands: list[ValidationCommandSpec] | None,
-        declared_run_command: str | None,
     ) -> dict[str, Any]:
         tool_call_id = task["id"]
         name = task["name"]
         args = task["args"]
 
-        # Plan Review's runtime guarantee applies here first because
-        # run_and_watch/run_terminal_command below are special-cased straight
-        # to ToolRunner and never reach ToolRegistry.execute(), which carries
-        # the same check for every other tool. Both call sites defer to
-        # ``PlanReviewState.blocks`` — the one authoritative policy — so nothing
-        # here re-derives which effects are blocked.
+        # Plan Review's runtime guarantee applies here first because ``shell``
+        # below is special-cased straight to ToolRunner and never reaches
+        # ToolRegistry.execute(), which carries the same check for every
+        # other tool. Both call sites defer to ``PlanReviewState.blocks`` —
+        # the one authoritative policy — so nothing here re-derives which
+        # effects are blocked.
         if self._tools.plan_review.blocks(task["effect"]):
             payload = json.dumps(blocked_tool_payload(), ensure_ascii=False)
             return {
@@ -439,18 +406,7 @@ class ToolRoundRunner:
                 ),
             }
 
-        if name == "run_and_watch":
-            # Streams its output and appends its own authoritative result.
-            self._tool_runner.handle_run_and_watch(
-                tool_call_id=tool_call_id,
-                args=args,
-                on_event=on_event,
-                cancel_event=cancel_event,
-                declared_run_command=declared_run_command or "",
-            )
-            return {"id": tool_call_id, "skip": True}
-
-        if name == "run_terminal_command":
+        if name == "shell":
             # Streams its output and appends its own authoritative result.
             self._tool_runner.handle_terminal_command(
                 tool_call_id=tool_call_id,
@@ -487,7 +443,10 @@ class ToolRoundRunner:
         effective_approval_cb = approval_cb
         if name in FILE_EDIT_LIFECYCLE_TOOLS:
             lifecycle_tracker = FileEditLifecycleTracker(
-                tool_call_id=tool_call_id, tool_name=name, on_event=on_event
+                tool_call_id=tool_call_id,
+                tool_name=name,
+                operation=str(args.get("operation") or ""),
+                on_event=on_event,
             )
             effective_approval_cb = lifecycle_tracker.wrap_approval_cb(approval_cb)
 
@@ -549,35 +508,6 @@ class ToolRoundRunner:
                 extras=exec_result.extras,
             ),
         }
-
-
-def _report_tool_succeeded(
-    tasks: list[dict[str, Any]],
-    results_by_id: dict[str, dict[str, Any]],
-    tool_name: str,
-    reported_key: str,
-) -> bool:
-    """Whether an optional report tool in this round returned its structured ok.
-
-    Receipt bookkeeping only: never true on the tool name alone, never on
-    assistant prose, and never used to end or extend the loop.
-    """
-    for task in tasks:
-        if task["name"] != tool_name:
-            continue
-        res = results_by_id.get(task["id"])
-        if not res:
-            return False
-        payload = _parse_tool_payload(str(res.get("result_payload", "")))
-        if not isinstance(payload, dict):
-            return False
-        return (
-            bool(payload.get("ok"))
-            and bool(payload.get(reported_key))
-            and payload.get("mutation") is False
-            and payload.get("applied") is False
-        )
-    return False
 
 
 __all__ = ["ToolRoundOutcome", "ToolRoundRunner"]

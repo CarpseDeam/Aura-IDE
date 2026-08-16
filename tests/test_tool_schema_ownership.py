@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-from aura.conversation.tools.capability_groups import GODOT, tool_names_for
 from aura.conversation.tools.catalog import ToolCatalog
 from aura.conversation.tools.schemas import GIT_TOOL_DEFS, READ_TOOL_DEFS, WRITE_TOOL_DEFS
 
 
 def _names(defs: list[dict]) -> list[str]:
     return [tool["function"]["name"] for tool in defs]
-
-
-GODOT_TOOL_NAMES = tool_names_for({GODOT})
 
 
 def test_aggregate_schema_order_matches_the_existing_model_surface() -> None:
@@ -41,9 +37,7 @@ def test_aggregate_schema_order_matches_the_existing_model_surface() -> None:
         "edit_godot_editor",
         "edit_godot_asset_preview",
         "edit_godot_scene",
-        "write_file",
-        "delete_file",
-        "patch_file",
+        "apply_patch",
     ]
     assert _names(GIT_TOOL_DEFS) == [
         "git_status",
@@ -62,28 +56,17 @@ def test_catalog_composition_preserves_read_only_and_production_order() -> None:
     read_only = _names(catalog.build_tool_defs(read_only=True))
     production = _names(catalog.build_tool_defs(read_only=False))
 
-    assert read_only == [
-        name for name in _names(READ_TOOL_DEFS) if name not in GODOT_TOOL_NAMES
-    ] + [
-        "load_skills",
-    ] + _names(GIT_TOOL_DEFS)
+    # Read-only: the compact observation surface (read_file, glob, grep_search
+    # -- in READ_TOOL_DEFS's own relative order) plus every git tool. No
+    # optional capability (load_skills, web_search, ...) is active by default.
+    assert read_only == ["read_file", "glob", "grep_search"] + _names(GIT_TOOL_DEFS)
+
+    # Production: exactly the five built-ins, in build order. No optional
+    # capability is active by default either.
     assert production == [
         "read_file",
-        "read_files",
-        "glob",
         "grep_search",
-        "search_codebase",
-        "inspect_code",
         "update_task_checklist",
-        "record_implementation_decision",
-        "write_file",
-        "delete_file",
-        "patch_file",
-        "report_blocker",
-        "report_already_satisfied",
-        "run_terminal_command",
-        "run_and_watch",
-        "git_status",
-        "git_diff",
-        "load_skills",
+        "apply_patch",
+        "shell",
     ]

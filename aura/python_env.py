@@ -221,7 +221,7 @@ def project_env_missing_dependency_payload(
             "Install it into the project .venv before running this command."
         ),
         "recoverable": True,
-        "suggested_next_tool": "run_terminal_command",
+        "suggested_next_tool": "shell",
         "suggested_next_action": (
             "Create a project-local environment with 'python -m venv .venv' if needed, "
             "then install project dependencies into .venv. Do not install into global Python."

@@ -43,7 +43,6 @@ class ChatView(QScrollArea):
     retry_requested = Signal()
     mermaid_detected = Signal(str)  # emits the raw mermaid code
     droneRunFocusRequested = Signal(str)
-    _CODE_TOOL_NAMES = {"write_file", "apply_edit_transaction", "edit_file", "edit_symbol", "edit_line_range", "patch_file"}
     _BOTTOM_THRESHOLD_PX = 64
     _BOTTOM_SAFE_MARGIN_PX = 44
 
@@ -535,7 +534,7 @@ class ChatView(QScrollArea):
         controller = self._controllers.pop(tool_call_id, None)
         if controller:
             controller.finalize(ok, result_text)
-            if controller.tool_name == "run_terminal_command" or controller.tool_name == "run_and_watch":
+            if controller.tool_name == "shell":
                 self._terminal_cards.pop(tool_call_id, None)
 
             self._scroll_to_bottom()

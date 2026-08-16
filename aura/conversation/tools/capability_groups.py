@@ -39,8 +39,8 @@ CAPABILITY_TOOLS: dict[str, frozenset[str]] = {
     # documents — bounded source regions with symbol/kind/parent metadata,
     # not whole files. Both are exposed in the production catalog.
     CORE_SEARCH: frozenset({"grep_search", "search_codebase"}),
-    CORE_EDIT: frozenset({"write_file", "patch_file", "delete_file"}),
-    CORE_TERMINAL: frozenset({"run_terminal_command", "run_and_watch"}),
+    CORE_EDIT: frozenset({"apply_patch"}),
+    CORE_TERMINAL: frozenset({"shell"}),
     CORE_TODO: frozenset({"update_task_checklist"}),
     CORE_WEB: frozenset({"web_search"}),
     # Targeted/context read helpers that stay outside the production surface.

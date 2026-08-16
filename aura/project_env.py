@@ -141,7 +141,7 @@ def project_environment_missing_payload(
             "Install or configure it in the project-local toolchain before running this command."
         ),
         "recoverable": True,
-        "suggested_next_tool": "run_terminal_command",
+        "suggested_next_tool": "shell",
         "suggested_next_action": (
             "Set up the project's local toolchain or run an explicit user-approved setup command. "
             "Do not install dependencies globally by default."

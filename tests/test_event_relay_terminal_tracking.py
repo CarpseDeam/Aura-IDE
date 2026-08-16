@@ -23,7 +23,7 @@ class TestEventRelayTerminalTracker:
         """A passing classified validation produces validation_ok=True."""
         tracker, events = _make_tracker()
         parsed = {
-            "tool_name": "run_terminal_command",
+            "tool_name": "shell",
             "command": "pytest tests/test_example.py -q",
             "ok": True,
             "exit_code": 0,
@@ -33,7 +33,7 @@ class TestEventRelayTerminalTracker:
             "counts_as_product_failure": False,
             "output": "=== 10 passed ===",
         }
-        tracker.handle_tool_result("run_terminal_command", parsed)
+        tracker.handle_tool_result("shell", parsed)
 
         assert len(tracker.terminal_results) == 1
         assert len(tracker.validation_results) == 1
@@ -55,7 +55,7 @@ class TestEventRelayTerminalTracker:
         """A failing classified validation produces validation_ok=False."""
         tracker, events = _make_tracker()
         parsed = {
-            "tool_name": "run_terminal_command",
+            "tool_name": "shell",
             "command": "pytest tests/test_example.py -q",
             "ok": False,
             "exit_code": 1,
@@ -65,7 +65,7 @@ class TestEventRelayTerminalTracker:
             "counts_as_product_failure": True,
             "output": "FAILED test_example.py::test_foo",
         }
-        tracker.handle_tool_result("run_terminal_command", parsed)
+        tracker.handle_tool_result("shell", parsed)
 
         assert len(tracker.terminal_results) == 1
         assert len(tracker.validation_results) == 1
@@ -82,13 +82,13 @@ class TestEventRelayTerminalTracker:
         validation_ok=False (never True just because exit_code is 0)."""
         tracker, events = _make_tracker()
         parsed = {
-            "tool_name": "run_terminal_command",
+            "tool_name": "shell",
             "command": "echo hello",
             "ok": True,
             "exit_code": 0,
             "output": "hello",
         }
-        tracker.handle_tool_result("run_terminal_command", parsed)
+        tracker.handle_tool_result("shell", parsed)
 
         assert len(tracker.terminal_results) == 1
         # _is_validation_terminal_record may still heuristic-detect it or not;
@@ -110,7 +110,7 @@ class TestEventRelayTerminalTracker:
         yields validation_ok=True."""
         tracker, events = _make_tracker()
         parsed = {
-            "tool_name": "run_terminal_command",
+            "tool_name": "shell",
             "command": "ruff check .",
             "ok": True,
             "exit_code": 0,
@@ -118,7 +118,7 @@ class TestEventRelayTerminalTracker:
             "counts_as_validation": True,
             "output": "All checks passed!",
         }
-        tracker.handle_tool_result("run_terminal_command", parsed)
+        tracker.handle_tool_result("shell", parsed)
 
         assert len(tracker.terminal_results) == 1
         assert len(tracker.validation_results) == 1
@@ -130,14 +130,14 @@ class TestEventRelayTerminalTracker:
         validation_ok=False."""
         tracker, events = _make_tracker()
         parsed = {
-            "tool_name": "run_terminal_command",
+            "tool_name": "shell",
             "command": "pytest tests/",
             "ok": True,
             "exit_code": 0,
             "auto_validation": True,
             "output": "=== 10 passed ===",
         }
-        tracker.handle_tool_result("run_terminal_command", parsed)
+        tracker.handle_tool_result("shell", parsed)
 
         assert len(tracker.terminal_results) == 1
         assert len(tracker.validation_results) == 1

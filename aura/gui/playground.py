@@ -343,6 +343,18 @@ class AuraPlayground(QWidget):
         ):
             self._tree.refresh()
 
+    def handle_workspace_reconcile(self, tool_call_id: str) -> None:
+        """Re-sync open editor tabs and the workspace tree after a shell command.
+
+        A submitted shell command may have mutated the workspace opaquely
+        (formatters, generators, builds, git) — this re-reads every currently
+        open editor path from disk and refreshes the tree, without claiming
+        any per-file "applied" lifecycle for a command whose file effects are
+        unproven.
+        """
+        self._file_edit_projection.reconcile_workspace()
+        self._tree.refresh()
+
     def add_diff_card(
         self,
         execution_tool_id: str,

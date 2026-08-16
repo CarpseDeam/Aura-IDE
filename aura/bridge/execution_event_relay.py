@@ -26,6 +26,7 @@ from aura.client import (
     ToolCallStart,
     ToolResult,
     Usage,
+    WorkspaceReconcileRequested,
 )
 from aura.conversation.validation_orchestrator import looks_like_validation_command
 from aura.events import (
@@ -61,6 +62,7 @@ class ExecutionEventRelay(QObject):
     diffDecided = Signal(str, str, str, str, str, str, bool)
     fileEditLifecycle = Signal(str, str, str, str, list, str)
     # run_id, tool_call_id, tool_name, phase, changes (list[dict]), reason
+    workspaceReconcileRequested = Signal(str, str)  # run_id, tool_call_id
     terminalCommandStarted = Signal(str, str, str, str)  # parent, tool, command, cwd
     terminalOutput = Signal(str, str, str)    # parent_tool_id, execution_tool_id, text
     agentProcessStarted = Signal(str, str, str, str)  # parent_tool_id, process_id, label, command
@@ -217,7 +219,7 @@ class ExecutionEventRelay(QObject):
                 ev.command,
                 ev.cwd,
             )
-            tool_name = self._active_tool_names.get(ev.tool_call_id, "run_terminal_command")
+            tool_name = self._active_tool_names.get(ev.tool_call_id, "shell")
             self._emit_bus_event(EXECUTION_COMMAND_STARTED, {
                 "name": tool_name,
                 "command": ev.command,
@@ -225,7 +227,7 @@ class ExecutionEventRelay(QObject):
                 "starting_cwd": ev.cwd,
                 "tool_call_id": ev.tool_call_id,
             })
-            if tool_name == "run_and_watch" or looks_like_validation_command(ev.command):
+            if looks_like_validation_command(ev.command):
                 self._emit_bus_event(EXECUTION_VALIDATION_STARTED, {
                     "name": tool_name,
                     "command": ev.command,
@@ -292,6 +294,8 @@ class ExecutionEventRelay(QObject):
                 ],
                 ev.reason,
             )
+        elif isinstance(ev, WorkspaceReconcileRequested):
+            self.workspaceReconcileRequested.emit(tool_call_id, ev.tool_call_id)
         elif isinstance(ev, ToolResult):
             approval = (ev.extras or {}).get("approval")
             if approval:
@@ -320,7 +324,7 @@ class ExecutionEventRelay(QObject):
             except (json.JSONDecodeError, TypeError):
                 parsed = {}
             if (
-                ev.name in ("run_terminal_command", "run_and_watch")
+                ev.name == "shell"
                 and isinstance(parsed, dict)
                 and _is_validation_terminal_record(parsed)
                 and ev.tool_call_id not in self._validation_lifecycle_started

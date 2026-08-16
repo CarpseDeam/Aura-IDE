@@ -1,9 +1,10 @@
 """End-to-end FileEditLifecycle coverage through the real write pipeline.
 
 Drives ``ToolRoundRunner.run()`` with a real ``ToolRegistry``/``ToolRunner``
-against a temp workspace, so these tests exercise the actual
-write_file/patch_file/delete_file handlers in ``_write_mixin.py`` /
-``write_transaction.py`` / ``fs_write.py`` -- not a fake. They prove:
+against a temp workspace, so these tests exercise the actual ``apply_patch``
+routing (create/replace/patch/delete) through the real write handlers in
+``_write_mixin.py`` / ``write_transaction.py`` / ``fs_write.py`` -- not a
+fake. They prove:
 
 * FileEditLifecycle events are correctly ordered relative to each other and
   to the existing ToolResult event.
@@ -77,7 +78,9 @@ def test_write_file_applied_lifecycle_matches_disk_at_emit_time(tmp_path: Path) 
 
     events = _run(
         runner,
-        [_tool_call("call-1", "write_file", {"path": "a.py", "content": "new = 2\n"})],
+        [_tool_call("call-1", "apply_patch", {
+            "operation": "replace", "path": "a.py", "content": "new = 2\n",
+        })],
         _approve,
     )
 
@@ -108,7 +111,9 @@ def test_new_file_creation_lifecycle(tmp_path: Path) -> None:
 
     events = _run(
         runner,
-        [_tool_call("call-1", "write_file", {"path": "brand_new.py", "content": "x = 1\n"})],
+        [_tool_call("call-1", "apply_patch", {
+            "operation": "create", "path": "brand_new.py", "content": "x = 1\n",
+        })],
         _approve,
     )
 
@@ -125,7 +130,9 @@ def test_rejected_write_preserves_disk_and_emits_no_applied(tmp_path: Path) -> N
 
     events = _run(
         runner,
-        [_tool_call("call-1", "write_file", {"path": "a.py", "content": "new = 2\n"})],
+        [_tool_call("call-1", "apply_patch", {
+            "operation": "replace", "path": "a.py", "content": "new = 2\n",
+        })],
         _reject,
     )
 
@@ -146,7 +153,9 @@ def test_approved_but_stale_write_becomes_failed_not_applied(tmp_path: Path) -> 
 
     events = _run(
         runner,
-        [_tool_call("call-1", "write_file", {"path": "a.py", "content": "new = 2\n"})],
+        [_tool_call("call-1", "apply_patch", {
+            "operation": "replace", "path": "a.py", "content": "new = 2\n",
+        })],
         approve_but_mutate,
     )
 
@@ -163,7 +172,9 @@ def test_delete_file_applied_lifecycle(tmp_path: Path) -> None:
 
     events = _run(
         runner,
-        [_tool_call("call-1", "delete_file", {"path": "gone.py", "reason": "cleanup"})],
+        [_tool_call("call-1", "apply_patch", {
+            "operation": "delete", "path": "gone.py", "reason": "cleanup",
+        })],
         _approve,
     )
 
@@ -183,8 +194,9 @@ def test_multi_file_patch_updates_both_paths_with_stable_identities(tmp_path: Pa
         [
             _tool_call(
                 "call-1",
-                "patch_file",
+                "apply_patch",
                 {
+                    "operation": "patch",
                     "files": [
                         {"path": "a.py", "edits": [{"old": "alpha = 1", "new": "alpha = 2"}]},
                         {"path": "b.py", "edits": [{"old": "beta = 1", "new": "beta = 2"}]},
@@ -226,8 +238,9 @@ def test_patch_transaction_commit_failure_never_reports_applied(tmp_path: Path) 
         [
             _tool_call(
                 "call-1",
-                "patch_file",
+                "apply_patch",
                 {
+                    "operation": "patch",
                     "files": [
                         {"path": "a.py", "edits": [{"old": "alpha = 1", "new": "alpha = 2"}]},
                         {"path": "b.py", "edits": [{"old": "beta = 1", "new": "beta = 2"}]},
@@ -251,7 +264,9 @@ def test_auto_approved_write_still_emits_full_lifecycle(tmp_path: Path) -> None:
 
     events = _run(
         runner,
-        [_tool_call("call-1", "write_file", {"path": "auto.py", "content": "x = 1\n"})],
+        [_tool_call("call-1", "apply_patch", {
+            "operation": "create", "path": "auto.py", "content": "x = 1\n",
+        })],
         _approve,  # stands in for an instant auto-approve decision
     )
 
@@ -265,8 +280,12 @@ def test_two_writes_in_one_round_do_not_cross_wire_paths(tmp_path: Path) -> None
     events = _run(
         runner,
         [
-            _tool_call("call-1", "write_file", {"path": "one.py", "content": "one\n"}),
-            _tool_call("call-2", "write_file", {"path": "two.py", "content": "two\n"}),
+            _tool_call("call-1", "apply_patch", {
+                "operation": "create", "path": "one.py", "content": "one\n",
+            }),
+            _tool_call("call-2", "apply_patch", {
+                "operation": "create", "path": "two.py", "content": "two\n",
+            }),
         ],
         _approve,
     )

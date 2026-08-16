@@ -40,13 +40,13 @@ def _write_req(rel_path: str = "a.py", is_new_file: bool = False) -> ApprovalReq
 
 
 def test_write_tools_are_the_only_tracked_lifecycle_tools() -> None:
-    assert FILE_EDIT_LIFECYCLE_TOOLS == {"write_file", "patch_file", "delete_file"}
+    assert FILE_EDIT_LIFECYCLE_TOOLS == {"apply_patch"}
 
 
 def test_approved_write_emits_proposed_then_awaiting_then_applied_in_order() -> None:
     events, on_event = _collector()
     tracker = FileEditLifecycleTracker(
-        tool_call_id="call-1", tool_name="write_file", on_event=on_event
+        tool_call_id="call-1", tool_name="apply_patch", operation="replace", on_event=on_event
     )
     wrapped = tracker.wrap_approval_cb(lambda req: ApprovalDecision(action="approve"))
 
@@ -60,7 +60,7 @@ def test_approved_write_emits_proposed_then_awaiting_then_applied_in_order() -> 
     phases = [e.phase for e in events]
     assert phases == ["proposed", "awaiting_approval", "applied"]
     assert all(e.tool_call_id == "call-1" for e in events)
-    assert all(e.tool_name == "write_file" for e in events)
+    assert all(e.tool_name == "apply_patch" for e in events)
     applied = events[-1]
     assert [c.path for c in applied.changes] == ["a.py"]
     assert applied.changes[0].action == "modify"
@@ -69,7 +69,7 @@ def test_approved_write_emits_proposed_then_awaiting_then_applied_in_order() -> 
 def test_new_file_action_is_create() -> None:
     events, on_event = _collector()
     tracker = FileEditLifecycleTracker(
-        tool_call_id="call-1", tool_name="write_file", on_event=on_event
+        tool_call_id="call-1", tool_name="apply_patch", operation="create", on_event=on_event
     )
     wrapped = tracker.wrap_approval_cb(lambda req: ApprovalDecision(action="approve"))
     wrapped(_write_req(is_new_file=True))
@@ -79,7 +79,7 @@ def test_new_file_action_is_create() -> None:
 def test_delete_file_action_is_delete() -> None:
     events, on_event = _collector()
     tracker = FileEditLifecycleTracker(
-        tool_call_id="call-1", tool_name="delete_file", on_event=on_event
+        tool_call_id="call-1", tool_name="apply_patch", operation="delete", on_event=on_event
     )
     req = ApprovalRequest(
         tool_name="delete_file",

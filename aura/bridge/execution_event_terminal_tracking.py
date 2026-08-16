@@ -1,7 +1,7 @@
 """Terminal command and validation result tracking for ExecutionEventRelay.
 
-Handles run_terminal_command and run_and_watch tool result processing,
-including output truncation, validation classification, and bus event emission.
+Handles ``shell`` tool result processing, including output truncation,
+validation classification, and bus event emission.
 """
 
 from __future__ import annotations
@@ -40,10 +40,10 @@ class EventRelayTerminalTracker:
     def handle_tool_result(self, tool_name: str, parsed: dict[str, Any]) -> None:
         """Build a terminal result record, attach validation metadata, and emit events.
 
-        Only processes run_terminal_command and run_and_watch when *parsed*
-        contains command, exit_code, and ok keys.
+        Only processes ``shell`` when *parsed* contains command, exit_code,
+        and ok keys.
         """
-        if tool_name not in ("run_terminal_command", "run_and_watch"):
+        if tool_name != "shell":
             return
         if not isinstance(parsed, dict):
             return
@@ -81,7 +81,7 @@ class EventRelayTerminalTracker:
         for key in VALIDATION_TRUTH_FIELDS:
             if key in parsed:
                 record[key] = parsed[key]
-        if tool_name == "run_terminal_command" and parsed.get("auto_validation"):
+        if tool_name == "shell" and parsed.get("auto_validation"):
             record["auto_validation"] = True
 
         self.terminal_results.append(record)

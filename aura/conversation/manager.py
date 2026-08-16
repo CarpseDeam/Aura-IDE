@@ -39,7 +39,6 @@ from aura.client import (
     Usage,
 )
 from aura.config import ModelId, ThinkingMode
-from aura.conversation._report_tools import REPORT_BLOCKER
 from aura.conversation.context_refresh import ContextRefreshState
 from aura.conversation.history import History
 from aura.conversation.manager_tool_round import ToolRoundRunner
@@ -58,27 +57,6 @@ from aura.skills.turn_state import SkillTurnState
 EventCallback = Callable[[Event], None]
 
 _PRODUCTION_STREAM_LABEL = "production_stream"
-
-
-def _blocker_reason_from_call(full_message: dict[str, Any]) -> str:
-    """Return the blocker text named by this turn's ``report_blocker`` call.
-
-    Bookkeeping for the completion receipt only: a turn that reported a blocker
-    is summarized as blocked rather than completed. It does not end the turn.
-    """
-    for call in full_message.get("tool_calls") or []:
-        if not isinstance(call, dict):
-            continue
-        function = call.get("function")
-        if not isinstance(function, dict) or function.get("name") != REPORT_BLOCKER:
-            continue
-        try:
-            args = json.loads(function.get("arguments") or "{}")
-        except (TypeError, ValueError):
-            return ""
-        reason = args.get("blocker")
-        return str(reason).strip() if isinstance(reason, str) else ""
-    return ""
 
 
 #: Structured payload paired to a tool call that was cancelled before Aura
@@ -283,7 +261,6 @@ class ConversationManager:
         thinking: ThinkingMode,
         temperature: float = 0.7,
         explicit_validation_commands: list[ValidationCommandSpec] | None = None,
-        declared_run_command: str | None = None,
     ) -> None:
         """Run the model -> tool -> model loop until the model stops calling tools.
 
@@ -320,6 +297,7 @@ class ConversationManager:
         # initial skill index — never a recomputation per round.
         skill_turn = self._build_skill_turn_state()
         self._last_skill_turn = skill_turn
+        self._tools.set_turn_skill_state(skill_turn)
         self._tool_round_runner.begin_turn()
 
         while True:
@@ -420,22 +398,8 @@ class ConversationManager:
                 cancel_event=cancel_event,
                 cleanup_cancelled=self._cleanup_cancelled,
                 explicit_validation_commands=explicit_validation_commands,
-                declared_run_command=declared_run_command,
                 tool_defs=tool_defs,
             )
-
-            # ── Passive receipt bookkeeping ──────────────────────────────
-            # A successful ``report_blocker`` names why the attempt ended; a
-            # successful ``report_already_satisfied`` records that the requested
-            # state already existed. Both are ordinary optional tools: they are
-            # summarized in the completion receipt and neither ends the turn,
-            # forces a finalization round, or changes the next request.
-            if tool_round.blocker_succeeded:
-                self._last_turn_blocked_reason = _blocker_reason_from_call(
-                    full_message
-                )
-            if tool_round.already_satisfied_succeeded:
-                self._last_turn_already_satisfied = True
 
             if tool_round.cancelled:
                 return

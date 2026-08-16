@@ -27,16 +27,29 @@ from aura.conversation.tools._types import (
     ToolExecResult,
 )
 
-FILE_EDIT_LIFECYCLE_TOOLS = frozenset({"write_file", "patch_file", "delete_file"})
+FILE_EDIT_LIFECYCLE_TOOLS = frozenset({"apply_patch"})
 
 LifecycleEventCallback = Callable[[FileEditLifecycle], None]
 
 _REJECTED_ACTIONS = frozenset({"reject", "reject_all"})
 
 
-def _action_for(tool_name: str, is_new_file: bool) -> str:
-    if tool_name == "delete_file":
+def _action_for(operation: str, is_new_file: bool) -> str:
+    """Resolve the per-file action from the call's ``operation``, not its name.
+
+    Every write-tool task is dispatched through the single public
+    ``apply_patch`` tool now, so the action a proposed change represents comes
+    from the operation the model chose, not from checking the tool name.
+    """
+    if operation == "delete":
         return "delete"
+    if operation == "create":
+        return "create"
+    if operation == "replace":
+        return "modify"
+    # operation == "patch" (or unrecognised): patch always targets an
+    # existing file, but fall back to the write owner's own is_new_file
+    # signal for parity with create/replace.
     return "create" if is_new_file else "modify"
 
 
@@ -44,10 +57,16 @@ class FileEditLifecycleTracker:
     """Tracks one write-tool task's proposal through to its final outcome."""
 
     def __init__(
-        self, *, tool_call_id: str, tool_name: str, on_event: LifecycleEventCallback
+        self,
+        *,
+        tool_call_id: str,
+        tool_name: str,
+        operation: str = "",
+        on_event: LifecycleEventCallback,
     ) -> None:
         self._tool_call_id = tool_call_id
         self._tool_name = tool_name
+        self._operation = operation
         self._on_event = on_event
         self._proposed_changes: tuple[FileEditChange, ...] = ()
         self._terminal_emitted = False
@@ -64,7 +83,7 @@ class FileEditLifecycleTracker:
                 FileEditChange(
                     change_id=f"{self._tool_call_id}:{index}",
                     path=normalize_execution_path(change.rel_path),
-                    action=_action_for(self._tool_name, change.is_new_file),
+                    action=_action_for(self._operation, change.is_new_file),
                     old_content=change.old_content,
                     new_content=change.new_content,
                 )

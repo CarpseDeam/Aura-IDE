@@ -9,9 +9,7 @@ need to know.
 from __future__ import annotations
 
 WRITE_TOOLS = {
-    "write_file",
-    "delete_file",
-    "patch_file",
+    "apply_patch",
     "edit_godot_scene",
     "edit_godot_editor",
     "edit_godot_asset_preview",

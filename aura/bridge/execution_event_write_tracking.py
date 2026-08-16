@@ -17,15 +17,7 @@ from aura.conversation.tool_names import WRITE_TOOLS
 TERMINAL_OUTPUT_CAPTURE_CHARS = 4000
 TERMINAL_OUTPUT_PREVIEW_CHARS = 200
 
-LEGACY_EDIT_TOOLS = frozenset(
-    {
-        "edit_file",
-        "edit_symbol",
-        "edit_line_range",
-        "apply_edit_transaction",
-    }
-)
-FILE_MUTATION_TOOLS = frozenset(WRITE_TOOLS) | LEGACY_EDIT_TOOLS
+FILE_MUTATION_TOOLS = frozenset(WRITE_TOOLS)
 
 PATH_FIELDS = ("path", "rel_path", "file", "filename", "target_path")
 

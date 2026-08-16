@@ -50,6 +50,9 @@ def create_execution_relay(
     relay.toolResult.connect(projection_target.executionToolResult)
     relay.diffDecided.connect(projection_target.executionDiffDecided)
     relay.fileEditLifecycle.connect(projection_target.executionFileEditLifecycle)
+    relay.workspaceReconcileRequested.connect(
+        projection_target.executionWorkspaceReconcileRequested
+    )
     # Terminal / agent process
     relay.terminalCommandStarted.connect(projection_target.executionTerminalCommandStarted)
     relay.terminalOutput.connect(projection_target.executionTerminalOutput)

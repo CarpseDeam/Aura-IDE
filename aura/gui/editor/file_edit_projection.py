@@ -42,6 +42,24 @@ class FileEditProjection:
             for change in changes:
                 self._reload_disk_truth(change)
 
+    def reconcile_workspace(self) -> None:
+        """Re-sync every open tab with actual disk state after a shell command.
+
+        An opaque shell command's file effects are unproven per-file, so this
+        makes no "applied" claim and runs no pulse animation -- it only
+        re-reads each currently open path and replaces stale content, or
+        closes the tab when the file no longer exists.
+        """
+        for path in self._pane.open_paths:
+            editor = self._pane.path_editor(path)
+            if editor is None:
+                continue
+            content = self._pane.read_disk_text(path)
+            if content is None:
+                self._pane.close_path(path)
+            elif editor.toPlainText() != content:
+                self._pane.set_path_content(path, content)
+
     # ------------------------------------------------------------------
 
     def _apply(self, change: dict) -> None:

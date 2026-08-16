@@ -182,7 +182,7 @@ class ValidationRunResult:
             payload.update(
                 {
                     "recoverable": True,
-                    "suggested_next_tool": "run_terminal_command",
+                    "suggested_next_tool": "shell",
                     "suggested_next_action": (
                         "Rerun the package-manager validation command from the "
                         "subproject/package root using cwd or working_directory."

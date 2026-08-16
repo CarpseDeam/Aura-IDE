@@ -40,10 +40,10 @@ from aura.paths import safe_relative_to
 
 PATCH_FILE_REPAIR_ACTION = (
     "Re-read the current file and inspect proposed_context. Treat joined Python statements "
-    "or swallowed newlines as a likely patch boundary issue. Retry patch_file with a larger "
-    "enclosing block: the line before, the edited lines, and the line after. Use the current "
-    "expected_file_hash. Keep existing-file recovery on patch_file; do not use write_file as "
-    "a fallback for this existing-file edit."
+    "or swallowed newlines as a likely patch boundary issue. Retry apply_patch with "
+    "operation=patch and a larger enclosing block: the line before, the edited lines, and the "
+    "line after. Use the current expected_file_hash. Keep existing-file recovery on "
+    "operation=patch; do not use operation=replace as a fallback for this existing-file edit."
 )
 
 def _proposal_context(text: str, line: int | None, radius: int = 4) -> dict:
@@ -141,7 +141,7 @@ def _python_syntax_error_payload(proposal: dict) -> dict | None:
             "failure_class": "syntax_invalid",
             "syntax_valid": False,
             "proposed_context": _proposal_context(proposed_content, syntax_line),
-            "suggested_next_tool": "patch_file",
+            "suggested_next_tool": "apply_patch",
             "suggested_next_action": PATCH_FILE_REPAIR_ACTION,
         }
         if syntax_line is not None:
@@ -202,8 +202,78 @@ def _is_scratch_python_name(name: str) -> bool:
     )
 
 
+_APPLY_PATCH_OPERATIONS = frozenset({"create", "replace", "patch", "delete"})
+
+
+def _validate_apply_patch_shape(args: dict) -> dict | None:
+    """Reject a field/operation mismatch before it reaches any write owner.
+
+    Returns a focused correction payload naming the wrong field, or None when
+    the shape matches the chosen operation.
+    """
+    operation = args.get("operation")
+    if operation not in _APPLY_PATCH_OPERATIONS:
+        return _mark_not_applied({
+            "ok": False,
+            "error": (
+                "operation must be one of create, replace, patch, delete; "
+                f"got {operation!r}"
+            ),
+            "failure_class": "invalid_arguments",
+        })
+    if operation in ("create", "replace"):
+        if "edits" in args or "files" in args:
+            return _mark_not_applied({
+                "ok": False,
+                "error": f"operation={operation!r} takes path+content, not edits/files",
+                "failure_class": "invalid_arguments",
+            })
+        if not isinstance(args.get("content"), str):
+            return _mark_not_applied({
+                "ok": False,
+                "error": f"operation={operation!r} requires a string content field",
+                "failure_class": "invalid_arguments",
+            })
+    elif operation == "patch":
+        if "content" in args:
+            return _mark_not_applied({
+                "ok": False,
+                "error": "operation='patch' takes path+edits or files, not content",
+                "failure_class": "invalid_arguments",
+            })
+    elif operation == "delete":
+        if "content" in args or "edits" in args or "files" in args:
+            return _mark_not_applied({
+                "ok": False,
+                "error": "operation='delete' takes only path (and optional reason)",
+                "failure_class": "invalid_arguments",
+            })
+    return None
+
+
 class WriteHandlersMixin:
     """Handlers for write tools — guards + approval + backup."""
+
+    def _handle_apply_patch(self, args, approval_cb, reject_all) -> ToolExecResult:
+        """Route the one model-facing mutation tool to its write owner.
+
+        ``operation`` selects the existing write owner unchanged — ``create``
+        and ``replace`` both reuse ``_handle_write_file`` (whose own
+        ``propose_write`` already derives whether the target is new from the
+        target itself, not from the caller's stated intent), ``patch`` reuses
+        ``_handle_patch_file`` (single- or multi-file transaction, unchanged
+        argument shape), and ``delete`` reuses ``_handle_delete_file``. No
+        parallel write engine exists here.
+        """
+        shape_error = _validate_apply_patch_shape(args)
+        if shape_error is not None:
+            return ToolExecResult(ok=False, payload=shape_error)
+        operation = args.get("operation")
+        if operation in ("create", "replace"):
+            return self._handle_write_file(args, approval_cb, reject_all)
+        if operation == "patch":
+            return self._handle_patch_file(args, approval_cb, reject_all)
+        return self._handle_delete_file(args, approval_cb, reject_all)
 
     def _handle_write_file(self, args, approval_cb, reject_all) -> ToolExecResult:
         if self._read_only:
@@ -586,12 +656,12 @@ class WriteHandlersMixin:
                         "path": rel_path,
                         "rel_path": rel_path,
                         "error": (
-                            "Validation scratch files should use run_terminal_command "
+                            "Validation scratch files should use shell "
                             "with python -c, or create and remove a temporary file "
                             "inside one terminal command."
                         ),
                         "failure_class": "validation_scratch_banned",
-                        "suggested_next_tool": "run_terminal_command",
+                        "suggested_next_tool": "shell",
                         "suggested_next_action": (
                             "Use python -c for scratch validation, or create and remove "
                             "a temporary file inside one terminal command."
@@ -607,7 +677,7 @@ class WriteHandlersMixin:
                         "rel_path": rel_path,
                         "error": "Root-level _check*.py validation scratch files are not allowed.",
                         "failure_class": "validation_scratch_banned",
-                        "suggested_next_tool": "run_terminal_command",
+                        "suggested_next_tool": "shell",
                         "suggested_next_action": (
                             "Use python -c, an existing focused test, or .aura/tmp "
                             "with cleanup."

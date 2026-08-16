@@ -1,4 +1,4 @@
-"""Floating terminal output window for run_terminal_command streams."""
+"""Floating terminal output window for shell tool streams."""
 
 from __future__ import annotations
 

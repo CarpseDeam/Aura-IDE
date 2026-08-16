@@ -62,43 +62,34 @@ def test_projector_receives_checklist_fact_for_the_production_run() -> None:
 
 
 def test_tool_description_establishes_live_progress_cursor_contract() -> None:
-    """The model-facing description must make the checklist a live cursor.
+    """The model-facing description keeps the checklist a live cursor, briefly.
 
-    Bursty behavior (several items reported done together, long after they
-    actually finished) comes from an underspecified contract, not from the
-    projector or parser. This pins the semantics that fix it, without pinning
-    the exact wording.
+    Phase 2C shortened this schema description on purpose (fewer sentences,
+    same semantics): one active item at a time, a full-snapshot replacement
+    contract, display-only, and never a separate execution context. This pins
+    the surviving semantics without pinning the old verbose wording.
     """
     description = TASK_CHECKLIST_TOOL_DEF["function"]["description"].lower()
 
     # Single active item is the normal state while work remains.
-    assert "exactly one item is" in description
     assert "active" in description
+    assert "one item" in description
 
-    # Initial snapshot: first item active, rest pending.
-    assert "initial snapshot" in description
+    # Full-snapshot replacement contract.
     assert "pending" in description
-
-    # Prompt transition: mark done and activate the next item promptly.
-    assert "promptly" in description
     assert "done" in description
-    assert "activates the next" in description
+    assert "full ordered list" in description or "replacing the previous" in description
 
-    # No batching completed work for a later report.
-    assert "do not batch" in description
-    assert "report them together later" in description
+    # Never a separate execution context.
+    assert "phases" in description or "phase" in description
+    assert "execution context" in description
 
-    # Multiple items may complete together only for one atomic action.
-    assert "atomic action" in description
+    # Display-only: it never blocks or gates the task.
+    assert "never" in description
+    assert "block" in description or "gate" in description
 
-    # Update at meaningful work boundaries, not on a timer.
-    assert "work boundaries" in description
-
-    # Pair bookkeeping with the next useful action instead of an empty round.
-    assert "pair a checklist update" in description or "pair checklist" in description
-
-    # Final active item is marked done at completion.
-    assert "final snapshot" in description
+    # Skipped for trivial requests, not mandatory bookkeeping.
+    assert "trivial" in description
 
 
 def test_relay_emits_role_neutral_checklist_event() -> None:

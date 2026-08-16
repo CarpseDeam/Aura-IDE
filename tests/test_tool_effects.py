@@ -275,8 +275,8 @@ def test_mcp_tool_declared_effect_and_default(tmp_path: Path) -> None:
 def test_builtin_spot_checks() -> None:
     registry = ToolRegistry(Path.cwd())
     assert registry.tool_effect("read_file") is ToolEffect.OBSERVATION
-    assert registry.tool_effect("write_file") is ToolEffect.MUTATION
-    assert registry.tool_effect("run_terminal_command") is ToolEffect.COMMAND
+    assert registry.tool_effect("apply_patch") is ToolEffect.MUTATION
+    assert registry.tool_effect("shell") is ToolEffect.COMMAND
     assert registry.tool_effect("update_task_checklist") is ToolEffect.BOOKKEEPING
 
 

@@ -123,6 +123,9 @@ class ExecutionEventHandler(QObject):
         self._bridge.executionFileEditLifecycle.connect(
             self._tool_router.on_execution_file_edit_lifecycle
         )
+        self._bridge.executionWorkspaceReconcileRequested.connect(
+            self._tool_router.on_execution_workspace_reconcile_requested
+        )
         self._bridge.executionApiError.connect(self._on_execution_api_error)
         self._bridge.executionUsage.connect(self._on_execution_usage)
         self._bridge.executionActivityUpdated.connect(self._on_execution_activity_updated)

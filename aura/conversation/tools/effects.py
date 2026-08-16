@@ -107,9 +107,7 @@ BUILTIN_TOOL_EFFECTS: dict[str, ToolEffect] = {
     "run_read_only_drone": ToolEffect.OBSERVATION,
     "check_drone_run": ToolEffect.OBSERVATION,
     # --- mutation: changes workspace files or the open scene ---
-    "write_file": ToolEffect.MUTATION,
-    "patch_file": ToolEffect.MUTATION,
-    "delete_file": ToolEffect.MUTATION,
+    "apply_patch": ToolEffect.MUTATION,
     "edit_godot_scene": ToolEffect.MUTATION,
     "edit_godot_editor": ToolEffect.MUTATION,
     "edit_godot_asset_preview": ToolEffect.MUTATION,
@@ -118,18 +116,14 @@ BUILTIN_TOOL_EFFECTS: dict[str, ToolEffect] = {
     # write path — a workspace mutation, never bookkeeping that writes.
     "declare_ui_contract": ToolEffect.MUTATION,
     # --- command/validation: runs an external command or validation ---
-    "run_terminal_command": ToolEffect.COMMAND,
-    "run_and_watch": ToolEffect.COMMAND,
+    "shell": ToolEffect.COMMAND,
     "run_diagnostic_command": ToolEffect.COMMAND,
     # --- bookkeeping/control: tracks or controls conversation/tool state ---
     "update_task_checklist": ToolEffect.BOOKKEEPING,
-    "report_blocker": ToolEffect.BOOKKEEPING,
-    "report_already_satisfied": ToolEffect.BOOKKEEPING,
     "summon_drone": ToolEffect.BOOKKEEPING,
     "register_drone_folder": ToolEffect.BOOKKEEPING,
     "save_to_project_memory": ToolEffect.BOOKKEEPING,
     "review_implementation_plan": ToolEffect.BOOKKEEPING,
-    "record_implementation_decision": ToolEffect.BOOKKEEPING,
 }
 
 _EFFECT_BY_VALUE: dict[str, ToolEffect] = {effect.value: effect for effect in ToolEffect}

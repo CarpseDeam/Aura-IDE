@@ -35,24 +35,31 @@ def _inspect(registry: ToolRegistry, **args) -> dict:
 # ── 1/2/3: catalog membership and effect classification ─────────────────
 
 
-def test_inspect_code_is_the_only_semantic_inspection_tool_in_production() -> None:
+def test_inspect_code_is_not_in_the_minimal_production_catalog() -> None:
+    """Phase 2C narrowed production reads to read_file + grep_search only.
+
+    inspect_code (and every other code-intel/bulk-read tool) is still a
+    registered, callable, OBSERVATION-classified handler -- it is reachable
+    through the withheld-but-replayable surface and directly via
+    ``registry.execute`` -- it just no longer occupies a slot in the ordinary
+    five-tool production catalog.
+    """
     names = {
         d["function"]["name"]
         for d in ToolCatalog().build_tool_defs(read_only=False)
     }
-    assert "inspect_code" in names
     removed = {
+        "inspect_code",
         "find_usages",
         "code_intel_outline",
         "code_intel_references",
         "code_intel_dependents",
         "code_intel_audit",
         "read_file_outline",
+        "search_codebase",
     }
     assert not (names & removed)
-    # search_codebase is a distinct, exposed capability — ranked structural
-    # retrieval, not semantic inspection — so it is not part of this removed set.
-    assert "search_codebase" in names
+    assert names == {"read_file", "grep_search", "apply_patch", "shell", "update_task_checklist"}
 
 
 def test_inspect_code_is_classified_as_observation() -> None:
@@ -169,13 +176,20 @@ def test_inspect_code_does_not_search_the_workspace_for_occurrences(
     assert set(payload) == {"ok", "path", "target", "source_excerpt", "diagnostics"}
 
 
-def test_grep_search_and_search_codebase_remain_the_global_discovery_owners() -> None:
+def test_grep_search_remains_the_production_discovery_owner() -> None:
+    """search_codebase still exists and is replayable, but production now
+    exposes exactly one search tool -- grep_search -- alongside shell for
+    everything else (rg --files, git, bulk inspection)."""
+    registry = ToolRegistry(workspace_root=Path("."))
     names = {
         d["function"]["name"]
         for d in ToolCatalog().build_tool_defs(read_only=False)
     }
     assert "grep_search" in names
-    assert "search_codebase" in names
+    assert "search_codebase" not in names
+    assert "search_codebase" in {
+        d["function"]["name"] for d in registry.replayable_tool_defs()
+    }
 
 
 # ── 9: graceful degradation for a language without a rich adapter ──────

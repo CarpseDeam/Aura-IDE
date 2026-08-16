@@ -11,9 +11,7 @@ from aura.code_intel.inspection import CodeInspector
 from aura.codebase_index.indexer import CodebaseIndex  # noqa: F401
 from aura.codebase_index.tool import search_codebase as _search_codebase  # noqa: F401
 from aura.conversation.plan_review import PlanReviewState, blocked_tool_payload
-from aura.conversation.tools._blocker_mixin import BlockerHandlersMixin
 from aura.conversation.tools._code_intel_mixin import CodeIntelHandlersMixin
-from aura.conversation.tools._decision_mixin import DecisionHandlersMixin
 from aura.conversation.tools._diagnostic_mixin import DiagnosticHandlersMixin
 from aura.conversation.tools._drone_mixin import DroneHandlersMixin
 from aura.conversation.tools._git_mixin import GitHandlersMixin
@@ -57,9 +55,7 @@ TOOL_HANDLERS: dict[str, Any] = {}
 
 
 class ToolRegistry(
-    BlockerHandlersMixin,
     CodeIntelHandlersMixin,
-    DecisionHandlersMixin,
     TaskContextHandlersMixin,
     ReadHandlersMixin,
     ReferenceReadHandlersMixin,
@@ -113,6 +109,11 @@ class ToolRegistry(
         # turn exposed no candidates and every activation request fails
         # truthfully.
         self._skill_turn_state: Any = None
+        # The same frozen per-turn skill state, held for the duration of the
+        # turn (not cleared between execute() calls) so ``tool_defs()`` can
+        # decide whether ``load_skills`` belongs in the catalog this turn.
+        # Set once per real user turn via ``set_turn_skill_state``.
+        self._turn_skill_state: Any = None
         # Whether the production catalog offers web research. Depends only on
         # whether the search backend is genuinely configured; it is re-resolved
         # once per real user turn and held for that turn's whole duration, so
@@ -261,6 +262,15 @@ class ToolRegistry(
         """
         return self._cancel_event
 
+    def set_turn_skill_state(self, state: Any | None) -> None:
+        """Freeze this real user turn's skill candidates for catalog purposes.
+
+        Called once per turn, before the first ``tool_defs()`` of that turn,
+        so ``load_skills`` joins the catalog only when the turn actually has
+        candidates — and stays in that state for every round of the turn.
+        """
+        self._turn_skill_state = state
+
     def tool_defs(self) -> list[dict[str, Any]]:
         dynamic_schemas = self._dynamic_tools.schemas() if not self._read_only else []
         # Read-only mode exposes only the MCP tools resolved as observations.
@@ -271,6 +281,10 @@ class ToolRegistry(
             if self._read_only
             else self._mcp_tools.schemas
         )
+        skills_active = bool(
+            self._turn_skill_state is not None
+            and not getattr(self._turn_skill_state, "is_empty", True)
+        )
         return self._catalog.build_tool_defs(
             read_only=self._read_only,
             dynamic_schemas=dynamic_schemas or None,
@@ -278,6 +292,7 @@ class ToolRegistry(
             web_search=self._web_search,
             plan_review=(not self._read_only) and self._plan_review.required,
             reference_available=self._reference_root.is_available,
+            skills_active=skills_active,
         )
 
     def replayable_tool_defs(self) -> list[dict[str, Any]]:
@@ -418,8 +433,8 @@ class ToolRegistry(
             # there is no second handwritten mutation/command-name list to
             # keep in sync. ``PlanReviewState.blocks`` is the single
             # authoritative policy; the tool round's terminal-special-cased
-            # dispatch (run_terminal_command/run_and_watch, which never
-            # reaches this method) consults the same method before it runs.
+            # dispatch (``shell``, which never reaches this method) consults
+            # the same method before it runs.
             if self._plan_review.blocks(self.tool_effect(name)):
                 return ToolExecResult(ok=False, payload=blocked_tool_payload())
             return self._executor.execute(name, args, approval_cb, reject_all)
@@ -482,9 +497,7 @@ TOOL_HANDLERS["git_log_file"] = ToolRegistry._handle_git_log_file
 TOOL_HANDLERS["git_branch_list"] = ToolRegistry._handle_git_branch_list
 TOOL_HANDLERS["git_stash_list"] = ToolRegistry._handle_git_stash_list
 TOOL_HANDLERS["git_stash_show"] = ToolRegistry._handle_git_stash_show
-TOOL_HANDLERS["write_file"] = ToolRegistry._handle_write_file
-TOOL_HANDLERS["delete_file"] = ToolRegistry._handle_delete_file
-TOOL_HANDLERS["patch_file"] = ToolRegistry._handle_patch_file
+TOOL_HANDLERS["apply_patch"] = ToolRegistry._handle_apply_patch
 TOOL_HANDLERS["edit_godot_scene"] = ToolRegistry._handle_edit_godot_scene
 TOOL_HANDLERS["inspect_godot_assets"] = ToolRegistry._handle_inspect_godot_assets
 TOOL_HANDLERS["inspect_godot_asset_preview"] = ToolRegistry._handle_inspect_godot_asset_preview
@@ -495,11 +508,6 @@ TOOL_HANDLERS["edit_godot_editor"] = ToolRegistry._handle_edit_godot_editor
 TOOL_HANDLERS["edit_godot_asset_preview"] = ToolRegistry._handle_edit_godot_asset_preview
 TOOL_HANDLERS["install_godot_editor_bridge"] = ToolRegistry._handle_install_godot_editor_bridge
 TOOL_HANDLERS["update_task_checklist"] = ToolRegistry._handle_update_task_checklist
-TOOL_HANDLERS["report_blocker"] = ToolRegistry._handle_report_blocker
-TOOL_HANDLERS["report_already_satisfied"] = ToolRegistry._handle_report_already_satisfied
-TOOL_HANDLERS["record_implementation_decision"] = (
-    ToolRegistry._handle_record_implementation_decision
-)
 
 TOOL_HANDLERS["search_project_memory"] = ToolRegistry._handle_search_project_memory
 TOOL_HANDLERS["save_to_project_memory"] = ToolRegistry._handle_save_to_project_memory

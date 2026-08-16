@@ -594,25 +594,28 @@ def test_transaction_result_reports_every_changed_file(tmp_path: Path) -> None:
 def test_no_new_editing_tool_was_added_to_the_catalog(tmp_path: Path) -> None:
     reg = _registry(tmp_path)
     names = {d["function"]["name"] for d in reg.tool_defs()}
-    mutation_names = {"write_file", "patch_file", "delete_file"}
-    assert mutation_names <= names
-    # No new general-purpose text-patching tool exists alongside patch_file:
-    # only one name in the whole catalog contains "patch".
+    # Phase 2C consolidated write_file/patch_file/delete_file into one
+    # canonical apply_patch tool -- the catalog has exactly one mutation
+    # entry point, not a general-purpose text-patching tool alongside it.
+    assert "apply_patch" in names
     patch_like = {n for n in names if "patch" in n.lower()}
-    assert patch_like == {"patch_file"}
-    banned_names = {"patch_files", "apply_edit_transaction", "edit_symbol"}
+    assert patch_like == {"apply_patch"}
+    banned_names = {
+        "patch_file", "write_file", "delete_file",
+        "patch_files", "apply_edit_transaction", "edit_symbol",
+    }
     assert not (banned_names & names)
 
 
 # ---------------------------------------------------------------------------
-# 19. patch_file effect classification remains unchanged
+# 19. apply_patch effect classification remains unchanged
 # ---------------------------------------------------------------------------
 
 
 def test_patch_file_effect_classification_is_unchanged(tmp_path: Path) -> None:
     from aura.conversation.tools.effects import BUILTIN_TOOL_EFFECTS, ToolEffect
 
-    assert BUILTIN_TOOL_EFFECTS["patch_file"] is ToolEffect.MUTATION
+    assert BUILTIN_TOOL_EFFECTS["apply_patch"] is ToolEffect.MUTATION
 
 
 # ---------------------------------------------------------------------------

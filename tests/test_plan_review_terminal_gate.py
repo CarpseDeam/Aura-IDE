@@ -1,26 +1,24 @@
 """Plan Review's gate over the terminal-special-cased tool round path.
 
-``run_terminal_command`` and ``run_and_watch`` bypass ``ToolRegistry.execute()``
-— ``ToolRoundRunner`` dispatches them straight to ``ToolRunner`` because they
-stream their own output as they run. Before this fix, Plan Review's runtime
-guarantee ("a MUTATION/COMMAND call is refused before it reaches any handler")
-was only true for calls that went through ``ToolRegistry.execute()``, so a
-model could run arbitrary workspace-mutating shell commands before a plan was
-ever approved.
+``shell`` bypasses ``ToolRegistry.execute()`` — ``ToolRoundRunner`` dispatches
+it straight to ``ToolRunner`` because it streams its own output as it runs.
+Before this fix, Plan Review's runtime guarantee ("a MUTATION/COMMAND call is
+refused before it reaches any handler") was only true for calls that went
+through ``ToolRegistry.execute()``, so a model could run arbitrary
+workspace-mutating shell commands before a plan was ever approved.
 
 These tests exercise ``ToolRoundRunner.run()`` directly — the one seam both
 registry-routed and terminal-special-cased calls share — and prove the
 required semantics while Plan Review is required and not yet approved:
 
-1. run_terminal_command does not execute before approval
-2. run_and_watch does not execute before approval
-3. ordinary MUTATION remains blocked
-4. OBSERVATION remains allowed
-5. BOOKKEEPING remains allowed
-6. review_implementation_plan remains callable
-7. COMMAND and MUTATION become callable normally after approval
-8. Plan OFF preserves current terminal behavior
-9. a COMMAND-classified extensible tool is blocked pre-review
+1. shell does not execute before approval
+2. ordinary MUTATION remains blocked
+3. OBSERVATION remains allowed
+4. BOOKKEEPING remains allowed
+5. review_implementation_plan remains callable
+6. COMMAND and MUTATION become callable normally after approval
+7. Plan OFF preserves current terminal behavior
+8. a COMMAND-classified extensible tool is blocked pre-review
 """
 from __future__ import annotations
 
@@ -75,19 +73,19 @@ def result_payload(events: list[Any], call_id: str) -> dict[str, Any]:
     raise AssertionError(f"no ToolResult for {call_id}")
 
 
-# ── 1 & 2: terminal-special-cased tools never reach ToolRunner while blocked ─
+# ── 1: the terminal-special-cased tool never reaches ToolRunner while blocked ─
 
 
-def test_run_terminal_command_does_not_execute_before_approval(tmp_path, monkeypatch) -> None:
+def test_shell_does_not_execute_before_approval(tmp_path, monkeypatch) -> None:
     runner, tools, _ = make_runner(tmp_path)
     tools.plan_review.begin_turn(required=True)
 
     def _fail(*_a, **_kw):
-        raise AssertionError("run_terminal_command handler must not run while blocked")
+        raise AssertionError("shell handler must not run while blocked")
 
     monkeypatch.setattr(ToolRunner, "handle_terminal_command", _fail)
 
-    events = run_batch(runner, [tool_call("c1", "run_terminal_command", {"command": "echo hi"})])
+    events = run_batch(runner, [tool_call("c1", "shell", {"command": "echo hi"})])
 
     payload = result_payload(events, "c1")
     assert payload["ok"] is False
@@ -95,24 +93,7 @@ def test_run_terminal_command_does_not_execute_before_approval(tmp_path, monkeyp
     assert payload["required_tool"] == "review_implementation_plan"
 
 
-def test_run_and_watch_does_not_execute_before_approval(tmp_path, monkeypatch) -> None:
-    runner, tools, _ = make_runner(tmp_path)
-    tools.plan_review.begin_turn(required=True)
-
-    def _fail(*_a, **_kw):
-        raise AssertionError("run_and_watch handler must not run while blocked")
-
-    monkeypatch.setattr(ToolRunner, "handle_run_and_watch", _fail)
-
-    events = run_batch(runner, [tool_call("c1", "run_and_watch", {"window_seconds": 5})])
-
-    payload = result_payload(events, "c1")
-    assert payload["ok"] is False
-    assert payload["failure_class"] == "plan_review_required"
-    assert payload["required_tool"] == "review_implementation_plan"
-
-
-# ── 3, 4, 5: the other effect classes, through the same seam ────────────────
+# ── 2, 3, 4: the other effect classes, through the same seam ────────────────
 
 
 def test_ordinary_mutation_remains_blocked_through_the_tool_round(tmp_path, monkeypatch) -> None:
@@ -129,7 +110,8 @@ def test_ordinary_mutation_remains_blocked_through_the_tool_round(tmp_path, monk
     monkeypatch.setattr(ToolRegistry, "_handle_write_file", spy)
 
     events = run_batch(
-        runner, [tool_call("c1", "write_file", {"path": "x.txt", "content": "hi"})]
+        runner,
+        [tool_call("c1", "apply_patch", {"operation": "create", "path": "x.txt", "content": "hi"})],
     )
 
     payload = result_payload(events, "c1")
@@ -156,12 +138,14 @@ def test_bookkeeping_remains_allowed_through_the_tool_round(tmp_path) -> None:
     tools.plan_review.begin_turn(required=True)
 
     events = run_batch(
-        runner, [tool_call("c1", "report_blocker", {"blocker": "waiting on input"})]
+        runner,
+        [tool_call("c1", "update_task_checklist", {
+            "items": [{"id": "a", "text": "do the thing", "status": "active"}],
+        })],
     )
 
     payload = result_payload(events, "c1")
     assert payload["ok"] is True
-    assert payload["blocker_reported"] is True
 
 
 # ── 6: the gate's own escape hatch ───────────────────────────────────────────
@@ -209,7 +193,7 @@ def test_command_and_mutation_become_callable_after_approval(tmp_path, monkeypat
         terminal_calls.append(tool_call_id)
         payload = json.dumps({"ok": True, "exit_code": 0, "output": "hi", "command": args.get("command", "")})
         self._history.append_tool_result(tool_call_id, payload)
-        on_event(ToolResult(tool_call_id=tool_call_id, name="run_terminal_command", ok=True, result=payload))
+        on_event(ToolResult(tool_call_id=tool_call_id, name="shell", ok=True, result=payload))
         return {"_terminal_payload": {"ok": True}}
 
     monkeypatch.setattr(ToolRunner, "handle_terminal_command", fake_terminal)
@@ -217,12 +201,12 @@ def test_command_and_mutation_become_callable_after_approval(tmp_path, monkeypat
     events = run_batch(
         runner,
         [
-            tool_call("c1", "run_terminal_command", {"command": "echo hi"}),
-            tool_call("c2", "write_file", {"path": "x.txt", "content": "hi"}),
+            tool_call("c1", "shell", {"command": "echo hi"}),
+            tool_call("c2", "apply_patch", {"operation": "create", "path": "x.txt", "content": "hi"}),
         ],
     )
 
-    assert terminal_calls == ["c1"], "run_terminal_command must execute once approved"
+    assert terminal_calls == ["c1"], "shell must execute once approved"
     terminal_payload = result_payload(events, "c1")
     assert terminal_payload["ok"] is True
 
@@ -245,12 +229,12 @@ def test_plan_off_preserves_current_terminal_behavior(tmp_path, monkeypatch) -> 
         terminal_calls.append(tool_call_id)
         payload = json.dumps({"ok": True, "exit_code": 0, "output": "hi", "command": args.get("command", "")})
         self._history.append_tool_result(tool_call_id, payload)
-        on_event(ToolResult(tool_call_id=tool_call_id, name="run_terminal_command", ok=True, result=payload))
+        on_event(ToolResult(tool_call_id=tool_call_id, name="shell", ok=True, result=payload))
         return {"_terminal_payload": {"ok": True}}
 
     monkeypatch.setattr(ToolRunner, "handle_terminal_command", fake_terminal)
 
-    events = run_batch(runner, [tool_call("c1", "run_terminal_command", {"command": "echo hi"})])
+    events = run_batch(runner, [tool_call("c1", "shell", {"command": "echo hi"})])
 
     assert terminal_calls == ["c1"]
     assert result_payload(events, "c1")["ok"] is True
