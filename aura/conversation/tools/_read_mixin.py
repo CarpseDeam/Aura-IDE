@@ -16,10 +16,6 @@ class ReadHandlersMixin:
         payload = self._fs_handler.handle_read_file(args)
         return ToolExecResult(ok=payload.get("ok", True), payload=payload)
 
-    def _handle_read_files(self, args, approval_cb, reject_all) -> ToolExecResult:
-        payload = self._fs_handler.handle_read_files(args)
-        return ToolExecResult(ok=payload.get("ok", True), payload=payload)
-
     def _handle_list_directory(self, args, approval_cb, reject_all) -> ToolExecResult:
         payload = self._fs_handler.handle_list_directory(args)
         return ToolExecResult(ok=payload.get("ok", True), payload=payload)

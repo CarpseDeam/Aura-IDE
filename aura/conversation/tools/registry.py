@@ -480,7 +480,6 @@ class ToolRegistry(
 TOOL_HANDLERS["load_skills"] = ToolRegistry._handle_load_skills
 TOOL_HANDLERS["read_file"] = ToolRegistry._handle_read_file
 TOOL_HANDLERS["read_reference_file"] = ToolRegistry._handle_read_reference_file
-TOOL_HANDLERS["read_files"] = ToolRegistry._handle_read_files
 TOOL_HANDLERS["read_file_range"] = ToolRegistry._handle_read_file_range
 TOOL_HANDLERS["read_task_context"] = ToolRegistry._handle_read_task_context
 TOOL_HANDLERS["list_directory"] = ToolRegistry._handle_list_directory

@@ -33,7 +33,7 @@ DRONES = "drones"
 GODOT = "godot"
 
 CAPABILITY_TOOLS: dict[str, frozenset[str]] = {
-    CORE_READ: frozenset({"read_file", "read_files", "glob"}),
+    CORE_READ: frozenset({"read_file", "glob"}),
     # ``grep_search`` is exact lexical/regex matching. ``search_codebase`` is
     # ranked conceptual/keyword retrieval over structure-aware retrieval
     # documents — bounded source regions with symbol/kind/parent metadata,

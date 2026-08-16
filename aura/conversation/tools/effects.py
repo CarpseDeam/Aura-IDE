@@ -77,7 +77,6 @@ BUILTIN_TOOL_EFFECTS: dict[str, ToolEffect] = {
     "inspect_godot_editor": ToolEffect.OBSERVATION,
     "read_file": ToolEffect.OBSERVATION,
     "read_reference_file": ToolEffect.OBSERVATION,
-    "read_files": ToolEffect.OBSERVATION,
     "read_file_range": ToolEffect.OBSERVATION,
     "read_file_outline": ToolEffect.OBSERVATION,
     "read_task_context": ToolEffect.OBSERVATION,

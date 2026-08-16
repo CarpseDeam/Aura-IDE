@@ -9,62 +9,49 @@ CORE_READ_TOOL_DEFS: list[dict[str, Any]] = [
             "function": {
                 "name": "read_file",
                 "description": (
-                    "Read one known UTF-8 text file from the workspace, or one targeted line window "
-                    "from that file. By default returns the full contents "
-                    "(capped at 200KB). Pass offset/limit to read a specific window of lines instead — "
-                    "far more context-efficient than re-reading a whole file when you already know which "
-                    "lines you need, and it can reach any line in a file too large to return in full. "
-                    "When several known files are needed, use read_files to gather them in one evidence batch. "
-                    "This reads the specified path; it does not discover files. "
-                    "The path argument MUST be relative to the workspace root."
+                    "Read one known UTF-8 text file from the workspace, or several known files in one "
+                    "coherent evidence batch. For a single file, pass 'path' — by default returns the "
+                    "full contents (capped at 200KB); pass offset/limit to read a specific window of "
+                    "lines instead, far more context-efficient than re-reading a whole file when you "
+                    "already know which lines you need, and it can reach any line in a file too large "
+                    "to return in full. For several known files, pass 'paths' (an array of "
+                    "workspace-relative paths) instead of 'path' — offset/limit do not apply to that "
+                    "shape. Every requested path in a 'paths' call comes back with metadata even when "
+                    "its content did not fully fit: path, file_size, content_hash, line_count, status "
+                    "(complete | summarized | truncated | omitted | error), reason, included_range, "
+                    "and continuation (the exact follow-up call for the rest). Small files are returned "
+                    "in full; large files return a bounded head slice plus a structural outline. "
+                    "Pass exactly one of 'path' or 'paths'. "
+                    "This reads specified paths; it does not discover files. "
+                    "All paths MUST be relative to the workspace root."
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "Workspace-relative path, e.g. 'scripts/player.gd'.",
+                            "description": "Workspace-relative path for a single file, e.g. 'scripts/player.gd'.",
                         },
-                        "offset": {
-                            "type": "integer",
-                            "description": "Optional first line to read (1-based, inclusive).",
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "description": "Optional number of lines to read starting at offset.",
-                        },
-                    },
-                    "required": ["path"],
-                },
-            },
-        },
-    {
-            "type": "function",
-            "function": {
-                "name": "read_files",
-                "description": (
-                    "Read several already-known relevant files in one coherent evidence batch. "
-                    "Use this to gather one evidence packet before the next reasoning step; it reads "
-                    "specified paths rather than performing repository discovery. "
-                    "EVERY requested path always comes back with metadata, even when its "
-                    "content did not fit: path, file_size, content_hash, line_count, "
-                    "status (complete | summarized | truncated | omitted | error), reason, "
-                    "included_range, and continuation (the exact follow-up call for the rest). "
-                    "Small files are returned in full; large files return a bounded head slice "
-                    "plus a structural outline. When status is not 'complete', use the "
-                    "continuation call rather than re-issuing the same read_files. "
-                    "All paths must be relative to the workspace root."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
                         "paths": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "Array of workspace-relative file paths to read, e.g. ['src/main.py', 'README.md'].",
+                            "minItems": 1,
+                            "description": (
+                                "Workspace-relative paths for several known files to read in one "
+                                "evidence batch, e.g. ['src/main.py', 'README.md']. Use this instead of "
+                                "'path' when several known files are needed."
+                            ),
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "description": "Optional first line to read (1-based, inclusive). Only valid with 'path'.",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Optional number of lines to read starting at offset. Only valid with 'path'.",
                         },
                     },
-                    "required": ["paths"],
+                    "additionalProperties": False,
                 },
             },
         },
@@ -145,8 +132,8 @@ CORE_READ_TOOL_DEFS: list[dict[str, Any]] = [
                     "root. '*' matches within one path segment, '**' recurses: use '**/*.gd' or "
                     "'scripts/**/*.py' to walk the tree, and '*' or 'aura/gui/*' to list one "
                     "directory's immediate contents. Returns 'matches' (files) and 'directories' "
-                    "(trailing slash), capped at 200 entries total. Use read_file or read_files "
-                    "after discovery to retrieve file contents."
+                    "(trailing slash), capped at 200 entries total. Use read_file after discovery to "
+                    "retrieve file contents — pass 'paths' with several files to gather them in one call."
                 ),
                 "parameters": {
                     "type": "object",

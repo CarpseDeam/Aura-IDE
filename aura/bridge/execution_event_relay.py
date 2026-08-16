@@ -139,7 +139,7 @@ class ExecutionEventRelay(QObject):
 
     @property
     def read_files(self) -> set[str]:
-        """Paths read via read_file / read_files / read_file_range."""
+        """Paths read via read_file (single or paths=[...] batch) / read_file_range."""
         return self._ledger.read_files
 
     @property

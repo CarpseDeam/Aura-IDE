@@ -22,7 +22,6 @@ TASK_CHECKLIST_TOOL_DEF: dict[str, Any] = {
                     "type": "array",
                     "description": "Full ordered checklist snapshot. Reuse row ids across updates.",
                     "minItems": 1,
-                    "maxItems": 7,
                     "items": {
                         "type": "object",
                         "properties": {

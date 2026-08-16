@@ -692,17 +692,17 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._drone_controller.refresh_drone_context()
             if self._drone_controller.drone_workbay_window is not None and self._drone_controller.drone_workbay_window.isVisible():
                 self._drone_controller.drone_workbay_window.chain_editor.refresh_roster()
-        if ok and name in ("read_file", "read_files"):
+        if ok and name == "read_file":
             try:
                 import json
                 from pathlib import Path
                 res_dict = json.loads(result)
                 if isinstance(res_dict, dict):
-                    if name == "read_file" and "path" in res_dict:
-                        self._playground.open_file(Path(self._workspace_root) / res_dict["path"])
-                    elif name == "read_files" and "files" in res_dict:
+                    if "files" in res_dict and isinstance(res_dict["files"], dict):
                         for p in res_dict["files"].keys():
                             self._playground.open_file(Path(self._workspace_root) / p)
+                    elif "path" in res_dict:
+                        self._playground.open_file(Path(self._workspace_root) / res_dict["path"])
             except Exception:
                 pass
 

@@ -11,7 +11,6 @@ CHECKLIST_PENDING = "pending"
 CHECKLIST_ACTIVE = "active"
 CHECKLIST_DONE = "done"
 CHECKLIST_STATUSES = frozenset({CHECKLIST_PENDING, CHECKLIST_ACTIVE, CHECKLIST_DONE})
-MAX_CHECKLIST_ITEMS = 7
 
 
 @dataclass(frozen=True)
@@ -59,8 +58,6 @@ def parse_task_checklist_snapshot(payload: Any) -> tuple[TaskChecklistSnapshot |
         return None, ["items must be a list"]
     if not raw_items:
         return None, ["items must contain at least one item"]
-    if len(raw_items) > MAX_CHECKLIST_ITEMS:
-        return None, [f"items must contain no more than {MAX_CHECKLIST_ITEMS} items"]
 
     items: list[TaskChecklistItem] = []
     errors: list[str] = []
@@ -71,9 +68,9 @@ def parse_task_checklist_snapshot(payload: Any) -> tuple[TaskChecklistSnapshot |
             errors.append(f"items[{index}] must be an object")
             continue
 
-        item_id = _clean_text(raw.get("id"), max_chars=80)
-        text = _clean_text(raw.get("text"), max_chars=160)
-        status = _clean_text(raw.get("status"), max_chars=24).lower()
+        item_id = _clean_text(raw.get("id"))
+        text = _clean_text(raw.get("text"))
+        status = _clean_text(raw.get("status")).lower()
 
         if not item_id:
             errors.append(f"items[{index}].id is required")
@@ -99,8 +96,8 @@ def parse_task_checklist_snapshot(payload: Any) -> tuple[TaskChecklistSnapshot |
     return TaskChecklistSnapshot(tuple(items)), []
 
 
-def _clean_text(value: Any, *, max_chars: int) -> str:
+def _clean_text(value: Any) -> str:
+    """Collapse whitespace without silently truncating the value."""
     if not isinstance(value, str):
         return ""
-    text = " ".join(value.replace("\r", " ").replace("\n", " ").split())
-    return text[:max_chars]
+    return " ".join(value.replace("\r", " ").replace("\n", " ").split())

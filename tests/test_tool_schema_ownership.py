@@ -18,7 +18,6 @@ def test_aggregate_schema_order_matches_the_existing_model_surface() -> None:
         "inspect_godot_api",
         "inspect_godot_editor",
         "read_file",
-        "read_files",
         "read_task_context",
         "list_directory",
         "glob",

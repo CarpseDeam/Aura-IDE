@@ -37,7 +37,6 @@ GODOT_TOOL_NAMES = tool_names_for({GODOT})
 #: stay registered so a replayed historical call still executes; none of
 #: these are ever offered in the ordinary production catalog.
 REMOVED_PRODUCTION_TOOLS: frozenset[str] = frozenset({
-    "read_files",
     "glob",
     "search_codebase",
     "inspect_code",
@@ -154,12 +153,24 @@ def test_removed_observations_stay_callable_for_transcript_replay(tmp_path) -> N
 
     for withheld in (
         "find_usages", "list_directory", "git_log",
-        "read_files", "glob", "search_codebase", "inspect_code",
+        "glob", "search_codebase", "inspect_code",
     ):
         assert withheld in replayable, withheld
     # Nothing that can change the workspace is callable from outside the
     # catalog that offered it.
     assert not (replayable & EXPECTED_PRODUCTION_TOOLS)
+
+
+def test_read_files_tool_is_fully_removed(tmp_path) -> None:
+    """``read_files`` was folded into ``read_file(paths=[...])``; the old
+    standalone tool must be gone everywhere a model or replay could reach it."""
+    from aura.conversation.tools.registry import TOOL_HANDLERS
+
+    registry = ToolRegistry(workspace_root=tmp_path)
+
+    assert "read_files" not in _names(registry.tool_defs())
+    assert "read_files" not in _names(registry.replayable_tool_defs())
+    assert "read_files" not in TOOL_HANDLERS
 
 
 def test_legacy_write_tool_names_are_not_in_any_catalog(tmp_path) -> None:

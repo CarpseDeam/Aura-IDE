@@ -15,6 +15,28 @@ CORE_KERNEL_TEXT = """Core kernel:
 - Verify repository facts before relying on them for an implementation decision. Investigate a fact only when it could materially change the implementation, correctness, edit scope, or validation — adjacent uncertainty does not require investigation.
 - Keep the response and any changes scoped to the user's request."""
 
+
+def _core_kernel_text(workspace_root: Path | None) -> str:
+    """Core kernel text, naming the resolved workspace root when known.
+
+    Only the root path is stated here — never Git branch, SHA, or worktree
+    cleanliness, which are repository facts the model verifies itself with
+    ``shell``.
+    """
+    if workspace_root is None:
+        return CORE_KERNEL_TEXT
+    return (
+        "Core kernel:\n"
+        f"- Workspace root: {workspace_root}. Workspace-relative tool paths "
+        "(read_file, grep_search, apply_patch) resolve against this root; "
+        "`shell` starts in this root unless a relative `cwd` is supplied.\n"
+        "- Verify repository facts before relying on them for an implementation decision. "
+        "Investigate a fact only when it could materially change the implementation, "
+        "correctness, edit scope, or validation — adjacent uncertainty does not require "
+        "investigation.\n"
+        "- Keep the response and any changes scoped to the user's request."
+    )
+
 GUI_RULES = """### gui_rules
 - Preserve existing signal wiring and data flow.
 - Use existing theme tokens, styles, and components before adding new UI paths.
@@ -394,7 +416,7 @@ def _load_source_text(
         )
         return text, reason
     if source.source_id == "core_kernel":
-        return CORE_KERNEL_TEXT, source.reason
+        return _core_kernel_text(workspace_root), source.reason
     if workspace_root is None:
         return "", "no workspace root"
     if source.source_id == "project_rules":

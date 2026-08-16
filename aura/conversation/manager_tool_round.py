@@ -39,6 +39,70 @@ from aura.skills.turn_state import SkillTurnState
 EventCallback = Callable[[Event], None]
 
 
+def _preflight_failure_payload(
+    *,
+    tool_call_id: str,
+    name: str,
+    error: str,
+    failure_class: str,
+    message: str,
+) -> tuple[str, ToolResult]:
+    """Build the one shared shape for a preflight-rejected call's own result.
+
+    Returns ``(payload_json, event)``, used both for the invalid call's own
+    entry in a whole-batch rejection and for a call rejected on its own in an
+    effect-aware partial batch — so the two call sites never diverge.
+    """
+    extras: dict[str, Any] = {
+        "call_rejected": True,
+        "reason": "tool_call_invalid_before_execution",
+        "failure_class": failure_class,
+    }
+    payload = json.dumps(
+        {
+            "ok": False,
+            "error": error,
+            "recoverable": True,
+            "failure_class": failure_class,
+            "tool": name,
+            "call_rejected": True,
+            "reason": "tool_call_invalid_before_execution",
+            "message": message,
+        },
+        ensure_ascii=False,
+    )
+    event = ToolResult(
+        tool_call_id=tool_call_id,
+        name=name,
+        ok=False,
+        result=payload,
+        extras=extras,
+    )
+    return payload, event
+
+
+def _isolated_schema_failure_result(tool_call_id: str, name: str, error: str) -> dict[str, Any]:
+    """The per-call result for a schema-invalid call in an isolatable batch.
+
+    Unlike whole-batch rejection, this call's valid siblings still execute —
+    only known ``OBSERVATION``/``BOOKKEEPING`` tools ever reach this path (see
+    ``ToolRoundRunner.run``), so this call's own failure carries no risk to
+    the rest of the batch.
+    """
+    payload, event = _preflight_failure_payload(
+        tool_call_id=tool_call_id,
+        name=name,
+        error=error,
+        failure_class="tool_call_schema_violation",
+        message=(
+            f"Call {tool_call_id} ({name}) was invalid before execution ({error}) and "
+            "was rejected on its own. This batch contained only observation/bookkeeping "
+            "calls, so valid sibling calls still executed. Re-issue the corrected call."
+        ),
+    )
+    return {"id": tool_call_id, "result_payload": payload, "event": event}
+
+
 def _reject_tool_call_batch(
     *,
     tool_calls: list[dict[str, Any]],
@@ -79,38 +143,20 @@ def _reject_tool_call_batch(
             else f"__malformed_call_{index}__"
         )
         if tool_call_id == invalid_id:
-            payload = json.dumps(
-                {
-                    "ok": False,
-                    "error": invalid_error,
-                    "recoverable": True,
-                    "failure_class": failure_class,
-                    "tool": name,
-                    "call_rejected": True,
-                    "reason": "tool_call_invalid_before_execution",
-                    "message": (
-                        f"No call in this batch executed. Call {tool_call_id} "
-                        f"({name}) was invalid before execution "
-                        f"({invalid_reason}), so the whole batch was rejected. "
-                        "Re-issue the corrected call(s)."
-                    ),
-                },
-                ensure_ascii=False,
+            payload, event = _preflight_failure_payload(
+                tool_call_id=tool_call_id,
+                name=name,
+                error=invalid_error,
+                failure_class=failure_class,
+                message=(
+                    f"No call in this batch executed. Call {tool_call_id} "
+                    f"({name}) was invalid before execution "
+                    f"({invalid_reason}), so the whole batch was rejected. "
+                    "Re-issue the corrected call(s)."
+                ),
             )
             history.append_tool_result(tool_call_id, payload)
-            on_event(
-                ToolResult(
-                    tool_call_id=tool_call_id,
-                    name=name,
-                    ok=False,
-                    result=payload,
-                    extras={
-                        "call_rejected": True,
-                        "reason": "tool_call_invalid_before_execution",
-                        "failure_class": failure_class,
-                    },
-                )
-            )
+            on_event(event)
             continue
         payload = json.dumps(
             {
@@ -228,7 +274,12 @@ class ToolRoundRunner:
         exposed = exposed_tool_schemas(tool_defs)
         for name, schema in exposed_tool_schemas(self._tools.replayable_tool_defs()).items():
             exposed.setdefault(name, schema)
-        preflighted: list[dict[str, Any]] = []
+
+        # Pass 1: decode arguments and resolve exposure + effect for every
+        # call. A parse failure or an unexposed name vetoes the whole batch —
+        # unlike a schema violation there is no per-call name/effect here to
+        # reason about safely, so these stay all-or-nothing.
+        decoded_calls: list[dict[str, Any]] = []
         for tc in tool_calls:
             fn = tc["function"]
             name = fn["name"]
@@ -255,18 +306,7 @@ class ToolRoundRunner:
                 }
                 break
 
-            schema_violations = schema_errors(name, args, exposed[name])
-            if schema_violations:
-                invalid = {
-                    "tool_call_id": tool_call_id,
-                    "name": name,
-                    "kind": "schema",
-                    "error": "; ".join(schema_violations),
-                    "failure_class": "tool_call_schema_violation",
-                }
-                break
-
-            preflighted.append(
+            decoded_calls.append(
                 {
                     "id": tool_call_id,
                     "name": name,
@@ -284,7 +324,53 @@ class ToolRoundRunner:
             )
             return ToolRoundOutcome()
 
-        tasks = preflighted
+        # Pass 2: schema-validate each call. A batch may isolate a
+        # schema-invalid call as its own failure — valid siblings still
+        # execute — only when *every* call in it is a known OBSERVATION or
+        # BOOKKEEPING effect (the authoritative lookup from pass 1, never a
+        # name-prefix guess). Anything that could touch the workspace or run
+        # a command (MUTATION/COMMAND, or an unrecognised extensible tool
+        # defaulting to COMMAND) keeps the whole batch all-or-nothing, so a
+        # schema failure there still vetoes every sibling, including
+        # ``apply_patch``/``shell``.
+        safe_effects = {ToolEffect.OBSERVATION, ToolEffect.BOOKKEEPING}
+        schema_isolatable = all(dc["effect"] in safe_effects for dc in decoded_calls)
+
+        # The full ordered call list: executable tasks keep {id, name, args,
+        # effect}; a call isolated on its own schema failure is instead a
+        # precomputed {id, result_payload, event} result. Original call order
+        # is preserved either way, so exactly one result per call comes out
+        # in original order regardless of which path each call took.
+        preflighted: list[dict[str, Any]] = []
+        for dc in decoded_calls:
+            schema_violations = schema_errors(dc["name"], dc["args"], exposed[dc["name"]])
+            if schema_violations:
+                error = "; ".join(schema_violations)
+                if schema_isolatable:
+                    preflighted.append(
+                        _isolated_schema_failure_result(dc["id"], dc["name"], error)
+                    )
+                    continue
+                invalid = {
+                    "tool_call_id": dc["id"],
+                    "name": dc["name"],
+                    "kind": "schema",
+                    "error": error,
+                    "failure_class": "tool_call_schema_violation",
+                }
+                break
+            preflighted.append(dc)
+
+        if invalid is not None:
+            _reject_tool_call_batch(
+                tool_calls=tool_calls,
+                invalid=invalid,
+                history=self._history,
+                on_event=on_event,
+            )
+            return ToolRoundOutcome()
+
+        tasks = [t for t in preflighted if "args" in t]
 
         if cancel_event.is_set():
             cleanup_cancelled(on_event)
@@ -329,7 +415,10 @@ class ToolRoundRunner:
                 }
             return result
 
-        results_to_append: list[dict[str, Any]] = []
+        # Seed with calls already resolved in preflight (isolated schema
+        # failures) — they never reach process_task, but still need exactly
+        # one result appended in original call order below.
+        results_to_append: list[dict[str, Any]] = [t for t in preflighted if "args" not in t]
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             futures: dict[concurrent.futures.Future[dict[str, Any]], dict[str, Any]] = {}
             for task in tasks:
@@ -353,8 +442,10 @@ class ToolRoundRunner:
 
         results_by_id = {r.get("id"): r for r in results_to_append if r is not None}
 
-        # Exactly one result per call, in original call order.
-        for task in tasks:
+        # Exactly one result per call, in original call order. Iterates the
+        # full preflighted list (executable tasks and isolated schema
+        # failures alike) so original call order survives either path.
+        for task in preflighted:
             if cancel_event.is_set():
                 cleanup_cancelled(on_event)
                 return ToolRoundOutcome(cancelled=True)

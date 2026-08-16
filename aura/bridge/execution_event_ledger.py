@@ -40,7 +40,8 @@ class EventRelayExecutionLedger:
         self.write_results: list[dict[str, Any]] = []
         # File-mutation attempts that were not applied
         self.not_applied_writes: list[dict[str, Any]] = []
-        # Paths read via read_file / read_files / read_file_range
+        # Paths read via read_file (single-file or paths=[...] batch shape) /
+        # read_file_range
         self.read_files: set[str] = set()
         # Paths read via read_file_outline
         self.read_outline_files: set[str] = set()
@@ -162,17 +163,9 @@ class EventRelayExecutionLedger:
         # ------------------------------------------------------------------
         if isinstance(parsed, dict):
             if ok and name == "read_file":
-                path = parsed.get("path")
-                if (
-                    parsed.get("ok") is True
-                    and parsed.get("truncated") is not True
-                    and isinstance(path, str)
-                    and path
-                ):
-                    self.read_files.add(path)
-            if ok and name == "read_files":
                 files = parsed.get("files")
                 if isinstance(files, dict):
+                    # The paths=[...] batch shape: one entry per requested path.
                     for path_key, result in files.items():
                         if not isinstance(result, dict):
                             continue
@@ -184,6 +177,16 @@ class EventRelayExecutionLedger:
                             and path
                         ):
                             self.read_files.add(path)
+                else:
+                    # The single-file shape.
+                    path = parsed.get("path")
+                    if (
+                        parsed.get("ok") is True
+                        and parsed.get("truncated") is not True
+                        and isinstance(path, str)
+                        and path
+                    ):
+                        self.read_files.add(path)
             if ok and name == "read_file_range":
                 path = parsed.get("path")
                 if (

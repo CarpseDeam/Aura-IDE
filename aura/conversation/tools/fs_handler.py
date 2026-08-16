@@ -14,7 +14,7 @@ from aura.conversation.tools.fs_read import glob_files, list_directory, read_fil
 # How many lines read_file returns when given an offset but no limit.
 DEFAULT_READ_WINDOW_LINES: int = 2000
 
-# read_files budgeting.
+# read_file(paths=[...]) batch budgeting.
 #
 # The point of these caps is that *every requested path keeps its metadata* even
 # when its content cannot be inlined. A path is never reduced to a bare
@@ -94,20 +94,46 @@ class FsReadHandler:
         self._resolve = resolve_fn
 
     def handle_read_file(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Read a file, or a window of it.
+        """Read one file (optionally a line window), or several known files.
 
-        ``offset``/``limit`` select a 1-based line window and route to the
-        streaming range reader, which can reach any line in a large file. With
-        neither, the whole file comes back (capped at MAX_READ_BYTES).
+        Two mutually exclusive call shapes:
+
+        * Single file — ``path``, plus optional ``offset``/``limit`` selecting
+          a 1-based line window routed to the streaming range reader, which
+          can reach any line in a large file. With neither, the whole file
+          comes back (capped at MAX_READ_BYTES).
+        * Multiple known files — ``paths``, a non-empty array of
+          workspace-relative paths, gathered in one evidence batch through
+          :meth:`_read_paths_batch`. ``offset``/``limit`` do not apply to this
+          shape.
 
         Args:
-            args: "path" (required), plus optional "offset" and "limit".
+            args: Exactly one of "path" or "paths", plus "offset"/"limit"
+                (only meaningful with "path").
 
         Returns:
-            Payload dict from read_file() or read_file_range().
+            Payload dict from read_file() / read_file_range(), or the batch
+            payload from :meth:`_read_paths_batch`, or {"ok": False, "error":
+            ...} for an invalid combination of arguments.
         """
+        has_path = "path" in args and args.get("path") is not None
+        has_paths = "paths" in args and args.get("paths") is not None
+        if has_path and has_paths:
+            return {"ok": False, "error": "pass exactly one of 'path' or 'paths', not both"}
+        if not has_path and not has_paths:
+            return {"ok": False, "error": "read_file requires either 'path' or 'paths'"}
+
         offset = args.get("offset")
         limit = args.get("limit")
+
+        if has_paths:
+            if offset is not None or limit is not None:
+                return {"ok": False, "error": "'offset'/'limit' are only valid with 'path', not 'paths'"}
+            paths = args.get("paths")
+            if not isinstance(paths, list) or len(paths) == 0:
+                return {"ok": False, "error": "paths must be a non-empty array"}
+            return self._read_paths_batch(paths)
+
         if offset is None and limit is None:
             target = self._resolve(args.get("path", ""))
             return read_file(self._root, target)
@@ -132,8 +158,8 @@ class FsReadHandler:
             return {"ok": False, "error": str(e)}
         return read_file_range(self._root, target, start_line, end_line)
 
-    def handle_read_files(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Read multiple files in one call, keeping metadata for every path.
+    def _read_paths_batch(self, paths: list[Any]) -> dict[str, Any]:
+        """Read multiple known files in one call, keeping metadata for every path.
 
         Every requested path gets an entry describing what happened to it:
         ``status`` (complete / truncated / summarized / omitted / error),
@@ -143,18 +169,16 @@ class FsReadHandler:
         bounded head slice plus a structural outline; paths past the shared
         content budget keep their metadata with no content.
 
+        This is the internal batch engine behind ``read_file(paths=[...])``;
+        it is not itself a model-facing tool.
+
         Args:
-            args: Must contain "paths" key with a non-empty list of path strings.
+            paths: A non-empty list of path strings.
 
         Returns:
             A dict with "ok": True and "files" mapping requested path keys to
-            per-file results, or {"ok": False, "error": ...} on validation
-            failure.
+            per-file results.
         """
-        paths = args.get("paths")
-        if not isinstance(paths, list) or len(paths) == 0:
-            return {"ok": False, "error": "paths is required and must be a non-empty array"}
-
         remaining = READ_FILES_TOTAL_CONTENT_CHARS
         files: dict[str, dict] = {}
 
@@ -172,7 +196,7 @@ class FsReadHandler:
         }
 
     def _read_one_for_batch(self, path_key: str, remaining: int) -> tuple[dict[str, Any], int]:
-        """Build the read_files entry for one path. Returns (entry, chars_used)."""
+        """Build the paths=[...] batch entry for one path. Returns (entry, chars_used)."""
         try:
             target = self._resolve(path_key)
         except ValueError as e:
@@ -229,7 +253,7 @@ class FsReadHandler:
                 "status": "omitted",
                 "truncated": True,
                 "reason": (
-                    "shared read_files content budget of "
+                    "shared read_file(paths=[...]) content budget of "
                     f"{READ_FILES_TOTAL_CONTENT_CHARS} chars was exhausted by earlier paths"
                 ),
                 "included_range": None,
