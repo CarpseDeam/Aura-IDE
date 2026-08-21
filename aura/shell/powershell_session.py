@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from aura.config import get_subprocess_kwargs
+from aura.python_env import detect_project_python_env
 from aura.shell.powershell_protocol import (
     BoundaryCollection,
     OutputCallback,
@@ -67,6 +68,97 @@ def resolve_powershell() -> str:
         if candidate and Path(candidate).is_file():
             return str(Path(candidate).resolve())
     raise FileNotFoundError("Unable to resolve pwsh or Windows PowerShell")
+
+
+def _find_env_key(env: dict[str, str], name: str) -> str | None:
+    """Locate *name* in *env*, case-insensitively on Windows."""
+    if os.name != "nt":
+        return name if name in env else None
+    lowered = name.lower()
+    for key in env:
+        if key.lower() == lowered:
+            return key
+    return None
+
+
+def _pop_env_value(env: dict[str, str], name: str) -> str | None:
+    key = _find_env_key(env, name)
+    if key is None:
+        return None
+    return env.pop(key)
+
+
+def _set_env_value(env: dict[str, str], name: str, value: str) -> None:
+    key = _find_env_key(env, name) or name
+    env[key] = value
+
+
+def _normalize_path_entry(entry: str) -> str:
+    text = entry.strip().strip('"').strip("'")
+    text = text.rstrip("\\/")
+    if os.name == "nt":
+        text = text.lower()
+    return text
+
+
+def _remove_path_entries_under(env: dict[str, str], root_dir: str) -> None:
+    """Drop any PATH entry equal to, or nested under, *root_dir*."""
+    path_key = _find_env_key(env, "PATH")
+    if path_key is None:
+        return
+    root_norm = _normalize_path_entry(root_dir)
+    if not root_norm:
+        return
+    kept = []
+    for entry in env[path_key].split(os.pathsep):
+        norm = _normalize_path_entry(entry)
+        if norm == root_norm or norm.startswith(root_norm + "/") or norm.startswith(root_norm + "\\"):
+            continue
+        kept.append(entry)
+    env[path_key] = os.pathsep.join(kept)
+
+
+def _prepend_path_once(env: dict[str, str], directory: str) -> None:
+    path_key = _find_env_key(env, "PATH") or "PATH"
+    existing = env.get(path_key, "")
+    norm_dir = _normalize_path_entry(directory)
+    entries = [
+        entry
+        for entry in existing.split(os.pathsep)
+        if entry and _normalize_path_entry(entry) != norm_dir
+    ]
+    entries.insert(0, directory)
+    env[path_key] = os.pathsep.join(entries)
+
+
+def build_child_environment(workspace_root: Path) -> dict[str, str]:
+    """Build the environment for a fresh PowerShell child process.
+
+    Starts from the ordinary inherited environment, then strips whatever
+    Python virtual-environment activation Aura's own runtime happens to be
+    running under (``VIRTUAL_ENV``/``VIRTUAL_ENV_PROMPT``/``PYTHONHOME`` and
+    the matching PATH entries), so model-facing commands never silently pick
+    up Aura's interpreter. When the workspace has its own recognized
+    ``.venv``/``venv``, that environment is then activated instead - even
+    when it happens to be the very same directory Aura itself runs from.
+    """
+    env = dict(os.environ)
+
+    inherited_virtual_env = _pop_env_value(env, "VIRTUAL_ENV")
+    _pop_env_value(env, "VIRTUAL_ENV_PROMPT")
+    _pop_env_value(env, "PYTHONHOME")
+    if inherited_virtual_env:
+        _remove_path_entries_under(env, inherited_virtual_env)
+
+    project_env = detect_project_python_env(workspace_root)
+    if project_env.python is not None:
+        scripts_dir = project_env.python.parent
+        venv_root = scripts_dir.parent
+        _remove_path_entries_under(env, str(venv_root))
+        _prepend_path_once(env, str(scripts_dir))
+        _set_env_value(env, "VIRTUAL_ENV", str(venv_root))
+
+    return env
 
 
 class PowerShellSession:
@@ -246,6 +338,7 @@ class PowerShellSession:
             "shell": False,
             "text": False,
             "bufsize": 0,
+            "env": build_child_environment(self._workspace_root),
         }
         kwargs.update(get_subprocess_kwargs())
         if os.name == "nt":
@@ -381,4 +474,9 @@ def _as_int(value: Any, *, default: int) -> int:
         return default
 
 
-__all__ = ["PowerShellCommandResult", "PowerShellSession", "resolve_powershell"]
+__all__ = [
+    "PowerShellCommandResult",
+    "PowerShellSession",
+    "build_child_environment",
+    "resolve_powershell",
+]
