@@ -1,14 +1,13 @@
-"""Validate Godot preview captures and produce bounded local structural evidence."""
+"""Validate Godot preview captures and produce trusted capture evidence."""
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import io
 import json
 import re
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from PIL import Image, UnidentifiedImageError
 
@@ -18,7 +17,6 @@ MAX_CAPTURE_COUNT = 4
 MAX_PNG_BYTES = 20 * 1024 * 1024
 MAX_WIDTH = 1920
 MAX_HEIGHT = 1080
-MAX_VISUAL_STRUCTURE_CHARS = 12_000
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -26,9 +24,8 @@ def validate_capture_set(
     workspace_root: Path,
     capture_result: dict[str, Any],
     preview_facts: dict[str, Any],
-    decompile: Callable[[str], str],
 ) -> dict[str, Any]:
-    """Validate bridge metadata/files before invoking the local image decompiler."""
+    """Validate bridge metadata/files and produce trusted per-capture evidence."""
     root = workspace_root.resolve()
     capture_set_id = _safe_capture_id(capture_result.get("capture_set_id"))
     scene_path = _scene_path(capture_result.get("scene_path"))
@@ -71,15 +68,6 @@ def validate_capture_set(
                 f"decoded PNG dimensions do not match bridge metadata for {relative_path}"
             )
 
-        image_b64 = base64.b64encode(png_bytes).decode("ascii")
-        try:
-            structure = str(decompile(image_b64))
-        finally:
-            del image_b64
-            del png_bytes
-        truncated = len(structure) > MAX_VISUAL_STRUCTURE_CHARS
-        if truncated:
-            structure = structure[:MAX_VISUAL_STRUCTURE_CHARS] + "\n…[visual structure truncated]"
         captures.append(
             {
                 "view": view,
@@ -87,9 +75,6 @@ def validate_capture_set(
                 "width": width,
                 "height": height,
                 "sha256": actual_sha256,
-                "evidence_kind": "local_structural_decompile",
-                "visual_structure": structure,
-                "visual_structure_truncated": truncated,
             }
         )
 

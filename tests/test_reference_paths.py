@@ -330,22 +330,20 @@ def test_retry_rederives_authorization_from_retained_user_text(
     assert bridge.authorization_calls == [reference.resolve()]
 
 
-def test_vision_description_cannot_authorize_a_reference(
+def test_finalize_send_authorizes_from_submitted_text(
     tmp_path: Path, monkeypatch
 ) -> None:
     handler, bridge, _chat = _handler(tmp_path, monkeypatch)
     reference = tmp_path / "old-project"
 
     handler._finalize_send(
-        SendPayload("Explain this screenshot", []),
+        SendPayload(str(reference), []),
         "model",
         "off",
-        [f"The screenshot mentions {reference}"],
-        None,
     )
 
-    assert bridge.authorization_calls == [None]
-    assert bridge.authorization_available_at_send == [False]
+    assert bridge.authorization_calls == [reference.resolve()]
+    assert bridge.authorization_available_at_send == [True]
 
 
 def test_attachment_metadata_cannot_authorize_a_reference(

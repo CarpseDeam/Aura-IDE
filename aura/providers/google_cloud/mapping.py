@@ -24,6 +24,31 @@ def _lookup_thought_signature(
     return metadata
 
 
+def _image_url_part_to_google_inline_data(part: dict) -> dict:
+    """Convert a canonical ``image_url`` content part into a Google inline image part.
+
+    Aura's canonical history carries images as ``data:`` URLs (see
+    ``aura.client.anthropic_stream`` for the equivalent Anthropic conversion).
+    Google's contents API instead expects ``{"inline_data": {"mime_type", "data"}}``
+    with the raw base64 payload. Anything that is not a well-formed ``data:`` URL
+    is a caller bug, not silently-droppable content, so it raises.
+    """
+    image_url = part.get("image_url")
+    url = image_url.get("url") if isinstance(image_url, dict) else None
+    if not isinstance(url, str) or not url.startswith("data:"):
+        raise ValueError(
+            f"Unsupported image_url content for Google: expected a data: URL, got {url!r}"
+        )
+    try:
+        header, data = url.split(",", 1)
+        mime_type = header.split(":", 1)[1].split(";", 1)[0]
+    except (IndexError, ValueError) as exc:
+        raise ValueError(f"Malformed data URL in image_url content: {url!r}") from exc
+    if not mime_type or not data:
+        raise ValueError(f"Malformed data URL in image_url content: {url!r}")
+    return {"inline_data": {"mime_type": mime_type, "data": data}}
+
+
 def aura_tools_to_google_declarations(tools: list[dict]) -> list[dict]:
     """Convert Aura (OpenAI-compatible) tools to Google function declarations.
 
@@ -117,7 +142,8 @@ def aura_messages_to_google_contents(
                         text = part.get("text")
                         if text:
                             parts.append({"text": text})
-                    # image_url parts are skipped — Google has different image handling
+                    elif ptype == "image_url":
+                        parts.append(_image_url_part_to_google_inline_data(part))
             if not parts:
                 parts.append({"text": ""})
             contents.append({"role": "user", "parts": parts})

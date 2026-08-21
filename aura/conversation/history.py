@@ -188,31 +188,6 @@ class History:
             return None
         return user_message_text(self.messages[index])
 
-    def set_latest_real_user_authored_text(self, text: str | None) -> None:
-        """Retain the raw composer text for turn-boundary authorization.
-
-        Vision fallback may add generated descriptive text to the canonical
-        user message. This local transcript marker lets retry recover only the
-        user's own words; :meth:`for_api` strips it before provider requests.
-        """
-        index = self.latest_real_user_index()
-        if index is None:
-            return
-        if text is None:
-            self.messages[index].pop("aura_user_authored_text", None)
-        else:
-            self.messages[index]["aura_user_authored_text"] = str(text)
-
-    def latest_real_user_authored_text(self) -> str | None:
-        """Return the newest turn's raw user-authored composer text."""
-        index = self.latest_real_user_index()
-        if index is None:
-            return None
-        authored = self.messages[index].get("aura_user_authored_text")
-        if isinstance(authored, str):
-            return authored
-        return user_message_text(self.messages[index])
-
     def rewind_to_last_user_turn(self) -> bool:
         """Keep history through the last user message and drop its response.
 
@@ -245,7 +220,6 @@ class History:
             out.append({"role": "system", "content": self.system_prompt})
         for msg in copy.deepcopy(self.messages):
             msg.pop("aura_internal", None)
-            msg.pop("aura_user_authored_text", None)
             out.append(msg)
         return out
 

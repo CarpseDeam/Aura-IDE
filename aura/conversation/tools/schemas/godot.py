@@ -72,11 +72,10 @@ GODOT_READ_TOOL_DEFS: list[dict[str, Any]] = [
                 "name": "capture_godot_asset_preview",
                 "description": (
                     "Capture a viewport rendering of the current Godot AuraPreview scene and return capture "
-                    "metadata, live preview facts, and local structural decompile evidence. Parameters are "
-                    "optional. Returns capture_set_id, scene_path, scene_fingerprint, preview facts from "
-                    "preview.snapshot, structural validation, and per-capture entries with view name, "
-                    "workspace-relative path, dimensions, sha256 digest, and textual visual structure from "
-                    "local decompilation. No image bytes or base64 data appear in the result. "
+                    "metadata and live preview facts. Parameters are optional. Returns capture_set_id, "
+                    "scene_path, scene_fingerprint, preview facts from preview.snapshot, structural validation, "
+                    "and per-capture entries with view name, workspace-relative path, dimensions, and sha256 "
+                    "digest. No image bytes or base64 data appear in the result. "
                     "Read-only — no approval needed."
                 ),
                 "parameters": {

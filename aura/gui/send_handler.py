@@ -1,14 +1,13 @@
 """Handles send/stop/undo logic extracted from MainWindow.
 
-Owns the message queue, vision fallback routing, and undo command
-execution. Delegates to the bridge, chat view, and input panel.
+Owns the message queue and undo command execution. Delegates to the
+bridge, chat view, and input panel.
 """
 
 from __future__ import annotations
 
 import logging
 import re
-import threading
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
@@ -55,16 +54,9 @@ class SendHandler(QObject):
     """Handles send/stop/undo logic extracted from MainWindow.
 
     Owns the message queue for queuing payloads while the bridge is busy,
-    orchestrates screenshot decompiler for image attachments, and
-    processes the /undo git command.
-
-    Signals:
-        vision_done: Emitted (payload, descriptions, error) after the vision
-            fallback thread completes, so the handler can finalise the send
-            on the GUI thread.
+    and processes the /undo git command.
     """
 
-    vision_done = Signal(object, list, object)  # SendPayload, list[str], str|None
     drone_bay_requested = Signal()  # /drone command → open/toggle Drone Workbay
 
     def __init__(
@@ -85,13 +77,6 @@ class SendHandler(QObject):
 
         # Queued messages sent while the bridge is running.
         self._message_queue: list[QueuedItem] = []
-
-        # Pending model/thinking stored while vision thread is running.
-        self._pending_model: str = ""
-        self._pending_thinking: ThinkingMode = "off"
-
-        # Wire our own signal so _on_vision_done runs on the GUI thread.
-        self.vision_done.connect(self._on_vision_done)
 
     # ---- public helpers (called externally from MainWindow) -----------------
 
@@ -161,54 +146,17 @@ class SendHandler(QObject):
             self._input.set_queued_messages(len(self._message_queue))
             return
 
-        # Check if the current model supports native vision
-        m_info = self._get_current_model_info(model)
-        native_vision = m_info.supports_vision if m_info else False
-
-        # Prepare history append: image attachments go via multimodal content array.
-        text = payload.text
-        # Add text refs from non-image attachments to the text body so the model knows.
-        text_refs = [a.text_ref for a in payload.attachments if a.text_ref]
-        if text_refs:
-            ref_block = "\n".join(text_refs)
-            text = f"{text}\n\n{ref_block}".strip() if text else ref_block
         image_atts = [a for a in payload.attachments if a.kind == "image" and a.b64]
+        if image_atts and not self._model_supports_vision(model):
+            self._input.restore_payload(payload)
+            self._chat.add_error(
+                "Unsupported model",
+                f"{model} does not support image input. Select a vision-capable "
+                "model to send images, or remove the attached image(s).",
+            )
+            return
 
-        # --- Vision routing ---
-        vision_descriptions: list[str] = []
-        vision_error: str | None = None
-
-        if image_atts and not native_vision:
-            # Screenshot decompiler for non-vision models
-            self._input.set_placeholder("Decompiling image (structural)...")
-            self._input.setEnabled(False)
-
-            self._pending_model = model
-            self._pending_thinking = thinking
-
-            def _run_vision():
-                nonlocal vision_error
-                try:
-                    from aura.perception.decompiler import describe
-
-                    for a in image_atts:
-                        desc = describe(a.b64, context=payload.text)
-                        vision_descriptions.append(desc)
-                except Exception as exc:
-                    vision_error = (
-                        f"Screenshot decompiler failed: {exc}"
-                    )
-
-                # Marshal back to GUI thread to actually send the message
-                self.vision_done.emit(payload, vision_descriptions, vision_error)
-
-            threading.Thread(target=_run_vision, daemon=True).start()
-            return  # Wait for _on_vision_done
-
-        # Either no images or native vision supported
-        self._finalize_send(
-            payload, model, thinking, vision_descriptions, vision_error
-        )
+        self._finalize_send(payload, model, thinking)
 
     def handle_stop(self) -> None:
         """Cancel the current bridge response, clear the message queue, but
@@ -235,9 +183,7 @@ class SendHandler(QObject):
         # Derive the target files from the retained user text so stale turn
         # state from another conversation cannot leak.
         retained_text = self._bridge.history.latest_real_user_text()
-        auth_text_fn = getattr(self._bridge.history, "latest_real_user_authored_text", None)
-        auth_text = auth_text_fn() if callable(auth_text_fn) else retained_text
-        if not self._authorize_reference_for_turn(auth_text):
+        if not self._authorize_reference_for_turn(retained_text):
             return False
         self._declare_turn_target_files(retained_text)
 
@@ -436,20 +382,6 @@ class SendHandler(QObject):
         else:
             self._chat.add_error("Git log", message)
 
-    # ---- vision done slot --------------------------------------------------
-
-    def _on_vision_done(self, payload: SendPayload, descriptions: list[str], error: str | None) -> None:
-        """Called when the vision fallback thread completes."""
-        self._input.setEnabled(True)
-        self._input.set_placeholder("")
-        self._finalize_send(
-            payload,
-            self._pending_model,
-            self._pending_thinking,
-            descriptions,
-            error,
-        )
-
     # ---- finalise send -----------------------------------------------------
 
     def _finalize_send(
@@ -457,13 +389,10 @@ class SendHandler(QObject):
         payload: SendPayload,
         model: str,
         thinking: ThinkingMode,
-        vision_descriptions: list[str],
-        vision_error: str | None,
     ) -> None:
         """Build the message parts, append to history, and send via the bridge."""
         # Authorization is derived from the literal user text before history
-        # mutation or bridge.send(). Attachment metadata and vision output are
-        # intentionally not part of this decision.
+        # mutation or bridge.send().
         if not self._authorize_reference_for_turn(payload.text):
             return
 
@@ -474,12 +403,8 @@ class SendHandler(QObject):
             ref_block = "\n".join(text_refs)
             text = f"{text}\n\n{ref_block}".strip() if text else ref_block
 
-        # Determine if we should send a native multimodal payload
-        m_info = self._get_current_model_info(model)
-        native_vision = m_info.supports_vision if m_info else False
-
-        if native_vision and image_atts:
-            # Construct native multimodal parts
+        if image_atts:
+            # Native multimodal turn: ordered text + image_url content parts.
             parts = []
             if text:
                 parts.append({"type": "text", "text": text})
@@ -489,50 +414,13 @@ class SendHandler(QObject):
                     "image_url": {"url": f"data:image/png;base64,{a.b64}"},
                 })
             self._bridge.history.append_user_multimodal(parts)
-            display_text = text
-        elif vision_descriptions:
-            # Build vision block from local fallback
-            vision_block_parts = []
-            for i, desc in enumerate(vision_descriptions):
-                vision_block_parts.append(
-                    f"[Image {i + 1} structural decompile:]\n{desc}"
-                )
-            vision_block = "\n\n---\n\n".join(vision_block_parts)
-
-            if vision_error:
-                vision_block += f"\n\n[Vision error: {vision_error}]"
-
-            # Final text for the model
-            final_text = f"{vision_block}\n\n[User's question:]\n{text}" if text else vision_block
-            display_text = final_text
-            history_text = final_text
-            self._bridge.history.append_user_text(history_text)
-        elif vision_error and not vision_descriptions and image_atts:
-            self._chat.add_error("Vision fallback failed", vision_error)
-            return
-        elif vision_error and not vision_descriptions:
-            final_text = f"{text}\n\n[Note: {vision_error}]" if text else f"[Vision error: {vision_error}]"
-            display_text = final_text
-            history_text = final_text
-            self._bridge.history.append_user_text(history_text)
         else:
-            # No images
-            display_text = text
-            history_text = text
-            self._bridge.history.append_user_text(history_text)
+            self._bridge.history.append_user_text(text)
 
-        record_authored = getattr(
-            self._bridge.history, "set_latest_real_user_authored_text", None
-        )
-        if callable(record_authored):
-            record_authored(payload.text)
-
-        self._chat.add_user(display_text, [a.b64 for a in image_atts] or None)
+        self._chat.add_user(text, [a.b64 for a in image_atts] or None)
         self._chat.scroll_to_bottom(force=True)
         self._chat.begin_assistant()
 
-        # The user's own words plus attachment references — not the vision
-        # block, whose paths are model-generated rather than user-named.
         self._declare_turn_target_files(text)
 
         _log.info(
@@ -549,6 +437,10 @@ class SendHandler(QObject):
         if not cfg:
             return None
         return cfg.models.get(model)
+
+    def _model_supports_vision(self, model: str) -> bool:
+        m_info = self._get_current_model_info(model)
+        return m_info.supports_vision if m_info else False
 
     # ---- message queue -----------------------------------------------------
 

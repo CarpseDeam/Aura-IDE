@@ -11,7 +11,6 @@ from aura.godot_assets import resolve_godot_asset
 from aura.godot_assets.capture_evidence import validate_capture_set
 from aura.godot_assets.preview import analyze_preview_snapshot
 from aura.godot_editor.client import GodotEditorBridgeClient, GodotEditorBridgeError
-from aura.perception.decompiler import describe as _decompile_image
 
 
 class GodotAssetPreviewHandlersMixin:
@@ -63,9 +62,7 @@ class GodotAssetPreviewHandlersMixin:
             capture_result = client.request("preview.capture", params)
             snapshot = client.request("preview.snapshot", {})
             preview_facts = analyze_preview_snapshot(self._root, snapshot)
-            evidence = validate_capture_set(
-                self._root, capture_result, preview_facts, _decompile_image
-            )
+            evidence = validate_capture_set(self._root, capture_result, preview_facts)
             payload = {"ok": True, "read_only": True, **evidence}
             return ToolExecResult(ok=True, payload=payload)
         except (GodotEditorBridgeError, TypeError, ValueError, OSError) as exc:
