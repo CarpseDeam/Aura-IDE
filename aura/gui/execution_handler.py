@@ -113,13 +113,9 @@ class ExecutionEventHandler(QObject):
         self._bridge.executionStarted.connect(self._on_execution_started)
         self._bridge.executionFinished.connect(self._on_execution_finished)
         self._bridge.executionCancelled.connect(self._on_execution_cancelled)
-        self._bridge.executionReasoningDelta.connect(self._on_execution_reasoning)
-        self._bridge.executionContentDelta.connect(self._on_execution_content)
-        self._bridge.executionToolCallStart.connect(self._tool_router.on_execution_tool_call_start)
         self._bridge.executionToolCallArgs.connect(self._tool_router.on_execution_tool_args)
         self._bridge.executionToolCallEnd.connect(lambda _t, _w: None)
         self._bridge.executionToolResult.connect(self._tool_router.on_execution_tool_result)
-        self._bridge.executionDiffDecided.connect(self._tool_router.on_execution_diff_decided)
         self._bridge.executionFileEditLifecycle.connect(
             self._tool_router.on_execution_file_edit_lifecycle
         )
@@ -128,7 +124,6 @@ class ExecutionEventHandler(QObject):
         )
         self._bridge.executionApiError.connect(self._on_execution_api_error)
         self._bridge.executionUsage.connect(self._on_execution_usage)
-        self._bridge.executionActivityUpdated.connect(self._on_execution_activity_updated)
         self._bridge.taskChecklistUpdated.connect(self._on_task_checklist_updated)
         self._bridge.executionTerminalCommandStarted.connect(
             self._tool_router.on_execution_terminal_command_started
@@ -306,37 +301,28 @@ class ExecutionEventHandler(QObject):
         return metadata if isinstance(metadata, dict) else {}
 
     def _on_execution_cancelled(self, tool_call_id: str) -> None:
-        """Stop execution aura and forward cancel to playground."""
+        """Stop execution aura, surface the stop in chat, and set the pane status."""
 
         self._clear_pending_execution_finish(tool_call_id)
         self._playground.stop_aura()
+        self._chat.add_info("Execution", "Stopped by user.")
         self._playground.execution_cancelled()
 
         if self._active_execution_tool_call_id == tool_call_id:
             self._active_execution_tool_call_id = None
         self.execution_running_changed.emit(False)
 
-    # ---- execution content slots --------------------------------------------------
-
-    def _on_execution_reasoning(self, tool_call_id: str, text: str) -> None:
-        """Forward reasoning delta to playground."""
-
-        self._playground.append_reasoning(text)
-
-    def _on_execution_content(self, tool_call_id: str, text: str) -> None:
-        """Forward content delta to playground."""
-
-        self._playground.append_content(text)
-
+    # ---- execution error slots --------------------------------------------------
 
     def _on_execution_api_error(self, tool_call_id: str, status: int, message: str) -> None:
-        """Forward API error to playground with a formatted title."""
+        """Surface an API/harness error in chat and mark the pane's status."""
         _log.info(
             "api_error tool_call_id=%s status=%s message_redacted=%s",
             tool_call_id, status, redact_secrets(message)[:200],
         )
         title = f"API Error {status}" if status > 0 else "Execution Error"
-        self._playground.add_error(f"{title}: {message}")
+        self._chat.add_error(title, message)
+        self._playground.mark_execution_error()
         self._playground.stop_aura()
         self._playground.set_execution_running(False)
         self._clear_pending_execution_finish(tool_call_id)
@@ -371,14 +357,6 @@ class ExecutionEventHandler(QObject):
             context_window_tokens=context_window_for_model(model_id),
         )
         self.usage_updated.emit()
-
-    def _on_execution_activity_updated(self, tool_call_id: str, entries: list) -> None:
-        """Route Execution Activity snapshots to playground (append-only heartbeat)."""
-        _log.debug(
-            "_on_execution_activity_updated tool_call_id=%s entry_count=%d",
-            tool_call_id, len(entries),
-        )
-        self._playground.update_activity(entries, tool_call_id)
 
     def _on_task_checklist_updated(self, tool_call_id: str, items: list) -> None:
         """Route Task Checklist snapshots to playground (full replacement lens)."""

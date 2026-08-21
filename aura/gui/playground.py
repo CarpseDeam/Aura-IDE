@@ -25,12 +25,12 @@ from aura.gui.workspace_tree import WorkspaceTree
 
 
 class AuraPlayground(QWidget):
-    """Right-side workspace panel with code editor (top), info hub (middle),
-    and execution log.
+    """Right-side workspace panel with code editor (top) and progress pane (bottom).
 
     Uses a vertical QSplitter to divide the space between a tabbed code editor
-    pane and a tabbed info hub pane (Execution Log). Terminal output is routed to
-    a floating TerminalWindow so it does not participate in this layout.
+    pane and the checklist-only info hub (Progress) pane. Terminal output is
+    routed to a floating TerminalWindow so it does not participate in this
+    layout.
     """
 
     focused_action_requested = Signal(str)
@@ -278,16 +278,6 @@ class AuraPlayground(QWidget):
         self._code_editor.close_execution_tabs()
         self._info_hub.clear_log()
 
-    def append_reasoning(self, text: str):
-        self._info_hub.append_reasoning(text)
-
-    def append_content(self, text: str):
-        self._info_hub.append_content(text)
-
-    def add_tool_call(self, execution_tool_id: str, name: str, parent_tool_id: str | None = None):
-        self._info_hub.flush_execution_log()
-        self._info_hub.mark_execution_log_boundary()
-
     def append_tool_args(self, execution_tool_id: str, fragment: str) -> None:
         """No-op: partial tool-call JSON never drives the workspace editor.
 
@@ -297,10 +287,16 @@ class AuraPlayground(QWidget):
         editor pane.
         """
 
-    def set_tool_result(self, execution_tool_id: str, ok: bool, result: str):
-        self._info_hub.flush_execution_log()
-        self._info_hub.mark_execution_log_boundary()
+    def mark_execution_error(self) -> None:
+        """Set the pane's truthful terminal status to Error mid-stream.
 
+        Used for an API/harness error that interrupts a run before it
+        reaches the normal finish/cancel path — the tabs and checklist are
+        left untouched since the run's own evidence didn't change.
+        """
+        self._info_hub.set_terminal_status(False, False, "harness_error")
+
+    def set_tool_result(self, execution_tool_id: str, ok: bool, result: str):
         # Finalize terminal window if this was a terminal tool.
         exit_code = 0
         try:
@@ -310,10 +306,6 @@ class AuraPlayground(QWidget):
         except Exception:
             pass
         self._terminal_window.set_result(execution_tool_id, exit_code)
-
-    def update_activity(self, entries: list, tool_call_id: str | None = None) -> None:
-        """Render a Execution Activity snapshot in the info hub."""
-        self._info_hub.update_activity(entries)
 
     def update_task_checklist(self, items: list[dict[str, str]], tool_call_id: str | None = None) -> None:
         """Render the latest Task Checklist snapshot in the info hub."""
@@ -355,20 +347,6 @@ class AuraPlayground(QWidget):
         self._file_edit_projection.reconcile_workspace()
         self._tree.refresh()
 
-    def add_diff_card(
-        self,
-        execution_tool_id: str,
-        rel_path: str,
-        old: str,
-        new: str,
-        decision: str,
-        is_new_file: bool,
-    ) -> None:
-        self._info_hub.add_diff_card(rel_path, old, new, decision, is_new_file)
-
-    def add_error(self, message: str) -> None:
-        self._info_hub.add_error(message)
-
     def start_terminal_process(self, process_id: str, command: str) -> None:
         self._terminal_window.set_command(process_id, command)
 
@@ -389,12 +367,12 @@ class AuraPlayground(QWidget):
 
     def execution_finished(self, ok: bool, summary: str, needs_followup: bool = False, status: str | None = None) -> None:
         self._code_editor.close_all_tabs()
-        self._info_hub.show_final_summary(ok, summary, needs_followup=needs_followup, status=status)
+        self._info_hub.set_terminal_status(ok, needs_followup, status)
         self._info_hub.set_execution_running(False)
 
     def execution_cancelled(self):
         self._code_editor.close_all_tabs()
-        self._info_hub.show_final_summary(False, "Execution stopped by user.", status="cancelled")
+        self._info_hub.set_terminal_status(False, False, "cancelled")
         self._info_hub.set_execution_running(False)
 
     def set_execution_running(self, running: bool):

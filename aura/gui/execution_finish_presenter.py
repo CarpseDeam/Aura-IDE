@@ -19,8 +19,12 @@ class ExecutionFinishPresentation:
 class ExecutionFinishPresenter:
     """Presents a completed production execution run.
 
-    The completion receipt is rendered into the workspace only. The assistant's answer is chat-owned and
-    reaches the chat on its own.
+    The workspace status chip always gets the truthful terminal status. A
+    plain success (ok, no follow-up needed) leaves chat untouched — the
+    assistant's answer is chat-owned and already reached chat on its own.
+    Any other outcome (needs-followup, validation failure, harness error,
+    rejected approval, ...) is durable execution evidence that used to live
+    only in the now-removed Execution Log, so it is also surfaced in chat.
     """
 
     def __init__(self, chat: ChatView, playground: AuraPlayground) -> None:
@@ -64,8 +68,6 @@ class ExecutionFinishPresenter:
                 )
         else:
             self._playground.set_execution_running(False)
-        # Direct production execution has no SpecCard, and its completion
-        # receipt is execution evidence: it stays in the workspace, rendered by
-        # playground.execution_finished above. The chat transcript is untouched —
-        # it already owns the assistant's answer, which streamed there directly.
+        if not outcome.terminal_success:
+            self._chat.add_error(outcome.status_label, summary)
         return ExecutionFinishPresentation(outcome=outcome)

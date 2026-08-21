@@ -1,51 +1,61 @@
-"""Info hub pane: Execution Log tab with activity and final report."""
+"""Info hub pane: checklist-only Progress panel.
+
+Shows Aura's live Task Checklist, the run status chip, and the Stop button —
+nothing else. Execution reasoning/content, the activity heartbeat, and
+per-write diff/error cards are not rendered here; they either duplicate what
+chat already shows (reasoning/content stream chat-owned) or belong to the
+authoritative code editor / floating terminal instead.
+"""
 
 from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
-    QPlainTextEdit,
     QPushButton,
     QSizePolicy,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from aura.gui.cards._helpers import _mono_font
-from aura.gui.cards.diff_card import DiffCard
-from aura.gui.cards.error_card import ErrorCard
-from aura.gui.execution_log_stream import ExecutionLogStreamBuffer
-from aura.gui.scrollbar_style import aura_scrollbar_qss
-from aura.gui.theme import ACCENT, BG, BORDER, FG, FG_MUTED, SUCCESS
+from aura.gui.execution_finish_outcome import (
+    STATUS_CANCELLED,
+    STATUS_DONE,
+    STATUS_ERROR,
+    STATUS_NEEDS_FOLLOWUP,
+    terminal_status_label,
+)
+from aura.gui.theme import BG, BORDER, DANGER, FG_MUTED, SUCCESS, WARN
 from aura.gui.widgets.task_checklist import TaskChecklistWidget
 
 _log = logging.getLogger(__name__)
 
-#: Execution Log status chip texts. The chip is the UI's only claim about whether a
-#: run is still going, so the three states are named rather than spelled inline:
-#: a run that has stopped must never be left reading ``LIVE``.
+#: Progress pane status chip texts. The chip is the UI's only claim about
+#: whether a run is still going or how it ended, so every state is named
+#: rather than spelled inline: a run that has stopped must never be left
+#: reading "Live", and a terminal state must always be truthful about outcome.
 _CHIP_IDLE = "Idle"
 _CHIP_LIVE = "● Live"
-_CHIP_RECEIPT = "● Receipt"
+
+_CHIP_STYLE_BY_LABEL = {
+    STATUS_DONE: f"color: {SUCCESS}; font-size: 10px; font-weight: 600;",
+    STATUS_NEEDS_FOLLOWUP: f"color: {WARN}; font-size: 10px; font-weight: 600;",
+    STATUS_CANCELLED: f"color: {FG_MUTED}; font-size: 10px; font-weight: 600;",
+    STATUS_ERROR: f"color: {DANGER}; font-size: 10px; font-weight: 600;",
+}
 
 
 class InfoHubPane(QWidget):
-    """Bottom pane with permanent Execution Log tab.
+    """Bottom pane: PROGRESS header, Task Checklist, status chip, Stop button.
 
     Public API:
-        append_reasoning(text) -> None
-        append_content(text) -> None
-        add_diff_card(rel_path, old, new, decision, is_new_file) -> None
-        add_error(message) -> None
-        flush_execution_log() -> None
-        mark_execution_log_boundary() -> None
-        show_final_summary(ok, summary) -> None
+        update_task_checklist(items) -> None
+        set_terminal_status(ok, needs_followup, status) -> None
+        set_execution_running(running) -> None
+        clear_log() -> None
         clear() -> None
     """
 
@@ -55,41 +65,22 @@ class InfoHubPane(QWidget):
         super().__init__(parent)
         self.setMinimumSize(0, 0)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setObjectName("infoHubPane")
+        self.setStyleSheet(
+            f"QWidget#infoHubPane {{ background: {BG}; border-top: 1px solid {BORDER}; }}"
+        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self._tabs = QTabWidget(self)
-        self._tabs.setMinimumSize(0, 0)
-        self._tabs.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
-        )
-        self._tabs.setStyleSheet(self._tab_widget_style())
-
-
-
-        layout.addWidget(self._tabs)
-
-        # ---- Execution Log tab (permanent, index 0) ----
-        self._log_tab = QWidget(self)
-        self._log_tab.setMinimumSize(0, 0)
-        self._log_tab.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Expanding,
-        )
-        log_layout = QVBoxLayout(self._log_tab)
-        log_layout.setContentsMargins(0, 0, 0, 0)
-        log_layout.setSpacing(0)
-
-        # Execution Log header row
-        self._log_header = QWidget(self._log_tab)
-        header_layout = QHBoxLayout(self._log_header)
+        # Header row
+        self._header = QWidget(self)
+        header_layout = QHBoxLayout(self._header)
         header_layout.setContentsMargins(10, 4, 10, 4)
         header_layout.setSpacing(8)
 
-        # Title
-        header_title = QLabel("EXECUTION LOG")
+        header_title = QLabel("PROGRESS")
         header_title.setObjectName("paneTitleWorkspace")
         header_layout.addWidget(header_title)
 
@@ -100,15 +91,6 @@ class InfoHubPane(QWidget):
 
         header_layout.addStretch(1)
 
-        # Copy Receipt button — shown after a final summary exists
-        self._copy_receipt_btn = QPushButton("Copy Receipt")
-        self._copy_receipt_btn.setObjectName("primary")
-        self._copy_receipt_btn.setMinimumSize(44, 36)
-        self._copy_receipt_btn.setVisible(False)
-        self._copy_receipt_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._copy_receipt_btn.clicked.connect(self._on_header_copy_receipt)
-        header_layout.addWidget(self._copy_receipt_btn)
-
         # Stop button (cancels active run, clears queue, preserves draft)
         self._stop_execution_btn = QPushButton("Stop")
         self._stop_execution_btn.setObjectName("danger")
@@ -118,182 +100,31 @@ class InfoHubPane(QWidget):
         self._stop_execution_btn.clicked.connect(self._on_stop_execution_clicked)
         header_layout.addWidget(self._stop_execution_btn)
 
-        # Insert header at the top of the log tab layout
-        log_layout.insertWidget(0, self._log_header, 0)
+        layout.addWidget(self._header, 0)
 
-        self._todo_widget = TaskChecklistWidget(self._log_tab)
-        log_layout.addWidget(self._todo_widget, 0)
+        self._todo_widget = TaskChecklistWidget(self)
+        layout.addWidget(self._todo_widget, 0)
 
-        # Execution log text area: activity/tool calls first, final report last.
-        self._log_view = QPlainTextEdit(self._log_tab)
-        self._log_view.setReadOnly(True)
-        self._log_view.setMinimumSize(0, 0)
-        self._log_view.setFont(_mono_font(10))
-        self._log_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
-        self._log_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._log_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-        self._log_view.setStyleSheet(
-            f"""
-            QPlainTextEdit {{
-                background: transparent;
-                color: {FG};
-                border: none;
-                padding: 8px;
-            }}
-            {aura_scrollbar_qss("QPlainTextEdit")}
-            """
-        )
-        self._log_view.setPlaceholderText("Execution output will appear here.")
-        log_layout.addWidget(self._log_view, 1)
-        self._log_stream = ExecutionLogStreamBuffer(self._append_execution_log_batch, parent=self)
-        self._activity_entry_count = 0
-        self._receipt_text: str = ""
+        layout.addStretch(1)
 
-        # Dynamic cards area (diff cards, error cards)
-        self._cards_layout = QVBoxLayout()
-        self._cards_layout.setContentsMargins(8, 0, 8, 8)
-        self._cards_layout.setSpacing(6)
-        log_layout.addLayout(self._cards_layout, 0)
+        self._set_chip_idle()
 
-        log_layout.setStretch(0, 0)  # header
-        log_layout.setStretch(1, 0)  # todo
-        log_layout.setStretch(2, 1)  # log view
-        log_layout.setStretch(3, 0)  # cards
-
-        self._tabs.addTab(self._log_tab, "Execution Log")
-        self._tabs.tabBar().setVisible(False)
-
-    # Public API — Execution Log
-
-    def append_reasoning(self, text: str) -> None:
-        """Append reasoning prose to the Execution Log through the stream buffer."""
-        self._log_stream.append("reasoning", text)
-
-    def append_content(self, text: str) -> None:
-        """Append content prose to the Execution Log through the stream buffer."""
-        self._log_stream.append("content", text)
-
-    def flush_execution_log(self) -> None:
-        """Flush any pending Execution Log prose immediately."""
-        self._log_stream.flush()
-
-    def mark_execution_log_boundary(self) -> None:
-        """Make the next Execution prose append start after a paragraph boundary."""
-        self._log_stream.mark_boundary()
-
-    def _append_execution_log_batch(self, text: str) -> None:
-        """Insert one buffered Execution Log prose batch and scroll once."""
-        cursor = self._log_view.textCursor()
-        cursor.movePosition(cursor.MoveOperation.End)
-        self._log_view.setTextCursor(cursor)
-        self._log_view.insertPlainText(text)
-        sb = self._log_view.verticalScrollBar()
-        sb.setValue(sb.maximum())
-
-    def update_activity(self, entries: list[dict]) -> None:
-        """Append new Execution Activity entries to the single Execution Log stream."""
-        if not entries:
-            self._activity_entry_count = 0
-            return
-
-        if len(entries) < self._activity_entry_count:
-            self._activity_entry_count = 0
-
-        new_entries = entries[self._activity_entry_count :]
-        self._activity_entry_count = len(entries)
-        lines = [
-            line
-            for line in (_activity_log_line(entry) for entry in new_entries)
-            if line
-        ]
-        if not lines:
-            return
-
-        self._log_stream.flush()
-        prefix = "\n" if self._log_view.toPlainText() else ""
-        self._append_execution_log_batch(prefix + "\n".join(lines) + "\n")
+    # Public API
 
     def update_task_checklist(self, items: list[dict[str, str]]) -> None:
         """Render the latest Task Checklist snapshot."""
         self._todo_widget.update_snapshot(items)
 
-    def add_diff_card(
+    def set_terminal_status(
         self,
-        rel_path: str,
-        old: str,
-        new: str,
-        decision: str,
-        is_new_file: bool,
+        ok: bool,
+        needs_followup: bool,
+        status: str | None,
     ) -> None:
-        """Create a DiffCard and add it to the Execution Log's dynamic cards area."""
-        self.flush_execution_log()
-        card = DiffCard(rel_path, old, new, decision, is_new_file, parent=self._log_tab)
-        self._cards_layout.addWidget(card)
-        self.mark_execution_log_boundary()
-
-    def add_error(self, message: str) -> None:
-        """Create an ErrorCard and add it to the Execution Log's dynamic cards area."""
-        self.flush_execution_log()
-        card = ErrorCard("Execution Error", message, parent=self._log_tab)
-        self._cards_layout.addWidget(card)
-        self.mark_execution_log_boundary()
-
-    def show_final_summary(self, ok: bool, summary: str, needs_followup: bool = False, status: str | None = None) -> None:
-        """Append a formatted summary block to the Execution Log text.
-
-        Flushes buffered prose immediately so the summary is ordered correctly.
-        """
-        self._log_stream.flush()
-        prefix = _final_summary_label(ok, needs_followup=needs_followup, status=status)
-        block = f"\n\n{'─' * 40}\n{prefix}\n{summary}\n{'─' * 40}\n"
-        self._log_view.insertPlainText(block)
-
-        # Auto-scroll to bottom
-        sb = self._log_view.verticalScrollBar()
-        sb.setValue(sb.maximum())
-
-        receipt_text = f"{'═' * 46}\n{prefix}\n{summary}\n{'═' * 46}"
-        self._receipt_text = receipt_text
-        self._copy_receipt_btn.setVisible(True)
-        self._status_chip.setText(_CHIP_RECEIPT)
-        self._status_chip.setStyleSheet(f"color: {ACCENT}; font-size: 10px; font-weight: 600;")
-
-    def _on_header_copy_receipt(self) -> None:
-        """Copy the stored receipt text to clipboard and show brief Copied! feedback."""
-        if not self._receipt_text:
-            return
-        QGuiApplication.clipboard().setText(self._receipt_text)
-        original_text = self._copy_receipt_btn.text()
-        self._copy_receipt_btn.setText("Copied!")
-        self._copy_receipt_btn.setEnabled(False)
-        QTimer.singleShot(2000, lambda: self._reset_header_copy_btn(original_text))
-
-    def _reset_header_copy_btn(self, original_text: str) -> None:
-        self._copy_receipt_btn.setText(original_text)
-        self._copy_receipt_btn.setEnabled(True)
-
-    def clear(self) -> None:
-        """Reset the Execution Log: clear text, activity, and dynamic cards."""
-        _log.info("DIAGNOSTIC InfoHubPane.clear called")
-        self.clear_log()
-        self.update_activity([])
-
-    def clear_log(self) -> None:
-        """Clear log text and dynamic cards."""
-        _log.info("DIAGNOSTIC InfoHubPane.clear_log called — clearing log text, TODO, cards")
-        self._log_stream.clear()
-        self._log_view.setPlainText("")
-        self._activity_entry_count = 0
-        self._todo_widget.clear()
-        self._copy_receipt_btn.setVisible(False)
-        self._receipt_text = ""
-        self._set_chip_idle()
-
-        # Remove all dynamic cards
-        while self._cards_layout.count() > 0:
-            item = self._cards_layout.takeAt(0)
-            if item and item.widget():
-                item.widget().deleteLater()
+        """Set the truthful terminal status chip for a finished/cancelled run."""
+        label = terminal_status_label(ok=ok, needs_followup=needs_followup, status=status)
+        self._status_chip.setText(label)
+        self._status_chip.setStyleSheet(_CHIP_STYLE_BY_LABEL[label])
 
     def _on_stop_execution_clicked(self) -> None:
         """Click handler: disable button, show stopping text, emit signal."""
@@ -305,11 +136,11 @@ class InfoHubPane(QWidget):
         """Show/hide the Stop button and own the Live claim on the status chip.
 
         Stopping is the authoritative end of the Live state: whatever path got
-        here — receipt, surfaced error, mismatch, cancellation, or a execution
-        thread that simply exited — the chip must stop claiming the run is
-        going. A terminal chip already written by :meth:`show_final_summary` is
-        left alone so the truthful outcome survives, which also makes repeated
-        calls idempotent.
+        here — terminal status, surfaced error, mismatch, cancellation, or an
+        execution thread that simply exited — the chip must stop claiming the
+        run is going. A terminal chip already written by
+        :meth:`set_terminal_status` is left alone so the truthful outcome
+        survives, which also makes repeated calls idempotent.
         """
         self._stop_execution_btn.setVisible(running)
         if running:
@@ -317,7 +148,6 @@ class InfoHubPane(QWidget):
             self._stop_execution_btn.setText("Stop")
             self._status_chip.setText(_CHIP_LIVE)
             self._status_chip.setStyleSheet(f"color: {SUCCESS}; font-size: 10px; font-weight: 600;")
-            self._copy_receipt_btn.setVisible(False)
         else:
             self._stop_execution_btn.setVisible(False)
             self._stop_execution_btn.setEnabled(True)
@@ -329,98 +159,13 @@ class InfoHubPane(QWidget):
         self._status_chip.setText(_CHIP_IDLE)
         self._status_chip.setStyleSheet(f"color: {FG_MUTED}; font-size: 10px;")
 
-    # Styling
+    def clear(self) -> None:
+        """Reset the Progress pane: clear the checklist and status."""
+        _log.info("DIAGNOSTIC InfoHubPane.clear called")
+        self.clear_log()
 
-    @staticmethod
-    def _tab_widget_style() -> str:
-        """Return a dark, minimal QTabWidget stylesheet consistent with Aura."""
-        return f"""
-            QTabWidget::pane {{
-                background: {BG};
-                border: none;
-                border-top: 1px solid {BORDER};
-            }}
-            QTabBar::tab {{
-                background: {BG};
-                color: {FG};
-                border: 1px solid transparent;
-                border-bottom: 1px solid {BORDER};
-                padding: 6px 14px;
-                margin-right: 2px;
-                font-size: 12px;
-            }}
-            QTabBar::tab:hover {{
-                background: #1e1e26;
-                border-color: {BORDER};
-            }}
-            QTabBar::tab:selected {{
-                background: #1c1c24;
-                border: 1px solid {BORDER};
-                border-bottom: 2px solid {ACCENT};
-                color: {FG};
-                font-weight: 600;
-            }}
-            QTabBar::close-button {{
-                image: none;
-                background: transparent;
-                border: none;
-                padding: 0;
-                margin: 0 0 0 6px;
-            }}
-            QTabBar::close-button:hover {{
-                background: rgba(247, 118, 142, 0.20);
-                border-radius: 3px;
-            }}
-        """
-
-
-def _final_summary_label(
-    ok: bool,
-    *,
-    needs_followup: bool = False,
-    status: str | None = None,
-) -> str:
-    from aura.conversation.execution_outcome import ExecutionOutcomeStatus, normalize_outcome_status
-
-    normalized = normalize_outcome_status(status)
-    if normalized == ExecutionOutcomeStatus.cancelled.value:
-        return "Cancelled."
-    if normalized == ExecutionOutcomeStatus.approval_rejected.value:
-        return "Changes rejected."
-    if normalized == ExecutionOutcomeStatus.harness_error.value:
-        return "Execution Error."
-    if normalized in {
-        ExecutionOutcomeStatus.completed.value,
-        ExecutionOutcomeStatus.completed_with_caveats.value,
-        ExecutionOutcomeStatus.validation_failed.value,
-        ExecutionOutcomeStatus.edit_mechanics_blocked.value,
-        ExecutionOutcomeStatus.scope_mismatch.value,
-    }:
-        return "Execution Report."
-    if ok and not needs_followup:
-        return "Execution Report."
-    return "Execution Report."
-
-
-_SUPPRESSED_ACTIVITY_KINDS = frozenset(
-    {
-        "campaign_started",
-        "step_started",
-        "step_completed",
-        "step_failed",
-        "final_report_started",
-        "final_report_completed",
-        "final_report_failed",
-    }
-)
-
-
-def _activity_log_line(entry: dict) -> str:
-    """Return the user-visible Execution Log line for one activity entry."""
-    if not isinstance(entry, dict):
-        return ""
-    kind = str(entry.get("kind") or "")
-    if kind in _SUPPRESSED_ACTIVITY_KINDS:
-        return ""
-    message = str(entry.get("message") or "").strip()
-    return message
+    def clear_log(self) -> None:
+        """Clear the checklist and status chip ahead of a new execution."""
+        _log.info("DIAGNOSTIC InfoHubPane.clear_log called — clearing checklist and status")
+        self._todo_widget.clear()
+        self._set_chip_idle()

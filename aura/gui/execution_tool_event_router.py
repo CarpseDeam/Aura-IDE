@@ -1,6 +1,6 @@
 """Thin delegation layer extracted from ExecutionEventHandler.
 
-Owns 9 one-line routing methods that forward bridge execution tool events to
+Owns one-line routing methods that forward bridge execution tool events to
 AuraPlayground and ChatView. Keeps ExecutionEventHandler focused on lifecycle
 orchestration rather than per-event forwarding.
 """
@@ -26,14 +26,6 @@ class ExecutionToolEventRouter:
         self._playground = playground
         self._chat = chat
 
-    def on_execution_tool_call_start(
-        self, tool_call_id: str, execution_tool_id: str, name: str
-    ) -> None:
-        """Forward tool call start to playground."""
-        if name == UPDATE_TASK_CHECKLIST_TOOL:
-            return
-        self._playground.add_tool_call(execution_tool_id, name, parent_tool_id=tool_call_id)
-
     def on_execution_tool_args(
         self, tool_call_id: str, execution_tool_id: str, fragment: str
     ) -> None:
@@ -53,25 +45,6 @@ class ExecutionToolEventRouter:
         if name == UPDATE_TASK_CHECKLIST_TOOL:
             return
         self._playground.set_tool_result(execution_tool_id, ok, result)
-
-    def on_execution_diff_decided(
-        self,
-        parent_tool_id: str,
-        execution_tool_id: str,
-        decision: str,
-        rel_path: str,
-        old: str,
-        new: str,
-        is_new_file: bool,
-    ) -> None:
-        """Record the approval decision as a diff card.
-
-        This is an approval-derived record for the user, not proof that the
-        change reached disk -- the workspace editor itself is never driven
-        from here. See ``on_execution_file_edit_lifecycle`` for the
-        authoritative applied-content projection.
-        """
-        self._playground.add_diff_card(execution_tool_id, rel_path, old, new, decision, is_new_file)
 
     def on_execution_file_edit_lifecycle(
         self,
