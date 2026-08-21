@@ -202,8 +202,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._playground_aura = AuraWidget(
             self._playground,
             glow_color="#00e5ff",
-            glow_spread=24,
-            content_margins=10,
+            glow_spread=16,
             parent=self,
         )
         self._playground.set_aura_wrapper(self._playground_aura)
