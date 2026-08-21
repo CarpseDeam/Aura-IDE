@@ -481,12 +481,21 @@ def _model_info_from_cache(
     refreshed models — so for known catalog entries the catalog is
     authoritative. Dynamically discovered models (``known is None``) keep
     whatever the cache holds either way.
+
+    The same reasoning applies to ``supports_vision``: OpenRouter derives it
+    from the provider's own advertised modalities, so a trusted OpenRouter
+    cache entry keeps its own value. Every other provider's model listing
+    carries no vision flag at all, so a non-OpenRouter cache entry only ever
+    reflects a snapshot of the seeded catalog at refresh time — an old
+    snapshot must not resurrect a stale ``false`` over a corrected seeded
+    ``true`` (or vice versa), so the current seeded value wins there too.
     """
     clean = {k: v for k, v in m_data.items() if k in _MODEL_INFO_FIELDS}
     if known is not None:
         if not trust_cached_capacity:
             clean["context_window_tokens"] = known.context_window_tokens
             clean["max_output_tokens"] = known.max_output_tokens
+            clean["supports_vision"] = known.supports_vision
         if _coerce_token_count(clean.get("context_window_tokens")) == 0:
             clean["context_window_tokens"] = known.context_window_tokens
         if _coerce_token_count(clean.get("max_output_tokens")) == 0:

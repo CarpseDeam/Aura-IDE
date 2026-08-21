@@ -1,3 +1,5 @@
+import base64
+import binascii
 import json
 from typing import Any
 
@@ -27,11 +29,12 @@ def _lookup_thought_signature(
 def _image_url_part_to_google_inline_data(part: dict) -> dict:
     """Convert a canonical ``image_url`` content part into a Google inline image part.
 
-    Aura's canonical history carries images as ``data:`` URLs (see
+    Aura's canonical history carries images as base64 ``data:`` URLs (see
     ``aura.client.anthropic_stream`` for the equivalent Anthropic conversion).
     Google's contents API instead expects ``{"inline_data": {"mime_type", "data"}}``
-    with the raw base64 payload. Anything that is not a well-formed ``data:`` URL
-    is a caller bug, not silently-droppable content, so it raises.
+    with the raw base64 payload. Anything that is not a well-formed base64 image
+    data URL is a caller bug, not silently-droppable content, so it raises with a
+    specific reason rather than a generic parse failure.
     """
     image_url = part.get("image_url")
     url = image_url.get("url") if isinstance(image_url, dict) else None
@@ -41,11 +44,26 @@ def _image_url_part_to_google_inline_data(part: dict) -> dict:
         )
     try:
         header, data = url.split(",", 1)
-        mime_type = header.split(":", 1)[1].split(";", 1)[0]
-    except (IndexError, ValueError) as exc:
-        raise ValueError(f"Malformed data URL in image_url content: {url!r}") from exc
-    if not mime_type or not data:
-        raise ValueError(f"Malformed data URL in image_url content: {url!r}")
+    except ValueError as exc:
+        raise ValueError(f"Malformed data URL in image_url content, missing ',': {url!r}") from exc
+
+    header_body = header[len("data:"):]
+    header_fields = header_body.split(";")
+    mime_type = header_fields[0]
+    params = [p.strip().lower() for p in header_fields[1:]]
+
+    if not mime_type.startswith("image/") or len(mime_type) <= len("image/"):
+        raise ValueError(
+            f"Unsupported image_url MIME type for Google (expected image/*): {mime_type!r}"
+        )
+    if "base64" not in params:
+        raise ValueError(f"image_url data URL must declare base64 encoding: {url!r}")
+    if not data:
+        raise ValueError(f"image_url data URL has an empty base64 payload: {url!r}")
+    try:
+        base64.b64decode(data, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError(f"image_url payload is not valid base64: {exc}") from exc
     return {"inline_data": {"mime_type": mime_type, "data": data}}
 
 

@@ -160,10 +160,13 @@ def build_deepseek_responses_request(
     """Build one stateless DeepSeek V4 Responses request."""
     instructions, input_items = project_deepseek_responses_input(messages)
     mode = normalize_thinking_mode(thinking) or "high"
+    # Aura's internal/UI/settings value for no reasoning is "off"; the wire
+    # API rejects that literal and requires "none" instead.
+    wire_effort = "none" if mode == "off" else mode
     request: dict[str, Any] = {
         "model": model,
         "input": input_items,
-        "reasoning": {"effort": mode},
+        "reasoning": {"effort": wire_effort},
         "stream": True,
     }
     if instructions is not None:

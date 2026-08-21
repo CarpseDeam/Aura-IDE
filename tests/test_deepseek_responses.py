@@ -135,8 +135,11 @@ def test_history_stays_canonical_when_request_is_projected() -> None:
     assert _contains_reasoning(request["input"]) is False
 
 
-@pytest.mark.parametrize("mode", ["off", "high", "max"])
-def test_responses_thinking_mapping_and_temperature(mode: str) -> None:
+@pytest.mark.parametrize(
+    "mode, wire_effort",
+    [("off", "none"), ("high", "high"), ("max", "max")],
+)
+def test_responses_thinking_mapping_and_temperature(mode: str, wire_effort: str) -> None:
     request = build_deepseek_responses_request(
         messages=[{"role": "user", "content": "hello"}],
         tools=None,
@@ -145,7 +148,7 @@ def test_responses_thinking_mapping_and_temperature(mode: str) -> None:
         temperature=0.25,
     )
 
-    assert request["reasoning"] == {"effort": mode}
+    assert request["reasoning"] == {"effort": wire_effort}
     assert (request.get("temperature") == 0.25) is (mode == "off")
     assert "tool_choice" not in request
     assert "previous_response_id" not in request
