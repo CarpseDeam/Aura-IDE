@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import inspect
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -288,13 +289,42 @@ class TestByokProviders:
 # ---------------------------------------------------------------------------
 
 class TestSessionCost:
-    def test_cost_usd_works(self) -> None:
+    def test_cost_usd_works(self, monkeypatch) -> None:
         # cost_usd(model, cache_hit_tokens, cache_miss_tokens, output_tokens)
-        cost = cost_usd("deepseek-v4-flash", 500, 1000, 800)
-        assert cost is not None
-        assert cost > 0
-        expected = (500 * 0.0028 + 1000 * 0.14 + 800 * 0.28) / 1_000_000
-        assert abs(cost - expected) < 1e-10
+        # DeepSeek rates come from the pricing source store — seed a fetched
+        # result (off-peak UTC hour) and verify the cost math consumes it.
+        from aura.providers import pricing as pricing_mod
+        from aura.providers.pricing import ModelRates, PeakWindow, PricingResult, RateTier
+
+        saved = dict(pricing_mod._results)
+        pricing_mod._results.clear()
+        try:
+            monkeypatch.setattr(
+                pricing_mod,
+                "_utcnow",
+                lambda: datetime(2025, 1, 1, 5, 0, tzinfo=timezone.utc),
+            )
+            pricing_mod._results["deepseek"] = PricingResult(
+                provider_id="deepseek",
+                models={
+                    "deepseek-v4-flash": ModelRates(
+                        model_id="deepseek-v4-flash",
+                        off_peak=RateTier(in_miss=0.22, in_hit=0.007, out=0.66),
+                        peak=RateTier(in_miss=0.44, in_hit=0.014, out=1.32),
+                    ),
+                },
+                source_url="https://api-docs.deepseek.com/quick_start/pricing/",
+                retrieved_at="2025-01-01T00:00:00+00:00",
+                peak_windows=(PeakWindow(start_minute=60, end_minute=240),),
+            )
+            cost = cost_usd("deepseek-v4-flash", 500, 1000, 800)
+            assert cost is not None
+            assert cost > 0
+            expected = (500 * 0.007 + 1000 * 0.22 + 800 * 0.66) / 1_000_000
+            assert abs(cost - expected) < 1e-10
+        finally:
+            pricing_mod._results.clear()
+            pricing_mod._results.update(saved)
 
     def test_cost_usd_for_unknown_model(self) -> None:
         cost = cost_usd("nonexistent-model", 0, 0, 0)

@@ -15,12 +15,14 @@ from aura.key_manager import has_key as _stored_has_key
 from aura.key_manager import set_key as _stored_set_key
 from aura.models import PROVIDERS, cost_usd, get_pricing  # noqa: F401
 from aura.paths import APP_AUTHOR, APP_NAME, config_dir, data_dir  # noqa: F401
+from aura.providers import pricing_sources  # noqa: F401  (registers pricing sources)
 from aura.providers.base import ModelId, ModelInfo, ProviderId, ThinkingMode  # noqa: F401
 from aura.providers.base import ProviderSpec as ProviderConfig
 from aura.providers.catalog import (  # noqa: F401
     DEFAULT_MODEL,
     DEFAULT_THINKING,
 )
+from aura.providers.pricing import load_pricing_cache, refresh_provider_pricing
 from aura.providers.registry import provider_registry
 from aura.settings import (  # noqa: F401
     DEFAULT_PROVIDER,
@@ -178,6 +180,13 @@ def fetch_provider_models(provider_id: str) -> tuple[dict[str, ModelInfo], dict[
 
     Returns (models_dict, pricing_dict, error_message).
     """
+    # Providers with a pricing source refresh their official published rates
+    # here, inside the discovery worker thread — startup/provider discovery
+    # and the model-refresh action both flow through this function. The
+    # pricing store keeps only validated results, so a failed or malformed
+    # fetch never disturbs cost reporting; the status bar reads the store
+    # alone and never fetches.
+    refresh_provider_pricing(provider_id)
     try:
         client = provider_registry.create_client(provider_id)
         raw = client.fetch_raw_models()
@@ -562,3 +571,6 @@ def load_dynamic_catalog() -> None:
 
 # Restore dynamic models on load
 load_dynamic_catalog()
+
+# Restore last-known-good pricing results from the pricing-source cache
+load_pricing_cache()

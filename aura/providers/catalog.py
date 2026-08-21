@@ -16,18 +16,22 @@ DEEPSEEK_MODELS: dict[str, ModelInfo] = {
     "deepseek-v4-flash": ModelInfo(
         id="deepseek-v4-flash",
         label="DeepSeek V4 Flash",
-        input_per_m_usd=0.14,
-        output_per_m_usd=0.28,
-        cache_hit_per_m_usd=0.0028,
+        # Rate fields are zeroed: DeepSeek's rates come exclusively from the
+        # DeepSeek pricing source (aura.providers.pricing), never from
+        # hardcoded numbers in the runtime cost path. Labels, context
+        # capacity, and vision metadata below are not rates and stay.
+        input_per_m_usd=0.0,
+        output_per_m_usd=0.0,
+        cache_hit_per_m_usd=0.0,
         context_window_tokens=1_000_000,
         max_output_tokens=384_000,
     ),
     "deepseek-v4-flash-vision-exp": ModelInfo(
         id="deepseek-v4-flash-vision-exp",
         label="DeepSeek V4 Flash Vision (Exp)",
-        input_per_m_usd=0.14,
-        output_per_m_usd=0.28,
-        cache_hit_per_m_usd=0.0028,
+        input_per_m_usd=0.0,
+        output_per_m_usd=0.0,
+        cache_hit_per_m_usd=0.0,
         supports_vision=True,
         context_window_tokens=1_000_000,
         max_output_tokens=384_000,
@@ -35,17 +39,12 @@ DEEPSEEK_MODELS: dict[str, ModelInfo] = {
     "deepseek-v4-pro": ModelInfo(
         id="deepseek-v4-pro",
         label="DeepSeek V4 Pro",
-        input_per_m_usd=0.435,
-        output_per_m_usd=0.87,
-        cache_hit_per_m_usd=0.003625,
+        input_per_m_usd=0.0,
+        output_per_m_usd=0.0,
+        cache_hit_per_m_usd=0.0,
         context_window_tokens=1_000_000,
         max_output_tokens=384_000,
     ),
-}
-DEEPSEEK_PRICING: dict[str, dict[str, float]] = {
-    "deepseek-v4-flash": {"in_miss": 0.14, "in_hit": 0.0028, "out": 0.28},
-    "deepseek-v4-flash-vision-exp": {"in_miss": 0.14, "in_hit": 0.0028, "out": 0.28},
-    "deepseek-v4-pro": {"in_miss": 0.435, "in_hit": 0.003625, "out": 0.87},
 }
 
 OPENAI_MODELS: dict[str, ModelInfo] = {
@@ -289,7 +288,9 @@ PROVIDER_CATALOG: dict[str, dict] = {
         "default_model": "deepseek-v4-flash",
         "default_thinking": "high",
         "models": DEEPSEEK_MODELS,
-        "pricing": DEEPSEEK_PRICING,
+        # DeepSeek rates come from the DeepSeek pricing source
+        # (aura.providers.pricing); the catalog carries no hardcoded rates.
+        "pricing": {},
         "kind": "api_key",
     },
     "openai": {

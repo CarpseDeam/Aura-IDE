@@ -1,0 +1,359 @@
+"""Provider pricing-source boundary — normalized official rates for the cost path.
+
+A provider may register a pricing source that retrieves its official
+published rates. A source returns a validated :class:`PricingResult` —
+per-model normalized rates plus the source URL and retrieval time, and any
+peak/off-peak UTC schedule the page publishes. The store keeps the last
+validated fetched or cached result per provider; the cost path
+(``aura.models.get_pricing`` → ``cost_usd`` → status bar) reads only this
+store for sourced providers — never the network, and never at repaint time.
+
+Only providers with a registered source participate; OpenRouter and every
+other provider keep their catalog pricing untouched. A future provider
+supplies the same normalized result by registering its own source class —
+no status-bar or cost-calculation change needed.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import math
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, ClassVar, Protocol
+
+from aura.paths import config_dir
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RateTier:
+    """One set of per-million-token rates, in USD."""
+
+    in_miss: float
+    in_hit: float
+    out: float
+
+
+@dataclass(frozen=True)
+class ModelRates:
+    """Normalized rates for one model id."""
+
+    model_id: str
+    off_peak: RateTier
+    #: Peak-hour tier; None when the page publishes no peak pricing.
+    peak: RateTier | None = None
+
+
+@dataclass(frozen=True)
+class PeakWindow:
+    """One daily peak window, in UTC minutes since 00:00 (end exclusive)."""
+
+    start_minute: int
+    end_minute: int
+
+
+@dataclass(frozen=True)
+class PricingResult:
+    """A fully validated pricing snapshot from one provider source."""
+
+    provider_id: str
+    models: dict[str, ModelRates]
+    source_url: str
+    retrieved_at: str  # ISO-8601 UTC timestamp
+    peak_windows: tuple[PeakWindow, ...] = ()
+
+
+class PricingSource(Protocol):
+    """A provider-owned source of official published rates.
+
+    ``fetch`` retrieves and parses the provider's pricing page and returns a
+    fully built ``PricingResult``, or None when retrieval/parsing failed so
+    the previous valid cache is preserved.
+    """
+
+    provider_id: ClassVar[str]
+    source_url: ClassVar[str]
+
+    def fetch(self) -> PricingResult | None:
+        ...
+
+
+# Registered source classes, keyed by provider id. Registration happens in
+# aura/providers/pricing_sources (imported by aura.config at startup), and is
+# self-healing via get_source() so callers never depend on import order.
+_SOURCES: dict[str, type[PricingSource]] = {}
+
+# Validated results currently in force, keyed by provider id.
+_results: dict[str, PricingResult] = {}
+
+
+def register_source(source_cls: type[PricingSource]) -> None:
+    """Register a pricing source class for its provider id."""
+    _SOURCES[source_cls.provider_id] = source_cls
+
+
+def _load_sources() -> None:
+    """Import the sources package so every available source registers."""
+    from aura.providers import pricing_sources  # noqa: F401
+
+
+def get_source(provider_id: str) -> type[PricingSource] | None:
+    if not _SOURCES:
+        _load_sources()
+    return _SOURCES.get(provider_id)
+
+
+def has_pricing_source(provider_id: str) -> bool:
+    """True when a provider supplies rates through the pricing boundary."""
+    return get_source(provider_id) is not None
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+
+def _valid_tier(tier: RateTier) -> bool:
+    return all(
+        isinstance(v, float) and math.isfinite(v) and v > 0.0
+        for v in (tier.in_miss, tier.in_hit, tier.out)
+    )
+
+
+def _validate(result: PricingResult) -> bool:
+    """Validate the entire result before it may replace the current cache.
+
+    Strict by design: a page that dropped a model column, lost a tier, or
+    changed shape must not silently supply partial rates — the previous
+    valid result wins.
+    """
+    if not result.provider_id or not result.source_url or not result.retrieved_at:
+        return False
+    if not result.models:
+        return False
+    peak_any = any(mr.peak is not None for mr in result.models.values())
+    peak_all = all(mr.peak is not None for mr in result.models.values())
+    if peak_any != peak_all:
+        # Mixed tiering (some models peak-priced, others not) is incomplete.
+        return False
+    if peak_any and not result.peak_windows:
+        return False
+    if not peak_any and result.peak_windows:
+        return False
+    for mr in result.models.values():
+        if not mr.model_id:
+            return False
+        if not _valid_tier(mr.off_peak):
+            return False
+        if mr.peak is not None and not _valid_tier(mr.peak):
+            return False
+    for window in result.peak_windows:
+        if not (0 <= window.start_minute < window.end_minute <= 24 * 60):
+            return False
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Store — the only rates the cost path reads for sourced providers
+# ---------------------------------------------------------------------------
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _in_peak_window(now: datetime, windows: tuple[PeakWindow, ...]) -> bool:
+    minute = now.hour * 60 + now.minute
+    return any(w.start_minute <= minute < w.end_minute for w in windows)
+
+
+def rates_for(provider_id: str, model_id: str, now: datetime | None = None) -> dict[str, float] | None:
+    """Return normalized ``{in_miss, in_hit, out}`` rates for a model, or None.
+
+    Peak/off-peak tier is selected from the published UTC schedule and the
+    current UTC time; with no schedule, the off-peak tier applies. None means
+    "unavailable" — the caller's existing unavailable-price behavior applies.
+    """
+    result = _results.get(provider_id)
+    if result is None:
+        return None
+    rates = result.models.get(model_id)
+    if rates is None:
+        return None
+    tier = rates.off_peak
+    if rates.peak is not None and result.peak_windows and _in_peak_window(now or _utcnow(), result.peak_windows):
+        tier = rates.peak
+    return {"in_miss": tier.in_miss, "in_hit": tier.in_hit, "out": tier.out}
+
+
+def get_result(provider_id: str) -> PricingResult | None:
+    """Return the validated result currently in force for a provider."""
+    return _results.get(provider_id)
+
+
+# ---------------------------------------------------------------------------
+# Last-known-good cache (platform-portable, config-dir based)
+# ---------------------------------------------------------------------------
+
+
+def pricing_cache_path() -> Path:
+    return config_dir() / "pricing_cache.json"
+
+
+def _tier_to_dict(tier: RateTier) -> dict[str, float]:
+    return {"in_miss": tier.in_miss, "in_hit": tier.in_hit, "out": tier.out}
+
+
+def _tier_from_dict(data: Any) -> RateTier | None:
+    try:
+        return RateTier(
+            in_miss=float(data["in_miss"]),
+            in_hit=float(data["in_hit"]),
+            out=float(data["out"]),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _model_rates_to_dict(rates: ModelRates) -> dict[str, Any]:
+    data: dict[str, Any] = {"model_id": rates.model_id, "off_peak": _tier_to_dict(rates.off_peak)}
+    if rates.peak is not None:
+        data["peak"] = _tier_to_dict(rates.peak)
+    return data
+
+
+def _model_rates_from_dict(data: Any) -> ModelRates | None:
+    if not isinstance(data, dict):
+        return None
+    off_peak = _tier_from_dict(data.get("off_peak"))
+    if off_peak is None:
+        return None
+    peak = _tier_from_dict(data["peak"]) if data.get("peak") is not None else None
+    return ModelRates(model_id=str(data.get("model_id", "")), off_peak=off_peak, peak=peak)
+
+
+def _result_to_dict(result: PricingResult) -> dict[str, Any]:
+    return {
+        "provider_id": result.provider_id,
+        "source_url": result.source_url,
+        "retrieved_at": result.retrieved_at,
+        "peak_windows": [[w.start_minute, w.end_minute] for w in result.peak_windows],
+        "models": {mid: _model_rates_to_dict(mr) for mid, mr in result.models.items()},
+    }
+
+
+def _result_from_dict(provider_id: str, data: Any) -> PricingResult | None:
+    if not isinstance(data, dict):
+        return None
+    try:
+        models: dict[str, ModelRates] = {}
+        for mid, m_data in data.get("models", {}).items():
+            mr = _model_rates_from_dict(m_data)
+            if mr is None or mr.model_id != mid:
+                return None
+            models[mid] = mr
+        windows = tuple(
+            PeakWindow(start_minute=int(w[0]), end_minute=int(w[1]))
+            for w in data.get("peak_windows", [])
+        )
+        return PricingResult(
+            provider_id=provider_id,
+            models=models,
+            source_url=str(data.get("source_url", "")),
+            retrieved_at=str(data.get("retrieved_at", "")),
+            peak_windows=windows,
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _save_cache(result: PricingResult) -> None:
+    """Persist a validated result into the shared cache file.
+
+    Only ever called with a fully validated result, so a partial or broken
+    fetch can never overwrite a last-known-good cache entry.
+    """
+    path = pricing_cache_path()
+    data: dict[str, Any] = {}
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+    data[result.provider_id] = _result_to_dict(result)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def _load_cached_entry(provider_id: str) -> None:
+    """Load one provider's last-known-good entry from disk into the store."""
+    path = pricing_cache_path()
+    if not path.exists():
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(data, dict):
+        return
+    entry = data.get(provider_id)
+    result = _result_from_dict(provider_id, entry)
+    if result is not None and _validate(result):
+        _results[provider_id] = result
+
+
+def load_pricing_cache() -> None:
+    """Load every cached pricing entry at startup (mirrors load_dynamic_catalog)."""
+    path = pricing_cache_path()
+    if not path.exists():
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(data, dict):
+        return
+    for provider_id in data:
+        _load_cached_entry(provider_id)
+
+
+def refresh_provider_pricing(provider_id: str) -> PricingResult | None:
+    """Fetch and validate a provider's official rates once.
+
+    Called from the provider-discovery flow (which already runs off the UI
+    thread) — never from the status bar or a cost calculation. A network
+    failure, malformed page, missing model, or incomplete result preserves
+    the previous valid result, falling back to the last-known-good cache
+    when nothing valid is in memory. Returns the result now in force, or
+    None when there is none.
+    """
+    source_cls = get_source(provider_id)
+    if source_cls is None:
+        return None
+    fetched: PricingResult | None = None
+    try:
+        fetched = source_cls().fetch()
+    except Exception as exc:
+        logger.warning("Pricing fetch failed for %s: %s", provider_id, exc)
+    if fetched is not None:
+        if fetched.provider_id != provider_id or not _validate(fetched):
+            logger.warning(
+                "Pricing fetch for %s failed validation; keeping previous valid result.",
+                provider_id,
+            )
+            fetched = None
+    if fetched is None:
+        if provider_id not in _results:
+            _load_cached_entry(provider_id)
+        return _results.get(provider_id)
+    _results[provider_id] = fetched
+    try:
+        _save_cache(fetched)
+    except OSError as exc:
+        logger.warning("Could not persist pricing cache for %s: %s", provider_id, exc)
+    return fetched
