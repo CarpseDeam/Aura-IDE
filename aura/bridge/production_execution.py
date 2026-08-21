@@ -57,9 +57,9 @@ class ProductionExecutionSession(QObject):
     """Owns the execution identity, ledger, and projection for one production run."""
 
     # Lifecycle
-    executionStarted = Signal(str)                        # run_id
-    executionFinished = Signal(str, bool, str, bool, str)  # run_id, ok, summary, needs_followup, status
-    executionCancelled = Signal(str)                      # run_id
+    executionStarted = Signal(str)                   # run_id
+    executionFinished = Signal(str, bool, str, str)  # run_id, ok, summary, status
+    executionCancelled = Signal(str)                 # run_id
 
     # Stream and tool projection for the active execution.
     executionReasoningDelta = Signal(str, str)
@@ -207,7 +207,6 @@ class ProductionExecutionSession(QObject):
             self._run_id,
             receipt.ok,
             receipt.text,
-            receipt.needs_followup,
             receipt.status,
         )
         return receipt

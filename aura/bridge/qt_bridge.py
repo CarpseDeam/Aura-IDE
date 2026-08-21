@@ -202,7 +202,7 @@ class ConversationBridge(QObject):
 
     # Workspace projection signals for the active production execution.
     executionStarted = Signal(str)
-    executionFinished = Signal(str, bool, str, bool, str)
+    executionFinished = Signal(str, bool, str, str)
     executionCancelled = Signal(str)
     executionReasoningDelta = Signal(str, str)
     executionContentDelta = Signal(str, str)

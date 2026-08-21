@@ -20,11 +20,11 @@ class ExecutionFinishPresenter:
     """Presents a completed production execution run.
 
     The workspace status chip always gets the truthful terminal status. A
-    plain success (ok, no follow-up needed) leaves chat untouched — the
-    assistant's answer is chat-owned and already reached chat on its own.
-    Any other outcome (needs-followup, validation failure, harness error,
-    rejected approval, ...) is durable execution evidence that used to live
-    only in the now-removed Execution Log, so it is also surfaced in chat.
+    plain success (ok) leaves chat untouched — the assistant's answer is
+    chat-owned and already reached chat on its own. A genuine non-success
+    outcome (validation failure, harness error, rejected approval, ...) is
+    durable execution evidence that used to live only in the now-removed
+    Execution Log, so it is also surfaced in chat.
     """
 
     def __init__(self, chat: ChatView, playground: AuraPlayground) -> None:
@@ -37,13 +37,11 @@ class ExecutionFinishPresenter:
         tool_call_id: str,
         ok: bool,
         summary: str,
-        needs_followup: bool | None,
         status: str | None,
         metadata: dict,
     ) -> ExecutionFinishPresentation:
         outcome = classify_execution_finish(
             ok=ok,
-            needs_followup=bool(needs_followup),
             status=status,
             metadata=metadata,
         )
@@ -57,15 +55,7 @@ class ExecutionFinishPresenter:
         # Rendering the receipt the backend produced states the real outcome;
         # it never invents one.
         if outcome.should_show_visible_summary:
-            if needs_followup is None:
-                self._playground.execution_finished(ok, summary, status=status)
-            else:
-                self._playground.execution_finished(
-                    ok,
-                    summary,
-                    needs_followup=bool(needs_followup),
-                    status=status,
-                )
+            self._playground.execution_finished(ok, summary, status=status)
         else:
             self._playground.set_execution_running(False)
         if not outcome.terminal_success:

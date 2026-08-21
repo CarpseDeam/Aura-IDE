@@ -294,7 +294,7 @@ class AuraPlayground(QWidget):
         reaches the normal finish/cancel path — the tabs and checklist are
         left untouched since the run's own evidence didn't change.
         """
-        self._info_hub.set_terminal_status(False, False, "harness_error")
+        self._info_hub.set_terminal_status(False, "harness_error")
 
     def set_tool_result(self, execution_tool_id: str, ok: bool, result: str):
         # Finalize terminal window if this was a terminal tool.
@@ -365,14 +365,14 @@ class AuraPlayground(QWidget):
     def finish_terminal_process(self, process_id: str, exit_code: int) -> None:
         self._terminal_window.set_result(process_id, exit_code)
 
-    def execution_finished(self, ok: bool, summary: str, needs_followup: bool = False, status: str | None = None) -> None:
+    def execution_finished(self, ok: bool, summary: str, status: str | None = None) -> None:
         self._code_editor.close_all_tabs()
-        self._info_hub.set_terminal_status(ok, needs_followup, status)
+        self._info_hub.set_terminal_status(ok, status)
         self._info_hub.set_execution_running(False)
 
     def execution_cancelled(self):
         self._code_editor.close_all_tabs()
-        self._info_hub.set_terminal_status(False, False, "cancelled")
+        self._info_hub.set_terminal_status(False, "cancelled")
         self._info_hub.set_execution_running(False)
 
     def set_execution_running(self, running: bool):

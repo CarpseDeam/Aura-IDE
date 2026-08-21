@@ -37,7 +37,6 @@ class _PendingExecutionFinish:
     tool_call_id: str
     ok: bool
     summary: str
-    needs_followup: bool | None
     status: str | None
     generation: int
 
@@ -169,7 +168,6 @@ class ExecutionEventHandler(QObject):
                 tool_call_id=pending_finish.tool_call_id,
                 ok=pending_finish.ok,
                 summary=pending_finish.summary,
-                needs_followup=pending_finish.needs_followup,
                 status=pending_finish.status,
             )
 
@@ -215,7 +213,6 @@ class ExecutionEventHandler(QObject):
         tool_call_id: str,
         ok: bool,
         summary: str,
-        needs_followup: bool | None = None,
         status: str | None = None,
     ) -> None:
         """Forward execution finished to playground.
@@ -235,7 +232,6 @@ class ExecutionEventHandler(QObject):
                 tool_call_id=tool_call_id,
                 ok=ok,
                 summary=summary,
-                needs_followup=needs_followup,
                 status=status,
                 generation=generation,
             )
@@ -249,7 +245,6 @@ class ExecutionEventHandler(QObject):
             tool_call_id=tool_call_id,
             ok=ok,
             summary=summary,
-            needs_followup=needs_followup,
             status=status,
         )
 
@@ -266,7 +261,6 @@ class ExecutionEventHandler(QObject):
             tool_call_id=pending.tool_call_id,
             ok=pending.ok,
             summary=pending.summary,
-            needs_followup=pending.needs_followup,
             status=pending.status,
         )
 
@@ -276,7 +270,6 @@ class ExecutionEventHandler(QObject):
         tool_call_id: str,
         ok: bool,
         summary: str,
-        needs_followup: bool | None,
         status: str | None,
     ) -> None:
         metadata = self._execution_result_metadata(tool_call_id)
@@ -284,7 +277,6 @@ class ExecutionEventHandler(QObject):
             tool_call_id=tool_call_id,
             ok=ok,
             summary=summary,
-            needs_followup=needs_followup,
             status=status,
             metadata=metadata,
         )

@@ -14,6 +14,13 @@ EXECUTION_COMPLETE = "execution_complete"
 ERROR = "error"
 PLAN_REVIEW = "plan_review"
 
+#: Legacy chat error title, retired: production runs no longer synthesize a
+#: generic "Needs follow-up" card. Old persisted conversations may still
+#: contain an ERROR item with exactly this title; it is dropped on load (and
+#: therefore on the next save) so it stops rendering, without touching any
+#: other historical error.
+_LEGACY_NEEDS_FOLLOWUP_ERROR_TITLE = "Needs follow-up"
+
 
 def user_item(text: str, image_b64s: list[str] | None = None) -> dict[str, Any]:
     item: dict[str, Any] = {"kind": USER, "text": str(text)}
@@ -108,6 +115,8 @@ def normalize_chat_item(data: Any) -> dict[str, Any] | None:
         title = data.get("title", "")
         message = data.get("message", "")
         if not isinstance(title, str) or not isinstance(message, str):
+            return None
+        if title == _LEGACY_NEEDS_FOLLOWUP_ERROR_TITLE:
             return None
         return error_item(title, message, bool(data.get("show_retry", False)))
     if kind == EXECUTION_COMPLETE:

@@ -25,10 +25,9 @@ from aura.gui.execution_finish_outcome import (
     STATUS_CANCELLED,
     STATUS_DONE,
     STATUS_ERROR,
-    STATUS_NEEDS_FOLLOWUP,
     terminal_status_label,
 )
-from aura.gui.theme import BG, BORDER, DANGER, FG_MUTED, SUCCESS, WARN
+from aura.gui.theme import BG, BORDER, DANGER, FG_MUTED, SUCCESS
 from aura.gui.widgets.task_checklist import TaskChecklistWidget
 
 _log = logging.getLogger(__name__)
@@ -42,7 +41,6 @@ _CHIP_LIVE = "● Live"
 
 _CHIP_STYLE_BY_LABEL = {
     STATUS_DONE: f"color: {SUCCESS}; font-size: 10px; font-weight: 600;",
-    STATUS_NEEDS_FOLLOWUP: f"color: {WARN}; font-size: 10px; font-weight: 600;",
     STATUS_CANCELLED: f"color: {FG_MUTED}; font-size: 10px; font-weight: 600;",
     STATUS_ERROR: f"color: {DANGER}; font-size: 10px; font-weight: 600;",
 }
@@ -53,7 +51,7 @@ class InfoHubPane(QWidget):
 
     Public API:
         update_task_checklist(items) -> None
-        set_terminal_status(ok, needs_followup, status) -> None
+        set_terminal_status(ok, status) -> None
         set_execution_running(running) -> None
         clear_log() -> None
         clear() -> None
@@ -118,11 +116,10 @@ class InfoHubPane(QWidget):
     def set_terminal_status(
         self,
         ok: bool,
-        needs_followup: bool,
         status: str | None,
     ) -> None:
         """Set the truthful terminal status chip for a finished/cancelled run."""
-        label = terminal_status_label(ok=ok, needs_followup=needs_followup, status=status)
+        label = terminal_status_label(ok=ok, status=status)
         self._status_chip.setText(label)
         self._status_chip.setStyleSheet(_CHIP_STYLE_BY_LABEL[label])
 

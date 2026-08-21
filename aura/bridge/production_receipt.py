@@ -84,7 +84,6 @@ class ProductionReceipt:
     ok: bool
     status: str
     text: str
-    needs_followup: bool
     metadata: dict[str, Any]
 
 
@@ -197,11 +196,6 @@ def build_production_receipt(
     outcomes = summarize_validation(evidence.validation_results)
     status = _resolve_status(evidence, outcomes)
     ok = status in (STATUS_COMPLETED, STATUS_COMPLETED_UNVERIFIED)
-    needs_followup = status in (
-        STATUS_VALIDATION_FAILED,
-        STATUS_BLOCKED,
-        STATUS_HARNESS_ERROR,
-    )
 
     writes = _write_paths(evidence.write_results)
     deleted = [w for w in writes if w.get("deleted")]
@@ -370,7 +364,6 @@ def build_production_receipt(
         ok=ok,
         status=status,
         text="\n".join(lines),
-        needs_followup=needs_followup,
         metadata=metadata,
     )
 

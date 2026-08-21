@@ -193,11 +193,10 @@ def install_gui_event_probe(window: QWidget, bridge: QObject) -> GuiEventProbe |
     probe.install()
 
     _connect_if_present(bridge, "executionStarted", lambda tid: probe.mark_and_dump("execution_started", tool_call_id=tid))
-    _connect_if_present(bridge, "executionFinished", lambda tid, ok, summary, followup, status: probe.mark_and_dump(
+    _connect_if_present(bridge, "executionFinished", lambda tid, ok, summary, status: probe.mark_and_dump(
         "execution_finished",
         tool_call_id=tid,
         ok=ok,
-        needs_followup=followup,
         status=status,
     ))
     _connect_if_present(bridge, "executionActivityUpdated", probe.on_execution_activity)

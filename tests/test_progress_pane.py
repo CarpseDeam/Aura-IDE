@@ -30,7 +30,6 @@ from aura.gui.execution_finish_outcome import (
     STATUS_CANCELLED,
     STATUS_DONE,
     STATUS_ERROR,
-    STATUS_NEEDS_FOLLOWUP,
     terminal_status_label,
 )
 from aura.gui.execution_finish_presenter import ExecutionFinishPresenter
@@ -59,7 +58,7 @@ class _FakeBridge(QObject):
     """Mirrors the subset of ConversationBridge signals ExecutionEventHandler wires."""
 
     executionStarted = Signal(str)
-    executionFinished = Signal(str, bool, str, bool, str)
+    executionFinished = Signal(str, bool, str, str)
     executionCancelled = Signal(str)
     executionToolCallArgs = Signal(str, str, str)
     executionToolCallEnd = Signal(str, str)
@@ -260,18 +259,24 @@ def test_progress_header_title_is_progress(qapp) -> None:
 
 def test_terminal_status_label_matrix() -> None:
     cases = [
-        (True, False, None, STATUS_DONE),
-        (True, False, "completed", STATUS_DONE),
-        (True, True, "completed_with_caveats", STATUS_NEEDS_FOLLOWUP),
-        (False, False, "harness_error", STATUS_ERROR),
-        (False, False, "cancelled", STATUS_CANCELLED),
-        (True, False, "cancelled", STATUS_CANCELLED),
-        (False, True, "validation_failed", STATUS_NEEDS_FOLLOWUP),
-        (False, False, "approval_rejected", STATUS_ERROR),
-        (False, False, None, STATUS_ERROR),
+        (True, None, STATUS_DONE),
+        (True, "completed", STATUS_DONE),
+        (True, "completed_with_caveats", STATUS_DONE),
+        (False, "harness_error", STATUS_ERROR),
+        (False, "cancelled", STATUS_CANCELLED),
+        (True, "cancelled", STATUS_CANCELLED),
+        (False, "validation_failed", STATUS_ERROR),
+        (False, "approval_rejected", STATUS_ERROR),
+        (False, None, STATUS_ERROR),
     ]
-    for ok, needs_followup, status, expected in cases:
-        assert terminal_status_label(ok=ok, needs_followup=needs_followup, status=status) == expected
+    for ok, status, expected in cases:
+        assert terminal_status_label(ok=ok, status=status) == expected
+
+
+def test_terminal_status_label_has_no_needs_followup_state() -> None:
+    import aura.gui.execution_finish_outcome as execution_finish_outcome
+
+    assert not hasattr(execution_finish_outcome, "STATUS_NEEDS_FOLLOWUP")
 
 
 class _FakePresenterPlayground:
@@ -281,8 +286,8 @@ class _FakePresenterPlayground:
     def stop_aura(self) -> None:
         self.calls.append(("stop_aura",))
 
-    def execution_finished(self, ok, summary, needs_followup=False, status=None) -> None:
-        self.calls.append(("execution_finished", ok, summary, needs_followup, status))
+    def execution_finished(self, ok, summary, status=None) -> None:
+        self.calls.append(("execution_finished", ok, summary, status))
 
     def set_execution_running(self, running) -> None:
         self.calls.append(("set_execution_running", running))
@@ -294,7 +299,7 @@ def test_presenter_success_does_not_add_chat_receipt() -> None:
 
     presenter.present(
         tool_call_id="t", ok=True, summary="All good.",
-        needs_followup=False, status="completed", metadata={},
+        status="completed", metadata={},
     )
 
     assert chat.error_calls == []
@@ -306,22 +311,25 @@ def test_presenter_failure_surfaces_error_in_chat() -> None:
 
     presenter.present(
         tool_call_id="t", ok=False, summary="Validation failed: x",
-        needs_followup=False, status="validation_failed", metadata={},
+        status="validation_failed", metadata={},
     )
 
     assert chat.error_calls == [(STATUS_ERROR, "Validation failed: x", False, True)]
 
 
-def test_presenter_needs_followup_surfaces_in_chat() -> None:
+def test_presenter_unverified_completion_shows_done_and_no_chat_card() -> None:
+    """A successful-but-unverified production run must never surface the
+    retired generic 'Needs follow-up' card — it shows Done, like any other
+    successful completion."""
     chat = _RecordingChat()
     presenter = ExecutionFinishPresenter(chat, _FakePresenterPlayground())
 
     presenter.present(
-        tool_call_id="t", ok=True, summary="Needs another turn.",
-        needs_followup=True, status="completed_with_caveats", metadata={},
+        tool_call_id="t", ok=True, summary="Done, unverified.",
+        status="completed_unverified", metadata={},
     )
 
-    assert chat.error_calls == [(STATUS_NEEDS_FOLLOWUP, "Needs another turn.", False, True)]
+    assert chat.error_calls == []
 
 
 def test_handler_cancellation_surfaces_in_chat_and_sets_pane_status(qapp) -> None:
@@ -347,7 +355,7 @@ def test_handler_api_error_surfaces_in_chat_and_sets_pane_status(qapp) -> None:
 def test_handler_finished_success_no_chat_receipt(qapp) -> None:
     bridge, chat, playground, _handler = _make_handler(qapp)
 
-    bridge.executionFinished.emit("run-1", True, "All good.", False, "completed")
+    bridge.executionFinished.emit("run-1", True, "All good.", "completed")
 
     assert chat.error_calls == []
     assert playground._info_hub._status_chip.text() == STATUS_DONE
@@ -356,7 +364,7 @@ def test_handler_finished_success_no_chat_receipt(qapp) -> None:
 def test_handler_finished_failure_surfaces_in_chat(qapp) -> None:
     bridge, chat, playground, _handler = _make_handler(qapp)
 
-    bridge.executionFinished.emit("run-1", False, "It broke.", False, "harness_error")
+    bridge.executionFinished.emit("run-1", False, "It broke.", "harness_error")
 
     assert chat.error_calls == [(STATUS_ERROR, "It broke.", False, True)]
     assert playground._info_hub._status_chip.text() == STATUS_ERROR
