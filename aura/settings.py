@@ -65,7 +65,6 @@ class AppSettings:
     default_thinking: ThinkingMode = DEFAULT_THINKING
     restore_last_conversation: bool = True
     temperature: float = 0.7
-    system_prompt: str = ""
     auto_approve: bool = False
     auto_summon_drones: bool = False
     #: When True, Aura pauses before the first workspace mutation of a real
@@ -138,9 +137,6 @@ class AppSettings:
             raw = data["temperature"]
             if isinstance(raw, (int, float)):
                 s.temperature = max(0.0, min(2.0, float(raw)))
-        # System prompt
-        if isinstance(data.get("system_prompt"), str):
-            s.system_prompt = data["system_prompt"]
         if isinstance(data.get("auto_approve"), bool):
             s.auto_approve = data["auto_approve"]
         if isinstance(data.get("auto_summon_drones"), bool):

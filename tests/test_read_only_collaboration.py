@@ -111,23 +111,29 @@ def _dummy_root():
 
 
 def test_read_only_prompt_appends_collaboration_instruction(tmp_path) -> None:
-    prompt = compose_system_prompt("", tmp_path, read_only=True).system_prompt
+    prompt = compose_system_prompt(tmp_path, read_only=True).system_prompt
     assert READ_ONLY_COLLABORATION_INSTRUCTION in prompt
     assert "conversationally" in prompt
     assert "rather than an action to perform" in prompt
 
 
 def test_normal_prompt_has_no_collaboration_instruction(tmp_path) -> None:
-    prompt = compose_system_prompt("", tmp_path).system_prompt
+    prompt = compose_system_prompt(tmp_path).system_prompt
     assert READ_ONLY_COLLABORATION_INSTRUCTION not in prompt
     assert "conversationally" not in prompt
 
 
-def test_read_only_instruction_survives_full_replacement_prompt(tmp_path) -> None:
-    custom = "{AURA_REPLACE_CANONICAL_PROMPT}\nDo work."
-    prompt = compose_system_prompt(custom, tmp_path, read_only=True).system_prompt
+def test_read_only_instruction_survives_canonical_composition(tmp_path) -> None:
+    """The Read Only hint appends onto the one canonical composition path.
+
+    There is no full-replacement custom prompt any more: canonical context and
+    the bundled production prompt always compose, and the Read Only hint is
+    simply appended on top.
+    """
+    normal_prompt = compose_system_prompt(tmp_path).system_prompt
+    prompt = compose_system_prompt(tmp_path, read_only=True).system_prompt
+    assert prompt.startswith(normal_prompt)
     assert READ_ONLY_COLLABORATION_INSTRUCTION in prompt
-    assert "Do work." in prompt
 
 
 # ---- read-only runner routing ----------------------------------------------
@@ -314,12 +320,12 @@ def test_frozen_turn_read_only_feeds_prompt_composition(tmp_path) -> None:
 
     # A frozen Read Only turn composes the collaboration instruction.
     bridge._turn_read_only = True
-    prompt = bridge._compose_prompt("").system_prompt
+    prompt = bridge._compose_prompt().system_prompt
     assert READ_ONLY_COLLABORATION_INSTRUCTION in prompt
 
     # A normal (non-Read-Only) turn composes the production prompt unchanged.
     bridge._turn_read_only = False
-    prompt = bridge._compose_prompt("").system_prompt
+    prompt = bridge._compose_prompt().system_prompt
     assert READ_ONLY_COLLABORATION_INSTRUCTION not in prompt
 
 
@@ -334,13 +340,13 @@ def test_toggle_after_freeze_does_not_change_active_turn_prompt(tmp_path) -> Non
     # Freeze the turn as Read Only, then the user toggles the toolbar OFF.
     bridge._turn_read_only = True
     bridge.registry.set_read_only(False)
-    prompt = bridge._compose_prompt("").system_prompt
+    prompt = bridge._compose_prompt().system_prompt
     # The frozen turn intent still drives composition for this turn.
     assert READ_ONLY_COLLABORATION_INSTRUCTION in prompt
 
     # The next turn re-freezes from the registry, so the new state applies.
     bridge._turn_read_only = bridge.registry.read_only
-    prompt = bridge._compose_prompt("").system_prompt
+    prompt = bridge._compose_prompt().system_prompt
     assert READ_ONLY_COLLABORATION_INSTRUCTION not in prompt
 
 

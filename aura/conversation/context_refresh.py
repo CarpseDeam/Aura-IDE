@@ -18,7 +18,6 @@ class ContextRefreshState:
         # recomposition must describe the surface as it is now, and a server
         # that dropped away mid-turn has to take its context block with it.
         self._capabilities_provider = capabilities_provider
-        self._base_system_prompt: str | None = None
         self._workspace_root: Path | None = None
         self._model: str | None = None
         self._task_kind: str | None = None
@@ -27,7 +26,6 @@ class ContextRefreshState:
 
     def configure(
         self,
-        base_prompt: str,
         workspace_root: Path,
         *,
         model: str | None = None,
@@ -35,12 +33,11 @@ class ContextRefreshState:
         content: str | None = None,
         target_files: tuple[str, ...] = (),
     ) -> None:
-        """Store the base prompt, root, and this turn's live terrain.
+        """Store the root and this turn's live terrain.
 
         The terrain is kept so a mid-turn refresh reselects the same skills
         the turn started with instead of silently dropping them.
         """
-        self._base_system_prompt = base_prompt
         self._workspace_root = workspace_root
         self._model = model
         self._task_kind = task_kind

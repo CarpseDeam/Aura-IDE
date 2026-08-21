@@ -316,7 +316,6 @@ def test_context_ledger_reports_selected_skills_and_their_character_cost(
     (workspace / "scripts" / "player.gd").write_text("extends Node3D\n", encoding="utf-8")
 
     composed = compose_system_prompt(
-        "",
         workspace,
         model="deepseek-chat",
         task_kind="bugfix",

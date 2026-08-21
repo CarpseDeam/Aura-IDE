@@ -79,7 +79,6 @@ class MainWindowSettingsController(QObject):
         window.set_thinking(settings.default_thinking)
         window._enter_production_mode()
         window._bridge.set_temperature(settings.temperature)
-        window._bridge.set_system_prompt(settings.system_prompt)
         window._bridge.set_auto_approve(settings.auto_approve)
         window._bridge.set_review_plan_before_changes(settings.review_plan_before_changes)
         # Returns immediately: connecting (and, the first time, installing)

@@ -30,7 +30,6 @@ These are what the Models settings page and the left sidebar edit.
 | `default_model`               | str     | `"deepseek-v4-flash"`    | Production model                                          |
 | `default_thinking`            | str     | `"high"`                 | Thinking mode: `"off"`, `"high"`, `"max"`                 |
 | `temperature`                 | float   | `0.7`                    | Production temperature (0.0–2.0)                          |
-| `system_prompt`               | str     | `""`                     | Custom system prompt for the production model             |
 | `restore_last_conversation`   | bool    | `true`                   | Restore the last conversation on launch                   |
 | `auto_approve`                | bool    | `false`                  | Skip diff approval for writes                             |
 | `auto_summon_drones`          | bool    | `false`                  | Summon suggested drones without a confirmation card       |
@@ -50,7 +49,6 @@ Accessed from the gear icon in the bottom-left corner. Organized into pages:
 - **General** — Auto-Approve, Auto-Summon Drones, Tavily API key, tool rounds
 - **Models** — Production provider, model, thinking mode, and temperature
 - **Backends** — API vs CLI backend selection
-- **System Prompts** — Custom prompt for the production model
 - **Sandbox** — Execution sandbox mode
 - **MCP** — MCP server commands
 - **Companion** — Mobile companion settings
@@ -71,12 +69,6 @@ Docker sandbox constraints:
 - Dropped Linux capabilities
 - `--no-new-privileges` flag
 - Read-only root filesystem for dynamic tool execution
-
-## Custom System Prompts
-
-- **Production** — The production model's prompt.
-
-Each supports `{tier1_context}` and `{private_execution_style}` template variables.
 
 ## Session Cost Tracking
 

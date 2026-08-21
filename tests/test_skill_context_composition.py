@@ -1,9 +1,6 @@
 from pathlib import Path
 
-from aura.context_gearbox.runtime import (
-    PRODUCTION_SYSTEM_PROMPT,
-    compose_system_prompt,
-)
+from aura.context_gearbox.runtime import compose_system_prompt
 
 
 def test_production_prompt_composes_selected_skills_without_runtime_roles(
@@ -15,7 +12,6 @@ def test_production_prompt_composes_selected_skills_without_runtime_roles(
     (scripts / "player.gd").write_text("extends Node3D\n", encoding="utf-8")
 
     composed = compose_system_prompt(
-        "",
         tmp_path,
         model="deepseek-chat",
         task_kind="bugfix",
@@ -24,5 +20,5 @@ def test_production_prompt_composes_selected_skills_without_runtime_roles(
     )
 
     assert "GDScript Practice" in composed.system_prompt
-    assert PRODUCTION_SYSTEM_PROMPT
+    assert composed.system_prompt
     assert not hasattr(composed, "role")

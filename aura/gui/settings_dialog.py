@@ -51,7 +51,6 @@ class SettingsDialog(QDialog):
         from aura.gui.settings_pages.api_keys_page import ApiKeysPage
         from aura.gui.settings_pages.automation_page import AutomationPage
         from aura.gui.settings_pages.models_page import ModelsPage
-        from aura.gui.settings_pages.prompts_page import PromptsPage
         from aura.gui.settings_pages.sandbox_page import SandboxPage
         from aura.gui.settings_pages.windows_computer_use_page import (
             WindowsComputerUsePage,
@@ -63,8 +62,6 @@ class SettingsDialog(QDialog):
         self._automation_page = AutomationPage(self._settings)
 
         self._sandbox_page = SandboxPage(self._settings, workspace_root, on_change_root)
-
-        self._prompts_page = PromptsPage(self._settings)
 
         self._windows_page = WindowsComputerUsePage(self._settings)
         if windows_computer_use_manager is not None:
@@ -80,7 +77,6 @@ class SettingsDialog(QDialog):
             (self._automation_page, "Automation"),
             (self._sandbox_page, "Sandbox / Workspace"),
             (self._windows_page, "Windows Control"),
-            (self._prompts_page, "Prompts"),
         ]
 
         from PySide6.QtWidgets import QScrollArea
@@ -143,7 +139,6 @@ class SettingsDialog(QDialog):
         self._automation_page.collect_settings(result)
         self._sandbox_page.collect_settings(result)
         self._windows_page.collect_settings(result)
-        self._prompts_page.collect_settings(result)
         return result
 
     def apply(self) -> None:

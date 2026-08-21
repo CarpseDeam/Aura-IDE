@@ -73,7 +73,6 @@ class _RestoreBridge:
         self.history = History()
         self.registry = SimpleNamespace(workspace_root=None)
 
-    def set_system_prompt(self, _value) -> None: pass
     def set_temperature(self, _value) -> None: pass
     def set_production_provider(self, _value) -> None: pass
     def refresh_production_prompt(self) -> None: pass
@@ -94,7 +93,7 @@ def test_apply_loaded_restores_telemetry_before_status_refresh(tmp_path: Path) -
             set_production_model=lambda _model: None,
             set_production_thinking=lambda _thinking: None,
         ),
-        settings=SimpleNamespace(system_prompt="", temperature=0.7, provider="deepseek"),
+        settings=SimpleNamespace(temperature=0.7, provider="deepseek"),
         get_conversation_telemetry=ConversationTelemetry,
         restore_conversation_telemetry=lambda telemetry: restored.append(telemetry.to_dict()),
         reset_conversation_usage=lambda: None,

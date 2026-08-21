@@ -363,7 +363,6 @@ class MainWindowDroneController(QObject):
             harness_bridge=HarnessLapBridge(
                 workspace_root=self._window._workspace_root,
                 provider=self._window._settings.provider,
-                system_prompt=self._window._settings.system_prompt,
             ),
             parent=None,
         )

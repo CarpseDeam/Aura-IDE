@@ -30,9 +30,9 @@ from aura.client import (
     ToolResult,
     Usage,
 )
+from aura.context_gearbox.runtime import compose_system_prompt
 from aura.conversation import ConversationManager, History
 from aura.conversation.tools import ApprovalDecision, ApprovalRequest, ToolRegistry
-from aura.prompts import SINGLE_SYSTEM_PROMPT
 
 
 def auto_approve(_req: ApprovalRequest) -> ApprovalDecision:
@@ -101,7 +101,7 @@ def main() -> int:
 
         client = DeepSeekClient()
         history = History()
-        history.set_system(SINGLE_SYSTEM_PROMPT)
+        history.set_system(compose_system_prompt(root).system_prompt)
         tools = ToolRegistry(root, read_only=False)
         manager = ConversationManager(client=client, history=history, tool_registry=tools)
 

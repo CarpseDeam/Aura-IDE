@@ -338,18 +338,12 @@ class ConversationPersistence(QObject):
         self._bridge.reset_history()
         # Old conversations may carry legacy Assistant/Execution metadata. They load
         # safely, but the live session always resumes with the production
-        # conversation's model fields only.
-        from aura.prompts import PRODUCTION_SYSTEM_PROMPT
-        default_prompt = PRODUCTION_SYSTEM_PROMPT
-
-        self._bridge.history.system_prompt = (
-            loaded.history.system_prompt or default_prompt
-        )
+        # conversation's model fields only. The conversation's own saved
+        # system_prompt snapshot is a persistence record, not a setting to
+        # revive: the canonical prompt is recomposed below instead.
         self._bridge.history.messages = list(loaded.history.messages)
         self._current_conversation_path = loaded.path
 
-        # Propagate the custom production prompt.
-        self._bridge.set_system_prompt(self._settings.system_prompt)
         self._bridge.set_temperature(self._settings.temperature)
 
         # Update settings to match the loaded conversation.

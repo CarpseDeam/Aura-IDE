@@ -640,7 +640,6 @@ class TestConnectedOnlyContext:
 
     def _prompt(self, tmp_path, capabilities):
         return compose_system_prompt(
-            "",
             tmp_path,
             active_capabilities=capabilities,
         ).system_prompt

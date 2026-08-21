@@ -59,7 +59,6 @@ from aura.gui.status_bar import AuraStatusBar
 from aura.gui.update_dialog import UpdateDialog
 from aura.gui.widgets.aura_glow import AuraWidget
 from aura.gui.window_chrome import WindowChromeMixin
-from aura.prompts import PRODUCTION_SYSTEM_PROMPT
 
 
 class _ShrinkableStack(QStackedWidget):
@@ -110,7 +109,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._bridge.set_workspace_root(self._workspace_root)
         self._enter_production_mode()
         self._bridge.set_temperature(self._settings.temperature)
-        self._bridge.set_system_prompt(self._settings.system_prompt)
         self._bridge.set_auto_approve(self._settings.auto_approve)
         self._bridge.set_review_plan_before_changes(self._settings.review_plan_before_changes)
         # Restores a connection the user already turned on. Disabled is the
@@ -591,8 +589,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         projects its execution into the workspace.
         """
         self._bridge.refresh_production_prompt()
-        prompt = self._settings.system_prompt or PRODUCTION_SYSTEM_PROMPT
-        self._bridge.set_system_prompt(prompt)
         if hasattr(self, "_chat"):
             self._chat.set_compact_tools(True)
 

@@ -228,7 +228,6 @@ class ConversationManager:
 
     def configure_runtime_context(
         self,
-        base_prompt: str,
         workspace_root: Path,
         *,
         model: str | None = None,
@@ -236,16 +235,14 @@ class ConversationManager:
         content: str | None = None,
         target_files: tuple[str, ...] = (),
     ) -> None:
-        """Store the production base prompt, root, and live terrain.
+        """Store the production root and live terrain.
 
         This is the canonical configuration call for the production
         production path. Mid-turn context refreshes use this terrain so the
         turn's skills are not dropped mid-run.
         """
         self._context_refresh.configure(
-            base_prompt,
             workspace_root,
-
             model=model,
             task_kind=task_kind,
             content=content,

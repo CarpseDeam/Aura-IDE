@@ -21,16 +21,12 @@ from aura.bridge.production_receipt import (
     ProductionReceipt,
 )
 from aura.config import DEFAULT_THINKING, redact_secrets
-from aura.context_gearbox.runtime import PRODUCTION_SYSTEM_PROMPT
+from aura.context_gearbox.runtime import compose_system_prompt
 from aura.conversation import ConversationManager, History
 from aura.conversation.execution_outcome import ExecutionOutcomeStatus
 from aura.conversation.tools import ToolRegistry
 from aura.git_ops import changes_since, snapshot
 from aura.model_streams import PRODUCTION_STREAM_HOOK, model_streams
-from aura.prompts import (
-    build_tier1_context,
-    inject_tier1_context,
-)
 from aura.settings import resolve_production_default_model
 
 logger = logging.getLogger(__name__)
@@ -136,12 +132,10 @@ class HarnessLapBridge(QObject):
         workspace_root: Path,
         *,
         provider: str = "deepseek",
-        system_prompt: str = "",
     ) -> None:
         super().__init__()
         self._workspace_root = workspace_root
         self._provider: str = provider
-        self._system_prompt = system_prompt
 
         self._history = History()
         self._registry = ToolRegistry(workspace_root=workspace_root)
@@ -153,11 +147,6 @@ class HarnessLapBridge(QObject):
         self._production_session = ProductionExecutionSession(
             approval_proxy=self._approval_proxy,
             parent=self,
-        )
-
-        # Build tier1 context once; reused across laps.
-        self._tier1_context = (
-            build_tier1_context(workspace_root) if workspace_root is not None else ""
         )
 
     def run_one_lap(self, want: str) -> LapResult:
@@ -183,24 +172,24 @@ class HarnessLapBridge(QObject):
             self._production_session.clear()
             self._history.append_user_text(want)
 
-            base_prompt = (
-                self._system_prompt
-                if self._system_prompt
-                else PRODUCTION_SYSTEM_PROMPT
-            )
+            model = resolve_production_default_model(self._provider)
+            thinking = DEFAULT_THINKING
+
             self._manager.configure_runtime_context(
-                base_prompt=base_prompt,
                 workspace_root=workspace_root,
+                model=model,
+                content=want,
             )
-            self._history.set_system(
-                inject_tier1_context(base_prompt, self._tier1_context)
+            composed = compose_system_prompt(
+                workspace_root,
+                model=model,
+                content=want,
+                active_capabilities=self._registry.active_capabilities(),
             )
+            self._history.set_system(composed.system_prompt)
 
             # Git snapshot before lap
             pre_sha = snapshot(workspace_root) if workspace_root is not None else None
-
-            model = resolve_production_default_model(self._provider)
-            thinking = DEFAULT_THINKING
 
             cancel = threading.Event()
 

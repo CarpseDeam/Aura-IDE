@@ -52,11 +52,8 @@ from aura.config import (
     ThinkingMode,
 )
 from aura.context_gearbox.runtime import (
-    PRODUCTION_SYSTEM_PROMPT,
     compose_system_prompt,
     context_gearbox_metadata,
-    diagnose_custom_prompt,
-    format_custom_prompt_diagnostics,
     format_prompt_composition,
 )
 from aura.conversation import (
@@ -279,10 +276,8 @@ class ConversationBridge(QObject):
         self._active_model: str = ""
 
         self._temperature: float = 0.7
-        self._single_system_prompt: str = ""
         self._tier1_context: str = ""
         self._context_gearbox_metadata: dict = {}
-        self._custom_prompt_diagnostics = diagnose_custom_prompt("")
         self._pre_execution_sha: str | None = None
         # Skill-selection terrain no longer carries a task kind: Aura does not
         # classify the request. Kept as a None-valued argument so the skill
@@ -399,23 +394,14 @@ class ConversationBridge(QObject):
         """End the active turn's external read-only capability."""
         self._registry.clear_reference_authorization()
 
-    def set_system_prompt(self, prompt: str) -> None:
-        """Store the custom production system prompt and reapply composition."""
-        self._single_system_prompt = prompt or ""
-        composed = self._compose_prompt(self._single_system_prompt)
-        self._history.set_system(composed.system_prompt)
-
     def refresh_tier1_context(self, force_repo_map: bool = False) -> None:
-        """Refresh workspace context and reapply the active system prompt."""
-        composed = self._compose_prompt(
-            self._single_system_prompt,
-            force_repo_map=force_repo_map,
-        )
+        """Refresh workspace context and reapply the canonical system prompt."""
+        composed = self._compose_prompt(force_repo_map=force_repo_map)
         self._history.set_system(composed.system_prompt)
 
     def refresh_production_prompt(self) -> None:
         """Recompose Aura's one production prompt."""
-        composed = self._compose_prompt(self._single_system_prompt)
+        composed = self._compose_prompt()
         self._history.set_system(composed.system_prompt)
 
     def set_temperature(self, temperature: float) -> None:
@@ -458,13 +444,11 @@ class ConversationBridge(QObject):
 
     def _compose_prompt(
         self,
-        custom_prompt: str,
         *,
         force_repo_map: bool = False,
     ):
-        """The one place a production system prompt is built and cached."""
+        """The one place the canonical production system prompt is built and cached."""
         composed = compose_system_prompt(
-            custom_prompt,
             self._registry.workspace_root,
             force=force_repo_map,
             model=self._active_model or None,
@@ -476,14 +460,6 @@ class ConversationBridge(QObject):
         )
         self._context_gearbox_metadata = context_gearbox_metadata(
             composed.ledger, workspace_root=self._registry.workspace_root,
-        )
-        self._custom_prompt_diagnostics = diagnose_custom_prompt(custom_prompt)
-        _log.info(
-            "prompt_composed %s",
-            format_custom_prompt_diagnostics(
-                self._custom_prompt_diagnostics,
-                effective_prompt_chars=len(composed.system_prompt),
-            ),
         )
         _log.info("%s", format_prompt_composition(composed))
         self._tier1_context = composed.context_text
@@ -581,13 +557,7 @@ class ConversationBridge(QObject):
         self._index_to_id.clear()
         self._index_to_name.clear()
         if self._registry.workspace_root is not None:
-            base_prompt = (
-                self._single_system_prompt
-                if self._single_system_prompt
-                else PRODUCTION_SYSTEM_PROMPT
-            )
             self._manager.configure_runtime_context(
-                base_prompt=base_prompt,
                 workspace_root=self._registry.workspace_root,
                 model=self._active_model or None,
                 task_kind=self._turn_task_kind,
@@ -767,7 +737,7 @@ class ConversationBridge(QObject):
         self._turn_content = _latest_user_text(self._history)
         if self._registry.workspace_root is None:
             return
-        composed = self._compose_prompt(self._single_system_prompt)
+        composed = self._compose_prompt()
         self._history.set_system(composed.system_prompt)
         _log.info(
             "context_gearbox_turn_summary %s",

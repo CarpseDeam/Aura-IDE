@@ -10,19 +10,9 @@ _log = logging.getLogger(__name__)
 from aura.context_gearbox.models import (
     ComposedContext,
     ContextLedgerEntry,
-    CustomPromptDiagnostics,
 )
 from aura.context_gearbox.sources import collect_source_text, iter_registered_sources
 from aura.production_prompt import load_production_prompt
-
-CONTEXT_PLACEHOLDER = "{TIER1_CONTEXT}"
-
-# Documented opt-in for full replacement. A custom prompt containing this
-# marker owns the whole system prompt; every other custom prompt is an
-# additive extension of Aura's canonical context and production instructions.
-FULL_REPLACEMENT_MARKER = "{AURA_REPLACE_CANONICAL_PROMPT}"
-
-CUSTOM_PROMPT_HEADER = "### Custom Instructions"
 
 # Compact interaction hint appended to the effective system prompt when the
 # turn is a frozen Read Only collaborative turn. It is an interaction hint, not
@@ -57,14 +47,6 @@ def _production_prompt_text() -> str:
     if prompt is None:
         raise RuntimeError("No bundled production prompt")
     return prompt.content
-
-
-def default_production_prompt() -> str:
-    blocks = _canonical_blocks(CONTEXT_PLACEHOLDER)
-    return "\n\n".join(block for block in blocks if block)
-
-
-PRODUCTION_SYSTEM_PROMPT = default_production_prompt()
 
 
 def serialize_context_ledger(
@@ -293,7 +275,6 @@ def build_context_text(
 
 
 def compose_system_prompt(
-    custom_prompt: str | None,
     workspace_root: Path | None,
     *,
     force: bool = False,
@@ -306,11 +287,7 @@ def compose_system_prompt(
 ) -> ComposedContext:
     """Compose the one canonical production system prompt.
 
-    Core context, response discipline, and the production prompt always survive.
-    A custom prompt is an additive extension appended under
-    ``### Custom Instructions``; text it repeats verbatim from the canonical
-    blocks is dropped so nothing is injected twice.  Full replacement is only
-    available by opting in with ``FULL_REPLACEMENT_MARKER``.
+    Always canonical context followed by the bundled production prompt.
 
     ``active_capabilities`` names the extensible surfaces connected *right
     now*, so a capability pack is composed in for exactly the requests whose
@@ -329,184 +306,16 @@ def compose_system_prompt(
         content=content,
         active_capabilities=active_capabilities,
     )
-    custom = (custom_prompt or "").strip()
-    if custom and FULL_REPLACEMENT_MARKER in custom:
-        template = custom.replace(FULL_REPLACEMENT_MARKER, "").strip()
-        system_prompt = template.replace(
-            CONTEXT_PLACEHOLDER, context.context_text, 1
-        ).strip()
-    else:
-        system_prompt = _compose_canonical_prompt(
-            context.context_text,
-            custom,
-        )
+    blocks = _canonical_blocks(context.context_text)
+    system_prompt = "\n\n".join(
+        block.strip() for block in blocks if block and block.strip()
+    )
     if read_only:
         system_prompt = _append_read_only_instruction(system_prompt)
     return ComposedContext(
         system_prompt=system_prompt,
         context_text=context.context_text,
         ledger=context.ledger,
-    )
-
-
-def _compose_canonical_prompt(
-    context_text: str,
-    custom: str,
-) -> str:
-    """Build canonical context + production prompt, then append custom extras."""
-    blocks = _canonical_blocks(context_text)
-    parts = [block.strip() for block in blocks if block and block.strip()]
-    extension = _custom_prompt_extension(custom, blocks)
-    if extension:
-        parts.append(f"{CUSTOM_PROMPT_HEADER}\n{extension}")
-    return "\n\n".join(parts)
-
-
-def _custom_prompt_extension(custom: str, canonical_blocks: list[str]) -> str:
-    """Return only the part of *custom* that canonical composition lacks.
-
-    Custom prompts are usually an edited copy of the default production prompt, so
-    the placeholder and any verbatim canonical block are removed before the
-    remainder is appended.
-    """
-    if not custom:
-        return ""
-    text = custom.replace(CONTEXT_PLACEHOLDER, "")
-    for block in canonical_blocks:
-        stripped = block.strip()
-        if stripped:
-            text = text.replace(stripped, "")
-    lines = [line.rstrip() for line in text.splitlines()]
-    collapsed: list[str] = []
-    for line in lines:
-        if not line and (not collapsed or not collapsed[-1]):
-            continue
-        collapsed.append(line)
-    return "\n".join(collapsed).strip()
-
-
-# Vocabulary from the retired Planner/Worker architecture. AppSettings.system_prompt
-# persists across Aura versions, so a saved custom prompt started as an edited
-# copy of an older default can still carry this terminology long after the
-# runtime collapsed to a single production role. Kept conservative: matched
-# terms are specific tool/type names or role-labeled phrases, not bare words
-# like "planner" or "worker" that could appear in an unrelated custom prompt.
-_LEGACY_ARCHITECTURE_TERMS: tuple[str, ...] = (
-    "runtimerole",
-    "registrymode",
-    "update_worker_todo",
-    "worker todo",
-    "planner role",
-    "worker role",
-)
-
-
-def _legacy_architecture_terms(text: str) -> tuple[str, ...]:
-    lowered = text.lower()
-    return tuple(term for term in _LEGACY_ARCHITECTURE_TERMS if term in lowered)
-
-
-# Concepts the canonical prompt already owns, and phrasings that indicate a
-# custom prompt is re-stating one. Exact-block removal cannot catch these —
-# they are paraphrases, which is precisely why they need to be visible.
-_CANONICAL_CONCEPT_MARKERS: dict[str, tuple[str, ...]] = {
-    "read before claiming (core kernel)": (
-        "read the file",
-        "read files before",
-        "before making claims",
-        "do not describe the repository from memory",
-    ),
-    "scope discipline (core kernel)": (
-        "stay in scope",
-        "do not expand scope",
-        "scope creep",
-        "only what was asked",
-    ),
-    "response length (response discipline)": (
-        "be concise",
-        "keep it short",
-        "avoid essays",
-        "lead with the answer",
-    ),
-    "anti-circling (production capsule)": (
-        "do not circle",
-        "do not overthink",
-        "act quickly",
-        "stop searching",
-        "one or two tool calls",
-    ),
-    "live todo (production capsule)": (
-        "update_task_checklist",
-        "checklist",
-        "todo list",
-    ),
-    "validation selection (validation_selection_contract)": (
-        "run the tests",
-        "py_compile",
-        "focused test",
-        "validate the change",
-    ),
-    "receipt honesty (receipt_contract)": (
-        "list changed files",
-        "do not claim",
-        "final receipt",
-        "summarize what changed",
-    ),
-    "code quality (code_quality_contract)": (
-        "no placeholders",
-        "no stubs",
-        "match local style",
-        "do not invent",
-    ),
-}
-
-
-def diagnose_custom_prompt(
-    custom_prompt: str | None,
-) -> CustomPromptDiagnostics:
-    """Describe what a custom prompt adds on top of the canonical one.
-
-    Reports size, whether it opts into full replacement, retired-architecture
-    terminology it still carries, and canonical concepts it appears to
-    restate. Purely observational: composition is unchanged by anything
-    measured here, and the user's saved prompt is never modified.
-    """
-    custom = (custom_prompt or "").strip()
-    if not custom:
-        return CustomPromptDiagnostics(
-            char_count=0,
-            appended_char_count=0,
-            full_replacement=False,
-            legacy_terms=(),
-            repeated_concepts=(),
-        )
-
-    full_replacement = FULL_REPLACEMENT_MARKER in custom
-    if full_replacement:
-        # The custom prompt is the whole prompt, so all of it reaches the model
-        # and "repeats a canonical block" is not a meaningful question.
-        appended = custom.replace(FULL_REPLACEMENT_MARKER, "").strip()
-        repeated: tuple[str, ...] = ()
-    else:
-        canonical_blocks = _canonical_blocks(CONTEXT_PLACEHOLDER)
-        appended = _custom_prompt_extension(custom, canonical_blocks)
-        repeated = _repeated_canonical_concepts(appended)
-
-    return CustomPromptDiagnostics(
-        char_count=len(custom),
-        appended_char_count=len(appended),
-        full_replacement=full_replacement,
-        legacy_terms=_legacy_architecture_terms(custom),
-        repeated_concepts=repeated,
-    )
-
-
-def _repeated_canonical_concepts(appended: str) -> tuple[str, ...]:
-    lowered = appended.lower()
-    return tuple(
-        concept
-        for concept, markers in _CANONICAL_CONCEPT_MARKERS.items()
-        if any(marker in lowered for marker in markers)
     )
 
 
@@ -528,35 +337,3 @@ def format_prompt_composition(composed: ComposedContext) -> str:
     return (
         f"prompt_composition total={len(composed.system_prompt):,} chars | " + " ".join(parts)
     )
-
-
-def format_custom_prompt_diagnostics(
-    diagnostics: CustomPromptDiagnostics,
-    *,
-    effective_prompt_chars: int | None = None,
-) -> str:
-    """One compact line for the settings page and the composition log.
-
-    ASCII only: this also goes to log handlers, which on Windows may be
-    encoding with the console code page rather than UTF-8.
-    """
-    if diagnostics.is_empty:
-        line = "Custom prompt: none (using the built-in default)."
-        if effective_prompt_chars is not None:
-            line += f" Effective system prompt: {effective_prompt_chars:,} chars."
-        return line
-
-    parts = [f"Custom prompt: {diagnostics.char_count:,} chars"]
-    if diagnostics.full_replacement:
-        parts.append("replaces the canonical prompt entirely")
-    else:
-        parts.append(f"{diagnostics.appended_char_count:,} appended after de-duplication")
-    if diagnostics.repeated_concepts:
-        parts.append("may restate: " + "; ".join(diagnostics.repeated_concepts))
-    if diagnostics.legacy_terms:
-        parts.append(
-            "retired architecture terms: " + ", ".join(diagnostics.legacy_terms)
-        )
-    if effective_prompt_chars is not None:
-        parts.append(f"effective system prompt {effective_prompt_chars:,} chars")
-    return " | ".join(parts) + "."
