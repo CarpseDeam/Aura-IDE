@@ -31,7 +31,6 @@ STATUS_VALIDATION_FAILED = "validation_failed"
 STATUS_CANCELLED = "cancelled"
 STATUS_BLOCKED = "blocked"
 STATUS_HARNESS_ERROR = "harness_error"
-STATUS_PROVIDER_CONTRACT_FAILURE = "provider_contract_failure"
 
 _BORDER = "═" * 38
 _DIVIDER = "─" * 38
@@ -43,7 +42,6 @@ _HEADER_LABELS = {
     STATUS_CANCELLED: "Cancelled",
     STATUS_BLOCKED: "Blocked",
     STATUS_HARNESS_ERROR: "Production Error",
-    STATUS_PROVIDER_CONTRACT_FAILURE: "Provider Contract Failure",
 }
 
 
@@ -63,7 +61,6 @@ class ProductionRunEvidence:
     final_response: str = ""
     cancelled: bool = False
     blocked_reason: str = ""
-    provider_contract_failure: bool = False
     #: Whether the model called ``report_already_satisfied`` and it succeeded.
     #: Observed evidence only — never inferred from "no write happened" and
     #: never from assistant prose.
@@ -167,19 +164,15 @@ def _resolve_status(
     """Project the turn's final status from its structured execution evidence.
 
     A passive summary of what was observed. Precedence is fixed: cancellation,
-    harness error, provider-contract failure, a reported blocker, and failing
-    validation all outrank success; changes made without any validation are
-    reported as unverified rather than proven. Nothing here judges whether the
-    turn was *allowed* to end the way it did.
+    harness error, a reported blocker, and failing validation all outrank
+    success; changes made without any validation are reported as unverified
+    rather than proven. Nothing here judges whether the turn was *allowed* to
+    end the way it did.
     """
     if evidence.cancelled:
         return STATUS_CANCELLED
     if evidence.api_errors:
         return STATUS_HARNESS_ERROR
-    if evidence.provider_contract_failure:
-        # A provider that genuinely cannot be used. Nothing executed and
-        # nothing was retried; a completed status would be untruthful.
-        return STATUS_PROVIDER_CONTRACT_FAILURE
     if evidence.blocked_reason:
         return STATUS_BLOCKED
     if any(not outcome.passed for outcome in outcomes):
@@ -208,7 +201,6 @@ def build_production_receipt(
         STATUS_VALIDATION_FAILED,
         STATUS_BLOCKED,
         STATUS_HARNESS_ERROR,
-        STATUS_PROVIDER_CONTRACT_FAILURE,
     )
 
     writes = _write_paths(evidence.write_results)
@@ -315,11 +307,6 @@ def build_production_receipt(
         lines.append(" Blocked:")
         lines.append(f"  • {evidence.blocked_reason}")
 
-    if evidence.provider_contract_failure:
-        lines.append("")
-        lines.append(" The provider was unusable for this turn. No edit was made")
-        lines.append(" and nothing was retried.")
-
     if evidence.cancelled:
         lines.append("")
         lines.append(" Stopped by user before completion.")
@@ -371,7 +358,6 @@ def build_production_receipt(
         "api_errors": list(evidence.api_errors),
         "cancelled": bool(evidence.cancelled),
         "blocked_reason": evidence.blocked_reason,
-        "provider_contract_failure": bool(evidence.provider_contract_failure),
         "already_satisfied": bool(evidence.already_satisfied),
         "final_response": final_response,
         "extras": {
@@ -400,6 +386,5 @@ __all__ = [
     "STATUS_COMPLETED",
     "STATUS_COMPLETED_UNVERIFIED",
     "STATUS_HARNESS_ERROR",
-    "STATUS_PROVIDER_CONTRACT_FAILURE",
     "STATUS_VALIDATION_FAILED",
 ]

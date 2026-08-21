@@ -118,7 +118,6 @@ class _ConversationRunner(QObject):
         self._production_session = production_session
         self._read_only_turn = read_only_turn
         self._blocked_reason: str = ""
-        self._provider_contract_failure: bool = False
         self._already_satisfied: bool = False
 
     @Slot()
@@ -671,15 +670,10 @@ class ConversationBridge(QObject):
         # Exactly one completion receipt per production turn, built from the
         # run's structured execution evidence, then back to idle. A successful
         # ``report_blocker`` names the reason so the receipt reports the turn as
-        # blocked, never as completed; a provider-contract failure is reported
-        # as its own terminal status rather than as a completed turn.
-        # Structured ``report_already_satisfied`` evidence and the turn's
-        # production-action route are carried so the completion contract can
-        # report truthfully.
+        # blocked, never as completed. Structured ``report_already_satisfied``
+        # evidence and the turn's production-action route are carried so the
+        # completion contract can report truthfully.
         blocked_reason = runner._blocked_reason if runner is not None else ""
-        provider_contract_failure = (
-            runner._provider_contract_failure if runner is not None else False
-        )
         already_satisfied = runner._already_satisfied if runner is not None else False
         # A Read Only collaborative turn never began a production session, so
         # there is no execution receipt to build — the turn is presented
@@ -688,7 +682,6 @@ class ConversationBridge(QObject):
             try:
                 self._production_session.finish(
                     blocked_reason=blocked_reason,
-                    provider_contract_failure=provider_contract_failure,
                     already_satisfied=already_satisfied,
                 )
             except Exception:

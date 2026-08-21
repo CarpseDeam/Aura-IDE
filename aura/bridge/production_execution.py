@@ -175,7 +175,6 @@ class ProductionExecutionSession(QObject):
     def finish(
         self,
         blocked_reason: str = "",
-        provider_contract_failure: bool = False,
         already_satisfied: bool = False,
     ) -> ProductionReceipt | None:
         """Build exactly one completion receipt and emit the finish lifecycle.
@@ -196,7 +195,6 @@ class ProductionExecutionSession(QObject):
         receipt = build_production_receipt(
             self.evidence(
                 blocked_reason=blocked_reason,
-                provider_contract_failure=provider_contract_failure,
                 already_satisfied=already_satisfied,
             )
         )
@@ -219,7 +217,6 @@ class ProductionExecutionSession(QObject):
     def evidence(
         self,
         blocked_reason: str = "",
-        provider_contract_failure: bool = False,
         already_satisfied: bool = False,
     ) -> ProductionRunEvidence:
         """Return the structured execution evidence for the active run."""
@@ -237,7 +234,6 @@ class ProductionExecutionSession(QObject):
             final_response=relay.final_report_text,
             cancelled=self._cancelled,
             blocked_reason=blocked_reason,
-            provider_contract_failure=provider_contract_failure,
             already_satisfied=already_satisfied,
         )
 

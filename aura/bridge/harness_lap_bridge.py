@@ -16,10 +16,10 @@ from aura.bridge.production_receipt import (
     STATUS_COMPLETED,
     STATUS_COMPLETED_UNVERIFIED,
     STATUS_HARNESS_ERROR,
-    STATUS_PROVIDER_CONTRACT_FAILURE,
     STATUS_VALIDATION_FAILED,
     ProductionReceipt,
 )
+from aura.client import ApiError
 from aura.config import DEFAULT_THINKING, redact_secrets
 from aura.context_gearbox.runtime import compose_system_prompt
 from aura.conversation import ConversationManager, History
@@ -42,7 +42,6 @@ _RECEIPT_STATUS_TO_EXECUTION: dict[str, str] = {
     STATUS_CANCELLED: ExecutionOutcomeStatus.cancelled.value,
     STATUS_BLOCKED: ExecutionOutcomeStatus.harness_error.value,
     STATUS_HARNESS_ERROR: ExecutionOutcomeStatus.harness_error.value,
-    STATUS_PROVIDER_CONTRACT_FAILURE: ExecutionOutcomeStatus.harness_error.value,
 }
 
 
@@ -77,7 +76,6 @@ class _LapConversationRunner(QObject):
         self._temperature = temperature
         self._workspace_root = workspace_root
         self._blocked_reason: str = ""
-        self._provider_contract_failure: bool = False
         self._already_satisfied: bool = False
         self._receipt: ProductionReceipt | None = None
 
@@ -94,13 +92,12 @@ class _LapConversationRunner(QObject):
                 temperature=self._temperature,
             )
             self._blocked_reason = self._manager.last_turn_blocked_reason
-            self._provider_contract_failure = (
-                self._manager.last_turn_provider_contract_failure
-            )
             self._already_satisfied = self._manager.last_turn_already_satisfied
         except Exception as exc:
-            logger.error(
-                "Harness lap runner error: %s", redact_secrets(str(exc))
+            message = redact_secrets(str(exc))
+            logger.error("Harness lap runner error: %s", message)
+            self._production_session.handle_event(
+                ApiError(status_code=None, message=message)
             )
         finally:
             if self._cancel.is_set():
@@ -108,7 +105,6 @@ class _LapConversationRunner(QObject):
             try:
                 self._receipt = self._production_session.finish(
                     blocked_reason=self._blocked_reason,
-                    provider_contract_failure=self._provider_contract_failure,
                     already_satisfied=self._already_satisfied,
                 )
             except Exception:
@@ -237,8 +233,6 @@ class HarnessLapBridge(QObject):
                         execution_errors.append(f"Blocked: {blocked}")
                 for record in metadata.get("not_applied_writes") or []:
                     execution_errors.append(f"Write not applied: {record}")
-                if runner._receipt.status == STATUS_PROVIDER_CONTRACT_FAILURE:
-                    execution_errors.append("Provider was unusable for the lap turn.")
                 validation_results = [
                     {
                         "command": str(item.get("command", "")),
