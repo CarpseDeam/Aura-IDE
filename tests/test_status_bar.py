@@ -7,11 +7,13 @@ import pytest
 
 pytest.importorskip("PySide6.QtWidgets")
 
-from aura.conversation.telemetry import LatestContext  # noqa: E402
+from aura.conversation.telemetry import ConversationTelemetry, LatestContext  # noqa: E402
 from aura.gui.status_bar import (  # noqa: E402
     AuraStatusBar,
+    _footer_cost_tooltip,
     _format_cache_percentage,
     _format_context_occupancy,
+    _format_footer_cost,
 )
 
 
@@ -107,7 +109,53 @@ def test_refresh_shows_context_and_conversation_cost(qapp) -> None:
         )
         assert bar._status_context.text() == "Context 556k / 1.0M · 55.6%"
         assert bar._context_meter.value() == 556
-        assert bar._status_session.text() == "Conversation $—"
+        assert bar._status_session.text() == "Cost —"
+    finally:
+        bar.deleteLater()
+
+
+def test_refresh_shows_estimated_cost_from_priced_events(qapp) -> None:
+    telemetry = ConversationTelemetry()
+    telemetry.record_usage(
+        model_id="gpt-5.4-mini",
+        prompt=1_000_000,
+        completion=1_000_000,
+        hit=0,
+        miss=1_000_000,
+        context_window_tokens=400_000,
+    )
+    bar = AuraStatusBar()
+    try:
+        bar.refresh(
+            workspace_root="/tmp/proj",
+            model_id="gpt-5.4-mini",
+            thinking="off",
+            conversation_usage=telemetry.per_model,
+            telemetry=telemetry,
+        )
+        # 1,000,000 miss tokens @ $0.15/M + 1,000,000 output tokens @ $0.60/M
+        assert bar._status_session.text() == "Est. cost $0.7500"
+        assert "gpt-5.4-mini" in bar._status_session.toolTip()
+    finally:
+        bar.deleteLater()
+
+
+def test_refresh_shows_cost_dash_for_legacy_aggregate_only_telemetry(qapp) -> None:
+    telemetry = ConversationTelemetry.from_dict({
+        "per_model": {"gpt-5.4-mini": {"hit": 0, "miss": 100, "out": 50}},
+        "latest_context": {"model_id": "gpt-5.4-mini", "input_tokens": 100, "context_window_tokens": 400_000},
+    })
+    bar = AuraStatusBar()
+    try:
+        bar.refresh(
+            workspace_root="/tmp/proj",
+            model_id="gpt-5.4-mini",
+            thinking="off",
+            conversation_usage=telemetry.per_model,
+            telemetry=telemetry,
+        )
+        assert bar._status_session.text() == "Cost —"
+        assert "Legacy" in bar._status_session.toolTip()
     finally:
         bar.deleteLater()
 
@@ -171,3 +219,43 @@ def test_handoff_is_a_footer_action_and_disables_during_execution(qapp) -> None:
         assert requests == [True]
     finally:
         bar.deleteLater()
+
+
+def test_format_footer_cost_states() -> None:
+    from decimal import Decimal
+
+    from aura.conversation.telemetry import CostSummary
+
+    unknown = CostSummary(known_total=None, unknown_count=1, total_events=1, exact=False, any_stale=False, has_legacy_gap=False)
+    assert _format_footer_cost(unknown) == "Cost —"
+
+    estimated = CostSummary(
+        known_total=Decimal("0.6402"), unknown_count=0, total_events=1, exact=False, any_stale=False, has_legacy_gap=False
+    )
+    assert _format_footer_cost(estimated) == "Est. cost $0.6402"
+
+    exact = CostSummary(
+        known_total=Decimal("0.6402"), unknown_count=0, total_events=1, exact=True, any_stale=False, has_legacy_gap=False
+    )
+    assert _format_footer_cost(exact) == "Cost $0.6402"
+
+    stale = CostSummary(
+        known_total=Decimal("0.6402"), unknown_count=0, total_events=1, exact=False, any_stale=True, has_legacy_gap=False
+    )
+    assert _format_footer_cost(stale) == "Est. cost $0.6402 · stale"
+
+    tiny = CostSummary(
+        known_total=Decimal("0.00001"), unknown_count=0, total_events=1, exact=False, any_stale=False, has_legacy_gap=False
+    )
+    assert _format_footer_cost(tiny) == "Est. cost < $0.0001"
+
+
+def test_footer_cost_tooltip_distinguishes_no_usage_from_legacy_gap() -> None:
+    empty = ConversationTelemetry()
+    assert _footer_cost_tooltip(empty, empty.cost_summary()) == "No usage recorded yet."
+
+    legacy = ConversationTelemetry.from_dict({
+        "per_model": {"gpt-5.4-mini": {"hit": 0, "miss": 100, "out": 50}},
+        "latest_context": {},
+    })
+    assert "Legacy" in _footer_cost_tooltip(legacy, legacy.cost_summary())

@@ -2,14 +2,33 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from aura.conversation.history import History
 from aura.conversation.persistence import SCHEMA_VERSION, load_conversation, save_conversation
-from aura.conversation.telemetry import ConversationTelemetry
+from aura.conversation.telemetry import ConversationTelemetry, UsageEvent
 from aura.gui.conv_persistence import ConversationPersistence
 from aura.gui.execution_handler import ExecutionEventHandler
+from aura.providers import pricing
+
+_FIXED_NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def pricing_store_clean():
+    """These tests assert unpriced/known-pricing states deterministically;
+    isolate them from whatever DeepSeek pricing cache happens to exist on
+    this machine (aura.config loads it at import time)."""
+    saved = dict(pricing._results)
+    pricing._results.clear()
+    yield
+    pricing._results.clear()
+    pricing._results.update(saved)
 
 
 def test_telemetry_round_trips_through_conversation_json(tmp_path) -> None:
@@ -23,6 +42,7 @@ def test_telemetry_round_trips_through_conversation_json(tmp_path) -> None:
         hit=490_240,
         miss=65_880,
         context_window_tokens=1_000_000,
+        now=_FIXED_NOW,
     )
 
     path = save_conversation(history, tmp_path, "deepseek-v4-pro", "off", telemetry=telemetry)
@@ -36,6 +56,24 @@ def test_telemetry_round_trips_through_conversation_json(tmp_path) -> None:
             "input_tokens": 556_000,
             "context_window_tokens": 1_000_000,
         },
+        "events": [
+            {
+                "provider_id": "deepseek",
+                "model_id": "deepseek-v4-pro",
+                "timestamp": _FIXED_NOW.isoformat(),
+                "cache_hit_tokens": 490_240,
+                "cache_miss_tokens": 65_880,
+                "output_tokens": 1_413,
+                # No DeepSeek pricing has been fetched in this test process,
+                # so the sourced provider correctly reports unpriceable.
+                "pricing_tier": "unknown",
+                "source_url": "",
+                "retrieved_at": "",
+                "stale": False,
+                "exact": False,
+                "cost": None,
+            }
+        ],
     }
     assert load_conversation(path).telemetry.to_dict() == payload["telemetry"]
 
@@ -47,7 +85,90 @@ def test_legacy_conversation_loads_zero_telemetry(tmp_path) -> None:
     assert load_conversation(path).telemetry.to_dict() == {
         "per_model": {},
         "latest_context": {"model_id": "", "input_tokens": 0, "context_window_tokens": 0},
+        "events": [],
     }
+
+
+def test_record_usage_calculates_decimal_cost_for_catalog_priced_model() -> None:
+    telemetry = ConversationTelemetry()
+    telemetry.record_usage(
+        model_id="gpt-5.4-mini",
+        prompt=1_000_000,
+        completion=1_000_000,
+        hit=0,
+        miss=1_000_000,
+        context_window_tokens=400_000,
+        now=_FIXED_NOW,
+    )
+    event = telemetry.events[0]
+    assert event.provider_id == "openai"
+    assert event.pricing_tier == "catalog"
+    assert event.cost_decimal() == Decimal("0.15") + Decimal("0.60")
+    assert event.exact is False
+    assert event.stale is False
+
+
+def test_cost_summary_reports_legacy_gap_when_aggregate_only() -> None:
+    telemetry = ConversationTelemetry.from_dict({
+        "per_model": {"gpt-5.4-mini": {"hit": 0, "miss": 100, "out": 50}},
+        "latest_context": {},
+    })
+    summary = telemetry.cost_summary()
+    assert summary.known_total is None
+    assert summary.has_legacy_gap is True
+
+
+def test_cost_summary_sums_only_known_events_and_flags_unknown() -> None:
+    telemetry = ConversationTelemetry()
+    telemetry.events.append(
+        UsageEvent(
+            provider_id="openai",
+            model_id="gpt-5.4-mini",
+            timestamp=_FIXED_NOW.isoformat(),
+            cache_hit_tokens=0,
+            cache_miss_tokens=1_000_000,
+            output_tokens=0,
+            pricing_tier="catalog",
+            cost="0.15",
+        )
+    )
+    telemetry.events.append(
+        UsageEvent(
+            provider_id="deepseek",
+            model_id="deepseek-v4-flash",
+            timestamp=_FIXED_NOW.isoformat(),
+            cache_hit_tokens=0,
+            cache_miss_tokens=100,
+            output_tokens=0,
+            pricing_tier="unknown",
+            cost=None,
+        )
+    )
+    summary = telemetry.cost_summary()
+    assert summary.known_total == Decimal("0.15")
+    assert summary.unknown_count == 1
+    assert summary.total_events == 2
+    assert summary.has_legacy_gap is False
+
+
+def test_usage_event_round_trips_decimal_cost_string_through_dict() -> None:
+    event = UsageEvent(
+        provider_id="deepseek",
+        model_id="deepseek-v4-flash",
+        timestamp=_FIXED_NOW.isoformat(),
+        cache_hit_tokens=500,
+        cache_miss_tokens=1_000,
+        output_tokens=800,
+        pricing_tier="off_peak",
+        source_url="https://api-docs.deepseek.com/quick_start/pricing/",
+        retrieved_at=_FIXED_NOW.isoformat(),
+        stale=False,
+        exact=False,
+        cost="0.001234",
+    )
+    restored = UsageEvent.from_dict(event.to_dict())
+    assert restored == event
+    assert restored.cost_decimal() == Decimal("0.001234")
 
 
 def test_execution_usage_accumulates_but_latest_context_is_replaced() -> None:

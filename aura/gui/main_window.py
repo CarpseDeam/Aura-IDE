@@ -474,6 +474,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             conversation_usage=self._execution_handler.conversation_usage,
             latest_context=self._execution_handler.conversation_telemetry.latest_context,
             has_provider=has_provider,
+            telemetry=self._execution_handler.conversation_telemetry,
         )
 
     # ----- handlers -------------------------------------------------------

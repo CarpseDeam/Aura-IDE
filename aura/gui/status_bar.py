@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
@@ -13,8 +15,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aura.config import ThinkingMode, cost_usd
-from aura.conversation.telemetry import LatestContext, context_window_for_model
+from aura.config import ThinkingMode
+from aura.conversation.telemetry import (
+    ConversationTelemetry,
+    CostSummary,
+    LatestContext,
+    context_window_for_model,
+)
 from aura.gui.theme import (
     BG_RAISED,
     BORDER,
@@ -26,21 +33,69 @@ from aura.gui.theme import (
 )
 
 
-def _format_footer_cost(known_cost: float, unknown_count: int, total_models: int) -> str:
-    """Format conversation cost for human-readable footer display."""
-    if total_models == 0:
-        return "$—"
-    if unknown_count == total_models:
-        return "$—"
-    if known_cost <= 0:
-        cost_str = "$0.0000"
-    elif known_cost < 0.0001:
-        cost_str = "< $0.0001"
+def _format_footer_cost(summary: CostSummary) -> str:
+    """Format the conversation's priced usage for the compact footer.
+
+    Every number here is the sum of ``UsageEvent`` costs actually calculated
+    at record time — never a fresh repricing of aggregate tokens. A
+    conversation with no priced events (legacy aggregate-only telemetry, or
+    no usage yet) is honestly unpriceable: ``Cost —``.
+    """
+    if summary.known_total is None:
+        return "Cost —"
+    label = "Cost" if summary.exact else "Est. cost"
+    total = summary.known_total
+    if total <= 0:
+        amount = "$0.0000"
+    elif total < Decimal("0.0001"):
+        amount = "< $0.0001"
     else:
-        cost_str = f"${known_cost:.4f}"
-    if unknown_count > 0:
-        cost_str += " *"
-    return cost_str
+        amount = f"${total:.4f}"
+    text = f"{label} {amount}"
+    if summary.any_stale:
+        text += " · stale"
+    return text
+
+
+def _footer_cost_tooltip(telemetry: ConversationTelemetry, summary: CostSummary) -> str:
+    """Audit-ready tooltip: provider/model breakdown, tier, source, freshness."""
+    if not telemetry.events:
+        if summary.has_legacy_gap:
+            return (
+                "Legacy conversation — recorded token totals were saved without "
+                "per-request pricing data, so cost cannot be calculated for this usage."
+            )
+        return "No usage recorded yet."
+
+    lines: list[str] = []
+    groups: dict[tuple[str, str, str], list] = {}
+    for event in telemetry.events:
+        key = (event.provider_id or "unknown", event.model_id, event.pricing_tier)
+        groups.setdefault(key, []).append(event)
+
+    for (provider_id, model_id, tier), events in sorted(groups.items()):
+        known = [e.cost_decimal() for e in events if e.cost_decimal() is not None]
+        if known:
+            subtotal = sum(known, Decimal(0))
+            cost_part = f"${subtotal:.4f}"
+        else:
+            cost_part = "unknown"
+        detail = f"{provider_id}/{model_id} [{tier}]: {cost_part} ({len(events)} call{'s' if len(events) != 1 else ''})"
+        sample = events[0]
+        if sample.source_url:
+            detail += f" — source {sample.source_url}"
+            if sample.retrieved_at:
+                detail += f", retrieved {sample.retrieved_at}"
+            if sample.stale:
+                detail += " (stale)"
+        lines.append(detail)
+
+    if summary.unknown_count:
+        lines.append(f"{summary.unknown_count} call(s) have no pricing data and are excluded from the total.")
+    if summary.has_legacy_gap:
+        lines.append("Earlier usage in this conversation predates per-request pricing and is not included.")
+    lines.append("Calculated from published rates — not a provider-issued invoice.")
+    return "\n".join(lines)
 
 
 def _format_cache_percentage(total_hit: int, total_miss: int) -> str:
@@ -164,7 +219,7 @@ class AuraStatusBar(QStatusBar):
         )
         center_widget.setMinimumWidth(0)
         center_widget.setToolTip(
-            "Conversation cache usage, context occupancy, and estimated cost — does not reflect actual provider billing."
+            "Conversation cache usage and context occupancy for this session."
         )
         center_layout = QHBoxLayout(center_widget)
         center_layout.setContentsMargins(8, 0, 8, 0)
@@ -258,13 +313,14 @@ class AuraStatusBar(QStatusBar):
         self._handoff_btn.setEnabled(not active)
 
     def refresh(
-        self, 
-        workspace_root: str, 
-        model_id: str, 
+        self,
+        workspace_root: str,
+        model_id: str,
         thinking: ThinkingMode,
         conversation_usage: dict[str, dict[str, int]],
         latest_context: LatestContext | None = None,
         has_provider: bool = False,
+        telemetry: ConversationTelemetry | None = None,
     ) -> None:
         # Workspace path truncation (left side)
         ws = workspace_root
@@ -272,25 +328,13 @@ class AuraStatusBar(QStatusBar):
             ws = "…" + ws[-63:]
         self._status_left.setText(ws)
 
-        # Usage and Cost
+        # Usage
         total_hit = sum(u["hit"] for u in conversation_usage.values())
         total_miss = sum(u["miss"] for u in conversation_usage.values())
         total_out = sum(u["out"] for u in conversation_usage.values())
 
-        known_cost = 0.0
-        unknown_count = 0
-        for m_id, u in conversation_usage.items():
-            c = cost_usd(m_id, u["hit"], u["miss"], u["out"])
-            if c is None:
-                unknown_count += 1
-            else:
-                known_cost += c
-
-        total_models = len(conversation_usage)
-
         cache_pct = _format_cache_percentage(total_hit, total_miss)
         usage_text = f"{total_hit:,} hit · {total_miss:,} miss · {total_out:,} out · cache {cache_pct}%"
-        cost_str = _format_footer_cost(known_cost, unknown_count, total_models)
         self._status_cache.setText(usage_text)
         snapshot = latest_context or LatestContext()
         context_capacity = snapshot.context_window_tokens or context_window_for_model(
@@ -301,4 +345,10 @@ class AuraStatusBar(QStatusBar):
         self._context_meter.setVisible(meter_value is not None)
         if meter_value is not None:
             self._context_meter.setValue(meter_value)
-        self._status_session.setText(f"Conversation {cost_str}")
+
+        # Cost — always derived from priced events, never from a fresh
+        # repricing of aggregate tokens.
+        telemetry = telemetry or ConversationTelemetry()
+        summary = telemetry.cost_summary()
+        self._status_session.setText(_format_footer_cost(summary))
+        self._status_session.setToolTip(_footer_cost_tooltip(telemetry, summary))

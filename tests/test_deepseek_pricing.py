@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import inspect
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -21,7 +21,9 @@ from aura.providers import pricing
 from aura.providers.pricing import (
     PeakWindow,
     RateTier,
+    is_stale,
     load_pricing_cache,
+    priced_lookup_for,
     pricing_cache_path,
     rates_for,
     refresh_provider_pricing,
@@ -316,3 +318,138 @@ class TestCostPathWithFetchedRates:
         # The old hardcoded DeepSeek rate literals are gone from the catalog.
         for literal in ("0.0028", "0.003625", "0.435"):
             assert literal not in source
+
+
+# ---------------------------------------------------------------------------
+# priced_lookup_for — the Decimal-costing entry point for per-event telemetry
+# ---------------------------------------------------------------------------
+
+
+class TestPricedLookupFor:
+    def test_returns_tier_and_provenance_off_peak(self) -> None:
+        _seed_standard()
+        lookup = priced_lookup_for("deepseek", "deepseek-v4-flash", OFF_PEAK_UTC)
+        assert lookup is not None
+        assert lookup.tier == "off_peak"
+        assert lookup.rates == {"in_miss": 0.22, "in_hit": 0.007, "out": 0.66}
+        assert lookup.source_url == "https://api-docs.deepseek.com/quick_start/pricing/"
+        assert lookup.retrieved_at
+        assert lookup.stale is False
+
+    def test_returns_peak_tier_inside_window(self) -> None:
+        _seed_standard()
+        lookup = priced_lookup_for("deepseek", "deepseek-v4-flash", PEAK_UTC)
+        assert lookup is not None
+        assert lookup.tier == "peak"
+        assert lookup.rates == {"in_miss": 0.44, "in_hit": 0.014, "out": 1.32}
+
+    def test_none_when_model_or_provider_unpriced(self) -> None:
+        _seed_standard()
+        assert priced_lookup_for("deepseek", "nonexistent-model", OFF_PEAK_UTC) is None
+        assert priced_lookup_for("openai", "gpt-5.4-mini", OFF_PEAK_UTC) is None
+
+
+class TestIsStale:
+    def test_fresh_result_is_not_stale(self) -> None:
+        result = _standard_result()
+        now = datetime.fromisoformat(result.retrieved_at) + timedelta(hours=1)
+        assert is_stale(result, now) is False
+
+    def test_result_older_than_seven_days_is_stale(self) -> None:
+        result = _standard_result()
+        retrieved = datetime.fromisoformat(result.retrieved_at)
+        now = retrieved + timedelta(days=8)
+        assert is_stale(result, now) is True
+
+    def test_unparsable_retrieved_at_is_treated_as_stale(self) -> None:
+        from dataclasses import replace
+
+        result = replace(_standard_result(), retrieved_at="not-a-timestamp")
+        assert is_stale(result) is True
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: ConversationTelemetry prices each event from the DeepSeek
+# pricing store at the moment usage was observed.
+# ---------------------------------------------------------------------------
+
+
+class TestConversationTelemetryPricesDeepSeekEvents:
+    def test_record_usage_prices_from_the_active_tier_and_never_reprices(self, monkeypatch) -> None:
+        from decimal import Decimal
+
+        from aura.conversation.telemetry import ConversationTelemetry
+
+        _seed_standard()
+        telemetry = ConversationTelemetry()
+        telemetry.record_usage(
+            model_id="deepseek-v4-flash",
+            prompt=1_500,
+            completion=800,
+            hit=500,
+            miss=1_000,
+            context_window_tokens=1_000_000,
+            now=OFF_PEAK_UTC,
+        )
+        event = telemetry.events[0]
+        assert event.provider_id == "deepseek"
+        assert event.pricing_tier == "off_peak"
+        expected = (Decimal(500) * Decimal("0.007") + Decimal(1000) * Decimal("0.22") + Decimal(800) * Decimal("0.66")) / Decimal(1_000_000)
+        assert event.cost_decimal() == expected
+        assert event.source_url == "https://api-docs.deepseek.com/quick_start/pricing/"
+
+        # The tier flips to peak for a second call — the first event's
+        # already-persisted cost must not move.
+        telemetry.record_usage(
+            model_id="deepseek-v4-flash",
+            prompt=1_500,
+            completion=800,
+            hit=500,
+            miss=1_000,
+            context_window_tokens=1_000_000,
+            now=PEAK_UTC,
+        )
+        assert telemetry.events[0].cost_decimal() == expected  # unchanged
+        assert telemetry.events[1].pricing_tier == "peak"
+        assert telemetry.events[1].cost_decimal() != expected
+
+    def test_stale_pricing_result_is_flagged_on_the_event(self) -> None:
+        from dataclasses import replace
+
+        stale_result = replace(
+            _standard_result(),
+            retrieved_at=(OFF_PEAK_UTC - timedelta(days=30)).isoformat(),
+        )
+        pricing._results["deepseek"] = stale_result
+
+        from aura.conversation.telemetry import ConversationTelemetry
+
+        telemetry = ConversationTelemetry()
+        telemetry.record_usage(
+            model_id="deepseek-v4-flash",
+            prompt=100,
+            completion=10,
+            hit=0,
+            miss=100,
+            context_window_tokens=1_000_000,
+            now=OFF_PEAK_UTC,
+        )
+        assert telemetry.events[0].stale is True
+
+    def test_missing_pricing_result_records_unknown_cost(self) -> None:
+        from aura.conversation.telemetry import ConversationTelemetry
+
+        telemetry = ConversationTelemetry()
+        telemetry.record_usage(
+            model_id="deepseek-v4-flash",
+            prompt=100,
+            completion=10,
+            hit=0,
+            miss=100,
+            context_window_tokens=1_000_000,
+            now=OFF_PEAK_UTC,
+        )
+        event = telemetry.events[0]
+        assert event.pricing_tier == "unknown"
+        assert event.cost is None
+        assert event.cost_decimal() is None

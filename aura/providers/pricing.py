@@ -20,13 +20,18 @@ import json
 import logging
 import math
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, ClassVar, Protocol
 
 from aura.paths import config_dir
 
 logger = logging.getLogger(__name__)
+
+#: A last-known-good pricing result older than this is surfaced to the user
+#: as stale rather than silently presented as current. Provider pricing pages
+#: change rarely, so this is a generous window, not a refresh interval.
+STALE_AFTER = timedelta(days=7)
 
 
 @dataclass(frozen=True)
@@ -171,6 +176,13 @@ def _in_peak_window(now: datetime, windows: tuple[PeakWindow, ...]) -> bool:
     return any(w.start_minute <= minute < w.end_minute for w in windows)
 
 
+def _select_tier(rates: ModelRates, result: PricingResult, now: datetime) -> tuple[RateTier, str]:
+    """Pick the active rate tier for *rates* at *now*, and name it."""
+    if rates.peak is not None and result.peak_windows and _in_peak_window(now, result.peak_windows):
+        return rates.peak, "peak"
+    return rates.off_peak, "off_peak"
+
+
 def rates_for(provider_id: str, model_id: str, now: datetime | None = None) -> dict[str, float] | None:
     """Return normalized ``{in_miss, in_hit, out}`` rates for a model, or None.
 
@@ -184,10 +196,54 @@ def rates_for(provider_id: str, model_id: str, now: datetime | None = None) -> d
     rates = result.models.get(model_id)
     if rates is None:
         return None
-    tier = rates.off_peak
-    if rates.peak is not None and result.peak_windows and _in_peak_window(now or _utcnow(), result.peak_windows):
-        tier = rates.peak
+    tier, _name = _select_tier(rates, result, now or _utcnow())
     return {"in_miss": tier.in_miss, "in_hit": tier.in_hit, "out": tier.out}
+
+
+def is_stale(result: PricingResult, now: datetime | None = None) -> bool:
+    """True when *result* is older than :data:`STALE_AFTER`, or unparsable."""
+    try:
+        retrieved = datetime.fromisoformat(result.retrieved_at)
+    except (TypeError, ValueError):
+        return True
+    if retrieved.tzinfo is None:
+        retrieved = retrieved.replace(tzinfo=timezone.utc)
+    return (now or _utcnow()) - retrieved > STALE_AFTER
+
+
+@dataclass(frozen=True)
+class PricedLookup:
+    """A rate lookup carrying its tier and provenance, for per-event costing."""
+
+    rates: dict[str, float]
+    tier: str  # "peak" | "off_peak"
+    source_url: str
+    retrieved_at: str
+    stale: bool
+
+
+def priced_lookup_for(provider_id: str, model_id: str, now: datetime | None = None) -> PricedLookup | None:
+    """Return the active rates plus tier/provenance/staleness for one event.
+
+    Same tier-selection rule as :func:`rates_for`; returned alongside the
+    source URL, retrieval time, and staleness so a usage event can persist
+    exactly which snapshot priced it.
+    """
+    result = _results.get(provider_id)
+    if result is None:
+        return None
+    rates = result.models.get(model_id)
+    if rates is None:
+        return None
+    now = now or _utcnow()
+    tier, tier_name = _select_tier(rates, result, now)
+    return PricedLookup(
+        rates={"in_miss": tier.in_miss, "in_hit": tier.in_hit, "out": tier.out},
+        tier=tier_name,
+        source_url=result.source_url,
+        retrieved_at=result.retrieved_at,
+        stale=is_stale(result, now),
+    )
 
 
 def get_result(provider_id: str) -> PricingResult | None:
