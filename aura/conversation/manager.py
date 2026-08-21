@@ -297,6 +297,15 @@ class ConversationManager:
         self._tools.set_turn_skill_state(skill_turn)
         self._tool_round_runner.begin_turn()
 
+        # The model-facing tool catalog is resolved exactly once per turn,
+        # after web-search availability, the frozen skill turn state, and
+        # begin_turn() are all in place. Every provider request and tool-round
+        # preflight in this send reuses this same snapshot; capabilities
+        # added, removed, connected, disconnected, or edited while this send
+        # is running take effect on the next send, not midway through this
+        # one.
+        tool_defs = self._tools.tool_defs()
+
         while True:
             if cancel_event.is_set():
                 self._cleanup_cancelled(on_event)
@@ -306,8 +315,6 @@ class ConversationManager:
 
             # The one request shape: the same stable catalog, the user's model,
             # and the user's thinking mode, on every round of the turn.
-            tool_defs = self._tools.tool_defs()
-
             _log.info(
                 "%s_start model=%s thinking=%s hook_name=%s",
                 _PRODUCTION_STREAM_LABEL, model, thinking, PRODUCTION_STREAM_HOOK,
