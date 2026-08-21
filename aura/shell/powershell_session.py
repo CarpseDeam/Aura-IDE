@@ -5,6 +5,7 @@ import os
 import queue
 import shutil
 import subprocess
+import sys
 import threading
 import uuid
 from dataclasses import dataclass
@@ -138,7 +139,10 @@ def build_child_environment(workspace_root: Path) -> dict[str, str]:
     Python virtual-environment activation Aura's own runtime happens to be
     running under (``VIRTUAL_ENV``/``VIRTUAL_ENV_PROMPT``/``PYTHONHOME`` and
     the matching PATH entries), so model-facing commands never silently pick
-    up Aura's interpreter. When the workspace has its own recognized
+    up Aura's interpreter. ``VIRTUAL_ENV`` is not always set (e.g. when Aura
+    is launched directly through a venv interpreter), so Aura's active
+    ``sys.prefix`` is also treated as a runtime root whenever it differs
+    from ``sys.base_prefix``. When the workspace has its own recognized
     ``.venv``/``venv``, that environment is then activated instead - even
     when it happens to be the very same directory Aura itself runs from.
     """
@@ -147,8 +151,20 @@ def build_child_environment(workspace_root: Path) -> dict[str, str]:
     inherited_virtual_env = _pop_env_value(env, "VIRTUAL_ENV")
     _pop_env_value(env, "VIRTUAL_ENV_PROMPT")
     _pop_env_value(env, "PYTHONHOME")
+
+    runtime_roots: list[str] = []
     if inherited_virtual_env:
-        _remove_path_entries_under(env, inherited_virtual_env)
+        runtime_roots.append(inherited_virtual_env)
+    if sys.prefix != sys.base_prefix:
+        runtime_roots.append(sys.prefix)
+
+    seen_roots: set[str] = set()
+    for root in runtime_roots:
+        norm_root = _normalize_path_entry(root)
+        if not norm_root or norm_root in seen_roots:
+            continue
+        seen_roots.add(norm_root)
+        _remove_path_entries_under(env, root)
 
     project_env = detect_project_python_env(workspace_root)
     if project_env.python is not None:

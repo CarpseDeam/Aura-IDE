@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -117,6 +118,89 @@ def test_path_removal_tolerates_quotes_and_trailing_separators(
 
     env = build_child_environment(workspace)
     assert _path_entries(env) == [r"C:\Windows\System32"]
+
+
+# Aura's runtime venv is detected via sys.prefix even when VIRTUAL_ENV is
+# absent from the inherited environment (e.g. Aura launched directly through
+# a venv interpreter).
+def test_runtime_venv_detected_via_sys_prefix_without_virtual_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from aura.shell import powershell_session
+
+    aura_scripts, aura_venv_root = _make_fake_venv(tmp_path / "aura-runtime")
+    workspace = tmp_path / "workspace-plain"
+    workspace.mkdir()
+
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.delenv("VIRTUAL_ENV_PROMPT", raising=False)
+    monkeypatch.delenv("PYTHONHOME", raising=False)
+    monkeypatch.setenv("MY_UNRELATED_TOKEN", "keep-me")
+    monkeypatch.setenv(
+        "PATH", os.pathsep.join([str(aura_scripts), r"C:\Windows\System32"])
+    )
+    monkeypatch.setattr(powershell_session.sys, "prefix", str(aura_venv_root))
+    monkeypatch.setattr(powershell_session.sys, "base_prefix", str(tmp_path / "system-python"))
+
+    env = powershell_session.build_child_environment(workspace)
+
+    assert "VIRTUAL_ENV" not in env
+    assert env["MY_UNRELATED_TOKEN"] == "keep-me"
+    entries = _path_entries(env)
+    assert str(aura_scripts) not in entries
+    assert r"C:\Windows\System32" in entries
+
+
+# Duplicate runtime roots (VIRTUAL_ENV and sys.prefix pointing at the same
+# directory) are deduplicated rather than processed twice.
+def test_runtime_roots_are_deduplicated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from aura.shell import powershell_session
+
+    aura_scripts, aura_venv_root = _make_fake_venv(tmp_path / "aura-runtime")
+    workspace = tmp_path / "workspace-plain"
+    workspace.mkdir()
+
+    monkeypatch.setenv("VIRTUAL_ENV", str(aura_venv_root))
+    monkeypatch.setenv(
+        "PATH", os.pathsep.join([str(aura_scripts), r"C:\Windows\System32"])
+    )
+    monkeypatch.setattr(powershell_session.sys, "prefix", str(aura_venv_root))
+    monkeypatch.setattr(powershell_session.sys, "base_prefix", str(tmp_path / "system-python"))
+
+    env = powershell_session.build_child_environment(workspace)
+
+    entries = _path_entries(env)
+    assert str(aura_scripts) not in entries
+    assert r"C:\Windows\System32" in entries
+
+
+# When sys.prefix equals sys.base_prefix (ordinary system Python, no venv
+# active), that path must not be treated as a runtime root to strip.
+def test_sys_prefix_equal_to_base_prefix_is_left_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from aura.shell import powershell_session
+
+    system_python_dir = tmp_path / "system-python"
+    system_scripts = system_python_dir / "Scripts"
+    system_scripts.mkdir(parents=True)
+    workspace = tmp_path / "workspace-plain"
+    workspace.mkdir()
+
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setenv(
+        "PATH", os.pathsep.join([str(system_scripts), r"C:\Windows\System32"])
+    )
+    monkeypatch.setattr(powershell_session.sys, "prefix", str(system_python_dir))
+    monkeypatch.setattr(powershell_session.sys, "base_prefix", str(system_python_dir))
+
+    env = powershell_session.build_child_environment(workspace)
+
+    entries = _path_entries(env)
+    assert str(system_scripts) in entries
+    assert r"C:\Windows\System32" in entries
 
 
 # 4. The environment is recomputed after session restart and per workspace.
