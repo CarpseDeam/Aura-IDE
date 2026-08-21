@@ -268,12 +268,12 @@ class ToolRoundRunner:
             )
             return ToolRoundOutcome()
 
-        # The callable surface is the exposed catalog plus the observation-only
-        # names this mode withholds but still honours on replay. Anything else
-        # is not callable, so a withheld mutation stays withheld.
+        # The callable surface is exactly the tool catalog sent with this
+        # request. A tool call executes only if its name and schema were
+        # present in that exact request; a registered-but-withheld tool
+        # (e.g. inspect_code, search_codebase, find_usages, git_log) is not
+        # callable merely because its handler still exists.
         exposed = exposed_tool_schemas(tool_defs)
-        for name, schema in exposed_tool_schemas(self._tools.replayable_tool_defs()).items():
-            exposed.setdefault(name, schema)
 
         # Pass 1: decode arguments and resolve exposure + effect for every
         # call. A parse failure or an unexposed name vetoes the whole batch —

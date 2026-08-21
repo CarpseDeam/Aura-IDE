@@ -177,19 +177,17 @@ def test_inspect_code_does_not_search_the_workspace_for_occurrences(
 
 
 def test_grep_search_remains_the_production_discovery_owner() -> None:
-    """search_codebase still exists and is replayable, but production now
-    exposes exactly one search tool -- grep_search -- alongside shell for
-    everything else (rg --files, git, bulk inspection)."""
-    registry = ToolRegistry(workspace_root=Path("."))
+    """search_codebase still exists as a registered handler, but production
+    now exposes exactly one search tool -- grep_search -- alongside shell for
+    everything else (rg --files, git, bulk inspection). search_codebase is
+    not part of the exposed catalog, so a model-generated call to it is not
+    callable; only the exact request catalog authorizes execution."""
     names = {
         d["function"]["name"]
         for d in ToolCatalog().build_tool_defs(read_only=False)
     }
     assert "grep_search" in names
     assert "search_codebase" not in names
-    assert "search_codebase" in {
-        d["function"]["name"] for d in registry.replayable_tool_defs()
-    }
 
 
 # ── 9: graceful degradation for a language without a rich adapter ──────

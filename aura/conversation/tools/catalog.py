@@ -16,10 +16,7 @@ from aura.conversation.tools.schemas import (
     TASK_CHECKLIST_TOOL_DEF,
     TERMINAL_TOOL_DEF,
     WEB_SEARCH_TOOL_DEF,
-    WORKSPACE_SNAPSHOT_TOOL_DEF,
 )
-from aura.conversation.tools.schemas.code_intel import INSPECT_CODE_TOOL_DEF
-from aura.conversation.tools.schemas.drones import RUN_READ_ONLY_DRONE_TOOL_DEF
 
 # Godot remains implemented and registered, but is not part of the ordinary
 # model-facing catalogs.
@@ -130,48 +127,6 @@ class ToolCatalog:
             tools.extend(mcp_schemas)
 
         return tools
-
-    def build_replayable_tool_defs(
-        self,
-        *,
-        read_only: bool,
-    ) -> list[dict[str, Any]]:
-        """Definitions for withheld observation tools that remain replayable.
-
-        The production catalog narrows *choice*, not capability: it drops
-        every read/search/git tool but ``read_file``/``grep_search`` because
-        offering all of them made the model pick an approach before it could
-        pick an action, but their handlers stay registered so a replayed
-        historical tool call still runs. Preflight rejects any name outside
-        the exposed catalog, so those withheld-but-callable names need their
-        schemas from here or the replay is rejected instead of executed.
-
-        Only observations qualify. Nothing that can change the workspace is
-        callable from outside the catalog that offered it, which is what
-        keeps ``read_only`` meaningful rather than advisory.
-        """
-        if read_only:
-            return []
-        exposed = {
-            _tool_name(tool)
-            for tool in self.build_tool_defs(
-                read_only=read_only, web_search=True, skills_active=True,
-            )
-        }
-        candidates = (
-            list(READ_TOOL_DEFS)
-            + list(GIT_TOOL_DEFS)
-            + [
-                WORKSPACE_SNAPSHOT_TOOL_DEF,
-                RUN_READ_ONLY_DRONE_TOOL_DEF,
-                INSPECT_CODE_TOOL_DEF,
-            ]
-        )
-        return [
-            tool for tool in candidates
-            if _tool_name(tool) not in exposed
-            and BUILTIN_TOOL_EFFECTS.get(_tool_name(tool)) is ToolEffect.OBSERVATION
-        ]
 
     def effect_for(self, name: str) -> ToolEffect:
         """Explicit effect classification for a built-in tool name.

@@ -146,19 +146,22 @@ def test_regular_catalog_modes_expose_no_godot_capability_tools() -> None:
         assert not names & GODOT_TOOL_NAMES
 
 
-def test_removed_observations_stay_callable_for_transcript_replay(tmp_path) -> None:
-    """Narrowing shapes choice; it does not revoke a replayed historical call."""
+def test_withheld_observations_are_absent_from_the_exposed_catalog(tmp_path) -> None:
+    """A registered-but-withheld observation is not part of what gets sent.
+
+    Phase 3A: the exact tool catalog sent with a request is the sole
+    authority for which tool calls that response may execute, so a name
+    absent here is not callable even though its handler stays registered
+    (see ``registry.execute`` direct-call coverage elsewhere).
+    """
     registry = ToolRegistry(workspace_root=tmp_path)
-    replayable = set(_names(registry.replayable_tool_defs()))
+    exposed = set(_names(registry.tool_defs()))
 
     for withheld in (
         "find_usages", "list_directory", "git_log",
         "glob", "search_codebase", "inspect_code",
     ):
-        assert withheld in replayable, withheld
-    # Nothing that can change the workspace is callable from outside the
-    # catalog that offered it.
-    assert not (replayable & EXPECTED_PRODUCTION_TOOLS)
+        assert withheld not in exposed, withheld
 
 
 def test_read_files_tool_is_fully_removed(tmp_path) -> None:
@@ -169,17 +172,15 @@ def test_read_files_tool_is_fully_removed(tmp_path) -> None:
     registry = ToolRegistry(workspace_root=tmp_path)
 
     assert "read_files" not in _names(registry.tool_defs())
-    assert "read_files" not in _names(registry.replayable_tool_defs())
     assert "read_files" not in TOOL_HANDLERS
 
 
 def test_legacy_write_tool_names_are_not_in_any_catalog(tmp_path) -> None:
-    """The consolidated names are gone from every exposed and replayable surface."""
+    """The consolidated names are gone from the exposed surface."""
     registry = ToolRegistry(workspace_root=tmp_path)
     legacy = {"write_file", "patch_file", "delete_file"}
 
     assert not (set(_names(registry.tool_defs())) & legacy)
-    assert not (set(_names(registry.replayable_tool_defs())) & legacy)
 
 
 def test_catalog_has_no_runtime_mode_dimension() -> None:

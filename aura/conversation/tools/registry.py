@@ -295,18 +295,6 @@ class ToolRegistry(
             skills_active=skills_active,
         )
 
-    def replayable_tool_defs(self) -> list[dict[str, Any]]:
-        """Defs for tools the current catalog withholds but still executes.
-
-        Preflight validates a call against the catalog the request exposed;
-        these are the observation-only names that stay callable anyway (see
-        :meth:`ToolCatalog.build_replayable_tool_defs`), supplied so a replayed
-        historical call is schema-checked rather than rejected as unexposed.
-        """
-        return self._catalog.build_replayable_tool_defs(
-            read_only=self._read_only,
-        )
-
     def tool_effect(self, name: str) -> ToolEffect:
         """Authoritative runtime effect lookup for any exposed tool.
 
