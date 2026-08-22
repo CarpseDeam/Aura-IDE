@@ -108,14 +108,16 @@ def test_record_usage_calculates_decimal_cost_for_catalog_priced_model() -> None
     assert event.stale is False
 
 
-def test_cost_summary_reports_legacy_gap_when_aggregate_only() -> None:
+def test_cost_summary_has_no_known_total_when_there_are_no_events() -> None:
+    """Aggregate-only telemetry with no per-event records is honestly
+    unpriceable — no cost is inferred or reconstructed from the totals."""
     telemetry = ConversationTelemetry.from_dict({
         "per_model": {"gpt-5.4-mini": {"hit": 0, "miss": 100, "out": 50}},
         "latest_context": {},
     })
     summary = telemetry.cost_summary()
     assert summary.known_total is None
-    assert summary.has_legacy_gap is True
+    assert summary.total_events == 0
 
 
 def test_cost_summary_sums_only_known_events_and_flags_unknown() -> None:
@@ -148,7 +150,6 @@ def test_cost_summary_sums_only_known_events_and_flags_unknown() -> None:
     assert summary.known_total == Decimal("0.15")
     assert summary.unknown_count == 1
     assert summary.total_events == 2
-    assert summary.has_legacy_gap is False
 
 
 def test_usage_event_round_trips_decimal_cost_string_through_dict() -> None:

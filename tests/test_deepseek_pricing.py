@@ -21,6 +21,7 @@ from aura.providers import pricing
 from aura.providers.pricing import (
     PeakWindow,
     RateTier,
+    ScheduleOverride,
     is_stale,
     load_pricing_cache,
     priced_lookup_for,
@@ -98,6 +99,16 @@ class TestDeepSeekPricingParse:
 
         # The published peak/off-peak UTC schedule is parsed from the page.
         assert result.peak_windows == (PeakWindow(start_minute=60, end_minute=240), PeakWindow(start_minute=360, end_minute=600))
+
+        # The published effective-dated Beijing-Time weekend rule is parsed too.
+        assert result.schedule_overrides == (
+            ScheduleOverride(
+                effective_at="2026-08-22T16:00:00+00:00",
+                utc_offset_minutes=480,
+                weekdays=(5, 6),
+                tier="off_peak",
+            ),
+        )
 
     def test_numeric_non_pricing_rows_are_not_read_as_rates(self) -> None:
         """The concurrency-limits row (2500/500/2500) must not become rates."""
@@ -208,6 +219,46 @@ class TestPricingStoreCache:
         load_pricing_cache()
         assert rates_for("deepseek", "deepseek-v4-flash", OFF_PEAK_UTC) is None
 
+    def test_schedule_override_round_trips_through_cache(self, isolated_config_dir) -> None:
+        pricing._results["deepseek"] = _standard_result()
+        pricing._save_cache(pricing._results["deepseek"])
+        pricing._results.clear()  # simulate a fresh process
+
+        load_pricing_cache()
+        result = pricing.get_result("deepseek")
+        assert result is not None
+        assert result.schedule_overrides == (
+            ScheduleOverride(
+                effective_at="2026-08-22T16:00:00+00:00",
+                utc_offset_minutes=480,
+                weekdays=(5, 6),
+                tier="off_peak",
+            ),
+        )
+
+    def test_old_cache_schema_without_schedule_overrides_is_rejected(self, isolated_config_dir) -> None:
+        """The pre-schedule-override cache shape (no schema_version field) must be
+        rejected outright rather than silently loaded without its weekly rule."""
+        legacy = {
+            "deepseek": {
+                "provider_id": "deepseek",
+                "source_url": "https://api-docs.deepseek.com/quick_start/pricing/",
+                "retrieved_at": "2026-01-01T00:00:00+00:00",
+                "peak_windows": [[60, 240], [360, 600]],
+                "models": {
+                    "deepseek-v4-flash": {
+                        "model_id": "deepseek-v4-flash",
+                        "off_peak": {"in_miss": 0.22, "in_hit": 0.007, "out": 0.66},
+                        "peak": {"in_miss": 0.44, "in_hit": 0.014, "out": 1.32},
+                    }
+                },
+            }
+        }
+        pricing_cache_path().write_text(json.dumps(legacy), encoding="utf-8")
+
+        load_pricing_cache()
+        assert rates_for("deepseek", "deepseek-v4-flash", OFF_PEAK_UTC) is None
+
 
 # ---------------------------------------------------------------------------
 # UTC peak/off-peak tier selection
@@ -242,6 +293,45 @@ class TestUtcTierSelection:
     def test_unknown_model_returns_none(self) -> None:
         _seed_standard()
         assert rates_for("deepseek", "nonexistent-model", OFF_PEAK_UTC) is None
+
+
+# ---------------------------------------------------------------------------
+# Beijing-Time weekend override — effective-dated all-day weekly tier rule
+# ---------------------------------------------------------------------------
+
+
+class TestDeepSeekWeekendSchedule:
+    # 00:00 Beijing Time on Sunday, August 23, 2026 == 2026-08-22T16:00:00Z.
+    PRE_EFFECTIVE_SATURDAY_PEAK_UTC = datetime(2026, 8, 22, 2, 0, tzinfo=timezone.utc)  # Beijing Sat, before effective instant
+    POST_EFFECTIVE_SATURDAY_PEAK_UTC = datetime(2026, 8, 29, 2, 0, tzinfo=timezone.utc)  # Beijing Sat Aug 29, in a UTC peak window
+    POST_EFFECTIVE_SUNDAY_PEAK_UTC = datetime(2026, 8, 30, 2, 0, tzinfo=timezone.utc)  # Beijing Sun Aug 30, in a UTC peak window
+    POST_EFFECTIVE_WEEKDAY_PEAK_UTC = datetime(2026, 8, 31, 2, 0, tzinfo=timezone.utc)  # Beijing Mon Aug 31, in a UTC peak window
+
+    def test_pre_effective_saturday_still_selects_daily_peak_window(self) -> None:
+        """Before the effective instant, the weekend override does not apply yet —
+        the original recurring daily UTC peak window still governs."""
+        _seed_standard()
+        assert rates_for("deepseek", "deepseek-v4-flash", self.PRE_EFFECTIVE_SATURDAY_PEAK_UTC)["in_miss"] == 0.44
+
+    def test_post_effective_beijing_saturday_and_sunday_select_off_peak(self) -> None:
+        """On or after the effective instant, Beijing Saturday and Sunday are
+        entirely off-peak even inside a published UTC peak window."""
+        _seed_standard()
+        assert rates_for("deepseek", "deepseek-v4-flash", self.POST_EFFECTIVE_SATURDAY_PEAK_UTC)["in_miss"] == 0.22
+        assert rates_for("deepseek", "deepseek-v4-flash", self.POST_EFFECTIVE_SUNDAY_PEAK_UTC)["in_miss"] == 0.22
+
+    def test_post_effective_weekday_still_uses_published_peak_window(self) -> None:
+        """A Beijing weekday keeps using the recurring UTC peak windows, even
+        after the weekend override has taken effect."""
+        _seed_standard()
+        assert rates_for("deepseek", "deepseek-v4-flash", self.POST_EFFECTIVE_WEEKDAY_PEAK_UTC)["in_miss"] == 0.44
+
+    def test_weekend_rule_advertised_but_incomplete_is_rejected(self) -> None:
+        """A page that mentions Beijing Time but doesn't fully spell out the
+        effective date and weekday/tier rule must be rejected outright — the
+        rule is never silently dropped."""
+        result = DeepSeekPricingSource().parse(_fixture("pricing_weekend_rule_incomplete.html"))
+        assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -435,6 +525,31 @@ class TestConversationTelemetryPricesDeepSeekEvents:
             now=OFF_PEAK_UTC,
         )
         assert telemetry.events[0].stale is True
+
+    def test_weekend_override_prices_event_as_off_peak(self) -> None:
+        """A usage event observed on a post-effective Beijing weekend, inside a
+        published UTC peak window, must be priced off-peak and persist that
+        tier — the weekend override outranks the daily peak window."""
+        from decimal import Decimal
+
+        from aura.conversation.telemetry import ConversationTelemetry
+
+        _seed_standard()
+        post_effective_saturday_peak = datetime(2026, 8, 29, 2, 0, tzinfo=timezone.utc)
+        telemetry = ConversationTelemetry()
+        telemetry.record_usage(
+            model_id="deepseek-v4-flash",
+            prompt=1_500,
+            completion=800,
+            hit=500,
+            miss=1_000,
+            context_window_tokens=1_000_000,
+            now=post_effective_saturday_peak,
+        )
+        event = telemetry.events[0]
+        assert event.pricing_tier == "off_peak"
+        expected = (Decimal(500) * Decimal("0.007") + Decimal(1000) * Decimal("0.22") + Decimal(800) * Decimal("0.66")) / Decimal(1_000_000)
+        assert event.cost_decimal() == expected
 
     def test_missing_pricing_result_records_unknown_cost(self) -> None:
         from aura.conversation.telemetry import ConversationTelemetry

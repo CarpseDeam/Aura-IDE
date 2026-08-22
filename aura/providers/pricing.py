@@ -62,6 +62,26 @@ class PeakWindow:
 
 
 @dataclass(frozen=True)
+class ScheduleOverride:
+    """An effective-dated, all-day weekly tier override.
+
+    From ``effective_at`` onward, on any weekday named in ``weekdays`` —
+    evaluated in the fixed ``utc_offset_minutes`` calendar, not UTC — the
+    override's ``tier`` applies for that entire local day, superseding the
+    recurring daily ``peak_windows``. Before the effective instant, or on a
+    weekday this override doesn't name, the daily UTC peak windows apply as
+    usual. A source (e.g. DeepSeek) is responsible for deciding what its
+    page's wording means; this shape only records the resulting rule for the
+    shared pricing module to evaluate.
+    """
+
+    effective_at: str  # ISO-8601 UTC timestamp
+    utc_offset_minutes: int  # fixed calendar offset, e.g. 480 for UTC+08:00
+    weekdays: tuple[int, ...]  # Mon=0 .. Sun=6, in the offset's local calendar
+    tier: str  # "off_peak" | "peak"
+
+
+@dataclass(frozen=True)
 class PricingResult:
     """A fully validated pricing snapshot from one provider source."""
 
@@ -70,6 +90,7 @@ class PricingResult:
     source_url: str
     retrieved_at: str  # ISO-8601 UTC timestamp
     peak_windows: tuple[PeakWindow, ...] = ()
+    schedule_overrides: tuple[ScheduleOverride, ...] = ()
 
 
 class PricingSource(Protocol):
@@ -129,6 +150,28 @@ def _valid_tier(tier: RateTier) -> bool:
     )
 
 
+def _valid_schedule_override(override: ScheduleOverride, peak_any: bool) -> bool:
+    try:
+        effective = datetime.fromisoformat(override.effective_at)
+    except (TypeError, ValueError):
+        return False
+    if effective.tzinfo is None:
+        return False
+    if not (-12 * 60 <= override.utc_offset_minutes <= 14 * 60):
+        return False
+    if override.tier not in ("off_peak", "peak"):
+        return False
+    if override.tier == "peak" and not peak_any:
+        return False
+    if not override.weekdays:
+        return False
+    if len(set(override.weekdays)) != len(override.weekdays):
+        return False
+    if any(not (0 <= d <= 6) for d in override.weekdays):
+        return False
+    return True
+
+
 def _validate(result: PricingResult) -> bool:
     """Validate the entire result before it may replace the current cache.
 
@@ -159,6 +202,9 @@ def _validate(result: PricingResult) -> bool:
     for window in result.peak_windows:
         if not (0 <= window.start_minute < window.end_minute <= 24 * 60):
             return False
+    for override in result.schedule_overrides:
+        if not _valid_schedule_override(override, peak_any):
+            return False
     return True
 
 
@@ -176,8 +222,39 @@ def _in_peak_window(now: datetime, windows: tuple[PeakWindow, ...]) -> bool:
     return any(w.start_minute <= minute < w.end_minute for w in windows)
 
 
+def _local_weekday(now: datetime, utc_offset_minutes: int) -> int:
+    """The calendar weekday (Mon=0..Sun=6) of *now* shifted by a fixed offset.
+
+    *now* is treated as UTC wall-clock (the convention already used
+    throughout this module); the shift is pure arithmetic, so this never
+    depends on the host's timezone database.
+    """
+    return (now + timedelta(minutes=utc_offset_minutes)).weekday()
+
+
+def _override_tier(rates: ModelRates, override: ScheduleOverride, now: datetime) -> RateTier | None:
+    """The tier *override* selects for *rates* at *now*, or None when it doesn't apply."""
+    try:
+        effective = datetime.fromisoformat(override.effective_at)
+    except (TypeError, ValueError):
+        return None
+    if now < effective:
+        return None
+    if _local_weekday(now, override.utc_offset_minutes) not in override.weekdays:
+        return None
+    return rates.peak if override.tier == "peak" else rates.off_peak
+
+
 def _select_tier(rates: ModelRates, result: PricingResult, now: datetime) -> tuple[RateTier, str]:
-    """Pick the active rate tier for *rates* at *now*, and name it."""
+    """Pick the active rate tier for *rates* at *now*, and name it.
+
+    A matching schedule override (effective and naming today's local
+    weekday) takes precedence over the recurring daily UTC peak windows.
+    """
+    for override in result.schedule_overrides:
+        tier = _override_tier(rates, override, now)
+        if tier is not None:
+            return tier, override.tier
     if rates.peak is not None and result.peak_windows and _in_peak_window(now, result.peak_windows):
         return rates.peak, "peak"
     return rates.off_peak, "off_peak"
@@ -256,6 +333,12 @@ def get_result(provider_id: str) -> PricingResult | None:
 # ---------------------------------------------------------------------------
 
 
+#: Bumped when the cache-entry shape changes. An entry whose stored version
+#: doesn't match is rejected outright — no migration, since a mis-shaped
+#: schedule override could silently mean the wrong rates.
+_CACHE_SCHEMA_VERSION = 2
+
+
 def pricing_cache_path() -> Path:
     return config_dir() / "pricing_cache.json"
 
@@ -292,18 +375,47 @@ def _model_rates_from_dict(data: Any) -> ModelRates | None:
     return ModelRates(model_id=str(data.get("model_id", "")), off_peak=off_peak, peak=peak)
 
 
+def _schedule_override_to_dict(override: ScheduleOverride) -> dict[str, Any]:
+    return {
+        "effective_at": override.effective_at,
+        "utc_offset_minutes": override.utc_offset_minutes,
+        "weekdays": list(override.weekdays),
+        "tier": override.tier,
+    }
+
+
+def _schedule_override_from_dict(data: Any) -> ScheduleOverride | None:
+    if not isinstance(data, dict):
+        return None
+    try:
+        return ScheduleOverride(
+            effective_at=str(data["effective_at"]),
+            utc_offset_minutes=int(data["utc_offset_minutes"]),
+            weekdays=tuple(int(d) for d in data["weekdays"]),
+            tier=str(data["tier"]),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def _result_to_dict(result: PricingResult) -> dict[str, Any]:
     return {
+        "schema_version": _CACHE_SCHEMA_VERSION,
         "provider_id": result.provider_id,
         "source_url": result.source_url,
         "retrieved_at": result.retrieved_at,
         "peak_windows": [[w.start_minute, w.end_minute] for w in result.peak_windows],
+        "schedule_overrides": [_schedule_override_to_dict(o) for o in result.schedule_overrides],
         "models": {mid: _model_rates_to_dict(mr) for mid, mr in result.models.items()},
     }
 
 
 def _result_from_dict(provider_id: str, data: Any) -> PricingResult | None:
     if not isinstance(data, dict):
+        return None
+    if data.get("schema_version") != _CACHE_SCHEMA_VERSION:
+        # Reject rather than migrate: an older (or newer/unknown) cache shape
+        # may not carry a schedule override correctly, so treat it as absent.
         return None
     try:
         models: dict[str, ModelRates] = {}
@@ -316,12 +428,22 @@ def _result_from_dict(provider_id: str, data: Any) -> PricingResult | None:
             PeakWindow(start_minute=int(w[0]), end_minute=int(w[1]))
             for w in data.get("peak_windows", [])
         )
+        overrides_raw = data.get("schedule_overrides", [])
+        if not isinstance(overrides_raw, list):
+            return None
+        overrides: list[ScheduleOverride] = []
+        for o_data in overrides_raw:
+            override = _schedule_override_from_dict(o_data)
+            if override is None:
+                return None
+            overrides.append(override)
         return PricingResult(
             provider_id=provider_id,
             models=models,
             source_url=str(data.get("source_url", "")),
             retrieved_at=str(data.get("retrieved_at", "")),
             peak_windows=windows,
+            schedule_overrides=tuple(overrides),
         )
     except (KeyError, TypeError, ValueError):
         return None

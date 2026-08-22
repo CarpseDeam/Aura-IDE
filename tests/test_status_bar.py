@@ -140,7 +140,7 @@ def test_refresh_shows_estimated_cost_from_priced_events(qapp) -> None:
         bar.deleteLater()
 
 
-def test_refresh_shows_cost_dash_for_legacy_aggregate_only_telemetry(qapp) -> None:
+def test_refresh_shows_cost_dash_for_eventless_telemetry(qapp) -> None:
     telemetry = ConversationTelemetry.from_dict({
         "per_model": {"gpt-5.4-mini": {"hit": 0, "miss": 100, "out": 50}},
         "latest_context": {"model_id": "gpt-5.4-mini", "input_tokens": 100, "context_window_tokens": 400_000},
@@ -155,7 +155,7 @@ def test_refresh_shows_cost_dash_for_legacy_aggregate_only_telemetry(qapp) -> No
             telemetry=telemetry,
         )
         assert bar._status_session.text() == "Cost —"
-        assert "Legacy" in bar._status_session.toolTip()
+        assert bar._status_session.toolTip() == "No priced usage recorded."
     finally:
         bar.deleteLater()
 
@@ -226,36 +226,31 @@ def test_format_footer_cost_states() -> None:
 
     from aura.conversation.telemetry import CostSummary
 
-    unknown = CostSummary(known_total=None, unknown_count=1, total_events=1, exact=False, any_stale=False, has_legacy_gap=False)
+    unknown = CostSummary(known_total=None, unknown_count=1, total_events=1, exact=False, any_stale=False)
     assert _format_footer_cost(unknown) == "Cost —"
 
-    estimated = CostSummary(
-        known_total=Decimal("0.6402"), unknown_count=0, total_events=1, exact=False, any_stale=False, has_legacy_gap=False
-    )
+    estimated = CostSummary(known_total=Decimal("0.6402"), unknown_count=0, total_events=1, exact=False, any_stale=False)
     assert _format_footer_cost(estimated) == "Est. cost $0.6402"
 
-    exact = CostSummary(
-        known_total=Decimal("0.6402"), unknown_count=0, total_events=1, exact=True, any_stale=False, has_legacy_gap=False
-    )
+    exact = CostSummary(known_total=Decimal("0.6402"), unknown_count=0, total_events=1, exact=True, any_stale=False)
     assert _format_footer_cost(exact) == "Cost $0.6402"
 
-    stale = CostSummary(
-        known_total=Decimal("0.6402"), unknown_count=0, total_events=1, exact=False, any_stale=True, has_legacy_gap=False
-    )
+    stale = CostSummary(known_total=Decimal("0.6402"), unknown_count=0, total_events=1, exact=False, any_stale=True)
     assert _format_footer_cost(stale) == "Est. cost $0.6402 · stale"
 
-    tiny = CostSummary(
-        known_total=Decimal("0.00001"), unknown_count=0, total_events=1, exact=False, any_stale=False, has_legacy_gap=False
-    )
+    tiny = CostSummary(known_total=Decimal("0.00001"), unknown_count=0, total_events=1, exact=False, any_stale=False)
     assert _format_footer_cost(tiny) == "Est. cost < $0.0001"
 
 
-def test_footer_cost_tooltip_distinguishes_no_usage_from_legacy_gap() -> None:
+def test_footer_cost_tooltip_is_generic_for_any_eventless_conversation() -> None:
+    """An eventless conversation shows the same generic wording whether it has
+    no usage at all, or only legacy aggregate-only telemetry with no events —
+    no historical cost is inferred or reconstructed either way."""
     empty = ConversationTelemetry()
-    assert _footer_cost_tooltip(empty, empty.cost_summary()) == "No usage recorded yet."
+    assert _footer_cost_tooltip(empty, empty.cost_summary()) == "No priced usage recorded."
 
     legacy = ConversationTelemetry.from_dict({
         "per_model": {"gpt-5.4-mini": {"hit": 0, "miss": 100, "out": 50}},
         "latest_context": {},
     })
-    assert "Legacy" in _footer_cost_tooltip(legacy, legacy.cost_summary())
+    assert _footer_cost_tooltip(legacy, legacy.cost_summary()) == "No priced usage recorded."

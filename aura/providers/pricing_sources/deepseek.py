@@ -8,12 +8,22 @@ cells are aligned to the model header row of the same table — no fixed
 column positions and no document-wide regex scraping — so a reordered or
 extended model table still parses, while a structurally broken page is
 rejected and the previous validated cache survives.
+
+The page also publishes an effective-dated Beijing-Time weekly rule (e.g.
+"Saturday and Sunday in Beijing Time are entirely off-peak"). That wording
+is DeepSeek-specific and interpreted only here; it's normalized into the
+shared, provider-neutral :class:`~aura.providers.pricing.ScheduleOverride`
+shape before being handed to :class:`~aura.providers.pricing.PricingResult`
+— the shared pricing module only ever evaluates that normalized schedule,
+never DeepSeek's wording directly. Beijing Time is treated as a fixed
+UTC+08:00 calendar offset (it observes no DST), so parsing never depends on
+the host's timezone database or locale.
 """
 
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 
 import httpx
@@ -23,6 +33,7 @@ from aura.providers.pricing import (
     PeakWindow,
     PricingResult,
     RateTier,
+    ScheduleOverride,
 )
 
 DEEPSEEK_PRICING_URL = "https://api-docs.deepseek.com/quick_start/pricing/"
@@ -41,9 +52,45 @@ _TIME_RANGE_RE = re.compile(r"(\d{1,2}):(\d{2})\s*[-–—]\s*(\d{1,2}):(\d{2})"
 _PEAK_HOURS_RE = re.compile(r"peak\s*hours", re.IGNORECASE)
 _SCHEDULE_CONTEXT_CHARS = 500
 
+_BEIJING_OFFSET_MINUTES = 8 * 60  # UTC+08:00, fixed — Beijing observes no DST
+
+_MONTH_NAMES = {
+    "january": 1, "february": 2, "march": 3, "april": 4,
+    "may": 5, "june": 6, "july": 7, "august": 8,
+    "september": 9, "october": 10, "november": 11, "december": 12,
+}
+_WEEKDAY_NAMES = {
+    "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+    "friday": 4, "saturday": 5, "sunday": 6,
+}
+
+_BEIJING_MENTION_RE = re.compile(r"beijing time", re.IGNORECASE)
+# "Effective 00:00 (Beijing Time) on Sunday, August 23, 2026, ..." — the
+# parenthetical around "Beijing Time" is optional so either phrasing matches.
+_EFFECTIVE_BEIJING_RE = re.compile(
+    r"Effective\s+(\d{1,2}):(\d{2})\s*\(?Beijing Time\)?\s+on\s+[A-Za-z]+,\s+"
+    r"([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})",
+    re.IGNORECASE,
+)
+# "... off-peak rates applying throughout the day on weekends (Saturdays and
+# Sundays, Beijing Time)." — the tier and the day-name list both come from
+# this clause; the parenthetical must itself confirm Beijing Time so an
+# unrelated "weekends" mention elsewhere on the page can't match.
+_ALL_DAY_TIER_RULE_RE = re.compile(
+    r"(off[- ]?peak|peak)\s+rates?\s+applying\s+throughout\s+the\s+day\s+on\s+weekends?\s*\(([^)]*)\)",
+    re.IGNORECASE,
+)
+
 
 def _norm(text: str) -> str:
     return " ".join(text.split()).strip()
+
+
+def _page_text(html: str) -> str:
+    """Strip tags/scripts/styles down to whitespace-normalized visible text."""
+    text = re.sub(r"<script.*?</script>|<style.*?</style>", " ", html, flags=re.S | re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", " ", text)
+    return " ".join(text.split())
 
 
 class _TableParser(HTMLParser):
@@ -174,9 +221,7 @@ def _parse_peak_windows(html: str) -> tuple[PeakWindow, ...] | None:
     when a published schedule cannot be parsed (the caller rejects the
     whole result so the previous valid cache survives).
     """
-    text = re.sub(r"<script.*?</script>|<style.*?</style>", " ", html, flags=re.S | re.IGNORECASE)
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = " ".join(text.split())
+    text = _page_text(html)
     match = _PEAK_HOURS_RE.search(text)
     if match is None:
         return ()
@@ -192,6 +237,67 @@ def _parse_peak_windows(html: str) -> tuple[PeakWindow, ...] | None:
     if not windows:
         return None
     return tuple(windows)
+
+
+def _weekday_index(name: str) -> int | None:
+    """Map a (possibly plural, e.g. "Saturdays") day name to Mon=0..Sun=6."""
+    key = name.strip().lower()
+    if key.endswith("s") and key[:-1] in _WEEKDAY_NAMES:
+        key = key[:-1]
+    return _WEEKDAY_NAMES.get(key)
+
+
+def _parse_schedule_overrides(html: str) -> tuple[ScheduleOverride, ...] | None:
+    """Parse DeepSeek's effective-dated Beijing-Time weekly rule, if any.
+
+    Looks for wording of the shape "Effective HH:MM (Beijing Time) on
+    <Weekday>, <Month> <Day>, <Year> ... <tier> rates applying throughout the
+    day on weekends (<Weekday list>, Beijing Time)." Returns the resulting
+    override(s), ``()`` when the page makes no Beijing-Time claim at all, or
+    None when it does but either the effective date or the weekday/tier rule
+    can't be parsed in full — the caller then rejects the whole fetch rather
+    than silently dropping the rule.
+    """
+    text = _page_text(html)
+    if _BEIJING_MENTION_RE.search(text) is None:
+        return ()
+
+    effective_match = _EFFECTIVE_BEIJING_RE.search(text)
+    weekly_match = _ALL_DAY_TIER_RULE_RE.search(text)
+    if effective_match is None or weekly_match is None:
+        return None
+
+    hour, minute, month_name, day, year = effective_match.groups()
+    month = _MONTH_NAMES.get(month_name.strip().lower())
+    if month is None:
+        return None
+    try:
+        beijing_naive = datetime(int(year), month, int(day), int(hour), int(minute))
+    except ValueError:
+        return None
+    effective_utc = (beijing_naive - timedelta(minutes=_BEIJING_OFFSET_MINUTES)).replace(tzinfo=timezone.utc)
+
+    tier_text, days_clause = weekly_match.groups()
+    if _BEIJING_MENTION_RE.search(days_clause) is None:
+        return None  # the day-name parenthetical must itself confirm Beijing Time
+    weekdays = [
+        idx
+        for token in re.findall(r"[A-Za-z]+", days_clause)
+        if (idx := _weekday_index(token)) is not None
+    ]
+    if not weekdays:
+        return None
+    normalized_tier = tier_text.strip().lower().replace(" ", "").replace("-", "")
+    tier = "peak" if normalized_tier == "peak" else "off_peak"
+
+    return (
+        ScheduleOverride(
+            effective_at=effective_utc.isoformat(),
+            utc_offset_minutes=_BEIJING_OFFSET_MINUTES,
+            weekdays=tuple(sorted(set(weekdays))),
+            tier=tier,
+        ),
+    )
 
 
 class DeepSeekPricingSource:
@@ -227,11 +333,15 @@ class DeepSeekPricingSource:
             peak_windows = _parse_peak_windows(html)
             if peak_windows is None:
                 return None
+            schedule_overrides = _parse_schedule_overrides(html)
+            if schedule_overrides is None:
+                return None
             return PricingResult(
                 provider_id=self.provider_id,
                 models=built,
                 source_url=self.source_url,
                 retrieved_at=datetime.now(timezone.utc).isoformat(),
                 peak_windows=peak_windows,
+                schedule_overrides=schedule_overrides,
             )
         return None

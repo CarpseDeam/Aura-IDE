@@ -155,7 +155,6 @@ class CostSummary:
     total_events: int
     exact: bool
     any_stale: bool
-    has_legacy_gap: bool
 
 
 @dataclass
@@ -256,7 +255,6 @@ class ConversationTelemetry:
 
     def cost_summary(self) -> CostSummary:
         """Summarize priced events for footer display — never re-prices anything."""
-        has_legacy_gap = bool(self.per_model) and not self.events
         known_costs = [e.cost_decimal() for e in self.events]
         known = [c for c in known_costs if c is not None]
         unknown_count = len(self.events) - len(known)
@@ -267,7 +265,6 @@ class ConversationTelemetry:
                 total_events=len(self.events),
                 exact=False,
                 any_stale=False,
-                has_legacy_gap=has_legacy_gap,
             )
         total = sum(known, Decimal(0))
         priced_events = [e for e in self.events if e.cost_decimal() is not None]
@@ -279,7 +276,6 @@ class ConversationTelemetry:
             total_events=len(self.events),
             exact=exact,
             any_stale=any_stale,
-            has_legacy_gap=has_legacy_gap,
         )
 
     def to_dict(self) -> dict[str, Any]:

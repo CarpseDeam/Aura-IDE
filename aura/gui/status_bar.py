@@ -38,8 +38,7 @@ def _format_footer_cost(summary: CostSummary) -> str:
 
     Every number here is the sum of ``UsageEvent`` costs actually calculated
     at record time — never a fresh repricing of aggregate tokens. A
-    conversation with no priced events (legacy aggregate-only telemetry, or
-    no usage yet) is honestly unpriceable: ``Cost —``.
+    conversation with no priced events is honestly unpriceable: ``Cost —``.
     """
     if summary.known_total is None:
         return "Cost —"
@@ -60,12 +59,7 @@ def _format_footer_cost(summary: CostSummary) -> str:
 def _footer_cost_tooltip(telemetry: ConversationTelemetry, summary: CostSummary) -> str:
     """Audit-ready tooltip: provider/model breakdown, tier, source, freshness."""
     if not telemetry.events:
-        if summary.has_legacy_gap:
-            return (
-                "Legacy conversation — recorded token totals were saved without "
-                "per-request pricing data, so cost cannot be calculated for this usage."
-            )
-        return "No usage recorded yet."
+        return "No priced usage recorded."
 
     lines: list[str] = []
     groups: dict[tuple[str, str, str], list] = {}
@@ -92,8 +86,6 @@ def _footer_cost_tooltip(telemetry: ConversationTelemetry, summary: CostSummary)
 
     if summary.unknown_count:
         lines.append(f"{summary.unknown_count} call(s) have no pricing data and are excluded from the total.")
-    if summary.has_legacy_gap:
-        lines.append("Earlier usage in this conversation predates per-request pricing and is not included.")
     lines.append("Calculated from published rates — not a provider-issued invoice.")
     return "\n".join(lines)
 
