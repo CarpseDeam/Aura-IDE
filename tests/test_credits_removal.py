@@ -357,6 +357,15 @@ class TestProductionModeEntry:
         monkeypatch.setattr(aura.paths, "config_dir", lambda: profile)
         monkeypatch.setattr(aura.paths, "data_dir", lambda: profile)
 
+        # This window hydrates provider pricing at startup; keep this
+        # offline test off the network.
+        from aura.gui.main_window_pricing import MainWindowPricingController
+        monkeypatch.setattr(
+            MainWindowPricingController,
+            "schedule_startup_refresh",
+            lambda self, delay_ms=0: False,
+        )
+
         from aura.gui.main_window import MainWindow
         window = MainWindow()
         try:

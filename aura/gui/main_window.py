@@ -44,6 +44,7 @@ from aura.gui.left_pane import LeftPane
 from aura.gui.main_window_companion import MainWindowCompanionController
 from aura.gui.main_window_drones import MainWindowDroneController
 from aura.gui.main_window_handoff import MainWindowHandoffController
+from aura.gui.main_window_pricing import MainWindowPricingController
 from aura.gui.main_window_settings import MainWindowSettingsController
 from aura.gui.main_window_signal_wiring import MainWindowSignalWiring
 from aura.gui.main_window_terminal import MainWindowTerminalController
@@ -120,6 +121,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self._toolbar)
         self._settings_controller = MainWindowSettingsController(self)
         self._update_controller = MainWindowUpdateController(self._toolbar, parent=self)
+        self._pricing_controller = MainWindowPricingController(
+            self._settings.provider, parent=self
+        )
 
         # ----- status bar -----
         self._status_bar = AuraStatusBar(
@@ -349,6 +353,11 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # Check for updates in the background.
         self._update_controller.schedule_background_check(2000)
 
+        # Hydrate official provider pricing once per launch, off the UI
+        # thread. Settings/Models discovery is the only other refresh, and
+        # a normal launch never opens it.
+        self._pricing_controller.schedule_startup_refresh()
+
         # Restore saved window geometry/state after construction.
         if self._settings.main_window_geometry:
             QTimer.singleShot(0, self._restore_layout)
@@ -382,6 +391,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._settings.playground_vertical_splitter_sizes = playground_vert
         save_settings(self._settings)
         self._companion_controller.stop()
+        self._pricing_controller.shutdown()
         self._bridge.shutdown()
         # Closes the Windows MCP subprocess. Without this the server outlives
         # the app that launched it.

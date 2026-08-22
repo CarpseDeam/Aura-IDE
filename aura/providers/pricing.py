@@ -503,12 +503,12 @@ def load_pricing_cache() -> None:
 def refresh_provider_pricing(provider_id: str) -> PricingResult | None:
     """Fetch and validate a provider's official rates once.
 
-    Called from the provider-discovery flow (which already runs off the UI
-    thread) — never from the status bar or a cost calculation. A network
-    failure, malformed page, missing model, or incomplete result preserves
-    the previous valid result, falling back to the last-known-good cache
-    when nothing valid is in memory. Returns the result now in force, or
-    None when there is none.
+    Called once per launch by the startup pricing controller, and from the
+    Settings -> Models discovery flow — both off the UI thread, and never
+    from the status bar or a cost calculation. A network failure, malformed
+    page, missing model, or incomplete result preserves the previous valid
+    result, falling back to the last-known-good cache when nothing valid is
+    in memory. Returns the result now in force, or None when there is none.
     """
     source_cls = get_source(provider_id)
     if source_cls is None:

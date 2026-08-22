@@ -181,11 +181,12 @@ def fetch_provider_models(provider_id: str) -> tuple[dict[str, ModelInfo], dict[
     Returns (models_dict, pricing_dict, error_message).
     """
     # Providers with a pricing source refresh their official published rates
-    # here, inside the discovery worker thread — startup/provider discovery
-    # and the model-refresh action both flow through this function. The
-    # pricing store keeps only validated results, so a failed or malformed
-    # fetch never disturbs cost reporting; the status bar reads the store
-    # alone and never fetches.
+    # here, inside the discovery worker thread — this function runs only for
+    # Settings -> Models discovery and the model-refresh action, never on an
+    # ordinary launch, which hydrates pricing through
+    # MainWindowPricingController instead. The pricing store keeps only
+    # validated results, so a failed or malformed fetch never disturbs cost
+    # reporting; the status bar reads the store alone and never fetches.
     refresh_provider_pricing(provider_id)
     try:
         client = provider_registry.create_client(provider_id)
