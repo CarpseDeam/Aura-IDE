@@ -26,12 +26,6 @@ class ExecutionToolEventRouter:
         self._playground = playground
         self._chat = chat
 
-    def on_execution_tool_args(
-        self, tool_call_id: str, execution_tool_id: str, fragment: str
-    ) -> None:
-        """Forward tool call args delta to playground."""
-        self._playground.append_tool_args(execution_tool_id, fragment)
-
     def on_execution_tool_result(
         self,
         parent_tool_id: str,

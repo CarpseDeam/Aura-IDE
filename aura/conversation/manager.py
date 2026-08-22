@@ -150,12 +150,8 @@ class ConversationManager:
             event_bus=self._event_bus,
         )
         #: Blocker reason from the most recent turn's successful
-        #: ``report_blocker``, for completion receipts. Reset per send.
+        #: ``report_blocker``. Reset per send.
         self._last_turn_blocked_reason: str = ""
-        #: Whether the most recent turn recorded a successful structured
-        #: ``report_already_satisfied``. Receipt bookkeeping only — never
-        #: inferred from the absence of a write. Reset per send.
-        self._last_turn_already_satisfied: bool = False
         #: The most recent send's frozen skill turn state (or None when the
         #: send exposed no candidates). Kept so the bridge can surface the
         #: activation ledger after the turn completes.
@@ -169,11 +165,6 @@ class ConversationManager:
     def last_turn_blocked_reason(self) -> str:
         """Blocker text from the last turn's successful ``report_blocker``."""
         return self._last_turn_blocked_reason
-
-    @property
-    def last_turn_already_satisfied(self) -> bool:
-        """Whether the last turn recorded structured already-satisfied evidence."""
-        return self._last_turn_already_satisfied
 
     def skill_activation_log(self) -> list[dict]:
         """Structured skill activation ledger of the last completed send.
@@ -283,7 +274,6 @@ class ConversationManager:
         whether the model is allowed to stop.
         """
         self._last_turn_blocked_reason = ""
-        self._last_turn_already_satisfied = False
         # Web research is offered when the search backend is genuinely
         # configured — never because Aura read the user's sentence. Resolved
         # once per turn so the catalog, and the provider's cached request

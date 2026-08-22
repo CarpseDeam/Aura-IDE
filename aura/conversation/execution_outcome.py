@@ -27,9 +27,6 @@ class ExecutionOutcomeStatus(str, enum.Enum):
     scope_mismatch = "scope_mismatch"
     """Execution determined the request was out of scope or unclear."""
 
-    needs_followup = "needs_followup"
-    """Execution stopped before completion and needs another harness turn."""
-
     approval_rejected = "approval_rejected"
     """User rejected a required approval request."""
 

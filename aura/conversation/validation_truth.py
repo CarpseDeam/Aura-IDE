@@ -8,6 +8,7 @@ own — a command can run successfully but produce a failing validation result.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -99,8 +100,67 @@ def normalize_validation_command_key(command: str, cwd: str = "") -> str:
     return key
 
 
+def _record_passed(record: dict[str, Any]) -> bool:
+    if "validation_ok" in record:
+        return bool(record["validation_ok"])
+    return validation_payload_passed(record)
+
+
+def _record_failed(record: dict[str, Any]) -> bool:
+    if "validation_ok" in record:
+        return not bool(record["validation_ok"])
+    return validation_payload_failed(record)
+
+
+@dataclass(frozen=True)
+class ValidationOutcome:
+    """Per-command validation history for a run: pass/fail with repair history."""
+
+    command: str
+    attempts: int
+    passed: bool
+    repaired: bool  # failed at least once, then passed
+    last_exit_code: Any = None
+
+
+def summarize_validation(
+    validation_results: list[dict[str, Any]],
+) -> list[ValidationOutcome]:
+    """Collapse a validation ledger into one outcome per normalized command.
+
+    Preserves the failure->repair->rerun story: a command that failed and
+    later passed is reported with ``repaired=True``.
+    """
+    ordered: list[str] = []
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for record in validation_results:
+        command = " ".join(str(record.get("command") or "").split())
+        if command not in grouped:
+            grouped[command] = []
+            ordered.append(command)
+        grouped[command].append(record)
+
+    outcomes: list[ValidationOutcome] = []
+    for command in ordered:
+        records = grouped[command]
+        any_failed = any(_record_failed(record) for record in records)
+        final_passed = _record_passed(records[-1])
+        outcomes.append(
+            ValidationOutcome(
+                command=command,
+                attempts=len(records),
+                passed=final_passed,
+                repaired=bool(any_failed and final_passed),
+                last_exit_code=records[-1].get("exit_code"),
+            )
+        )
+    return outcomes
+
+
 __all__ = [
+    "ValidationOutcome",
     "normalize_validation_command_key",
+    "summarize_validation",
     "validation_payload_counts_as_validation",
     "validation_payload_failed",
     "validation_payload_passed",

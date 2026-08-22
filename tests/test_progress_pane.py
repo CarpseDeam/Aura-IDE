@@ -13,9 +13,10 @@ Checklist, a truthful terminal status chip, and the Stop button. Proves:
 4. Stop still emits the cancellation request.
 5. Execution reasoning/activity/diff-decided routing methods and connections
    were removed, so those events can no longer create log/card content.
-6. Non-success terminal outcomes (cancellation, API/harness errors, failed
-   finishes) remain visibly surfaced in chat; a plain success does not add a
-   duplicate receipt.
+6. A normal finish, a failed finish, and a genuine API error never add a
+   chat card from the executionFinished/executionApiError paths — the
+   canonical ``ConversationBridge.apiError`` path is chat's sole error
+   surface, and a plain success leaves chat untouched.
 """
 
 from __future__ import annotations
@@ -32,7 +33,6 @@ from aura.gui.execution_finish_outcome import (
     STATUS_ERROR,
     terminal_status_label,
 )
-from aura.gui.execution_finish_presenter import ExecutionFinishPresenter
 from aura.gui.execution_handler import ExecutionEventHandler
 from aura.gui.execution_tool_event_router import ExecutionToolEventRouter
 from aura.gui.info_hub_pane import InfoHubPane
@@ -58,10 +58,8 @@ class _FakeBridge(QObject):
     """Mirrors the subset of ConversationBridge signals ExecutionEventHandler wires."""
 
     executionStarted = Signal(str)
-    executionFinished = Signal(str, bool, str, str)
+    executionFinished = Signal(str, bool, str)
     executionCancelled = Signal(str)
-    executionToolCallArgs = Signal(str, str, str)
-    executionToolCallEnd = Signal(str, str)
     executionToolResult = Signal(str, str, str, bool, str, dict)
     executionFileEditLifecycle = Signal(str, str, str, str, list, str)
     executionWorkspaceReconcileRequested = Signal(str, str)
@@ -76,9 +74,6 @@ class _FakeBridge(QObject):
     terminalOutput = Signal(str, str)
 
     production_run_id = ""
-
-    def execution_result_metadata(self, tool_call_id: str) -> dict:
-        return {}
 
 
 class _RecordingChat:
@@ -129,7 +124,7 @@ def test_completion_does_not_clear_checklist(qapp) -> None:
     playground = AuraPlayground()
     playground.update_task_checklist(CHECKLIST_ITEMS)
 
-    playground.execution_finished(True, "All done.")
+    playground.execution_finished(True)
 
     widget = playground._info_hub._todo_widget
     assert set(widget._rows.keys()) == {"1", "2", "3"}
@@ -164,7 +159,7 @@ def test_api_error_does_not_clear_checklist(qapp) -> None:
 def test_next_execution_clears_prior_checklist(qapp) -> None:
     playground = AuraPlayground()
     playground.update_task_checklist(CHECKLIST_ITEMS)
-    playground.execution_finished(True, "All done.")
+    playground.execution_finished(True)
 
     playground.begin_assistant()
 
@@ -177,7 +172,7 @@ def test_next_execution_clears_prior_checklist(qapp) -> None:
 def test_explicit_clear_clears_prior_checklist(qapp) -> None:
     playground = AuraPlayground()
     playground.update_task_checklist(CHECKLIST_ITEMS)
-    playground.execution_finished(False, "Blocked.", status="validation_failed")
+    playground.execution_finished(False, status="validation_failed")
 
     playground.clear()
 
@@ -238,12 +233,17 @@ def test_playground_no_longer_exposes_removed_execution_log_forwarders() -> None
         "add_diff_card",
         "add_error",
         "add_tool_call",
+        "append_tool_args",
     ):
         assert not hasattr(AuraPlayground, removed), removed
 
 
 def test_router_no_longer_forwards_tool_call_start_or_diff_decided() -> None:
-    for removed in ("on_execution_tool_call_start", "on_execution_diff_decided"):
+    for removed in (
+        "on_execution_tool_call_start",
+        "on_execution_diff_decided",
+        "on_execution_tool_args",
+    ):
         assert not hasattr(ExecutionToolEventRouter, removed), removed
 
 
@@ -254,7 +254,7 @@ def test_progress_header_title_is_progress(qapp) -> None:
     assert "EXECUTION LOG" not in titles
 
 
-# ---- 6. non-success outcomes stay visible in chat ---------------------------
+# ---- 6. genuine errors reach chat exactly once, elsewhere never -------------
 
 
 def test_terminal_status_label_matrix() -> None:
@@ -279,92 +279,49 @@ def test_terminal_status_label_has_no_needs_followup_state() -> None:
     assert not hasattr(execution_finish_outcome, "STATUS_NEEDS_FOLLOWUP")
 
 
-class _FakePresenterPlayground:
-    def __init__(self) -> None:
-        self.calls: list[tuple] = []
-
-    def stop_aura(self) -> None:
-        self.calls.append(("stop_aura",))
-
-    def execution_finished(self, ok, summary, status=None) -> None:
-        self.calls.append(("execution_finished", ok, summary, status))
-
-    def set_execution_running(self, running) -> None:
-        self.calls.append(("set_execution_running", running))
-
-
-def test_presenter_success_does_not_add_chat_receipt() -> None:
-    chat = _RecordingChat()
-    presenter = ExecutionFinishPresenter(chat, _FakePresenterPlayground())
-
-    presenter.present(
-        tool_call_id="t", ok=True, summary="All good.",
-        status="completed", metadata={},
-    )
-
-    assert chat.error_calls == []
-
-
-def test_presenter_failure_surfaces_error_in_chat() -> None:
-    chat = _RecordingChat()
-    presenter = ExecutionFinishPresenter(chat, _FakePresenterPlayground())
-
-    presenter.present(
-        tool_call_id="t", ok=False, summary="Validation failed: x",
-        status="validation_failed", metadata={},
-    )
-
-    assert chat.error_calls == [(STATUS_ERROR, "Validation failed: x", False, True)]
-
-
-def test_presenter_unverified_completion_shows_done_and_no_chat_card() -> None:
-    """A successful-but-unverified production run must never surface the
-    retired generic 'Needs follow-up' card — it shows Done, like any other
-    successful completion."""
-    chat = _RecordingChat()
-    presenter = ExecutionFinishPresenter(chat, _FakePresenterPlayground())
-
-    presenter.present(
-        tool_call_id="t", ok=True, summary="Done, unverified.",
-        status="completed_unverified", metadata={},
-    )
-
-    assert chat.error_calls == []
-
-
-def test_handler_cancellation_surfaces_in_chat_and_sets_pane_status(qapp) -> None:
+def test_handler_cancellation_surfaces_compact_info_and_sets_pane_status(qapp) -> None:
     bridge, chat, playground, handler = _make_handler(qapp)
     handler._active_execution_tool_call_id = "run-1"
 
     bridge.executionCancelled.emit("run-1")
 
     assert chat.info_calls == [("Execution", "Stopped by user.")]
+    assert chat.error_calls == []
     assert playground._info_hub._status_chip.text() == STATUS_CANCELLED
 
 
-def test_handler_api_error_surfaces_in_chat_and_sets_pane_status(qapp) -> None:
+def test_handler_api_error_marks_pane_status_without_a_chat_card(qapp) -> None:
+    """The executionApiError path must never add a chat error card — the
+    canonical ConversationBridge.apiError -> MainWindow._on_api_error path is
+    chat's sole presentation for a genuine API/harness error."""
     bridge, chat, playground, handler = _make_handler(qapp)
     handler._active_execution_tool_call_id = "run-1"
 
     bridge.executionApiError.emit("run-1", 500, "boom")
 
-    assert chat.error_calls == [("API Error 500", "boom", False, True)]
+    assert chat.error_calls == []
+    assert chat.info_calls == []
     assert playground._info_hub._status_chip.text() == STATUS_ERROR
 
 
-def test_handler_finished_success_no_chat_receipt(qapp) -> None:
+def test_handler_finished_success_adds_no_chat_card(qapp) -> None:
     bridge, chat, playground, _handler = _make_handler(qapp)
 
-    bridge.executionFinished.emit("run-1", True, "All good.", "completed")
+    bridge.executionFinished.emit("run-1", True, "completed")
 
     assert chat.error_calls == []
+    assert chat.info_calls == []
     assert playground._info_hub._status_chip.text() == STATUS_DONE
 
 
-def test_handler_finished_failure_surfaces_in_chat(qapp) -> None:
+def test_handler_finished_failure_adds_no_chat_card(qapp) -> None:
+    """A failed finish (e.g. validation_failed) still leaves Progress at
+    Error, but must never synthesize a chat card — the model's own final
+    response, and terminal output already in the terminal, are the record."""
     bridge, chat, playground, _handler = _make_handler(qapp)
 
-    bridge.executionFinished.emit("run-1", False, "It broke.", "harness_error")
+    bridge.executionFinished.emit("run-1", False, "harness_error")
 
-    assert chat.error_calls == [(STATUS_ERROR, "It broke.", False, True)]
+    assert chat.error_calls == []
+    assert chat.info_calls == []
     assert playground._info_hub._status_chip.text() == STATUS_ERROR

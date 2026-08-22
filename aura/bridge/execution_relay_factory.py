@@ -31,7 +31,6 @@ def create_execution_relay(
     relay = ExecutionEventRelay(
         approval_proxy=approval_proxy,
         execution_model=execution_model,
-        suppress_final_report_activity=False,
         event_bus=event_bus,
     )
     # Stream events

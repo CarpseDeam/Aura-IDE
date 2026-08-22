@@ -10,17 +10,15 @@ tracking dict and emits signals so that MainWindow can react to state changes
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject, Signal
 
 from aura.config import redact_secrets
 from aura.conversation.telemetry import ConversationTelemetry, context_window_for_model
 
 _log = logging.getLogger(__name__)
 
-from aura.gui.execution_finish_presenter import ExecutionFinishPresenter
 from aura.gui.execution_tool_event_router import ExecutionToolEventRouter
 
 if TYPE_CHECKING:
@@ -32,18 +30,16 @@ if TYPE_CHECKING:
     from aura.gui.playground import AuraPlayground
 
 
-@dataclass(frozen=True)
-class _PendingExecutionFinish:
-    tool_call_id: str
-    ok: bool
-    summary: str
-    status: str | None
-    generation: int
-
-
 class ExecutionEventHandler(QObject):
     """Owns execution signal wiring and forwards bridge execution events to the
     chat view and playground.
+
+    A normal production turn's terminal outcome is owned by the Progress
+    pane's status chip alone: reaching this handler's finish/cancel/API-error
+    slots never adds a chat card. The one exception is a genuine API/harness
+    error, which chat already shows exactly once through the canonical
+    ``ConversationBridge.apiError`` -> ``MainWindow._on_api_error`` path; this
+    handler only marks the pane's status for that case.
 
     Attributes:
         usage_updated: Emitted when conversation telemetry changes so that
@@ -71,9 +67,6 @@ class ExecutionEventHandler(QObject):
         self._settings = settings
         self._conversation_telemetry = ConversationTelemetry()
         self._active_execution_tool_call_id: str | None = None
-        self._pending_execution_finish: _PendingExecutionFinish | None = None
-        self._pending_execution_finish_generation = 0
-        self._finish_presenter = ExecutionFinishPresenter(chat, playground)
         self._tool_router = ExecutionToolEventRouter(playground=playground, chat=chat)
 
     # ---- public property -------------------------------------------------------
@@ -112,8 +105,6 @@ class ExecutionEventHandler(QObject):
         self._bridge.executionStarted.connect(self._on_execution_started)
         self._bridge.executionFinished.connect(self._on_execution_finished)
         self._bridge.executionCancelled.connect(self._on_execution_cancelled)
-        self._bridge.executionToolCallArgs.connect(self._tool_router.on_execution_tool_args)
-        self._bridge.executionToolCallEnd.connect(lambda _t, _w: None)
         self._bridge.executionToolResult.connect(self._tool_router.on_execution_tool_result)
         self._bridge.executionFileEditLifecycle.connect(
             self._tool_router.on_execution_file_edit_lifecycle
@@ -158,45 +149,10 @@ class ExecutionEventHandler(QObject):
 
         The production execution session emits one executionStarted per run.
         """
-        pending_finish = self._pending_execution_finish
-        if (
-            pending_finish is not None
-            and pending_finish.tool_call_id != tool_call_id
-        ):
-            self._pending_execution_finish = None
-            self._present_execution_finish(
-                tool_call_id=pending_finish.tool_call_id,
-                ok=pending_finish.ok,
-                summary=pending_finish.summary,
-                status=pending_finish.status,
-            )
-
-        _log.info(
-            "DIAGNOSTIC _on_execution_started tool_call_id=%s active_execution_tool_call_id=%s",
-            tool_call_id,
-            self._active_execution_tool_call_id,
-        )
         if self._active_execution_tool_call_id == tool_call_id:
-            if (
-                self._pending_execution_finish is not None
-                and self._pending_execution_finish.tool_call_id == tool_call_id
-            ):
-                _log.info(
-                    "execution_finish_cancelled_for_continuing_run tool_call_id=%s",
-                    tool_call_id,
-                )
-                self._pending_execution_finish = None
-            _log.info(
-                "DIAGNOSTIC execution_started_duplicate_ignored — skipping begin_assistant tool_call_id=%s",
-                tool_call_id,
-            )
             self.execution_running_changed.emit(True)
             return
 
-        _log.info(
-            "DIAGNOSTIC execution_started_first_call — calling begin_assistant tool_call_id=%s",
-            tool_call_id,
-        )
         self._active_execution_tool_call_id = tool_call_id
         # Direct production execution: the run is still in flight, so keep the
         # chat aura alive and point the user at the workspace instead of
@@ -212,90 +168,28 @@ class ExecutionEventHandler(QObject):
         self,
         tool_call_id: str,
         ok: bool,
-        summary: str,
         status: str | None = None,
     ) -> None:
-        """Forward execution finished to playground.
+        """Finish the Progress pane for one production turn.
 
-        The production execution session emits one executionFinished signal per
-        run.
+        The production execution session emits one executionFinished signal
+        per run, carrying only the run identity and truthful terminal
+        status — never a summary/report string. A normal completed turn adds
+        no chat card; the model's own final response is chat's sole
+        conclusion for the turn.
         """
         _log.info(
             "execution_finished tool_call_id=%s status=%s",
             tool_call_id, status,
         )
-
-        if self._active_execution_tool_call_id == tool_call_id:
-            self._pending_execution_finish_generation += 1
-            generation = self._pending_execution_finish_generation
-            self._pending_execution_finish = _PendingExecutionFinish(
-                tool_call_id=tool_call_id,
-                ok=ok,
-                summary=summary,
-                status=status,
-                generation=generation,
-            )
-            QTimer.singleShot(
-                0,
-                lambda: self._flush_pending_execution_finish(tool_call_id, generation),
-            )
-            return
-
-        self._present_execution_finish(
-            tool_call_id=tool_call_id,
-            ok=ok,
-            summary=summary,
-            status=status,
-        )
-
-    def _flush_pending_execution_finish(self, tool_call_id: str, generation: int) -> None:
-        pending = self._pending_execution_finish
-        if (
-            pending is None
-            or pending.tool_call_id != tool_call_id
-            or pending.generation != generation
-        ):
-            return
-        self._pending_execution_finish = None
-        self._present_execution_finish(
-            tool_call_id=pending.tool_call_id,
-            ok=pending.ok,
-            summary=pending.summary,
-            status=pending.status,
-        )
-
-    def _present_execution_finish(
-        self,
-        *,
-        tool_call_id: str,
-        ok: bool,
-        summary: str,
-        status: str | None,
-    ) -> None:
-        metadata = self._execution_result_metadata(tool_call_id)
-        self._finish_presenter.present(
-            tool_call_id=tool_call_id,
-            ok=ok,
-            summary=summary,
-            status=status,
-            metadata=metadata,
-        )
+        self._playground.execution_finished(ok, status=status)
         if self._active_execution_tool_call_id == tool_call_id:
             self._active_execution_tool_call_id = None
         self.execution_running_changed.emit(False)
 
-    def _execution_result_metadata(self, tool_call_id: str) -> dict:
-        """Read run metadata through the bridge's role-neutral accessor."""
-        getter = getattr(self._bridge, "execution_result_metadata", None)
-        if not callable(getter):
-            return {}
-        metadata = getter(tool_call_id)
-        return metadata if isinstance(metadata, dict) else {}
-
     def _on_execution_cancelled(self, tool_call_id: str) -> None:
         """Stop execution aura, surface the stop in chat, and set the pane status."""
 
-        self._clear_pending_execution_finish(tool_call_id)
         self._playground.stop_aura()
         self._chat.add_info("Execution", "Stopped by user.")
         self._playground.execution_cancelled()
@@ -307,27 +201,23 @@ class ExecutionEventHandler(QObject):
     # ---- execution error slots --------------------------------------------------
 
     def _on_execution_api_error(self, tool_call_id: str, status: int, message: str) -> None:
-        """Surface an API/harness error in chat and mark the pane's status."""
+        """Mark the Progress pane's status for an API/harness error.
+
+        Chat presentation for a genuine API/transport/harness error happens
+        exactly once, through the canonical ``ConversationBridge.apiError`` ->
+        ``MainWindow._on_api_error`` path — this handler must never add a
+        second chat error card for the same failure.
+        """
         _log.info(
             "api_error tool_call_id=%s status=%s message_redacted=%s",
             tool_call_id, status, redact_secrets(message)[:200],
         )
-        title = f"API Error {status}" if status > 0 else "Execution Error"
-        self._chat.add_error(title, message)
         self._playground.mark_execution_error()
         self._playground.stop_aura()
         self._playground.set_execution_running(False)
-        self._clear_pending_execution_finish(tool_call_id)
         if self._active_execution_tool_call_id == tool_call_id:
             self._active_execution_tool_call_id = None
         self.execution_running_changed.emit(False)
-
-    def _clear_pending_execution_finish(self, tool_call_id: str) -> None:
-        if (
-            self._pending_execution_finish is not None
-            and self._pending_execution_finish.tool_call_id == tool_call_id
-        ):
-            self._pending_execution_finish = None
 
     def _on_execution_usage(
         self,

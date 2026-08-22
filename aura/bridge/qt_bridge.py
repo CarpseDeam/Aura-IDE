@@ -6,7 +6,7 @@ Normal Aura coding is one continuous production run:
       → selected production provider and model
       → one ConversationManager over the original conversation
       → inspection → live TODO → edits → terminal → diagnosis → repair
-      → validation rerun → one factual completion receipt
+      → validation rerun → one terminal lifecycle status
 
 - send() spawns a QThread that runs ConversationManager.send against the
   `generate_production_code` hook.
@@ -118,7 +118,6 @@ class _ConversationRunner(QObject):
         self._production_session = production_session
         self._read_only_turn = read_only_turn
         self._blocked_reason: str = ""
-        self._already_satisfied: bool = False
 
     @Slot()
     def run(self) -> None:
@@ -132,10 +131,19 @@ class _ConversationRunner(QObject):
                 temperature=self._temperature,
             )
             self._blocked_reason = self._manager.last_turn_blocked_reason
-            self._already_satisfied = self._manager.last_turn_already_satisfied
         except Exception as exc:
+            from aura.client import ApiError
             from aura.config import redact_secrets
-            self.apiError.emit(-1, redact_secrets(f"{type(exc).__name__}: {exc}"))
+            message = redact_secrets(f"{type(exc).__name__}: {exc}")
+            if not self._read_only_turn and self._production_session is not None:
+                # Route the exception through the session's own ledger so its
+                # terminal-status resolution sees it — otherwise the run would
+                # later resolve as a false-positive completion and overwrite
+                # this error on the Progress pane with "Done".
+                self._production_session.handle_event(
+                    ApiError(status_code=None, message=message)
+                )
+            self.apiError.emit(-1, message)
         finally:
             if self._cancel.is_set():
                 self._manager.history.pop_if_empty_assistant_message()
@@ -202,7 +210,7 @@ class ConversationBridge(QObject):
 
     # Workspace projection signals for the active production execution.
     executionStarted = Signal(str)
-    executionFinished = Signal(str, bool, str, str)
+    executionFinished = Signal(str, bool, str)
     executionCancelled = Signal(str)
     executionReasoningDelta = Signal(str, str)
     executionContentDelta = Signal(str, str)
@@ -216,7 +224,6 @@ class ConversationBridge(QObject):
     executionTerminalCommandStarted = Signal(str, str, str, str)
     executionApiError = Signal(str, int, str)
     executionUsage = Signal(str, str, int, int, int, int)
-    executionActivityUpdated = Signal(str, list)  # Activity entries (append-only execution heartbeat)
     taskChecklistUpdated = Signal(str, list)  # Full Task Checklist snapshot
     executionTerminalOutput = Signal(str, str, str)  # parent_tool_id, execution_tool_id, text
     executionAgentProcessStarted = Signal(str, str, str, str)
@@ -314,7 +321,6 @@ class ConversationBridge(QObject):
         session.executionTerminalCommandStarted.connect(self.executionTerminalCommandStarted)
         session.executionApiError.connect(self.executionApiError)
         session.executionUsage.connect(self.executionUsage)
-        session.executionActivityUpdated.connect(self.executionActivityUpdated)
         session.taskChecklistUpdated.connect(self.taskChecklistUpdated)
         session.executionTerminalOutput.connect(self.executionTerminalOutput)
         session.executionAgentProcessStarted.connect(self.executionAgentProcessStarted)
@@ -344,10 +350,6 @@ class ConversationBridge(QObject):
     @property
     def production_run_id(self) -> str:
         return self._production_session.run_id
-
-    def execution_result_metadata(self, run_id: str) -> dict:
-        """Role-neutral result metadata accessor for the active execution."""
-        return self._production_session.result_metadata(run_id)
 
     def context_gearbox_metadata(self) -> dict:
         return copy.deepcopy(self._context_gearbox_metadata)
@@ -566,8 +568,8 @@ class ConversationBridge(QObject):
 
         # A Read Only collaborative turn stays conversation-first: no
         # production workspace session is begun, so the right-side worker
-        # presentation (start, activity, live TODO, completion receipt) stays
-        # visually idle. Normal turns begin one stable execution identity.
+        # presentation (start, live TODO, terminal status) stays visually
+        # idle. Normal turns begin one stable execution identity.
         if not self._turn_read_only:
             self._production_session.begin(model=str(model))
 
@@ -667,25 +669,19 @@ class ConversationBridge(QObject):
         self._thread = None
         self._conversation_runner = None
 
-        # Exactly one completion receipt per production turn, built from the
+        # Exactly one finish lifecycle per production turn, resolved from the
         # run's structured execution evidence, then back to idle. A successful
-        # ``report_blocker`` names the reason so the receipt reports the turn as
-        # blocked, never as completed. Structured ``report_already_satisfied``
-        # evidence and the turn's production-action route are carried so the
-        # completion contract can report truthfully.
+        # ``report_blocker`` names the reason so the turn resolves as blocked
+        # (harness_error), never as completed.
         blocked_reason = runner._blocked_reason if runner is not None else ""
-        already_satisfied = runner._already_satisfied if runner is not None else False
         # A Read Only collaborative turn never began a production session, so
-        # there is no execution receipt to build — the turn is presented
+        # there is no execution lifecycle to finish — the turn is presented
         # conversationally and returns straight to idle.
         if not self._turn_read_only:
             try:
-                self._production_session.finish(
-                    blocked_reason=blocked_reason,
-                    already_satisfied=already_satisfied,
-                )
+                self._production_session.finish(blocked_reason=blocked_reason)
             except Exception:
-                _log.exception("Failed to build production completion receipt")
+                _log.exception("Failed to resolve production execution finish")
 
         # Surface the turn's skill activation ledger on the same metadata the
         # Context Gearbox exposes, so activations that happened *during* the

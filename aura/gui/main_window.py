@@ -39,7 +39,6 @@ from aura.gui.conv_persistence import ConversationPersistence
 from aura.gui.drones.drone_reports_window import DroneReportsWindow
 from aura.gui.edge_rail_host import ExternalEdgeRailHost
 from aura.gui.execution_handler import ExecutionEventHandler
-from aura.gui.gui_event_probe import install_gui_event_probe
 from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.left_pane import LeftPane
 from aura.gui.main_window_companion import MainWindowCompanionController
@@ -225,8 +224,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             settings=self._settings,
             parent=self,
         )
-        self._gui_event_probe = install_gui_event_probe(self, self._bridge)
-
         # Conversation persistence (auto-save, load, restore, replay).
         self._persistence = ConversationPersistence(
             bridge=self._bridge,

@@ -18,7 +18,6 @@ from aura.config import APP_NAME
 from aura.conversation.chat_transcript import (
     ASSISTANT,
     ERROR,
-    EXECUTION_COMPLETE,
     PLAN_REVIEW,
     USER,
     clone_chat_items,
@@ -467,10 +466,6 @@ class ConversationPersistence(QObject):
                     str(item.get("message", "")),
                     bool(item.get("show_retry", False)),
                 )
-            elif kind == EXECUTION_COMPLETE:
-                # Execution completion records are durable diagnostics only.
-                # Replaying them must not recreate main-chat finish cards.
-                continue
             elif kind == PLAN_REVIEW:
                 # Replay a resolved Plan Review in its non-interactive final
                 # state: never a pending review, never re-executed.

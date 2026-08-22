@@ -10,16 +10,8 @@ from typing import Any
 
 USER = "user"
 ASSISTANT = "assistant"
-EXECUTION_COMPLETE = "execution_complete"
 ERROR = "error"
 PLAN_REVIEW = "plan_review"
-
-#: Legacy chat error title, retired: production runs no longer synthesize a
-#: generic "Needs follow-up" card. Old persisted conversations may still
-#: contain an ERROR item with exactly this title; it is dropped on load (and
-#: therefore on the next save) so it stops rendering, without touching any
-#: other historical error.
-_LEGACY_NEEDS_FOLLOWUP_ERROR_TITLE = "Needs follow-up"
 
 
 def user_item(text: str, image_b64s: list[str] | None = None) -> dict[str, Any]:
@@ -44,26 +36,6 @@ def error_item(title: str, message: str, show_retry: bool = False) -> dict[str, 
         "title": str(title),
         "message": str(message),
         "show_retry": bool(show_retry),
-    }
-
-
-def execution_complete_item(
-    *,
-    tool_call_id: str,
-    goal: str,
-    summary: str,
-    status: str | None,
-    ok: bool,
-    needs_followup: bool,
-) -> dict[str, Any]:
-    return {
-        "kind": EXECUTION_COMPLETE,
-        "tool_call_id": str(tool_call_id),
-        "goal": str(goal),
-        "summary": str(summary),
-        "status": str(status) if status is not None else None,
-        "ok": bool(ok),
-        "needs_followup": bool(needs_followup),
     }
 
 
@@ -116,22 +88,7 @@ def normalize_chat_item(data: Any) -> dict[str, Any] | None:
         message = data.get("message", "")
         if not isinstance(title, str) or not isinstance(message, str):
             return None
-        if title == _LEGACY_NEEDS_FOLLOWUP_ERROR_TITLE:
-            return None
         return error_item(title, message, bool(data.get("show_retry", False)))
-    if kind == EXECUTION_COMPLETE:
-        return execution_complete_item(
-            tool_call_id=str(data.get("tool_call_id", "")),
-            goal=str(data.get("goal", "Execution task")),
-            summary=str(data.get("summary", "")),
-            status=(
-                str(data.get("status"))
-                if data.get("status") is not None
-                else None
-            ),
-            ok=bool(data.get("ok", False)),
-            needs_followup=bool(data.get("needs_followup", False)),
-        )
     if kind == PLAN_REVIEW:
         raw_files = data.get("files")
         files = [str(f) for f in raw_files] if isinstance(raw_files, list) else []

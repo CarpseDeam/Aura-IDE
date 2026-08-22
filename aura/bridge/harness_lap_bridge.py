@@ -10,21 +10,13 @@ from aura.backends import APIAgentBackend
 from aura.bridge.approval_proxy import _ApprovalProxy
 from aura.bridge.lap_result import LapResult
 from aura.bridge.production_execution import ProductionExecutionSession
-from aura.bridge.production_receipt import (
-    STATUS_BLOCKED,
-    STATUS_CANCELLED,
-    STATUS_COMPLETED,
-    STATUS_COMPLETED_UNVERIFIED,
-    STATUS_HARNESS_ERROR,
-    STATUS_VALIDATION_FAILED,
-    ProductionReceipt,
-)
 from aura.client import ApiError
 from aura.config import DEFAULT_THINKING, redact_secrets
 from aura.context_gearbox.runtime import compose_system_prompt
 from aura.conversation import ConversationManager, History
 from aura.conversation.execution_outcome import ExecutionOutcomeStatus
 from aura.conversation.tools import ToolRegistry
+from aura.conversation.validation_truth import summarize_validation
 from aura.git_ops import changes_since, snapshot
 from aura.model_streams import PRODUCTION_STREAM_HOOK, model_streams
 from aura.settings import resolve_production_default_model
@@ -32,25 +24,13 @@ from aura.settings import resolve_production_default_model
 logger = logging.getLogger(__name__)
 
 
-# Map a production receipt status onto the ExecutionOutcomeStatus vocabulary the
-# Drone harness-lap consumers understand. Only the truly-successful receipts
-# map to success; every failure class maps to a real failure status.
-_RECEIPT_STATUS_TO_EXECUTION: dict[str, str] = {
-    STATUS_COMPLETED: ExecutionOutcomeStatus.completed.value,
-    STATUS_COMPLETED_UNVERIFIED: ExecutionOutcomeStatus.completed.value,
-    STATUS_VALIDATION_FAILED: ExecutionOutcomeStatus.validation_failed.value,
-    STATUS_CANCELLED: ExecutionOutcomeStatus.cancelled.value,
-    STATUS_BLOCKED: ExecutionOutcomeStatus.harness_error.value,
-    STATUS_HARNESS_ERROR: ExecutionOutcomeStatus.harness_error.value,
-}
-
-
 class _LapConversationRunner(QObject):
     """Execution thread object that runs one production conversation lap.
 
     Simplified for headless operation — no GUI signal forwarding. The lap runs
-    the ordinary production conversation loop against ``PRODUCTION_STREAM_HOOK`` and
-    collects the run's structured receipt via ``ProductionExecutionSession``.
+    the ordinary production conversation loop against ``PRODUCTION_STREAM_HOOK``
+    and reads the run's truthful terminal status directly off
+    ``ProductionExecutionSession``'s structured execution ledgers.
     """
 
     finished = Signal()
@@ -76,8 +56,11 @@ class _LapConversationRunner(QObject):
         self._temperature = temperature
         self._workspace_root = workspace_root
         self._blocked_reason: str = ""
-        self._already_satisfied: bool = False
-        self._receipt: ProductionReceipt | None = None
+        self.execution_ok: bool = True
+        self.execution_status: str = ExecutionOutcomeStatus.completed.value
+
+        production_session.executionFinished.connect(self._on_execution_finished)
+        production_session.executionCancelled.connect(self._on_execution_cancelled)
 
     @Slot()
     def run(self) -> None:
@@ -92,7 +75,6 @@ class _LapConversationRunner(QObject):
                 temperature=self._temperature,
             )
             self._blocked_reason = self._manager.last_turn_blocked_reason
-            self._already_satisfied = self._manager.last_turn_already_satisfied
         except Exception as exc:
             message = redact_secrets(str(exc))
             logger.error("Harness lap runner error: %s", message)
@@ -103,16 +85,21 @@ class _LapConversationRunner(QObject):
             if self._cancel.is_set():
                 self._manager.history.pop_if_empty_assistant_message()
             try:
-                self._receipt = self._production_session.finish(
-                    blocked_reason=self._blocked_reason,
-                    already_satisfied=self._already_satisfied,
-                )
+                self._production_session.finish(blocked_reason=self._blocked_reason)
             except Exception:
-                logger.exception("Harness lap failed to build production receipt")
+                logger.exception("Harness lap failed to resolve production execution finish")
             self.finished.emit()
 
     def _on_event(self, ev) -> None:
         self._production_session.handle_event(ev)
+
+    def _on_execution_finished(self, run_id: str, ok: bool, status: str) -> None:
+        self.execution_ok = ok
+        self.execution_status = status
+
+    def _on_execution_cancelled(self, run_id: str) -> None:
+        self.execution_ok = False
+        self.execution_status = ExecutionOutcomeStatus.cancelled.value
 
 
 class HarnessLapBridge(QObject):
@@ -213,36 +200,29 @@ class HarnessLapBridge(QObject):
             thread.deleteLater()
             runner.deleteLater()
 
-            # Collect production receipt metadata
-            execution_ok = True
-            execution_status = "completed"
-            execution_errors: list[str] = []
-            validation_results: list[dict] = []
-            if runner._receipt is not None:
-                metadata = runner._receipt.metadata
-                execution_status = _RECEIPT_STATUS_TO_EXECUTION.get(
-                    runner._receipt.status, ExecutionOutcomeStatus.harness_error.value
-                )
-                execution_ok = runner._receipt.ok
-                execution_errors = [
-                    str(message) for message in metadata.get("api_errors") or []
-                ]
-                if runner._receipt.status == STATUS_BLOCKED:
-                    blocked = metadata.get("blocked_reason")
-                    if blocked:
-                        execution_errors.append(f"Blocked: {blocked}")
-                for record in metadata.get("not_applied_writes") or []:
-                    execution_errors.append(f"Write not applied: {record}")
-                validation_results = [
-                    {
-                        "command": str(item.get("command", "")),
-                        "attempts": int(item.get("attempts", 0)),
-                        "passed": bool(item.get("passed", False)),
-                        "repaired": bool(item.get("repaired", False)),
-                        "exit_code": item.get("exit_code"),
-                    }
-                    for item in metadata.get("validation") or []
-                ]
+            # Collect the run's truthful terminal status from the session's
+            # structured execution ledgers — never a formatted report.
+            relay = self._production_session.relay
+            execution_ok = runner.execution_ok
+            execution_status = runner.execution_status
+            execution_errors: list[str] = [str(message) for message in relay.api_errors]
+            if execution_status == ExecutionOutcomeStatus.harness_error.value and not execution_errors:
+                blocked = runner._blocked_reason
+                if blocked:
+                    execution_errors.append(f"Blocked: {blocked}")
+            for record in relay.not_applied_writes:
+                path = str(record.get("path") or "")
+                execution_errors.append(f"Write not applied: {path}")
+            validation_results = [
+                {
+                    "command": outcome.command,
+                    "attempts": outcome.attempts,
+                    "passed": outcome.passed,
+                    "repaired": outcome.repaired,
+                    "exit_code": outcome.last_exit_code,
+                }
+                for outcome in summarize_validation(relay.validation_results)
+            ]
 
             # Detect git changes
             has_work = False

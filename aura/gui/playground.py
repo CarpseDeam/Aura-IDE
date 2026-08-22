@@ -278,15 +278,6 @@ class AuraPlayground(QWidget):
         self._code_editor.close_execution_tabs()
         self._info_hub.clear_log()
 
-    def append_tool_args(self, execution_tool_id: str, fragment: str) -> None:
-        """No-op: partial tool-call JSON never drives the workspace editor.
-
-        Kept as a stable forwarding target for ExecutionToolEventRouter; raw
-        argument fragments belong to generic argument/log UI (e.g. the chat
-        transcript's own tool-call display), never to this authoritative
-        editor pane.
-        """
-
     def mark_execution_error(self) -> None:
         """Set the pane's truthful terminal status to Error mid-stream.
 
@@ -365,7 +356,7 @@ class AuraPlayground(QWidget):
     def finish_terminal_process(self, process_id: str, exit_code: int) -> None:
         self._terminal_window.set_result(process_id, exit_code)
 
-    def execution_finished(self, ok: bool, summary: str, status: str | None = None) -> None:
+    def execution_finished(self, ok: bool, status: str | None = None) -> None:
         self._code_editor.close_all_tabs()
         self._info_hub.set_terminal_status(ok, status)
         self._info_hub.set_execution_running(False)
