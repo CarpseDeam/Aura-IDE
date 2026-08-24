@@ -268,21 +268,19 @@ def test_unscoped_request_declares_no_targets(monkeypatch, workspace: Path) -> N
 
 _WINDOWS_FILESYSTEM = pytest.mark.skipif(
     os.name != "nt",
-    reason="external-reference path syntax is the Windows absolute form supported by Aura",
+    reason="external path syntax is the Windows absolute form supported by Aura",
 )
 
 
 @_WINDOWS_FILESYSTEM
-def test_outside_workspace_path_is_rejected_at_send(
+def test_outside_workspace_path_never_becomes_a_target_file(
     monkeypatch, workspace: Path, tmp_path: Path
 ) -> None:
     """Plan test 5: an explicit outside-workspace file never becomes a target.
 
-    The absolute Windows path is treated as an external-reference candidate.
-    Because only an existing external *directory* can authorize a reference
-    project, a bare file path is an invalid external reference: the send path
-    must stop before declaring targets, mutating history, starting the
-    assistant, or calling the model.
+    Naming an absolute external path authorizes reading it for the turn, but
+    target files are workspace scope: the turn proceeds normally and declares
+    no targets, because nothing inside the workspace was named.
     """
     outside = tmp_path.parent / "outside_at_send.py"
     outside.write_text("x = 1\n", encoding="utf-8")
@@ -294,16 +292,9 @@ def test_outside_workspace_path_is_rejected_at_send(
         thinking="off",
     )
 
-    # No target-file declaration, no model send, no history mutation.
-    assert handler._bridge.target_file_calls == []
-    assert handler._bridge.send_calls == []
-    assert handler._bridge.history.messages == []
-
-    # A clear External reference error explains the path must be a directory.
-    assert handler._chat.errors
-    title, message = handler._chat.errors[0]
-    assert title == "External reference"
-    assert "existing directory" in message
+    assert handler._bridge.target_file_calls == [()]
+    assert handler._bridge.send_calls
+    assert handler._chat.errors == []
 
 
 def test_targets_do_not_leak_into_the_next_turn(monkeypatch, workspace: Path) -> None:

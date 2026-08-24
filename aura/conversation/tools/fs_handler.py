@@ -83,15 +83,46 @@ class FsReadHandler:
     and returns a payload dict (same shape as the underlying fs_read.py functions).
     """
 
-    def __init__(self, workspace_root: Path, resolve_fn: Callable[[str], Path]) -> None:
+    def __init__(
+        self,
+        workspace_root: Path,
+        resolve_fn: Callable[[str], Path],
+        is_external_fn: Callable[[Path], bool] | None = None,
+    ) -> None:
         """Args:
             workspace_root: The jail root for path resolution.
             resolve_fn: A callable that takes a user-provided path string and
-                        returns an absolute Path inside workspace_root, or raises
-                        ValueError if the path is invalid or escapes.
+                        returns an absolute Path inside workspace_root — or, when
+                        the caller authorized one, inside this turn's external
+                        read allowlist — and raises ValueError otherwise.
+            is_external_fn: Optional predicate telling this reader that a
+                        resolved target lies outside the workspace. Such a
+                        result is rendered by its absolute path and marked as a
+                        read-only external observation; the authorization
+                        decision itself belongs entirely to resolve_fn.
         """
         self._root = workspace_root
         self._resolve = resolve_fn
+        self._is_external = is_external_fn or (lambda _target: False)
+
+    def _render_root(self, target: Path) -> Path:
+        """The root a payload's paths and errors are rendered against."""
+        return target.parent if self._is_external(target) else self._root
+
+    def _mark(self, target: Path, payload: dict[str, Any]) -> dict[str, Any]:
+        """Label an external result truthfully, by its own absolute path.
+
+        Only the target actually read is named: nothing about the rest of this
+        turn's allowlist appears in a result.
+        """
+        if not isinstance(payload, dict) or not self._is_external(target):
+            return payload
+        payload["external"] = True
+        payload["read_only"] = True
+        payload["source"] = "external"
+        if payload.get("ok"):
+            payload["path"] = target.as_posix()
+        return payload
 
     def handle_read_file(self, args: dict[str, Any]) -> dict[str, Any]:
         """Read one file (optionally a line window), or several known files.
@@ -102,10 +133,14 @@ class FsReadHandler:
           a 1-based line window routed to the streaming range reader, which
           can reach any line in a large file. With neither, the whole file
           comes back (capped at MAX_READ_BYTES).
-        * Multiple known files — ``paths``, a non-empty array of
-          workspace-relative paths, gathered in one evidence batch through
-          :meth:`_read_paths_batch`. ``offset``/``limit`` do not apply to this
-          shape.
+        * Multiple known files — ``paths``, a non-empty array of paths
+          gathered in one evidence batch through :meth:`_read_paths_batch`.
+          ``offset``/``limit`` do not apply to this shape.
+
+        Either shape accepts a workspace-relative path or an absolute path the
+        user authorized for this turn; every path is validated independently by
+        the caller's ``resolve_fn``, so one unauthorized entry in a batch fails
+        only itself.
 
         Args:
             args: Exactly one of "path" or "paths", plus "offset"/"limit"
@@ -136,7 +171,7 @@ class FsReadHandler:
 
         if offset is None and limit is None:
             target = self._resolve(args.get("path", ""))
-            return read_file(self._root, target)
+            return self._mark(target, read_file(self._render_root(target), target))
 
         if offset is not None and not isinstance(offset, int):
             return {"ok": False, "error": "offset must be an integer"}
@@ -156,7 +191,9 @@ class FsReadHandler:
             target = self._resolve(args.get("path", ""))
         except ValueError as e:
             return {"ok": False, "error": str(e)}
-        return read_file_range(self._root, target, start_line, end_line)
+        return self._mark(
+            target, read_file_range(self._render_root(target), target, start_line, end_line)
+        )
 
     def _read_paths_batch(self, paths: list[Any]) -> dict[str, Any]:
         """Read multiple known files in one call, keeping metadata for every path.
@@ -210,7 +247,8 @@ class FsReadHandler:
                 "continuation": "",
             }, 0
 
-        result = read_file(self._root, target)
+        render_root = self._render_root(target)
+        result = self._mark(target, read_file(render_root, target))
         if not result.get("ok"):
             error = result.get("error", "unknown error")
             return {
@@ -239,6 +277,12 @@ class FsReadHandler:
             "content_hash": content_hash,
             "line_count": total_lines,
         }
+        if result.get("external"):
+            # A mixed batch must say which entries are external observations,
+            # per entry — the batch as a whole is not one or the other.
+            base["external"] = True
+            base["read_only"] = True
+            base["source"] = "external"
 
         def continuation(from_line: int) -> str:
             return (
@@ -276,7 +320,7 @@ class FsReadHandler:
         # Large file (or tight budget): bounded head slice + structural outline.
         allowance = max(0, min(READ_FILES_BOUNDED_CHARS, remaining))
         head, head_lines = _head_slice(content, allowance)
-        outline = _outline_summary(self._root, target)
+        outline = _outline_summary(render_root, target)
         reason = (
             f"file is {file_size} bytes; included the first {len(head)} chars "
             f"({head_lines} of {total_lines} read lines) plus a structural outline"
@@ -307,7 +351,7 @@ class FsReadHandler:
             Payload dict from list_directory().
         """
         target = self._resolve(args.get("path", "."))
-        return list_directory(self._root, target)
+        return self._mark(target, list_directory(self._render_root(target), target))
 
     def handle_glob(self, args: dict[str, Any]) -> dict[str, Any]:
         """Recursively find files matching a glob pattern.
@@ -336,7 +380,7 @@ class FsReadHandler:
             Payload dict from read_file_outline().
         """
         target = self._resolve(args.get("path", ""))
-        return read_file_outline(self._root, target)
+        return self._mark(target, read_file_outline(self._render_root(target), target))
 
     def handle_read_file_range(self, args: dict[str, Any]) -> dict[str, Any]:
         """Read a specific line range from a file (1-based, inclusive).

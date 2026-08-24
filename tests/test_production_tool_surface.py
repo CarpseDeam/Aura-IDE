@@ -37,6 +37,7 @@ GODOT_TOOL_NAMES = tool_names_for({GODOT})
 #: stay registered so a replayed historical call still executes; none of
 #: these are ever offered in the ordinary production catalog.
 REMOVED_PRODUCTION_TOOLS: frozenset[str] = frozenset({
+    "read_reference_file",
     "glob",
     "search_codebase",
     "inspect_code",
@@ -265,9 +266,23 @@ def test_plan_review_joins_only_when_required_and_never_read_only(tmp_path) -> N
     assert "review_implementation_plan" not in _names(registry.tool_defs())
 
 
-def test_reference_tool_joins_only_when_a_reference_is_authorized(tmp_path) -> None:
-    registry = ToolRegistry(workspace_root=tmp_path)
-    assert "read_reference_file" not in _names(registry.tool_defs())
+def test_no_separate_external_read_tool_exists(tmp_path) -> None:
+    """Reading an authorized external path is read_file's job, not a second tool."""
+    from aura.conversation.tools.registry import TOOL_HANDLERS
+
+    external = tmp_path / "external"
+    external.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    registry = ToolRegistry(workspace_root=workspace)
+
+    before = registry.tool_defs()
+    registry.begin_external_read_turn([external])
+    after = registry.tool_defs()
+
+    assert before == after
+    assert "read_reference_file" not in _names(after)
+    assert "read_reference_file" not in TOOL_HANDLERS
 
 
 # ── 3. descriptions describe the tool, not a workflow ───────────────────────

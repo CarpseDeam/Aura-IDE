@@ -9,7 +9,9 @@ SEARCH_TOOL_DEFS: list[dict[str, Any]] = [
                     "function": {
                         "name": "grep_search",
                         "description": (
-                            "Search workspace file contents for a string or regex pattern. "
+                            "Search file contents for a string or regex pattern. Searches the "
+                            "workspace by default; pass 'path' to scope the search to one directory "
+                            "or file. "
                             "Returns matching file paths, line numbers, the matching line content, "
                             "and the column where the match starts, plus search metadata such as the "
                             "engine used, searched file count, skipped file count, truncation, and regex hint state. "
@@ -43,14 +45,22 @@ SEARCH_TOOL_DEFS: list[dict[str, Any]] = [
                                     "description": "Maximum number of matching lines to return.",
                                     "default": 50,
                                 },
+                                "path": {
+                                    "type": "string",
+                                    "description": (
+                                        "Optional search root: a workspace-relative directory or file, or an "
+                                        "absolute path the user named this turn. A directory searches its "
+                                        "tree, a file searches only that file; results from outside the "
+                                        "workspace are read-only, with absolute paths."
+                                    ),
+                                },
                                 "include_pattern": {
                                     "type": "string",
                                     "description": (
-                                        "Optional workspace-relative exact file path or glob pattern restricting "
-                                        "which files are searched. Exact paths such as 'aura/gui/main_window.py' "
-                                        "search only that file. Glob patterns such as '**/*.py' search matching "
-                                        "files anywhere in the repo. Prefer '**/*.py' over '*.py' when you want "
-                                        "recursive Python-only search."
+                                        "Optional exact file path or glob pattern, relative to the search root, "
+                                        "restricting which files are searched. Exact paths such as "
+                                        "'aura/gui/main_window.py' search only that file. Glob patterns such as "
+                                        "'**/*.py' search matching files anywhere below the root."
                                     ),
                                 },
                             },
@@ -106,9 +116,8 @@ SEARCH_TOOL_DEFS: list[dict[str, Any]] = [
                     "function": {
                         "name": "search_codebase",
                         "description": (
-                            "Ranked keyword/natural-language search over a local BM25 index. By "
-                            "default it searches the active workspace; source='reference' searches "
-                            "the external project explicitly authorized by the user for this turn. "
+                            "Ranked keyword/natural-language search over a local BM25 index of the "
+                            "active workspace. "
                             "The index is built from structure-aware retrieval documents: "
                             "each file is partitioned into bounded, non-overlapping source regions "
                             "using parser-derived structure where available, so a result is a "
@@ -130,15 +139,6 @@ SEARCH_TOOL_DEFS: list[dict[str, Any]] = [
                                     "type": "integer",
                                     "description": "Maximum number of results to return. Default: 5.",
                                     "default": 5,
-                                },
-                                "source": {
-                                    "type": "string",
-                                    "enum": ["workspace", "reference"],
-                                    "description": (
-                                        "Search the editable workspace or the user-authorized "
-                                        "read-only external reference project. Defaults to workspace."
-                                    ),
-                                    "default": "workspace",
                                 },
                             },
                             "required": ["query"],

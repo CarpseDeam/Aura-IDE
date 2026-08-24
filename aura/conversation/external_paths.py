@@ -1,21 +1,18 @@
-"""Detect explicit external project directories in user-authored text.
+"""Detect explicit external file and directory paths in user-authored text.
 
 This module deliberately does not decide whether a candidate is safe to use.
 It only extracts absolute path-shaped text and applies the filesystem facts
-needed to distinguish an external directory from an ordinary workspace path.
-ReferenceRootAccess remains the authorization and containment boundary.
+needed to distinguish an external location from an ordinary workspace path.
+:class:`aura.conversation.tools.external_read.ExternalReadAccess` remains the
+authorization and containment boundary.
 """
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path, PureWindowsPath
 
 from aura.paths import safe_is_relative_to
-
-
-class ReferencePathError(ValueError):
-    """The user explicitly supplied an unusable external reference path."""
-
 
 # Quoting is the unambiguous way to paste a path containing spaces. Backticks
 # are included because they are common in coding-harness messages.
@@ -74,54 +71,44 @@ def extract_absolute_path_candidates(text: str | None) -> list[str]:
     return candidates
 
 
-def extract_reference_path(
+def extract_external_read_paths(
     text: str | None,
     workspace_root: Path,
-) -> Path | None:
-    """Extract one valid external directory from raw user-authored text.
+) -> list[Path]:
+    """Return the existing external locations the user explicitly named.
 
-    ``None`` means the user supplied no external reference directory. An
-    explicit external path that is missing or a file raises
-    :class:`ReferencePathError`; so does more than one distinct valid external
-    directory. Absolute paths inside the active workspace are ignored because
-    they do not authorize an external reference.
+    Every absolute path-shaped string in the literal user text is resolved
+    against the filesystem. Existing files and directories outside the active
+    workspace are returned, in the order they appeared; each one authorizes
+    read-only access to itself for the turn being prepared.
+
+    Paths inside the active workspace are ignored: they are ordinary workspace
+    references and already resolvable. A named path that does not exist — or
+    that cannot be resolved at all — authorizes nothing and is dropped rather
+    than failing the turn; the model simply cannot read it, exactly as with
+    any other path it was not given.
     """
     workspace = workspace_root.resolve()
-    valid_external: dict[Path, str] = {}
-    invalid_external: list[str] = []
+    authorized: list[Path] = []
+    seen: set[str] = set()
 
     for raw in extract_absolute_path_candidates(text):
         candidate = Path(raw).expanduser()
         try:
             resolved = candidate.resolve()
-        except (OSError, ValueError) as exc:
-            raise ReferencePathError(
-                f"The external reference path could not be resolved: {raw} ({exc})."
-            ) from exc
-
+            exists = resolved.exists()
+        except (OSError, ValueError):
+            continue
+        if not exists:
+            continue
         # Absolute paths that point into the editable workspace are ordinary
         # workspace references, never external authorization candidates.
-        inside_workspace = safe_is_relative_to(resolved, workspace)
-        if inside_workspace:
+        if safe_is_relative_to(resolved, workspace):
             continue
-
-        if not resolved.exists():
-            invalid_external.append(raw)
+        key = os.path.normcase(str(resolved))
+        if key in seen:
             continue
-        if not resolved.is_dir():
-            invalid_external.append(raw)
-            continue
-        valid_external.setdefault(resolved, raw)
+        seen.add(key)
+        authorized.append(resolved)
 
-    if invalid_external:
-        path = invalid_external[0]
-        raise ReferencePathError(
-            f"External reference path must be an existing directory: {path}."
-        )
-
-    if len(valid_external) > 1:
-        raise ReferencePathError(
-            "Aura currently supports one external reference project per request."
-        )
-
-    return next(iter(valid_external), None)
+    return authorized

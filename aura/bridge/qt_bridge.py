@@ -24,6 +24,7 @@ from __future__ import annotations
 import copy
 import logging
 import threading
+from collections.abc import Sequence
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -385,15 +386,20 @@ class ConversationBridge(QObject):
         """Whether the currently active bridge turn is frozen Read Only."""
         return self._turn_active and self._turn_read_only
 
-    # ---- turn-scoped external reference ------------------------------------
+    # ---- turn-scoped external read access ----------------------------------
 
-    def authorize_reference_root(self, candidate: Path | None) -> tuple[bool, str]:
-        """Authorize one user-derived reference candidate for the next turn."""
-        return self._registry.begin_reference_turn(candidate)
+    def authorize_external_reads(self, paths: Sequence[Path] | None) -> tuple[Path, ...]:
+        """Authorize the external locations this turn's user text named.
 
-    def clear_reference_authorization(self) -> None:
+        Called by the send layer before ``send()``, so the allowlist is in
+        place before the turn's tool catalog and first request are built. It
+        replaces whatever the previous turn authorized, including with nothing.
+        """
+        return self._registry.begin_external_read_turn(paths)
+
+    def clear_external_read_authorization(self) -> None:
         """End the active turn's external read-only capability."""
-        self._registry.clear_reference_authorization()
+        self._registry.clear_external_read_authorization()
 
     def refresh_tier1_context(self, force_repo_map: bool = False) -> None:
         """Refresh workspace context and reapply the canonical system prompt."""
@@ -705,13 +711,13 @@ class ConversationBridge(QObject):
         except Exception:
             _log.exception("Failed to clean up production conversation thread")
         finally:
-            # Reference authorization is a production-turn capability, never
-            # a session setting. Clear the root and its dedicated index before
-            # the bridge announces that the turn is finished. Apply the latest
-            # toolbar request only after the active turn has released the
-            # registry, so it is ready for the next send without changing any
-            # remaining round of this one.
-            self.clear_reference_authorization()
+            # External read access is a turn capability, never a session
+            # setting. Clear it before the bridge announces that the turn is
+            # finished — this runs on normal completion, cancellation, and
+            # error cleanup alike. Apply the latest toolbar request only after
+            # the active turn has released the registry, so it is ready for the
+            # next send without changing any remaining round of this one.
+            self.clear_external_read_authorization()
             self._registry.set_read_only(self._requested_read_only)
             self._turn_active = False
             self.finished.emit()

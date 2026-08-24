@@ -15,7 +15,7 @@ CORE_READ_TOOL_DEFS: list[dict[str, Any]] = [
                     "lines instead, far more context-efficient than re-reading a whole file when you "
                     "already know which lines you need, and it can reach any line in a file too large "
                     "to return in full. For several known files, pass 'paths' (an array of "
-                    "workspace-relative paths) instead of 'path' — offset/limit do not apply to that "
+                    "paths) instead of 'path' — offset/limit do not apply to that "
                     "shape. Every requested path in a 'paths' call comes back with metadata even when "
                     "its content did not fully fit: path, file_size, content_hash, line_count, status "
                     "(complete | summarized | truncated | omitted | error), reason, included_range, "
@@ -23,23 +23,29 @@ CORE_READ_TOOL_DEFS: list[dict[str, Any]] = [
                     "in full; large files return a bounded head slice plus a structural outline. "
                     "Pass exactly one of 'path' or 'paths'. "
                     "This reads specified paths; it does not discover files. "
-                    "All paths MUST be relative to the workspace root."
+                    "Paths are workspace-relative. An absolute path works only when the user "
+                    "named that file, or a directory above it, in their own message this turn; "
+                    "such a result is marked as a read-only external observation."
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "Workspace-relative path for a single file, e.g. 'scripts/player.gd'.",
+                            "description": (
+                                "Path for a single file: workspace-relative, e.g. "
+                                "'scripts/player.gd', or an authorized absolute path."
+                            ),
                         },
                         "paths": {
                             "type": "array",
                             "items": {"type": "string"},
                             "minItems": 1,
                             "description": (
-                                "Workspace-relative paths for several known files to read in one "
-                                "evidence batch, e.g. ['src/main.py', 'README.md']. Use this instead of "
-                                "'path' when several known files are needed."
+                                "Paths for several known files to read in one evidence batch, "
+                                "e.g. ['src/main.py', 'README.md']. Each path is validated on its "
+                                "own, so a batch may mix workspace-relative and authorized "
+                                "absolute paths."
                             ),
                         },
                         "offset": {

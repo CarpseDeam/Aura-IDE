@@ -10,7 +10,6 @@ from aura.conversation.tools.schemas import (
     APPLY_PATCH_TOOL_DEF,
     GIT_TOOL_DEFS,
     LOAD_SKILLS_TOOL_DEF,
-    READ_REFERENCE_FILE_TOOL_DEF,
     READ_TOOL_DEFS,
     REVIEW_IMPLEMENTATION_PLAN_TOOL_DEF,
     TASK_CHECKLIST_TOOL_DEF,
@@ -64,7 +63,6 @@ class ToolCatalog:
         mcp_schemas: list[dict[str, Any]] | None = None,
         web_search: bool = False,
         plan_review: bool = False,
-        reference_available: bool = False,
         skills_active: bool = False,
     ) -> list[dict[str, Any]]:
         """Build tool definitions for the production catalog.
@@ -81,10 +79,12 @@ class ToolCatalog:
         genuinely configured. ``plan_review`` adds
         ``review_implementation_plan`` when Plan Review is required for this
         turn (never in read-only mode: nothing read-only can mutate, so there
-        is nothing for a plan to gate). ``reference_available`` adds
-        ``read_reference_file`` whenever this turn has an authorized external
-        reference. ``skills_active`` adds ``load_skills`` only when this
-        turn's frozen skill index actually has candidates.
+        is nothing for a plan to gate). ``skills_active`` adds ``load_skills``
+        only when this turn's frozen skill index actually has candidates.
+
+        Reading an explicitly authorized external location is not a separate
+        capability and never changes this catalog: ``read_file`` and
+        ``grep_search`` accept such a path directly.
         """
         if read_only:
             tools: list[dict[str, Any]] = [
@@ -116,9 +116,6 @@ class ToolCatalog:
 
         if skills_active:
             tools.append(dict(LOAD_SKILLS_TOOL_DEF))
-
-        if reference_available:
-            tools.append(dict(READ_REFERENCE_FILE_TOOL_DEF))
 
         if not read_only and dynamic_schemas:
             tools.extend(dynamic_schemas)

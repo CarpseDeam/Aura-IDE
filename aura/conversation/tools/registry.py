@@ -22,7 +22,6 @@ from aura.conversation.tools._godot_scene_mixin import GodotSceneHandlersMixin
 from aura.conversation.tools._memory_mixin import MemoryHandlersMixin
 from aura.conversation.tools._plan_review_mixin import PlanReviewHandlersMixin
 from aura.conversation.tools._read_mixin import ReadHandlersMixin
-from aura.conversation.tools._reference_mixin import ReferenceReadHandlersMixin
 from aura.conversation.tools._research_mixin import ResearchHandlersMixin
 from aura.conversation.tools._search_mixin import SearchHandlersMixin
 from aura.conversation.tools._task_checklist_mixin import TaskChecklistHandlersMixin
@@ -38,6 +37,7 @@ from aura.conversation.tools.effects import (
     ToolEffect,
 )
 from aura.conversation.tools.executor import ToolExecutor
+from aura.conversation.tools.external_read import ExternalReadAccess, looks_absolute
 from aura.conversation.tools.find_usages import find_usages  # noqa: F401
 from aura.conversation.tools.fs_handler import FsReadHandler
 from aura.conversation.tools.fs_write import (  # noqa: F401
@@ -47,9 +47,8 @@ from aura.conversation.tools.fs_write import (  # noqa: F401
 from aura.conversation.tools.git_handler import GitHandler
 from aura.conversation.tools.grep import grep_files  # noqa: F401
 from aura.conversation.tools.mcp_registry import MCPToolRegistry
-from aura.conversation.tools.reference_root import ReferenceRootAccess
 from aura.conversation.tools.task_context import TaskContextHandlersMixin
-from aura.paths import safe_relative_to
+from aura.paths import safe_is_relative_to, safe_relative_to
 
 TOOL_HANDLERS: dict[str, Any] = {}
 
@@ -58,7 +57,6 @@ class ToolRegistry(
     CodeIntelHandlersMixin,
     TaskContextHandlersMixin,
     ReadHandlersMixin,
-    ReferenceReadHandlersMixin,
     SearchHandlersMixin,
     GitHandlersMixin,
     GodotAssetHandlersMixin,
@@ -84,14 +82,16 @@ class ToolRegistry(
         self._root = workspace_root.resolve()
         self._read_only = read_only
         self._codebase_index: CodebaseIndex | None = None
-        self._reference_codebase_index: CodebaseIndex | None = None
-        self._fs_handler = FsReadHandler(self._root, self._resolve_in_root)
+        # The turn-scoped external read allowlist. No model-facing tool can
+        # add to or change it; see ExternalReadAccess. It is created before
+        # the reader below, which consults it for absolute paths.
+        self._external_read = ExternalReadAccess(self._root)
+        self._fs_handler = FsReadHandler(
+            self._root, self._resolve_readable, self._is_external_target
+        )
         self._git_handler = GitHandler(self._root)
         self._code_intel_index = CodeIntelIndex(self._root)
         self._code_inspector = CodeInspector(self._root, self._code_intel_index)
-        # The single turn-scoped external reference authorization. No
-        # model-facing tool can attach or change it. See ReferenceRootAccess.
-        self._reference_root = ReferenceRootAccess(self._root)
         self._catalog = ToolCatalog()
         self._dynamic_tools = DynamicToolRegistry(self._root)
         self._mcp_tools = MCPToolRegistry()
@@ -143,16 +143,17 @@ class ToolRegistry(
         self._root = root.resolve()
         self._dynamic_tools.set_workspace_root(self._root)
         self._codebase_index = None
-        self._reference_codebase_index = None
-        self._fs_handler = FsReadHandler(self._root, self._resolve_in_root)
+        # External access authorized while the old workspace was active must
+        # never remain reachable once the active workspace changes.
+        self._external_read.set_workspace_root(self._root)
+        self._fs_handler = FsReadHandler(
+            self._root, self._resolve_readable, self._is_external_target
+        )
         self._git_handler = GitHandler(self._root)
         # Replace, not mutate: no CodeIntel fact from the old workspace's
         # index must remain reachable after the root changes.
         self._code_intel_index = CodeIntelIndex(self._root)
         self._code_inspector = CodeInspector(self._root, self._code_intel_index)
-        # A Reference Folder authorized for the old workspace must never
-        # remain reachable once the active workspace changes.
-        self._reference_root.set_workspace_root(self._root)
 
     def _refresh_code_intel_paths(self, paths: str | Iterable[str]) -> None:
         """Target-refresh the canonical CodeIntel index for known mutations."""
@@ -182,34 +183,30 @@ class ToolRegistry(
     def set_read_only(self, value: bool) -> None:
         self._read_only = value
 
-    # ---- turn-scoped external reference ------------------------------------
+    # ---- turn-scoped external read access ----------------------------------
 
     @property
-    def reference_root_available(self) -> bool:
-        """Whether this turn has an authorized external reference root."""
-        return self._reference_root.is_available
+    def external_read(self) -> ExternalReadAccess:
+        """This turn's external read allowlist — the one such authority."""
+        return self._external_read
 
     @property
-    def reference_root_name(self) -> str | None:
-        """Non-sensitive folder name used to label reference observations."""
-        return self._reference_root.name
+    def external_read_available(self) -> bool:
+        """Whether this turn authorized any external read location."""
+        return self._external_read.is_available
 
-    def begin_reference_turn(self, candidate: Path | None) -> tuple[bool, str]:
-        """Clear prior authorization and authorize one candidate for a turn."""
-        self.clear_reference_authorization()
-        if candidate is None:
-            return True, "no external reference"
-        ok, message = self._reference_root.attach(candidate)
-        if not ok:
-            # ``attach`` preserves a previous root by design; this boundary
-            # must not, because authorization is strictly turn-scoped.
-            self.clear_reference_authorization()
-        return ok, message
+    @property
+    def external_read_names(self) -> tuple[str, ...]:
+        """Non-sensitive display names for the authorized locations."""
+        return self._external_read.display_names
 
-    def clear_reference_authorization(self) -> None:
-        """End the turn's external capability and release its live index."""
-        self._reference_root.clear()
-        self._reference_codebase_index = None
+    def begin_external_read_turn(self, paths: Iterable[Path] | None) -> tuple[Path, ...]:
+        """Replace the allowlist with the paths this turn's user text named."""
+        return self._external_read.authorize(paths or ())
+
+    def clear_external_read_authorization(self) -> None:
+        """End the turn's external read capability."""
+        self._external_read.clear()
 
     @property
     def plan_review(self) -> PlanReviewState:
@@ -291,7 +288,6 @@ class ToolRegistry(
             mcp_schemas=mcp_schemas or None,
             web_search=self._web_search,
             plan_review=(not self._read_only) and self._plan_review.required,
-            reference_available=self._reference_root.is_available,
             skills_active=skills_active,
         )
 
@@ -387,6 +383,36 @@ class ToolRegistry(
         """Return the current RestorePointManager, or None."""
         return getattr(self, "_restore_point_manager", None)
 
+    def _is_external_target(self, target: Path) -> bool:
+        """Whether an already-resolved read target lies outside the workspace."""
+        return not safe_is_relative_to(target, self._root)
+
+    def _resolve_readable(self, raw: str) -> Path:
+        """Resolve a read target: workspace-relative, or authorized absolute.
+
+        Anything that is not a real absolute path goes to the unchanged
+        workspace jail, so relative paths — and the rooted-without-drive forms
+        the jail has always folded back into the workspace — behave exactly as
+        before. A genuine absolute path inside the active workspace is an
+        ordinary workspace read; one outside it is readable only if this turn's
+        external allowlist authorizes it, and that allowlist is the sole
+        authority for reading outside the workspace. Nothing here is reachable
+        from a write, command, or Git handler: those resolve through
+        ``_resolve_in_root``, which never consults the allowlist.
+        """
+        text = "" if raw is None else str(raw).strip()
+        if not looks_absolute(text) or not Path(text).is_absolute():
+            return self._resolve_in_root(raw)
+        if ".." in Path(text).parts:
+            raise ValueError("'..' is not allowed in tool paths")
+        try:
+            resolved = Path(text).expanduser().resolve()
+        except (OSError, ValueError):
+            resolved = None
+        if resolved is not None and safe_is_relative_to(resolved, self._root):
+            return resolved
+        return self._external_read.resolve(text)
+
     def _resolve_in_root(self, raw: str) -> Path:
         if raw is None:
             raise ValueError("path is required")
@@ -397,7 +423,6 @@ class ToolRegistry(
         if ".." in Path(s).parts:
             raise ValueError("'..' is not allowed in tool paths")
         candidate = (self._root / s).resolve() if not Path(s).is_absolute() else Path(s).resolve()
-        from aura.paths import safe_is_relative_to
         if not safe_is_relative_to(candidate, self._root):
             raise ValueError(f"path '{raw}' escapes workspace root")
         return candidate
@@ -467,7 +492,6 @@ class ToolRegistry(
 
 TOOL_HANDLERS["load_skills"] = ToolRegistry._handle_load_skills
 TOOL_HANDLERS["read_file"] = ToolRegistry._handle_read_file
-TOOL_HANDLERS["read_reference_file"] = ToolRegistry._handle_read_reference_file
 TOOL_HANDLERS["read_file_range"] = ToolRegistry._handle_read_file_range
 TOOL_HANDLERS["read_task_context"] = ToolRegistry._handle_read_task_context
 TOOL_HANDLERS["list_directory"] = ToolRegistry._handle_list_directory
