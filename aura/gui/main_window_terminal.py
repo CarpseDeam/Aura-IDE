@@ -35,6 +35,11 @@ class MainWindowTerminalController(QObject):
         self._window._edge_rail.set_state(self._window._edge_rail.state)
 
     def _on_terminal_cleared(self) -> None:
+        # Clearing the display while commands are still streaming says nothing
+        # about the work itself, so the rail keeps its running state until the
+        # remaining exit statuses arrive.
+        if self._window._playground.terminal_window().has_active_commands:
+            return
         self._window._edge_rail.set_state("dim")
 
     def _on_terminal_geometry_saved(self, geometry: str) -> None:

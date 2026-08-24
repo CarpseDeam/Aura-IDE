@@ -67,7 +67,7 @@ class ExecutionEventHandler(QObject):
         self._settings = settings
         self._conversation_telemetry = ConversationTelemetry()
         self._active_execution_tool_call_id: str | None = None
-        self._tool_router = ExecutionToolEventRouter(playground=playground, chat=chat)
+        self._tool_router = ExecutionToolEventRouter(playground=playground)
 
     # ---- public property -------------------------------------------------------
 

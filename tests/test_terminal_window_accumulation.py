@@ -92,7 +92,7 @@ def test_output_accumulates_while_hidden(window: TerminalWindow) -> None:
     assert window.isVisible() is False
 
 
-def test_clear_empties_transcript_and_emits_signal(window: TerminalWindow) -> None:
+def test_reset_empties_transcript_and_emits_signal(window: TerminalWindow) -> None:
     cleared: list[bool] = []
     window.terminal_cleared.connect(lambda: cleared.append(True))
 
@@ -100,7 +100,7 @@ def test_clear_empties_transcript_and_emits_signal(window: TerminalWindow) -> No
     window.append_output("tool-1", "some output\n")
     assert window.transcript_text() != ""
 
-    window.clear()
+    window.reset()
 
     assert window.transcript_text() == ""
     assert cleared == [True]
@@ -109,13 +109,119 @@ def test_clear_empties_transcript_and_emits_signal(window: TerminalWindow) -> No
     assert "C:/work" in window.transcript_text()
 
 
-def test_clear_button_clears_the_transcript(window: TerminalWindow) -> None:
+def test_reset_drops_active_ids_and_rejects_late_output(
+    window: TerminalWindow,
+) -> None:
+    """A full reset abandons the running execution, so its stragglers vanish."""
+    window.set_command("tool-1", "long job", "C:/work")
+
+    window.reset()
+
+    assert window.has_active_commands is False
+    window.append_output("tool-1", "late output\n")
+    window.set_result("tool-1", 0)
+
+    assert window.transcript_text() == ""
+
+
+def test_clear_button_keeps_a_running_command_streaming(
+    window: TerminalWindow,
+) -> None:
+    """Clearing the display must not silently discard the rest of a command."""
     window.set_command("tool-1", "echo one", "C:/work")
-    window.append_output("tool-1", "some output\n")
+    window.append_output("tool-1", "before clear\n")
+    assert window.transcript_text() != ""
 
     window._clear_btn.click()
 
     assert window.transcript_text() == ""
+    assert window.has_active_commands is True
+
+    window.append_output("tool-1", "after clear\n")
+    window.set_result("tool-1", 0)
+
+    text = window.transcript_text()
+    assert "before clear" not in text
+    assert "after clear" in text
+    assert "\u2713 exited 0" in text
+    assert window.has_active_commands is False
+
+
+def test_clear_display_resets_only_presentation_state(
+    window: TerminalWindow,
+) -> None:
+    """The cwd reappears and no blank separator leads the fresh transcript."""
+    window.set_command("tool-1", "echo one", "C:/work")
+    window.append_output("tool-1", "before\n")
+
+    window.clear_display()
+    window.append_output("tool-1", "after\n")
+    window.set_result("tool-1", 0)
+    window.set_command("tool-2", "echo two", "C:/work")
+
+    text = window.transcript_text()
+    assert text.startswith("after\n")
+    # The cwd was forgotten along with the document, so it is reprinted once.
+    assert text.count("C:/work\n") == 1
+
+
+def test_clear_button_on_an_idle_terminal_still_empties_it(
+    window: TerminalWindow,
+) -> None:
+    cleared: list[bool] = []
+    window.terminal_cleared.connect(lambda: cleared.append(True))
+
+    window.set_command("tool-1", "echo one", "C:/work")
+    window.append_output("tool-1", "some output\n")
+    window.set_result("tool-1", 0)
+
+    window._clear_btn.click()
+
+    assert window.transcript_text() == ""
+    assert cleared == [True]
+    assert window.has_active_commands is False
+
+
+def test_finished_id_may_be_reused_by_a_later_command(
+    window: TerminalWindow,
+) -> None:
+    window.set_command("tool-1", "first", "C:/work")
+    window.set_result("tool-1", 0)
+    window.set_command("tool-1", "second", "C:/work")
+    window.append_output("tool-1", "second output\n")
+    window.set_result("tool-1", 2)
+
+    text = window.transcript_text()
+    assert text.index("\u276f first") < text.index("\u276f second")
+    assert "second output" in text
+    assert "\u2717 exited 2" in text
+
+
+def test_duplicate_start_for_an_active_id_is_ignored(
+    window: TerminalWindow,
+) -> None:
+    started: list[bool] = []
+    window.terminal_started.connect(lambda: started.append(True))
+
+    window.set_command("tool-1", "first", "C:/work")
+    window.set_command("tool-1", "duplicate", "C:/work")
+
+    assert started == [True]
+    assert "duplicate" not in window.transcript_text()
+
+
+def test_duplicate_result_for_a_finished_id_is_ignored(
+    window: TerminalWindow,
+) -> None:
+    finished: list[int] = []
+    window.terminal_finished.connect(finished.append)
+
+    window.set_command("tool-1", "once", "C:/work")
+    window.set_result("tool-1", 0)
+    window.set_result("tool-1", 7)
+
+    assert finished == [0]
+    assert window.transcript_text().count("exited") == 1
 
 
 def test_started_and_finished_signals_carry_exit_codes(
@@ -135,11 +241,14 @@ def test_started_and_finished_signals_carry_exit_codes(
     assert finished == [0, 3]
 
 
-def test_output_for_unknown_id_is_ignored(window: TerminalWindow) -> None:
+def test_output_and_result_for_an_inactive_id_are_ignored(
+    window: TerminalWindow,
+) -> None:
     window.append_output("never-started", "orphan output\n")
     window.set_result("never-started", 0)
 
     assert window.transcript_text() == ""
+    assert window.has_active_commands is False
 
 
 def test_document_growth_is_globally_bounded(window: TerminalWindow) -> None:
@@ -232,9 +341,13 @@ def test_no_per_command_widgets_or_nested_editors(window: TerminalWindow) -> Non
 class _RecordingTerminal:
     def __init__(self) -> None:
         self.commands: list[tuple[str, str, str]] = []
+        self.resets = 0
 
     def set_command(self, tool_id: str, command: str, cwd: str = "") -> None:
         self.commands.append((tool_id, command, cwd))
+
+    def reset(self) -> None:
+        self.resets += 1
 
 
 def test_playground_threads_starting_cwd_into_the_transcript() -> None:
@@ -245,3 +358,80 @@ def test_playground_threads_starting_cwd_into_the_transcript() -> None:
     AuraPlayground.start_terminal_command(playground, "call-1", "echo hi", "C:/work")
 
     assert playground._terminal_window.commands == [("call-1", "echo hi", "C:/work")]
+
+
+def test_playground_clear_is_a_full_terminal_reset() -> None:
+    """The workspace reset must drop active ids, not merely blank the view."""
+    from aura.gui.playground import AuraPlayground
+
+    playground = SimpleNamespace(
+        _terminal_window=_RecordingTerminal(),
+        _code_editor=SimpleNamespace(close_all_tabs=lambda: None),
+        _info_hub=SimpleNamespace(clear=lambda: None),
+    )
+    AuraPlayground.clear(playground)
+
+    assert playground._terminal_window.resets == 1
+
+
+class _FakeEdgeRail:
+    def __init__(self) -> None:
+        self.state = "running"
+
+    def set_state(self, state: str) -> None:
+        self.state = state
+
+
+def _controller_for(window: TerminalWindow):
+    from aura.gui.main_window_terminal import MainWindowTerminalController
+
+    rail = _FakeEdgeRail()
+    main_window = SimpleNamespace(
+        _edge_rail=rail,
+        _playground=SimpleNamespace(terminal_window=lambda: window),
+    )
+    return MainWindowTerminalController(main_window), rail
+
+
+def test_clearing_during_active_work_leaves_the_edge_rail_running(
+    window: TerminalWindow,
+) -> None:
+    controller, rail = _controller_for(window)
+    window.terminal_cleared.connect(controller._on_terminal_cleared)
+
+    window.set_command("tool-1", "long job", "C:/work")
+    rail.set_state("running")
+    window.clear_display()
+
+    assert rail.state == "running"
+
+    # The rail only settles once the command's own exit status arrives.
+    window.set_result("tool-1", 0)
+    window.clear_display()
+    assert rail.state == "dim"
+
+
+def test_idle_clearing_still_dims_the_edge_rail(window: TerminalWindow) -> None:
+    controller, rail = _controller_for(window)
+    window.terminal_cleared.connect(controller._on_terminal_cleared)
+
+    window.set_command("tool-1", "quick", "C:/work")
+    window.set_result("tool-1", 0)
+    rail.set_state("success")
+
+    window.clear_display()
+
+    assert rail.state == "dim"
+
+
+def test_full_reset_dims_the_edge_rail_even_mid_command(
+    window: TerminalWindow,
+) -> None:
+    controller, rail = _controller_for(window)
+    window.terminal_cleared.connect(controller._on_terminal_cleared)
+
+    window.set_command("tool-1", "abandoned", "C:/work")
+    rail.set_state("running")
+    window.reset()
+
+    assert rail.state == "dim"

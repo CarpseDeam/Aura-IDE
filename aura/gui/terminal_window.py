@@ -75,9 +75,10 @@ class TerminalWindow(QDialog):
 
         self._initial_geometry = initial_geometry.strip()
 
-        # Event correlation only — an id never owns a widget.
-        self._known_ids: set[str] = set()
-        self._finished_ids: set[str] = set()
+        # Ids of commands started but not yet finished. Event correlation
+        # only — an id never owns a widget, and it is dropped again once its
+        # exit status lands so a later command may reuse it.
+        self._active_ids: set[str] = set()
 
         # One ordered, globally throttled buffer of (style, text) fragments.
         self._pending: list[tuple[str, str]] = []
@@ -123,7 +124,7 @@ class TerminalWindow(QDialog):
         self._clear_btn.setToolTip("Clear the terminal transcript")
         self._clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._clear_btn.setStyleSheet(subtle_button_qss)
-        self._clear_btn.clicked.connect(self.clear)
+        self._clear_btn.clicked.connect(self.clear_display)
         header_layout.addWidget(self._clear_btn)
 
         close_btn = QToolButton(header)
@@ -186,9 +187,9 @@ class TerminalWindow(QDialog):
 
     def set_command(self, tool_id: str, command: str, cwd: str = "") -> None:
         """Append one command to the transcript, keyed by its tool/process id."""
-        if tool_id in self._known_ids:
+        if tool_id in self._active_ids:
             return
-        self._known_ids.add(tool_id)
+        self._active_ids.add(tool_id)
 
         if self._has_content:
             self._queue_line_break()
@@ -202,16 +203,20 @@ class TerminalWindow(QDialog):
         self.terminal_started.emit()
 
     def append_output(self, tool_id: str, text: str) -> None:
-        """Append streamed output for a known id, even while hidden."""
-        if not text or tool_id not in self._known_ids:
+        """Append streamed output for an active id, even while hidden."""
+        if not text or tool_id not in self._active_ids:
             return
         self._queue("output", text)
 
     def set_result(self, tool_id: str, exit_code: int) -> None:
-        """Append the compact exit-status line without changing visibility."""
-        if tool_id not in self._known_ids or tool_id in self._finished_ids:
+        """Append the compact exit-status line without changing visibility.
+
+        Finishing retires the id, so a duplicate or orphan result is ignored
+        and the same id is free to key a later command.
+        """
+        if tool_id not in self._active_ids:
             return
-        self._finished_ids.add(tool_id)
+        self._active_ids.discard(tool_id)
         self._queue_line_break()
         if exit_code == 0:
             self._queue("ok", f"{OK_GLYPH} exited 0\n")
@@ -219,18 +224,40 @@ class TerminalWindow(QDialog):
             self._queue("fail", f"{FAIL_GLYPH} exited {exit_code}\n")
         self.terminal_finished.emit(exit_code)
 
-    def clear(self) -> None:
-        """Drop the whole transcript at a full reset boundary."""
+    @property
+    def has_active_commands(self) -> bool:
+        """Whether any started command is still awaiting its exit status."""
+        return bool(self._active_ids)
+
+    def clear_display(self) -> None:
+        """Empty what is rendered without abandoning commands still running.
+
+        The header's Clear button lands here. Only presentation state is
+        reset, so output and the final exit status of anything still active
+        keep arriving in the fresh transcript.
+        """
+        self._clear_rendered()
+        self.terminal_cleared.emit()
+
+    def reset(self) -> None:
+        """Drop the transcript and every active id at a full reset boundary.
+
+        The abandoned execution's late output stays ignored afterwards,
+        because its id is no longer active.
+        """
+        self._clear_rendered()
+        self._active_ids.clear()
+        self.terminal_cleared.emit()
+
+    def _clear_rendered(self) -> None:
+        """Empty the document, the pending buffer and presentation state."""
         self._flush_timer.stop()
         self._pending.clear()
         self._view.clear()
-        self._known_ids.clear()
-        self._finished_ids.clear()
         self._current_cwd = ""
         self._has_content = False
         self._at_line_start = True
         self._auto_follow = True
-        self.terminal_cleared.emit()
 
     def transcript_text(self) -> str:
         """Return the rendered transcript, flushing anything still buffered."""

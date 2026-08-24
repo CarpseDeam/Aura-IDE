@@ -18,7 +18,7 @@ class _FakePlayground:
 
 def test_file_edit_lifecycle_forwards_to_playground() -> None:
     playground = _FakePlayground()
-    router = ExecutionToolEventRouter(playground=playground, chat=None)
+    router = ExecutionToolEventRouter(playground=playground)
 
     changes = [{"change_id": "call-1:0", "path": "a.py", "action": "modify"}]
     router.on_execution_file_edit_lifecycle(
@@ -50,3 +50,18 @@ def test_playground_no_longer_exposes_add_diff_card() -> None:
     from aura.gui.playground import AuraPlayground
 
     assert not hasattr(AuraPlayground, "add_diff_card")
+
+
+def test_router_neither_requires_nor_owns_a_chat_view() -> None:
+    """Every remaining route targets the playground, so ChatView is dead here."""
+    import inspect
+
+    params = inspect.signature(ExecutionToolEventRouter.__init__).parameters
+    assert list(params) == ["self", "playground"]
+
+    router = ExecutionToolEventRouter(playground=_FakePlayground())
+    assert not hasattr(router, "_chat")
+
+    import aura.gui.execution_tool_event_router as router_module
+
+    assert "ChatView" not in inspect.getsource(router_module)

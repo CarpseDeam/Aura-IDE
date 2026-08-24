@@ -373,7 +373,7 @@ class AuraPlayground(QWidget):
         _log.info("DIAGNOSTIC AuraPlayground.clear called — full workspace reset")
         self._code_editor.close_all_tabs()
         self._info_hub.clear()
-        self._terminal_window.clear()
+        self._terminal_window.reset()
 
     def add_mermaid_artifact(self, code: str):
         pass

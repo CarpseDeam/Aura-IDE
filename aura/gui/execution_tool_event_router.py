@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING
 from aura.task_checklist import UPDATE_TASK_CHECKLIST_TOOL
 
 if TYPE_CHECKING:
-    from aura.gui.chat_view import ChatView
     from aura.gui.playground import AuraPlayground
 
 
@@ -22,9 +21,8 @@ class ExecutionToolEventRouter:
     Each method is a thin one-line forward — no logic, no state, no signals.
     """
 
-    def __init__(self, playground: AuraPlayground, chat: ChatView) -> None:
+    def __init__(self, playground: AuraPlayground) -> None:
         self._playground = playground
-        self._chat = chat
 
     def on_execution_tool_result(
         self,
