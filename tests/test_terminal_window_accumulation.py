@@ -51,6 +51,50 @@ def test_multiple_commands_accumulate_in_one_transcript(window: TerminalWindow) 
     )
 
 
+def test_fragmented_output_concatenates_exactly_and_exit_line_starts_fresh(
+    window: TerminalWindow,
+) -> None:
+    """Streamed fragments join verbatim; a final fragment without a trailing
+    newline still forces the exit-status line onto its own line."""
+    window.set_command("tool-1", "echo one", "C:/work")
+    window.append_output("tool-1", "part one-")
+    window.append_output("tool-1", "part two-")
+    window.append_output("tool-1", "part three")
+    window.set_result("tool-1", 0)
+
+    text = window.transcript_text()
+    assert text == (
+        "C:/work\n"
+        "\u276f echo one\n"
+        "part one-part two-part three\n"
+        "\u2713 exited 0\n"
+    )
+
+
+def test_clear_discards_buffered_output_but_keeps_active_command(
+    window: TerminalWindow,
+) -> None:
+    """Clearing drops anything still queued, then later output and its exit
+    status continue to accumulate for the preserved active command."""
+    window.set_command("tool-1", "echo one", "C:/work")
+    window.append_output("tool-1", "buffered before clear")
+    assert window._pending  # not yet flushed to the document
+
+    window.clear_display()
+
+    assert window._pending == []
+    assert window.has_active_commands is True
+
+    window.append_output("tool-1", "after clear\n")
+    window.set_result("tool-1", 0)
+
+    text = window.transcript_text()
+    assert "buffered before clear" not in text
+    assert "after clear\n" in text
+    assert "\u2713 exited 0" in text
+    assert window.has_active_commands is False
+
+
 def test_transcript_preserves_event_order_across_interleaved_ids(
     window: TerminalWindow,
 ) -> None:
