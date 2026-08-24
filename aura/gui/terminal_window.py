@@ -1,27 +1,44 @@
-"""Floating terminal output window for shell tool streams."""
+"""Floating terminal transcript window for shell and CLI-agent streams.
+
+This window is a read-only observer. Everything Aura runs — shell commands and
+CLI-agent processes alike — is appended chronologically to one continuous
+transcript, the way a conventional coding-agent console reads::
+
+    C:/Projects/Aura-Harness2
+    ❯ pytest -q
+    ........
+    ✓ exited 0
+
+Tool and process ids are kept only to correlate streaming events back to the
+transcript; no widget is ever created per id.
+"""
 
 from __future__ import annotations
 
-from PySide6.QtCore import QByteArray, Qt, QTimer, Signal
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtCore import QByteArray, QElapsedTimer, Qt, QTimer, Signal
+from PySide6.QtGui import QCloseEvent, QColor, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
-    QScrollArea,
-    QSizePolicy,
+    QPlainTextEdit,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from aura.gui.cards.terminal_card import TerminalCard
-from aura.gui.theme import BG, BORDER, FG, FG_DIM, TERMINAL_BG
+from aura.gui.cards._helpers import _mono_font
+from aura.gui.scrollbar_style import aura_scrollbar_qss
+from aura.gui.theme import ACCENT, BG, BORDER, DANGER, FG, FG_DIM, SUCCESS, TERMINAL_BG
+
+PROMPT_GLYPH = "❯"
+OK_GLYPH = "✓"
+FAIL_GLYPH = "✗"
 
 
 class TerminalWindow(QDialog):
-    """Non-modal floating terminal output window.
+    """Non-modal floating terminal transcript window.
 
     The window hides instead of being destroyed, so output continues buffering
     while hidden and reappears when the edge tab opens it again.
@@ -32,6 +49,13 @@ class TerminalWindow(QDialog):
     visibility_changed = Signal(bool)
     terminal_cleared = Signal()
     geometry_saved = Signal(str)
+
+    #: One global cap on transcript growth, shared by every command.
+    MAX_BLOCKS = 5000
+    #: Minimum gap between document writes, so rapid streaming stays responsive.
+    FLUSH_INTERVAL_MS = 33
+    #: How close to the bottom still counts as "following" new output.
+    FOLLOW_SLACK_PX = 24
 
     def __init__(
         self,
@@ -49,8 +73,18 @@ class TerminalWindow(QDialog):
         self._geometry_save_timer.timeout.connect(self._save_geometry)
         self.resize(860, 460)
 
-        self._terminal_cards: dict[str, TerminalCard] = {}
         self._initial_geometry = initial_geometry.strip()
+
+        # Event correlation only — an id never owns a widget.
+        self._known_ids: set[str] = set()
+        self._finished_ids: set[str] = set()
+
+        # One ordered, globally throttled buffer of (style, text) fragments.
+        self._pending: list[tuple[str, str]] = []
+        self._current_cwd = ""
+        self._has_content = False
+        self._at_line_start = True
+        self._auto_follow = True
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -74,81 +108,192 @@ class TerminalWindow(QDialog):
         header_layout.addWidget(title)
         header_layout.addStretch(1)
 
+        subtle_button_qss = (
+            f"QToolButton {{"
+            f"  background: transparent;"
+            f"  color: {FG_DIM};"
+            f"  border: none;"
+            f"  padding: 2px 8px;"
+            f"}}"
+            f"QToolButton:hover {{ color: {FG}; }}"
+        )
+
+        self._clear_btn = QToolButton(header)
+        self._clear_btn.setText("Clear")
+        self._clear_btn.setToolTip("Clear the terminal transcript")
+        self._clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._clear_btn.setStyleSheet(subtle_button_qss)
+        self._clear_btn.clicked.connect(self.clear)
+        header_layout.addWidget(self._clear_btn)
+
         close_btn = QToolButton(header)
         close_btn.setText("x")
         close_btn.setToolTip("Hide terminal")
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.setStyleSheet(
-            f"QToolButton {{"
-            f"  background: transparent;"
-            f"  color: {FG_DIM};"
-            f"  border: none;"
-            f"  font-size: 14px;"
-            f"  padding: 2px 8px;"
-            f"}}"
-            f"QToolButton:hover {{ color: {FG}; }}"
+            subtle_button_qss + "QToolButton { font-size: 14px; }"
         )
         close_btn.clicked.connect(self.hide)
         header_layout.addWidget(close_btn)
         outer.addWidget(header)
 
-        self._scroll = QScrollArea(self)
-        self._scroll.setWidgetResizable(True)
-        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self._scroll.setStyleSheet(f"background: {TERMINAL_BG}; border: none;")
-
-        self._card_host = QWidget(self._scroll)
-        self._card_host.setObjectName("terminalWindowCardHost")
-        self._card_host.setStyleSheet(f"background: {TERMINAL_BG};")
-        self._card_host.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Expanding,
+        self._view = QPlainTextEdit(self)
+        self._view.setReadOnly(True)
+        self._view.setFrameShape(QFrame.Shape.NoFrame)
+        self._view.setFont(_mono_font(10))
+        self._view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self._view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._view.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
         )
-        self._card_layout = QVBoxLayout(self._card_host)
-        self._card_layout.setContentsMargins(10, 10, 10, 10)
-        self._card_layout.setSpacing(0)
-        self._card_layout.addStretch(1)
-        self._scroll.setWidget(self._card_host)
-        outer.addWidget(self._scroll, 1)
-
-        self.setStyleSheet(
-            f"QDialog {{ background: {TERMINAL_BG}; color: {FG}; }}"
+        self._view.setStyleSheet(
+            f"QPlainTextEdit {{"
+            f"  background: {TERMINAL_BG};"
+            f"  color: {FG};"
+            f"  border: none;"
+            f"  padding: 10px 12px;"
+            f"  selection-background-color: {ACCENT};"
+            f"  selection-color: {BG};"
+            f"}}"
+            + aura_scrollbar_qss("QPlainTextEdit")
         )
+        self._view.document().setMaximumBlockCount(self.MAX_BLOCKS)
+        self._view.verticalScrollBar().valueChanged.connect(self._on_scrolled)
+        outer.addWidget(self._view, 1)
+
+        self._formats = {
+            "cwd": self._make_format(FG_DIM),
+            "command": self._make_format(ACCENT),
+            "output": self._make_format(FG),
+            "ok": self._make_format(SUCCESS),
+            "fail": self._make_format(DANGER),
+        }
+
+        self._flush_timer = QTimer(self)
+        self._flush_timer.setSingleShot(True)
+        self._flush_timer.timeout.connect(self._flush)
+        self._since_flush = QElapsedTimer()
+        self._since_flush.start()
+
+        self.setStyleSheet(f"QDialog {{ background: {TERMINAL_BG}; color: {FG}; }}")
         self._restore_geometry(self._initial_geometry)
         self._geometry_restore_done = True
 
-    def set_command(self, tool_id: str, command: str) -> None:
-        """Add one card for a real command, keyed by its tool-call id."""
-        existing = self._terminal_cards.get(tool_id)
-        if existing is not None:
-            existing.set_command(command)
+    # ------------------------------------------------------------------
+    # Transcript API
+    # ------------------------------------------------------------------
+
+    def set_command(self, tool_id: str, command: str, cwd: str = "") -> None:
+        """Append one command to the transcript, keyed by its tool/process id."""
+        if tool_id in self._known_ids:
             return
-        card = TerminalCard(
-            command=command,
-            parent=self._card_host,
-            start_collapsed=False,
-        )
-        self._terminal_cards[tool_id] = card
-        self._card_layout.insertWidget(self._card_layout.count() - 1, card)
-        QTimer.singleShot(0, lambda: self._scroll.ensureWidgetVisible(card))
+        self._known_ids.add(tool_id)
+
+        if self._has_content:
+            self._queue_line_break()
+            self._queue("output", "\n")
+        cwd = (cwd or "").strip()
+        if cwd and cwd != self._current_cwd:
+            self._current_cwd = cwd
+            self._queue("cwd", f"{cwd}\n")
+        self._queue("command", f"{PROMPT_GLYPH} {command or ''}\n")
+        self._has_content = True
         self.terminal_started.emit()
 
     def append_output(self, tool_id: str, text: str) -> None:
-        """Forward output text to the active card, even while hidden."""
-        card = self._terminal_cards.get(tool_id)
-        if card is not None:
-            card.append_output(text)
+        """Append streamed output for a known id, even while hidden."""
+        if not text or tool_id not in self._known_ids:
+            return
+        self._queue("output", text)
 
     def set_result(self, tool_id: str, exit_code: int) -> None:
-        """Finalize the matching terminal card without changing window visibility."""
-        card = self._terminal_cards.get(tool_id)
-        if card is None:
+        """Append the compact exit-status line without changing visibility."""
+        if tool_id not in self._known_ids or tool_id in self._finished_ids:
             return
-        card.set_result(exit_code)
-        if self.isVisible():
-            card.expand()
-
+        self._finished_ids.add(tool_id)
+        self._queue_line_break()
+        if exit_code == 0:
+            self._queue("ok", f"{OK_GLYPH} exited 0\n")
+        else:
+            self._queue("fail", f"{FAIL_GLYPH} exited {exit_code}\n")
         self.terminal_finished.emit(exit_code)
+
+    def clear(self) -> None:
+        """Drop the whole transcript at a full reset boundary."""
+        self._flush_timer.stop()
+        self._pending.clear()
+        self._view.clear()
+        self._known_ids.clear()
+        self._finished_ids.clear()
+        self._current_cwd = ""
+        self._has_content = False
+        self._at_line_start = True
+        self._auto_follow = True
+        self.terminal_cleared.emit()
+
+    def transcript_text(self) -> str:
+        """Return the rendered transcript, flushing anything still buffered."""
+        self._flush()
+        return self._view.toPlainText()
+
+    # ------------------------------------------------------------------
+    # Ordered, throttled buffering
+    # ------------------------------------------------------------------
+
+    def _queue(self, style: str, text: str) -> None:
+        self._pending.append((style, text))
+        self._at_line_start = text.endswith("\n")
+        self._schedule_flush()
+
+    def _queue_line_break(self) -> None:
+        """Ensure the next fragment starts on a fresh line."""
+        if not self._at_line_start:
+            self._queue("output", "\n")
+
+    def _schedule_flush(self) -> None:
+        if self._flush_timer.isActive():
+            return
+        elapsed = self._since_flush.elapsed()
+        if elapsed >= self.FLUSH_INTERVAL_MS:
+            self._flush()
+        else:
+            self._flush_timer.start(self.FLUSH_INTERVAL_MS - int(elapsed))
+
+    def _flush(self) -> None:
+        """Write every buffered fragment to the document in event order."""
+        self._flush_timer.stop()
+        self._since_flush.restart()
+        if not self._pending:
+            return
+        pending, self._pending = self._pending, []
+
+        # A detached cursor leaves the viewport wherever the user left it.
+        cursor = QTextCursor(self._view.document())
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.beginEditBlock()
+        for style, text in pending:
+            cursor.insertText(text, self._formats[style])
+        cursor.endEditBlock()
+
+        if self._auto_follow:
+            scrollbar = self._view.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
+
+    def _on_scrolled(self, value: int) -> None:
+        """Follow new output only while the user is at or near the bottom."""
+        scrollbar = self._view.verticalScrollBar()
+        self._auto_follow = value >= scrollbar.maximum() - self.FOLLOW_SLACK_PX
+
+    @staticmethod
+    def _make_format(color: str) -> QTextCharFormat:
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(color))
+        return fmt
+
+    # ------------------------------------------------------------------
+    # Window behaviour
+    # ------------------------------------------------------------------
 
     def show_and_raise(self) -> None:
         """Show this floating window and bring it to the front."""
@@ -167,14 +312,6 @@ class TerminalWindow(QDialog):
         """Return whether the floating terminal window is visible."""
         return self.isVisible()
 
-    def clear(self) -> None:
-        """Delete all terminal cards at a full reset boundary."""
-        for card in self._terminal_cards.values():
-            self._card_layout.removeWidget(card)
-            card.deleteLater()
-        self._terminal_cards.clear()
-        self.terminal_cleared.emit()
-
     def hideEvent(self, event) -> None:
         super().hideEvent(event)
         self._schedule_geometry_save()
@@ -182,6 +319,7 @@ class TerminalWindow(QDialog):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        self._flush()
         self.visibility_changed.emit(True)
 
     def moveEvent(self, event) -> None:
@@ -213,7 +351,5 @@ class TerminalWindow(QDialog):
     def _save_geometry(self) -> None:
         if not self._geometry_restore_done:
             return
-        geometry = bytes(
-            self.saveGeometry().toBase64()
-        ).decode("ascii")
+        geometry = bytes(self.saveGeometry().toBase64()).decode("ascii")
         self.geometry_saved.emit(geometry)

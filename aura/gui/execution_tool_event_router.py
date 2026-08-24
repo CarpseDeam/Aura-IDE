@@ -1,8 +1,8 @@
 """Thin delegation layer extracted from ExecutionEventHandler.
 
 Owns one-line routing methods that forward bridge execution tool events to
-AuraPlayground and ChatView. Keeps ExecutionEventHandler focused on lifecycle
-orchestration rather than per-event forwarding.
+AuraPlayground. Keeps ExecutionEventHandler focused on lifecycle orchestration
+rather than per-event forwarding.
 """
 
 from __future__ import annotations
@@ -102,7 +102,3 @@ class ExecutionToolEventRouter:
     ) -> None:
         """Forward CLI backend process completion to playground terminal."""
         self._playground.finish_terminal_process(process_id, exit_code)
-
-    def on_terminal_output(self, tool_call_id: str, text: str) -> None:
-        """Forward terminal output to the chat view."""
-        self._chat.append_terminal_output(tool_call_id, text)

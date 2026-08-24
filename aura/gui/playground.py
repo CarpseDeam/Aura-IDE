@@ -29,8 +29,8 @@ class AuraPlayground(QWidget):
 
     Uses a vertical QSplitter to divide the space between a tabbed code editor
     pane and the checklist-only info hub (Progress) pane. Terminal output is
-    routed to a floating TerminalWindow so it does not participate in this
-    layout.
+    routed to a floating TerminalWindow transcript so it does not participate
+    in this layout.
     """
 
     focused_action_requested = Signal(str)
@@ -347,8 +347,8 @@ class AuraPlayground(QWidget):
         command: str,
         starting_cwd: str = "",
     ) -> None:
-        """Present a card only after the command was submitted for execution."""
-        self._terminal_window.set_command(tool_call_id, command)
+        """Record the command in the transcript once it was really submitted."""
+        self._terminal_window.set_command(tool_call_id, command, starting_cwd)
 
     def append_terminal_output(self, execution_tool_id: str, text: str) -> None:
         self._terminal_window.append_output(execution_tool_id, text)

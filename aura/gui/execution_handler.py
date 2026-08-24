@@ -98,10 +98,7 @@ class ExecutionEventHandler(QObject):
         self._settings = settings
 
     def connect_bridge_signals(self) -> None:
-        """Wire all bridge execution signals to the corresponding handler slots.
-
-        Also connects ``bridge.terminalOutput`` for normal terminal output.
-        """
+        """Wire all bridge execution signals to the corresponding handler slots."""
         self._bridge.executionStarted.connect(self._on_execution_started)
         self._bridge.executionFinished.connect(self._on_execution_finished)
         self._bridge.executionCancelled.connect(self._on_execution_cancelled)
@@ -122,7 +119,6 @@ class ExecutionEventHandler(QObject):
         self._bridge.executionAgentProcessStarted.connect(self._tool_router.on_execution_agent_process_started)
         self._bridge.executionAgentProcessOutput.connect(self._tool_router.on_execution_agent_process_output)
         self._bridge.executionAgentProcessFinished.connect(self._tool_router.on_execution_agent_process_finished)
-        self._bridge.terminalOutput.connect(self._tool_router.on_terminal_output)
 
     # ---- production-run helpers ------------------------------------------------
 

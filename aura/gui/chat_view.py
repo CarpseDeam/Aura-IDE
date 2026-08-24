@@ -26,7 +26,6 @@ from aura.gui.cards.code_writer_card import CodeWriterCard
 from aura.gui.cards.diff_card import DiffCard
 from aura.gui.cards.error_card import ErrorCard
 from aura.gui.cards.plan_review_card import PlanReviewCard
-from aura.gui.cards.terminal_card import TerminalCard
 from aura.gui.cards.user_card import UserCard
 from aura.gui.controllers import ToolStreamController
 from aura.gui.theme import (
@@ -67,8 +66,6 @@ class ChatView(QScrollArea):
         self._latest_user_card: UserCard | None = None
         # Map tool_call_id -> the assistant card that owns it (for routing diff-after).
         self._tool_owner: dict[str, AssistantCard] = {}
-        # Map tool_call_id -> TerminalCard.
-        self._terminal_cards: dict[str, TerminalCard] = {}
         # Map tool_call_id -> ToolStreamController.
         self._controllers: dict[str, ToolStreamController] = {}
         # Per assistant turn: route repeated write/edit calls for the same path
@@ -259,7 +256,6 @@ class ChatView(QScrollArea):
         self._chat_items.clear()
         self._current_assistant_transcript_parts.clear()
         self._current_assistant_transcript_recorded = False
-        self._terminal_cards.clear()
         self._controllers.clear()
         self._clear_code_card_routes()
         self._compact_tool_names.clear()
@@ -534,9 +530,6 @@ class ChatView(QScrollArea):
         controller = self._controllers.pop(tool_call_id, None)
         if controller:
             controller.finalize(ok, result_text)
-            if controller.tool_name == "shell":
-                self._terminal_cards.pop(tool_call_id, None)
-
             self._scroll_to_bottom()
 
     def _tool_goal_from_args(self, args_text: str) -> str:
@@ -547,13 +540,6 @@ class ChatView(QScrollArea):
         if not isinstance(data, dict):
             return ""
         return str(data.get("goal") or data.get("objective") or "").strip()
-
-    def append_terminal_output(self, tool_call_id: str, text: str) -> None:
-        """Append a chunk of stdout/stderr to the TerminalCard."""
-        card = self._terminal_cards.get(tool_call_id)
-        if card is not None:
-            card.append_output(text)
-        self._request_scroll_to_bottom()
 
     def add_diff_card(
         self,
