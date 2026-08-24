@@ -16,7 +16,8 @@ from aura.conversation.external_paths import (
     extract_absolute_path_candidates,
     extract_external_read_paths,
 )
-from aura.conversation.history import History
+from aura.conversation.history import LITERAL_COMPOSER_TEXT_KEY, History
+from aura.conversation.persistence import load_conversation, save_conversation
 from aura.conversation.tools.registry import ToolRegistry
 from aura.gui.input_panel import Attachment, SendPayload
 from aura.gui.send_handler import SendHandler
@@ -203,6 +204,60 @@ def test_broad_user_locations_are_extracted_when_named(tmp_path: Path) -> None:
         assert extract_external_read_paths(f'"{candidate}"', workspace) == [
             candidate.resolve()
         ], candidate
+
+
+# ── B2. the durable literal composer text ────────────────────────────────────
+
+
+def test_literal_composer_text_is_stored_local_only_and_stripped_for_the_api() -> None:
+    history = History()
+    history.append_user_text(
+        "Read the notes.\n\n[user attached: C:\\Elsewhere\\notes.txt]",
+        literal_composer_text="Read the notes.",
+    )
+
+    stored = history.messages[-1]
+    assert stored[LITERAL_COMPOSER_TEXT_KEY] == "Read the notes."
+    assert history.latest_real_user_literal_composer_text() == "Read the notes."
+    # The provider request carries the message, never Aura's own bookkeeping.
+    sent = history.for_api()[-1]
+    assert LITERAL_COMPOSER_TEXT_KEY not in sent
+    assert sent["content"] == stored["content"]
+    # Stripping the snapshot must not strip the canonical log.
+    assert stored[LITERAL_COMPOSER_TEXT_KEY] == "Read the notes."
+
+
+def test_literal_composer_text_is_stored_on_multimodal_turns() -> None:
+    history = History()
+    history.append_user_multimodal(
+        [{"type": "text", "text": "Look at this."}],
+        literal_composer_text="Look at this.",
+    )
+
+    assert history.latest_real_user_literal_composer_text() == "Look at this."
+    assert LITERAL_COMPOSER_TEXT_KEY not in history.for_api()[-1]
+
+
+def test_a_message_without_the_field_reports_no_literal_composer_text() -> None:
+    history = History()
+    history.append_user_text("legacy record")
+
+    assert history.latest_real_user_literal_composer_text() is None
+
+
+def test_literal_composer_text_survives_save_and_load(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    history = History()
+    history.append_user_text(
+        "typed text\n\n[user attached: notes.txt]",
+        literal_composer_text="typed text",
+    )
+
+    path = save_conversation(history, workspace, "model", "off")
+    reloaded = load_conversation(path).history
+
+    assert reloaded.latest_real_user_literal_composer_text() == "typed text"
 
 
 # ── C. the send layer ────────────────────────────────────────────────────────
@@ -400,14 +455,67 @@ def test_a_queued_message_rederives_its_own_paths(tmp_path: Path, monkeypatch) -
     assert bridge.registry.external_read_available is False
 
 
+def _reload_conversation(bridge: _Bridge, workspace: Path) -> None:
+    """Round-trip the conversation through Aura's own save/open path.
+
+    Mirrors ``ConversationPersistence.apply_loaded``: the canonical message
+    dicts are written to disk and restored onto the live history, which is what
+    reopening Aura or selecting a thread actually does.
+    """
+    path = save_conversation(bridge.history, workspace, "model", "off")
+    loaded = load_conversation(path)
+    bridge.history.messages = list(loaded.history.messages)
+
+
 @_WINDOWS_FILESYSTEM
-def test_retry_rederives_authorization_from_retained_user_text(
+def test_retry_rederives_authorization_from_the_literal_composer_text(
     tmp_path: Path, monkeypatch
 ) -> None:
     handler, bridge, _chat = _handler(tmp_path, monkeypatch)
     external = tmp_path / "old-project"
     handler.handle_send(SendPayload(str(external), []), "model", "off")
     bridge.clear_external_read_authorization()
+    bridge.authorization_calls.clear()
+
+    assert handler.handle_retry_last("model", "off") is True
+    assert bridge.authorization_calls == [(external.resolve(),)]
+    assert bridge.registry.external_read_available is True
+
+
+@_WINDOWS_FILESYSTEM
+def test_a_typed_path_still_authorizes_retry_after_switching_conversations(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The literal text outlives the volatile per-send state.
+
+    ``clear_queue()`` runs whenever the active conversation changes. The
+    authority for a later retry comes from the stored user message, so the
+    typed path must survive it.
+    """
+    handler, bridge, _chat = _handler(tmp_path, monkeypatch)
+    external = tmp_path / "old-project"
+    handler.handle_send(SendPayload(str(external), []), "model", "off")
+
+    handler.clear_queue()
+    assert bridge.registry.external_read_available is False
+    bridge.authorization_calls.clear()
+
+    assert handler.handle_retry_last("model", "off") is True
+    assert bridge.authorization_calls == [(external.resolve(),)]
+    assert bridge.registry.external_read_available is True
+
+
+@_WINDOWS_FILESYSTEM
+def test_a_typed_path_still_authorizes_retry_after_save_and_reload(
+    tmp_path: Path, monkeypatch
+) -> None:
+    handler, bridge, _chat = _handler(tmp_path, monkeypatch)
+    workspace = tmp_path / "workspace"
+    external = tmp_path / "old-project"
+    handler.handle_send(SendPayload(str(external), []), "model", "off")
+
+    _reload_conversation(bridge, workspace)
+    handler.clear_queue()
     bridge.authorization_calls.clear()
 
     assert handler.handle_retry_last("model", "off") is True
@@ -449,11 +557,8 @@ def test_attachment_metadata_cannot_authorize_external_access(
     assert bridge.registry.external_read_available is False
 
 
-def test_attachment_metadata_cannot_authorize_on_retry(
-    tmp_path: Path, monkeypatch
-) -> None:
-    handler, bridge, _chat = _handler(tmp_path, monkeypatch)
-    external = tmp_path / "old-project"
+def _send_attachment_only_path(handler: SendHandler, external: Path) -> None:
+    """Submit a turn whose only mention of *external* is attachment metadata."""
     handler.handle_send(
         SendPayload(
             "Use the attached notes.",
@@ -462,7 +567,70 @@ def test_attachment_metadata_cannot_authorize_on_retry(
         "model",
         "off",
     )
+
+
+def test_attachment_metadata_cannot_authorize_on_retry(
+    tmp_path: Path, monkeypatch
+) -> None:
+    handler, bridge, _chat = _handler(tmp_path, monkeypatch)
+    external = tmp_path / "old-project"
+    _send_attachment_only_path(handler, external)
     bridge.authorization_calls.clear()
+
+    assert handler.handle_retry_last("model", "off") is True
+    assert bridge.authorization_calls == [()]
+    assert bridge.registry.external_read_available is False
+
+
+def test_attachment_metadata_cannot_authorize_after_switching_conversations(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The retry fallback that used to reach the stored text is gone.
+
+    Once ``clear_queue()`` has run there is no volatile composer text left, and
+    the stored message still carries the attachment reference block. Retry must
+    read the literal-composer metadata — which never named the path — and not
+    the flattened message content.
+    """
+    handler, bridge, _chat = _handler(tmp_path, monkeypatch)
+    external = tmp_path / "old-project"
+    _send_attachment_only_path(handler, external)
+
+    handler.clear_queue()
+    bridge.authorization_calls.clear()
+
+    assert handler.handle_retry_last("model", "off") is True
+    assert bridge.authorization_calls == [()]
+    assert bridge.registry.external_read_available is False
+
+
+def test_attachment_metadata_cannot_authorize_after_save_and_reload(
+    tmp_path: Path, monkeypatch
+) -> None:
+    handler, bridge, _chat = _handler(tmp_path, monkeypatch)
+    workspace = tmp_path / "workspace"
+    external = tmp_path / "old-project"
+    _send_attachment_only_path(handler, external)
+
+    _reload_conversation(bridge, workspace)
+    handler.clear_queue()
+    bridge.authorization_calls.clear()
+
+    assert handler.handle_retry_last("model", "off") is True
+    # The attachment block survived the round trip; the authority did not exist.
+    assert str(external) in bridge.history.latest_real_user_text()
+    assert bridge.authorization_calls == [()]
+    assert bridge.registry.external_read_available is False
+
+
+def test_a_legacy_user_message_authorizes_nothing_on_retry(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A record written before the literal-composer field grants no authority."""
+    handler, bridge, _chat = _handler(tmp_path, monkeypatch)
+    external = tmp_path / "old-project"
+    bridge.history.append_user_text(str(external))
+    assert bridge.history.latest_real_user_literal_composer_text() is None
 
     assert handler.handle_retry_last("model", "off") is True
     assert bridge.authorization_calls == [()]

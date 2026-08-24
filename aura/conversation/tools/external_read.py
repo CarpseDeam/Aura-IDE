@@ -97,11 +97,15 @@ class ExternalReadAccess:
         """Replace the allowlist with *candidates*, and report what took.
 
         Authorization is strictly turn-scoped: whatever was authorized before
-        is dropped first. Each candidate is resolved once; an existing file
-        authorizes that file, an existing directory authorizes that tree, and
-        anything that no longer exists or cannot be resolved authorizes
-        nothing. Overlapping paths are normalized rather than rejected — a
-        directory plus a file inside it is an ordinary request, not an error.
+        is dropped first. Each candidate must already name a location: a
+        non-absolute candidate is ignored outright, because resolving one would
+        silently anchor it to the process working directory and authorize a
+        place nobody named. Each remaining candidate is resolved once; an
+        existing file authorizes that file, an existing directory authorizes
+        that tree, and anything that no longer exists or cannot be resolved
+        authorizes nothing. Overlapping paths are normalized rather than
+        rejected — a directory plus a file inside it is an ordinary request,
+        not an error.
         """
         self.clear()
 
@@ -109,7 +113,15 @@ class ExternalReadAccess:
         directories: list[Path] = []
         for candidate in candidates or ():
             try:
-                resolved = Path(candidate).expanduser().resolve()
+                expanded = Path(candidate).expanduser()
+                # ``~`` expansion happens first so a home-relative candidate is
+                # judged by the location it actually names. Drive-relative
+                # (``C:foo``) and driveless-rooted (``\foo``) forms are not
+                # absolute either: both would still be completed from process
+                # state, so neither authorizes anything.
+                if not expanded.is_absolute():
+                    continue
+                resolved = expanded.resolve()
                 is_dir = resolved.is_dir()
                 is_file = resolved.is_file()
             except (OSError, ValueError):

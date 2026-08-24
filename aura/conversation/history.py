@@ -26,7 +26,19 @@ import copy
 from dataclasses import dataclass, field
 from typing import Any
 
-__all__ = ["History", "is_real_user_message", "user_message_text"]
+__all__ = [
+    "LITERAL_COMPOSER_TEXT_KEY",
+    "History",
+    "is_real_user_message",
+    "user_message_text",
+]
+
+# Aura-local bookkeeping key: the exact text the user typed into the composer
+# for this turn, stored on the canonical user message before any attachment
+# reference block is folded into its content. It is durable (persistence keeps
+# the canonical message dicts verbatim) and local-only — `for_api()` strips it,
+# so it never reaches a provider.
+LITERAL_COMPOSER_TEXT_KEY = "aura_literal_composer_text"
 
 
 def is_real_user_message(msg: dict[str, Any]) -> bool:
@@ -55,6 +67,14 @@ def user_message_text(msg: dict[str, Any]) -> str:
             if isinstance(part, dict) and part.get("type") == "text"
         )
     return ""
+
+
+def _attach_literal_composer_text(
+    message: dict[str, Any], literal_composer_text: str | None
+) -> None:
+    """Record the literal composer text on a user message, when there is one."""
+    if literal_composer_text is not None:
+        message[LITERAL_COMPOSER_TEXT_KEY] = literal_composer_text
 
 
 def repair_tool_call_blocks(messages: list[dict[str, Any]]) -> int:
@@ -127,19 +147,37 @@ class History:
     def set_system(self, prompt: str | None) -> None:
         self.system_prompt = prompt
 
-    def append_user_text(self, text: str) -> None:
-        self.messages.append({"role": "user", "content": text})
+    def append_user_text(
+        self, text: str, *, literal_composer_text: str | None = None
+    ) -> None:
+        """Append a real user turn.
+
+        ``literal_composer_text`` is the exact text the user typed, recorded
+        before attachment reference blocks were folded into ``text``. The
+        composer is the only caller that can supply it.
+        """
+        message: dict[str, Any] = {"role": "user", "content": text}
+        _attach_literal_composer_text(message, literal_composer_text)
+        self.messages.append(message)
 
     def append_internal_user_text(self, text: str) -> None:
         self.messages.append({"role": "user", "content": text, "aura_internal": True})
 
     def append_user_multimodal(
-        self, parts: list[dict[str, Any]]
+        self,
+        parts: list[dict[str, Any]],
+        *,
+        literal_composer_text: str | None = None,
     ) -> None:
         """For image+text turns: parts is a list like
         [{"type":"text","text":"..."}, {"type":"image_url","image_url":{"url":"data:..."}}].
+
+        ``literal_composer_text`` carries the same meaning as in
+        :meth:`append_user_text`.
         """
-        self.messages.append({"role": "user", "content": parts})
+        message: dict[str, Any] = {"role": "user", "content": parts}
+        _attach_literal_composer_text(message, literal_composer_text)
+        self.messages.append(message)
 
     def append_assistant(self, full_message: dict[str, Any]) -> None:
         """Append the *complete* assistant message — content, tool calls,
@@ -188,6 +226,23 @@ class History:
             return None
         return user_message_text(self.messages[index])
 
+    def latest_real_user_literal_composer_text(self) -> str | None:
+        """The exact composer text of the newest genuine user request.
+
+        ``None`` when that message carries no literal-composer metadata: a
+        record written before this field existed, or a user message Aura
+        appended from somewhere other than the composer. Callers that gate
+        authority on what the user actually typed must treat that as "the user
+        typed nothing" and never fall back to the stored message content — that
+        content also carries attachment reference blocks Aura generated, which
+        were never user-authored authority.
+        """
+        index = self.latest_real_user_index()
+        if index is None:
+            return None
+        value = self.messages[index].get(LITERAL_COMPOSER_TEXT_KEY)
+        return value if isinstance(value, str) else None
+
     def rewind_to_last_user_turn(self) -> bool:
         """Keep history through the last user message and drop its response.
 
@@ -220,6 +275,7 @@ class History:
             out.append({"role": "system", "content": self.system_prompt})
         for msg in copy.deepcopy(self.messages):
             msg.pop("aura_internal", None)
+            msg.pop(LITERAL_COMPOSER_TEXT_KEY, None)
             out.append(msg)
         return out
 

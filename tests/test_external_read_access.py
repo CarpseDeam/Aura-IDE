@@ -242,6 +242,31 @@ def test_authorizing_replaces_the_previous_turns_allowlist(tmp_path: Path) -> No
         access.resolve(str(first / "a.txt"))
 
 
+def test_relative_candidates_authorize_nothing(tmp_path: Path, monkeypatch) -> None:
+    """A relative candidate must never be completed from the working directory.
+
+    ``authorize`` is the authority boundary, so it enforces its own contract:
+    a candidate that does not already name a location is ignored outright,
+    rather than being resolved against wherever the process happens to be.
+    """
+    workspace = _workspace(tmp_path)
+    external = tmp_path / "Notes"
+    external.mkdir()
+    (external / "secret.txt").write_text("s", encoding="utf-8")
+    # Standing in the external folder is exactly the situation a relative
+    # candidate would silently exploit.
+    monkeypatch.chdir(external)
+
+    access = ExternalReadAccess(workspace)
+
+    assert access.authorize([Path("."), Path("secret.txt"), Path("")]) == ()
+    assert access.is_available is False
+    assert access.files == ()
+    assert access.directories == ()
+    with pytest.raises(ValueError):
+        access.resolve(str(external / "secret.txt"))
+
+
 # ── B. read_file through the live registry ───────────────────────────────────
 
 

@@ -77,11 +77,6 @@ class SendHandler(QObject):
 
         # Queued messages sent while the bridge is running.
         self._message_queue: list[QueuedItem] = []
-        # The literal composer text of the last submitted turn. A retry
-        # rederives its external read authority from this rather than from the
-        # history message, which also carries attachment reference blocks that
-        # were never user-authored path authority.
-        self._last_composer_text: str | None = None
 
     # ---- public helpers (called externally from MainWindow) -----------------
 
@@ -101,7 +96,6 @@ class SendHandler(QObject):
         must not survive into another.
         """
         self._message_queue.clear()
-        self._last_composer_text = None
         clear = getattr(self._bridge, "clear_external_read_authorization", None)
         if callable(clear):
             clear()
@@ -194,15 +188,18 @@ class SendHandler(QObject):
             self._chat.add_error("Retry", "No user message to retry.")
             return False
 
-        # Derive the target files from the retained user text so stale turn
-        # state from another conversation cannot leak.
-        retained_text = self._bridge.history.latest_real_user_text()
+        # External read authority comes from the literal composer text stored
+        # on the retained user message and from nothing else. That value is
+        # durable across conversation switches, restarts, and restored history,
+        # and there is deliberately no fallback to the retained message content:
+        # that content also carries attachment reference blocks Aura generated,
+        # which were never user-authored path authority. A message with no
+        # literal-composer metadata therefore authorizes nothing.
         self._authorize_external_reads_for_turn(
-            self._last_composer_text
-            if self._last_composer_text is not None
-            else retained_text
+            self._bridge.history.latest_real_user_literal_composer_text()
         )
-        self._declare_turn_target_files(retained_text)
+        # Target files stay derived from the retained user text, unchanged.
+        self._declare_turn_target_files(self._bridge.history.latest_real_user_text())
 
         self._message_queue.clear()
         self._input.set_queued_messages(0)
@@ -218,10 +215,11 @@ class SendHandler(QObject):
 
         Only absolute paths the user typed themselves can authorize a read
         outside the workspace, so this reads the composer text (or, for a retry,
-        the retained original user text) and nothing else — never attachment
-        metadata, generated descriptions, model output, or tool arguments. It
-        runs before ``bridge.send()``, and it always runs: a turn that named
-        nothing replaces the previous turn's allowlist with an empty one.
+        the literal composer text stored on the retained user message) and
+        nothing else — never attachment metadata, generated descriptions, model
+        output, or tool arguments. It runs before ``bridge.send()``, and it
+        always runs: a turn that named nothing replaces the previous turn's
+        allowlist with an empty one.
         """
         authorize = getattr(self._bridge, "authorize_external_reads", None)
         if not callable(authorize):
@@ -411,7 +409,6 @@ class SendHandler(QObject):
         """Build the message parts, append to history, and send via the bridge."""
         # Authorization is derived from the literal user text before history
         # mutation or bridge.send().
-        self._last_composer_text = payload.text
         self._authorize_external_reads_for_turn(payload.text)
 
         image_atts = [a for a in payload.attachments if a.kind == "image" and a.b64]
@@ -431,9 +428,13 @@ class SendHandler(QObject):
                     "type": "image_url",
                     "image_url": {"url": f"data:image/png;base64,{a.b64}"},
                 })
-            self._bridge.history.append_user_multimodal(parts)
+            self._bridge.history.append_user_multimodal(
+                parts, literal_composer_text=payload.text
+            )
         else:
-            self._bridge.history.append_user_text(text)
+            self._bridge.history.append_user_text(
+                text, literal_composer_text=payload.text
+            )
 
         self._chat.add_user(text, [a.b64 for a in image_atts] or None)
         self._chat.scroll_to_bottom(force=True)
