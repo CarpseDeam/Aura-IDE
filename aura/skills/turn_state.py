@@ -15,7 +15,7 @@ ledger.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from aura.skills.text import SkillCandidate, SkillPack
 
@@ -210,6 +210,40 @@ class SkillTurnState:
             )
         return activated, rejected
 
+    # ---- resource resolution -------------------------------------------------
+
+    def resolve_resource(self, skill_id: str, path: str) -> dict:
+        """Read one supporting resource file of an already-activated skill.
+
+        Requires the skill to have been activated this turn through
+        ``load_skills`` first — an unactivated (even if frozen-indexed)
+        skill's resources are unreachable, and resolution never touches any
+        directory but that one skill's own frozen ``source_dir``.
+        """
+        from aura.conversation.tools.fs_read import read_file
+        from aura.skills.resources import SkillResourceError, resolve_skill_resource
+
+        normalized_id = _normalize_skill_id(skill_id)
+        if not normalized_id:
+            return {"ok": False, "error": "skill_id must be a non-empty string"}
+        if not self.is_active(normalized_id):
+            return {
+                "ok": False,
+                "error": "skill is not activated for this turn; call load_skills first",
+            }
+        candidate = self._by_id.get(normalized_id)
+        if candidate is None or candidate.skill.source_dir is None:
+            return {"ok": False, "error": "activated skill has no resource directory"}
+
+        try:
+            target = resolve_skill_resource(candidate.skill.source_dir, path)
+        except SkillResourceError as exc:
+            return {"ok": False, "error": str(exc)}
+
+        result = read_file(candidate.skill.source_dir, target)
+        result["skill_id"] = normalized_id
+        return result
+
 
 def _normalize_skill_id(raw: object) -> str:
     if not isinstance(raw, str):
@@ -233,4 +267,11 @@ def load_skills_result(state: SkillTurnState, skill_ids: list[str]) -> dict:
         "skills": activated,
         "rejected": rejected,
     }
+
+
+def read_skill_resource_result(state: SkillTurnState, skill_id: str, path: str) -> dict:
+    """Structured result payload for one ``read_skill_resource`` tool call."""
+    payload = state.resolve_resource(skill_id, path)
+    payload.setdefault("tool", "read_skill_resource")
+    return payload
 

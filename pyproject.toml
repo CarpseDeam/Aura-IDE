@@ -22,6 +22,7 @@ dependencies = [
     "playwright>=1.40",
     "pygments>=2.17",
     "PySide6>=6.6",
+    "PyYAML>=6.0",
     "tomli>=2.0; python_version < '3.11'",
     "tree_sitter",
     "tree-sitter-language-pack>=1.10.8",
@@ -55,7 +56,13 @@ exclude = ["scripts*", "tests*"]
 
 [tool.setuptools.package-data]
 "aura" = ["production_prompt.md"]
-"aura.skills" = ["bundled/*.json", "bundled/*/SKILL.md"]
+"aura.skills" = [
+    "bundled/*.json",
+    "bundled/*/SKILL.md",
+    "bundled/*/scripts/*",
+    "bundled/*/references/*",
+    "bundled/*/assets/*",
+]
 "aura.validation" = ["*.gd"]
 "aura.godot_editor" = [
     "addon/*.gd",

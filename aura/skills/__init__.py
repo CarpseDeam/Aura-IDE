@@ -5,6 +5,9 @@ from aura.skills.eviction import (
     format_eviction_report,
     summarize_eviction_report,
 )
+from aura.skills.identity import InstalledSkillId, InstallScope
+from aura.skills.importer import ImportPreview, SkillImporter, SkillImportError
+from aura.skills.library import InstalledSkillSummary, SkillInspection, SkillLibrary
 from aura.skills.models import (
     Skill,
     SkillProvenance,
@@ -24,11 +27,19 @@ from aura.skills.text import (
     format_skill_index,
     format_skills,
 )
-from aura.skills.turn_state import SkillTurnState, load_skills_result
+from aura.skills.turn_state import SkillTurnState, load_skills_result, read_skill_resource_result
 
 __all__ = [
+    "ImportPreview",
+    "InstallScope",
+    "InstalledSkillId",
+    "InstalledSkillSummary",
     "Skill",
     "SkillCandidate",
+    "SkillImportError",
+    "SkillImporter",
+    "SkillInspection",
+    "SkillLibrary",
     "SkillPack",
     "SkillProvenance",
     "SkillRecord",
@@ -44,6 +55,7 @@ __all__ = [
     "format_skill_index",
     "format_skills",
     "read_skills",
+    "read_skill_resource_result",
     "score_skills",
     "select_relevant_skills",
     "skill_body_hash",

@@ -489,8 +489,36 @@ class ToolRegistry(
             return ToolExecResult(ok=True, payload=payload)
         return ToolExecResult(ok=True, payload=load_skills_result(state, skill_ids))
 
+    def _handle_read_skill_resource(
+        self, args: dict[str, Any], approval_cb: ApprovalCallback, reject_all: bool
+    ) -> ToolExecResult:
+        """Read one supporting resource file of a skill activated this turn.
+
+        Resolution happens entirely against the frozen per-turn snapshot: the
+        skill must be exposed in this turn's candidate index *and* already
+        activated via ``load_skills``, and only that skill's own canonical
+        source directory is ever reachable.
+        """
+        from aura.skills.turn_state import SkillTurnState, read_skill_resource_result
+
+        state: SkillTurnState | None = self._skill_turn_state
+        skill_id = str(args.get("skill_id") or "")
+        path = str(args.get("path") or "")
+        if state is None or state.is_empty:
+            return ToolExecResult(
+                ok=False,
+                payload={
+                    "ok": False,
+                    "tool": "read_skill_resource",
+                    "error": "no skills were selected for this turn",
+                },
+            )
+        payload = read_skill_resource_result(state, skill_id, path)
+        return ToolExecResult(ok=bool(payload.get("ok")), payload=payload)
+
 
 TOOL_HANDLERS["load_skills"] = ToolRegistry._handle_load_skills
+TOOL_HANDLERS["read_skill_resource"] = ToolRegistry._handle_read_skill_resource
 TOOL_HANDLERS["read_file"] = ToolRegistry._handle_read_file
 TOOL_HANDLERS["read_file_range"] = ToolRegistry._handle_read_file_range
 TOOL_HANDLERS["read_task_context"] = ToolRegistry._handle_read_task_context

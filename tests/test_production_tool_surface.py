@@ -255,6 +255,22 @@ def test_load_skills_joins_only_when_the_turn_has_frozen_candidates(tmp_path) ->
     assert "load_skills" not in _names(registry.tool_defs())
 
 
+def test_read_skill_resource_joins_alongside_load_skills(tmp_path) -> None:
+    """The resource reader shares load_skills's activation condition exactly."""
+    registry = ToolRegistry(workspace_root=tmp_path)
+
+    assert "read_skill_resource" not in _names(registry.tool_defs())
+
+    class _FakeSkillTurnState:
+        is_empty = False
+
+    registry.set_turn_skill_state(_FakeSkillTurnState())
+    assert "read_skill_resource" in _names(registry.tool_defs())
+
+    registry.set_turn_skill_state(None)
+    assert "read_skill_resource" not in _names(registry.tool_defs())
+
+
 def test_plan_review_joins_only_when_required_and_never_read_only(tmp_path) -> None:
     registry = ToolRegistry(workspace_root=tmp_path)
     assert "review_implementation_plan" not in _names(registry.tool_defs())

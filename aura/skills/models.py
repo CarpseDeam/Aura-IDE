@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 
@@ -30,6 +31,19 @@ class Skill:
     #: ``SKILL.md`` (references, scripts, examples). Flat JSON skills and
     #: learned guards have no directory, so this stays False.
     has_resources: bool = False
+    #: Stable ``"scope:name"`` identity from :mod:`aura.skills.identity`, for
+    #: skills SkillLibrary manages (installed project/personal/bundled
+    #: skills). ``None`` for graduated hazards and refined guards, which are
+    #: internal runtime guards, not installable user skills. Distinct from
+    #: the hashed per-turn candidate id (:func:`compute_skill_id`): this one
+    #: is stable across body edits, the candidate id is content-addressed.
+    install_id: str | None = None
+    #: The skill's canonical source directory on disk, for resolving
+    #: supporting resources (:mod:`aura.conversation.tools`'s
+    #: ``read_skill_resource``). Internal only — never leaked into provider
+    #: prompts, which see only ``has_resources``. ``None`` for skills with no
+    #: backing directory (flat JSON, graduated hazards, refined guards).
+    source_dir: Path | None = None
 
 
 def skill_label(skill: Skill) -> str:

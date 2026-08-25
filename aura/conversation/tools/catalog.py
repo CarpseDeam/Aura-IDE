@@ -10,6 +10,7 @@ from aura.conversation.tools.schemas import (
     APPLY_PATCH_TOOL_DEF,
     GIT_TOOL_DEFS,
     LOAD_SKILLS_TOOL_DEF,
+    READ_SKILL_RESOURCE_TOOL_DEF,
     READ_TOOL_DEFS,
     REVIEW_IMPLEMENTATION_PLAN_TOOL_DEF,
     TASK_CHECKLIST_TOOL_DEF,
@@ -80,7 +81,8 @@ class ToolCatalog:
         ``review_implementation_plan`` when Plan Review is required for this
         turn (never in read-only mode: nothing read-only can mutate, so there
         is nothing for a plan to gate). ``skills_active`` adds ``load_skills``
-        only when this turn's frozen skill index actually has candidates.
+        and ``read_skill_resource`` only when this turn's frozen skill index
+        actually has candidates.
 
         Reading an explicitly authorized external location is not a separate
         capability and never changes this catalog: ``read_file`` and
@@ -116,6 +118,7 @@ class ToolCatalog:
 
         if skills_active:
             tools.append(dict(LOAD_SKILLS_TOOL_DEF))
+            tools.append(dict(READ_SKILL_RESOURCE_TOOL_DEF))
 
         if not read_only and dynamic_schemas:
             tools.extend(dynamic_schemas)
