@@ -292,6 +292,7 @@ class ConversationBridge(QObject):
         self._turn_task_kind: str | None = None
         self._turn_content: str = ""
         self._turn_target_files: tuple[str, ...] = ()
+        self._turn_explicit_install_ids: tuple[str, ...] = ()
         # The frozen Read Only collaborative-turn intent for the active turn,
         # set at the start of send(). A toolbar toggle during an active response
         # never mutates it; it applies to the next turn.
@@ -357,6 +358,7 @@ class ConversationBridge(QObject):
 
     def set_workspace_root(self, root) -> None:
         self._cancel.set()
+        self._turn_explicit_install_ids = ()
         if root is None:
             self._manager.reset_conversation_runtime()
             self._tier1_context = ""
@@ -462,6 +464,7 @@ class ConversationBridge(QObject):
             task_kind=self._turn_task_kind,
             target_files=self._turn_target_files,
             content=self._turn_content or None,
+            explicit_install_ids=self._turn_explicit_install_ids,
             active_capabilities=self._registry.active_capabilities(),
             read_only=self._turn_read_only,
         )
@@ -540,6 +543,12 @@ class ConversationBridge(QObject):
         """
         if self.is_running():
             return
+        # History is the durable authority for this turn. Freeze its ordered
+        # installed identities once; neither prompt composition nor runtime
+        # activation reads the mutable composer or infers from message text.
+        self._turn_explicit_install_ids = (
+            self._history.latest_real_user_explicit_installed_skill_ids()
+        )
         # Freeze the requested toolbar mode before composing the prompt or
         # starting the worker. The registry remains at this value for the
         # entire model/tool loop, including every later round.
@@ -570,6 +579,7 @@ class ConversationBridge(QObject):
                 task_kind=self._turn_task_kind,
                 content=self._turn_content or None,
                 target_files=self._turn_target_files,
+                explicit_install_ids=self._turn_explicit_install_ids,
             )
 
         # A Read Only collaborative turn stays conversation-first: no

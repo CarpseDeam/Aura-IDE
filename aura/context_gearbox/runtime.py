@@ -248,6 +248,7 @@ def build_context_text(
     target_files: tuple[str, ...] | None = None,
     content: str | None = None,
     active_capabilities: frozenset[str] | None = None,
+    explicit_install_ids: tuple[str, ...] = (),
 ) -> ComposedContext:
     parts: list[str] = []
     ledger: list[ContextLedgerEntry] = []
@@ -262,6 +263,7 @@ def build_context_text(
             target_files=normalized_target_files,
             content=content,
             active_capabilities=active_capabilities,
+            explicit_install_ids=explicit_install_ids,
         )
         if text:
             parts.append(text)
@@ -283,6 +285,7 @@ def compose_system_prompt(
     target_files: tuple[str, ...] | None = None,
     content: str | None = None,
     active_capabilities: frozenset[str] | None = None,
+    explicit_install_ids: tuple[str, ...] = (),
     read_only: bool = False,
 ) -> ComposedContext:
     """Compose the one canonical production system prompt.
@@ -305,6 +308,7 @@ def compose_system_prompt(
         target_files=target_files,
         content=content,
         active_capabilities=active_capabilities,
+        explicit_install_ids=explicit_install_ids,
     )
     blocks = _canonical_blocks(context.context_text)
     system_prompt = "\n\n".join(

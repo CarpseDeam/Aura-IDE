@@ -8,7 +8,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from aura.gui.input_panel import Attachment, InputPanel
+from aura.gui.composer_skills import ComposerSkill, ComposerSkillsWidget
+from aura.gui.input_panel import Attachment, InputPanel, SendPayload
 from aura.gui.send_handler import QueuedItem, SendHandler
 
 
@@ -88,6 +89,77 @@ def test_active_send_button_and_ctrl_enter_both_emit(tmp_path) -> None:
         "button follow-up",
         "keyboard follow-up",
     ]
+
+
+def test_composer_skill_chips_add_dedupe_order_remove_and_clear() -> None:
+    _app()
+    skills = ComposerSkillsWidget()
+
+    assert skills.select_installed_skill("project:first", "First") is True
+    assert skills.select_installed_skill("project:first", "Duplicate") is False
+    assert skills.select_installed_skill("personal:second", "Second") is True
+    assert skills.selection == (
+        ComposerSkill("project:first", "First"),
+        ComposerSkill("personal:second", "Second"),
+    )
+    assert skills.isVisible() is True
+
+    assert skills.remove_installed_skill("project:first") is True
+    assert skills.selection == (ComposerSkill("personal:second", "Second"),)
+    skills.clear()
+    assert skills.selection == ()
+    assert skills.isVisible() is False
+
+
+def test_send_payload_freezes_and_clears_selected_skills(tmp_path) -> None:
+    _app()
+    panel = InputPanel(tmp_path)
+    payloads = []
+    panel.sent.connect(payloads.append)
+    panel.select_installed_skill("project:first", "First")
+    panel.select_installed_skill("personal:second", "Second")
+    panel.set_text("Use both")
+
+    panel._on_submit()
+    panel.select_installed_skill("bundled:later", "Later")
+
+    assert payloads[0].selected_skills == (
+        ComposerSkill("project:first", "First"),
+        ComposerSkill("personal:second", "Second"),
+    )
+    assert panel.selected_skills() == (ComposerSkill("bundled:later", "Later"),)
+
+
+def test_skill_only_is_not_sendable_and_rejected_payload_restores_chips(tmp_path) -> None:
+    _app()
+    panel = InputPanel(tmp_path)
+    payloads = []
+    panel.sent.connect(payloads.append)
+    panel.select_installed_skill("project:test", "Test")
+
+    panel._on_submit()
+
+    assert payloads == []
+    assert panel._send_btn.isEnabled() is False
+
+    payload = SendPayload(
+        "Look",
+        [],
+        (ComposerSkill("project:restored", "Restored"),),
+    )
+    panel.restore_payload(payload)
+    assert panel._editor.toPlainText() == "Look"
+    assert panel.selected_skills() == payload.selected_skills
+
+
+def test_workspace_change_clears_unsent_skill_chips(tmp_path) -> None:
+    _app()
+    panel = InputPanel(tmp_path / "first")
+    panel.select_installed_skill("project:test", "Test")
+
+    panel.set_workspace_root(tmp_path / "second")
+
+    assert panel.selected_skills() == ()
 
 
 def test_stop_clears_submitted_queue_but_preserves_draft_and_attachments(

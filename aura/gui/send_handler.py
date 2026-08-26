@@ -28,6 +28,7 @@ from aura.git_ops import (
     working_tree_status,
 )
 from aura.gui.builtin_commands import classify_built_in_command
+from aura.gui.composer_skills import ComposerSkill
 from aura.gui.input_panel import Attachment, SendPayload
 
 
@@ -48,6 +49,7 @@ class QueuedItem:
     attachments: list[Attachment]
     model: str
     thinking: ThinkingMode
+    selected_skills: tuple[ComposerSkill, ...] = ()
 
 
 class SendHandler(QObject):
@@ -96,6 +98,9 @@ class SendHandler(QObject):
         must not survive into another.
         """
         self._message_queue.clear()
+        clear_skills = getattr(self._input, "clear_selected_skills", None)
+        if callable(clear_skills):
+            clear_skills()
         clear = getattr(self._bridge, "clear_external_read_authorization", None)
         if callable(clear):
             clear()
@@ -149,6 +154,7 @@ class SendHandler(QObject):
                 attachments=list(payload.attachments),
                 model=model,
                 thinking=thinking,
+                selected_skills=tuple(payload.selected_skills),
             )
             self._message_queue.append(item)
             self._input.set_queued_messages(len(self._message_queue))
@@ -429,11 +435,19 @@ class SendHandler(QObject):
                     "image_url": {"url": f"data:image/png;base64,{a.b64}"},
                 })
             self._bridge.history.append_user_multimodal(
-                parts, literal_composer_text=payload.text
+                parts,
+                literal_composer_text=payload.text,
+                explicit_installed_skill_ids=tuple(
+                    skill.install_id for skill in payload.selected_skills
+                ),
             )
         else:
             self._bridge.history.append_user_text(
-                text, literal_composer_text=payload.text
+                text,
+                literal_composer_text=payload.text,
+                explicit_installed_skill_ids=tuple(
+                    skill.install_id for skill in payload.selected_skills
+                ),
             )
 
         self._chat.add_user(text, [a.b64 for a in image_atts] or None)
@@ -473,5 +487,9 @@ class SendHandler(QObject):
         self._input.set_queued_messages(len(self._message_queue))
         # Reconstruct a SendPayload from the queued item, which captured its
         # own model and thinking at queue time.
-        payload = SendPayload(text=item.text, attachments=list(item.attachments))
+        payload = SendPayload(
+            text=item.text,
+            attachments=list(item.attachments),
+            selected_skills=tuple(item.selected_skills),
+        )
         self.handle_send(payload, item.model, item.thinking)

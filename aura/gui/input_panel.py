@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aura.gui.composer_skills import ComposerSkill, ComposerSkillsWidget
 from aura.gui.theme import BG_RAISED, BORDER, DANGER, FG, FG_DIM
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
@@ -46,6 +47,7 @@ class Attachment:
 class SendPayload:
     text: str
     attachments: list[Attachment]
+    selected_skills: tuple[ComposerSkill, ...] = ()
 
 
 class _AttachmentChip(QFrame):
@@ -194,6 +196,11 @@ class InputPanel(QFrame):
         outer.setContentsMargins(16, 12, 16, 14)
         outer.setSpacing(6)
 
+        # Explicit installed skills are independently owned by this focused
+        # widget; InputPanel only captures/restores its immutable selection.
+        self._composer_skills = ComposerSkillsWidget()
+        outer.addWidget(self._composer_skills)
+
         # Attachment chips row (hidden when empty).
         self._chips_row = QHBoxLayout()
         self._chips_row.setContentsMargins(0, 0, 0, 0)
@@ -285,7 +292,21 @@ class InputPanel(QFrame):
     # ---- public state -----------------------------------------------------
 
     def set_workspace_root(self, root: Path | None) -> None:
+        if root != self._workspace_root:
+            self._composer_skills.clear()
         self._workspace_root = root
+
+    def select_installed_skill(self, install_id: str, label: str) -> bool:
+        """Select an installed skill by stable identity for the next send."""
+        return self._composer_skills.select_installed_skill(install_id, label)
+
+    def clear_selected_skills(self) -> None:
+        """Clear unsent installed-skill chips."""
+        self._composer_skills.clear()
+
+    def selected_skills(self) -> tuple[ComposerSkill, ...]:
+        """Return the current immutable ordered selection."""
+        return self._composer_skills.selection
 
     def set_execution_active(self, active: bool) -> None:
         """Set whether a production run is active.
@@ -434,9 +455,14 @@ class InputPanel(QFrame):
         text = self._editor.toPlainText().strip()
         if not text and not self._attachments:
             return
-        payload = SendPayload(text=text, attachments=list(self._attachments))
+        payload = SendPayload(
+            text=text,
+            attachments=list(self._attachments),
+            selected_skills=self._composer_skills.selection,
+        )
         self._editor.clear()
         self._clear_attachments()
+        self._composer_skills.clear()
         self.sent.emit(payload)
 
     def set_text(self, text: str) -> None:
@@ -451,9 +477,10 @@ class InputPanel(QFrame):
             self._add_attachment(a)
 
     def restore_payload(self, payload: SendPayload) -> None:
-        """Restore a previously submitted payload to the editor and attachments."""
+        """Restore a rejected payload, including its installed-skill chips."""
         self.set_text(payload.text)
         self.set_attachments(payload.attachments)
+        self._composer_skills.restore(payload.selected_skills)
 
     def focus_editor(self) -> None:
         self._editor.setFocus()

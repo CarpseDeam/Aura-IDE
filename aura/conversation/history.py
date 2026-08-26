@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 __all__ = [
+    "EXPLICIT_INSTALLED_SKILL_IDS_KEY",
     "LITERAL_COMPOSER_TEXT_KEY",
     "History",
     "is_real_user_message",
@@ -39,6 +40,11 @@ __all__ = [
 # the canonical message dicts verbatim) and local-only — `for_api()` strips it,
 # so it never reaches a provider.
 LITERAL_COMPOSER_TEXT_KEY = "aura_literal_composer_text"
+
+# Aura-local bookkeeping key: the ordered stable installed identities the user
+# explicitly selected for this turn. Persistence keeps this canonical metadata
+# verbatim; ``for_api()`` strips it before any provider projection.
+EXPLICIT_INSTALLED_SKILL_IDS_KEY = "aura_explicit_installed_skill_ids"
 
 
 def is_real_user_message(msg: dict[str, Any]) -> bool:
@@ -75,6 +81,16 @@ def _attach_literal_composer_text(
     """Record the literal composer text on a user message, when there is one."""
     if literal_composer_text is not None:
         message[LITERAL_COMPOSER_TEXT_KEY] = literal_composer_text
+
+
+def _attach_explicit_installed_skill_ids(
+    message: dict[str, Any], explicit_installed_skill_ids: tuple[str, ...]
+) -> None:
+    """Record only the ordered stable identities, omitting empty metadata."""
+    if explicit_installed_skill_ids:
+        message[EXPLICIT_INSTALLED_SKILL_IDS_KEY] = list(
+            explicit_installed_skill_ids
+        )
 
 
 def repair_tool_call_blocks(messages: list[dict[str, Any]]) -> int:
@@ -148,7 +164,11 @@ class History:
         self.system_prompt = prompt
 
     def append_user_text(
-        self, text: str, *, literal_composer_text: str | None = None
+        self,
+        text: str,
+        *,
+        literal_composer_text: str | None = None,
+        explicit_installed_skill_ids: tuple[str, ...] = (),
     ) -> None:
         """Append a real user turn.
 
@@ -158,6 +178,9 @@ class History:
         """
         message: dict[str, Any] = {"role": "user", "content": text}
         _attach_literal_composer_text(message, literal_composer_text)
+        _attach_explicit_installed_skill_ids(
+            message, explicit_installed_skill_ids
+        )
         self.messages.append(message)
 
     def append_internal_user_text(self, text: str) -> None:
@@ -168,6 +191,7 @@ class History:
         parts: list[dict[str, Any]],
         *,
         literal_composer_text: str | None = None,
+        explicit_installed_skill_ids: tuple[str, ...] = (),
     ) -> None:
         """For image+text turns: parts is a list like
         [{"type":"text","text":"..."}, {"type":"image_url","image_url":{"url":"data:..."}}].
@@ -177,6 +201,9 @@ class History:
         """
         message: dict[str, Any] = {"role": "user", "content": parts}
         _attach_literal_composer_text(message, literal_composer_text)
+        _attach_explicit_installed_skill_ids(
+            message, explicit_installed_skill_ids
+        )
         self.messages.append(message)
 
     def append_assistant(self, full_message: dict[str, Any]) -> None:
@@ -243,6 +270,20 @@ class History:
         value = self.messages[index].get(LITERAL_COMPOSER_TEXT_KEY)
         return value if isinstance(value, str) else None
 
+    def latest_real_user_explicit_installed_skill_ids(self) -> tuple[str, ...]:
+        """Ordered explicit installed identities stored on the latest real turn.
+
+        Older messages and malformed non-sequence metadata resolve to an empty
+        tuple. This intentionally never infers selections from message content.
+        """
+        index = self.latest_real_user_index()
+        if index is None:
+            return ()
+        value = self.messages[index].get(EXPLICIT_INSTALLED_SKILL_IDS_KEY)
+        if not isinstance(value, (list, tuple)):
+            return ()
+        return tuple(item for item in value if isinstance(item, str))
+
     def rewind_to_last_user_turn(self) -> bool:
         """Keep history through the last user message and drop its response.
 
@@ -276,6 +317,7 @@ class History:
         for msg in copy.deepcopy(self.messages):
             msg.pop("aura_internal", None)
             msg.pop(LITERAL_COMPOSER_TEXT_KEY, None)
+            msg.pop(EXPLICIT_INSTALLED_SKILL_IDS_KEY, None)
             out.append(msg)
         return out
 

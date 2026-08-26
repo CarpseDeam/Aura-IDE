@@ -23,6 +23,7 @@ class ContextRefreshState:
         self._task_kind: str | None = None
         self._content: str | None = None
         self._target_files: tuple[str, ...] = ()
+        self._explicit_install_ids: tuple[str, ...] = ()
 
     def configure(
         self,
@@ -32,6 +33,7 @@ class ContextRefreshState:
         task_kind: str | None = None,
         content: str | None = None,
         target_files: tuple[str, ...] = (),
+        explicit_install_ids: tuple[str, ...] = (),
     ) -> None:
         """Store the root and this turn's live terrain.
 
@@ -43,6 +45,7 @@ class ContextRefreshState:
         self._task_kind = task_kind
         self._content = content
         self._target_files = tuple(target_files or ())
+        self._explicit_install_ids = tuple(explicit_install_ids or ())
 
     @property
     def workspace_root(self) -> Path | None:
@@ -63,6 +66,10 @@ class ContextRefreshState:
     @property
     def target_files(self) -> tuple[str, ...]:
         return self._target_files
+
+    @property
+    def explicit_install_ids(self) -> tuple[str, ...]:
+        return self._explicit_install_ids
 
     def _active_capabilities(self) -> frozenset[str]:
         if self._capabilities_provider is None:

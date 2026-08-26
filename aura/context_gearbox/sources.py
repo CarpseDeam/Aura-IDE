@@ -281,6 +281,7 @@ def collect_source_text(
     target_files: tuple[str, ...] | None = None,
     content: str | None = None,
     active_capabilities: frozenset[str] | None = None,
+    explicit_install_ids: tuple[str, ...] = (),
 ) -> tuple[str, ContextLedgerEntry, list[ContextLedgerEntry]]:
     try:
         pack: SkillPack | None = None
@@ -293,6 +294,7 @@ def collect_source_text(
                 task_kind,
                 target_files,
                 content,
+                explicit_install_ids,
             )
         else:
             text, reason = _load_source_text(
@@ -305,6 +307,7 @@ def collect_source_text(
                 target_files=target_files,
                 content=content,
                 active_capabilities=active_capabilities,
+                explicit_install_ids=explicit_install_ids,
             )
         included = bool(text)
         entry = ContextLedgerEntry(
@@ -324,7 +327,10 @@ def collect_source_text(
                 reason=reason or source.reason,
                 included=included,
                 char_count=len(text),
-                detail=f"index_chars={pack.index_chars}; guard_chars={pack.guard_chars}",
+                detail=(
+                    f"explicit_chars={pack.explicit_chars}; "
+                    f"index_chars={pack.index_chars}; guard_chars={pack.guard_chars}"
+                ),
             )
 
         # For skill_pack, include per-skill ledger entries so the Context
@@ -334,7 +340,16 @@ def collect_source_text(
         extra: list[ContextLedgerEntry] = []
         if pack is not None:
             for candidate in pack.candidates:
-                if candidate.eager_guard:
+                if candidate.explicit:
+                    detail = (
+                        "explicitly_preactivated "
+                        f"install_id={candidate.install_id} "
+                        f"explicit_chars={candidate.explicit_chars} "
+                        f"body_chars={candidate.body_chars} "
+                        f"body_hash={candidate.body_hash}"
+                    )
+                    char_count = candidate.explicit_chars
+                elif candidate.eager_guard:
                     detail = (
                         "eager_guard "
                         f"guard_chars={candidate.guard_chars} "
@@ -374,6 +389,21 @@ def collect_source_text(
                         detail="skipped",
                     )
                 )
+            for unresolved in pack.unresolved_explicit:
+                extra.append(
+                    ContextLedgerEntry(
+                        source_id=unresolved.reference or "<empty identity>",
+                        kind="explicit_skill_reference",
+                        reason=unresolved.reason,
+                        included=False,
+                        char_count=0,
+                        detail=(
+                            "explicit_unresolved "
+                            f"status={unresolved.status} "
+                            f"install_id={unresolved.reference or '<empty identity>'}"
+                        ),
+                    )
+                )
 
         return text, entry, extra
     except Exception as exc:
@@ -396,6 +426,7 @@ def _load_source_text(
     target_files: tuple[str, ...] | None,
     content: str | None,
     active_capabilities: frozenset[str] | None = None,
+    explicit_install_ids: tuple[str, ...] = (),
 ) -> tuple[str, str]:
     if source.kind == "capability_pack":
         return _load_capability_pack(source, active_capabilities)
@@ -413,6 +444,7 @@ def _load_source_text(
             task_kind,
             target_files,
             content,
+            explicit_install_ids,
         )
         return text, reason
     if source.source_id == "core_kernel":
@@ -588,6 +620,7 @@ def _load_skill_pack(
     task_kind: str | None,
     target_files: tuple[str, ...] | None,
     content: str | None,
+    explicit_install_ids: tuple[str, ...] = (),
 ) -> tuple[str, str, SkillPack | None]:
     if workspace_root is None:
         return "", "no workspace root", None
@@ -597,6 +630,7 @@ def _load_skill_pack(
         task_kind=task_kind,
         target_files=tuple(target_files or ()),
         content=content,
+        explicit_install_ids=explicit_install_ids,
     )
     if pack.text:
         return pack.text, "terrain-selected skills for this context", pack

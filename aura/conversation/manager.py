@@ -59,6 +59,10 @@ EventCallback = Callable[[Event], None]
 _PRODUCTION_STREAM_LABEL = "production_stream"
 
 
+class ExplicitSkillSelectionError(RuntimeError):
+    """The frozen explicit installed-skill selection cannot be honored."""
+
+
 #: Structured payload paired to a tool call that was cancelled before Aura
 #: received its authoritative result. Deliberately fail-closed: never
 #: ``applied``, never successful, and it explicitly refuses to claim the tool
@@ -197,7 +201,18 @@ class ConversationManager:
             task_kind=self._context_refresh.task_kind,
             target_files=self._context_refresh.target_files,
             content=self._context_refresh.content,
+            explicit_install_ids=self._context_refresh.explicit_install_ids,
         )
+        if pack.unresolved_explicit:
+            details = "\n".join(
+                f"- {item.reference or '<empty identity>'}: {item.reason}"
+                for item in pack.unresolved_explicit
+            )
+            raise ExplicitSkillSelectionError(
+                "Selected skills could not be activated:\n"
+                f"{details}\n"
+                "Restore or re-enable the affected skills, then Retry."
+            )
         if not pack.candidates:
             return None
         return SkillTurnState(pack)
@@ -225,6 +240,7 @@ class ConversationManager:
         task_kind: str | None = None,
         content: str | None = None,
         target_files: tuple[str, ...] = (),
+        explicit_install_ids: tuple[str, ...] = (),
     ) -> None:
         """Store the production root and live terrain.
 
@@ -238,6 +254,7 @@ class ConversationManager:
             task_kind=task_kind,
             content=content,
             target_files=target_files,
+            explicit_install_ids=explicit_install_ids,
         )
 
     def send(
@@ -274,6 +291,11 @@ class ConversationManager:
         whether the model is allowed to stop.
         """
         self._last_turn_blocked_reason = ""
+        # Clear the preceding turn's runtime state before attempting to freeze
+        # this one. An invalid explicit selection must not inherit old skills.
+        self._last_skill_turn = None
+        self._tools.set_turn_skill_state(None)
+
         # Web research is offered when the search backend is genuinely
         # configured — never because Aura read the user's sentence. Resolved
         # once per turn so the catalog, and the provider's cached request
@@ -282,7 +304,11 @@ class ConversationManager:
         # Freeze this real user turn's skill candidates once, so load_skills
         # resolves against the same deterministic selection that produced the
         # initial skill index — never a recomputation per round.
-        skill_turn = self._build_skill_turn_state()
+        try:
+            skill_turn = self._build_skill_turn_state()
+        except ExplicitSkillSelectionError as exc:
+            on_event(ApiError(status_code=None, message=str(exc)))
+            return
         self._last_skill_turn = skill_turn
         self._tools.set_turn_skill_state(skill_turn)
         self._tool_round_runner.begin_turn()
