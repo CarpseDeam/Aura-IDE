@@ -50,6 +50,14 @@ def qapp() -> QApplication:
 @pytest.fixture(autouse=True)
 def no_lingering_threads():
     yield
+    for thread in import_worker._LINGERING_THREADS:
+        try:
+            if thread.isRunning():
+                thread.quit()
+                assert thread.wait(10_000), "detached import thread did not finish"
+        except RuntimeError:
+            # Qt may already have processed deleteLater after QThread.finished.
+            pass
     import_worker._LINGERING_THREADS.clear()
 
 
@@ -634,6 +642,156 @@ def test_a_late_preview_is_cleaned_without_ever_being_shown(harness: _Harness, q
     assert harness.prompts.views == []
     assert harness.installed == []
     assert not (harness.project_dir / "late-arrival").exists()
+
+
+def test_rebind_during_a_blocked_install_preserves_worker_ownership(
+    harness: _Harness, qapp, monkeypatch
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    calls: list[_RecordingImporter] = []
+    real_install = _RecordingImporter.install
+
+    def _blocked_install(self, preview, *, replace=False):
+        calls.append(self)
+        started.set()
+        release.wait(timeout=10)
+        return real_install(self, preview, replace=replace)
+
+    monkeypatch.setattr(_RecordingImporter, "install", _blocked_install)
+    source = harness.source_skill("old-workspace-install")
+    window = harness.open()
+    harness.prompts.kind = SOURCE_FOLDER
+    harness.prompts.folder = str(source)
+    harness.request(IMPORT_LOCAL)
+
+    try:
+        assert _pump(qapp, started.is_set), "install never started"
+        assert harness.staging_survivors()
+        old_token = harness.controller._imports._token
+        refreshes: list[None] = []
+        reveals: list[str] = []
+        real_refresh = harness.controller.refresh
+        real_reveal = window.select_row
+
+        def _refresh() -> None:
+            refreshes.append(None)
+            real_refresh()
+
+        def _reveal(install_id: str) -> bool:
+            reveals.append(install_id)
+            return real_reveal(install_id)
+
+        monkeypatch.setattr(harness.controller, "refresh", _refresh)
+        monkeypatch.setattr(window, "select_row", _reveal)
+        harness.controller.set_workspace_root(harness.other_workspace)
+        refresh_count = len(refreshes)
+
+        assert harness.staging_survivors(), "abandonment deleted worker-owned staging"
+        assert old_token in harness.controller._imports._retired
+        assert calls[0]._library._workspace_root == harness.workspace
+    finally:
+        release.set()
+
+    assert _pump(qapp, lambda: harness.staging_survivors() == [])
+    assert _pump(qapp, lambda: harness.controller._imports._retired == {})
+    assert (harness.project_dir / "old-workspace-install" / "SKILL.md").is_file()
+    assert not (
+        harness.other_workspace / ".aura" / "skills" / "authored" / "old-workspace-install"
+    ).exists()
+    assert harness.installed == []
+    assert len(refreshes) == refresh_count
+    assert reveals == []
+    assert window.current_install_id() == ""
+
+
+def test_shutdown_during_a_blocked_install_preserves_worker_cleanup(
+    harness: _Harness, qapp, monkeypatch
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    real_install = _RecordingImporter.install
+
+    def _blocked_install(self, preview, *, replace=False):
+        started.set()
+        release.wait(timeout=10)
+        return real_install(self, preview, replace=replace)
+
+    monkeypatch.setattr(_RecordingImporter, "install", _blocked_install)
+    source = harness.source_skill("detached-install")
+    harness.open()
+    harness.prompts.kind = SOURCE_FOLDER
+    harness.prompts.folder = str(source)
+    harness.request(IMPORT_LOCAL)
+
+    try:
+        assert _pump(qapp, started.is_set), "install never started"
+        assert harness.staging_survivors()
+        harness.controller._imports.shutdown(timeout_ms=100)
+        assert harness.staging_survivors(), "shutdown deleted worker-owned staging"
+        assert import_worker._LINGERING_THREADS
+        detached_thread = import_worker._LINGERING_THREADS[-1]
+        assert detached_thread.isRunning()
+    finally:
+        release.set()
+
+    assert _pump(qapp, lambda: harness.staging_survivors() == [])
+    assert _pump(qapp, lambda: not detached_thread.isRunning())
+    assert detached_thread in import_worker._LINGERING_THREADS
+    assert harness.installed == []
+
+
+def test_an_abandoned_install_error_releases_retired_state_without_stale_ui(
+    harness: _Harness, qapp, monkeypatch
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    def _blocked_failure(self, _preview, *, replace=False):
+        del self, replace
+        started.set()
+        release.wait(timeout=10)
+        raise OSError("late install failure")
+
+    monkeypatch.setattr(_RecordingImporter, "install", _blocked_failure)
+    source = harness.source_skill("abandoned-failure")
+    window = harness.open()
+    harness.prompts.kind = SOURCE_FOLDER
+    harness.prompts.folder = str(source)
+    harness.request(IMPORT_LOCAL)
+
+    try:
+        assert _pump(qapp, started.is_set), "install never started"
+        refreshes: list[None] = []
+        reveals: list[str] = []
+        real_refresh = harness.controller.refresh
+        real_reveal = window.select_row
+
+        def _refresh() -> None:
+            refreshes.append(None)
+            real_refresh()
+
+        def _reveal(install_id: str) -> bool:
+            reveals.append(install_id)
+            return real_reveal(install_id)
+
+        monkeypatch.setattr(harness.controller, "refresh", _refresh)
+        monkeypatch.setattr(window, "select_row", _reveal)
+        old_token = harness.controller._imports._token
+        harness.controller._imports.abandon()
+
+        assert harness.staging_survivors(), "abandonment deleted worker-owned staging"
+        assert old_token in harness.controller._imports._retired
+    finally:
+        release.set()
+
+    assert _pump(qapp, lambda: harness.staging_survivors() == [])
+    assert _pump(qapp, lambda: harness.controller._imports._retired == {})
+    assert harness.prompts.errors == []
+    assert harness.installed == []
+    assert refreshes == []
+    assert reveals == []
+    assert not (harness.project_dir / "abandoned-failure").exists()
 
 
 def test_shutdown_drops_staged_content_and_never_destroys_a_running_thread(

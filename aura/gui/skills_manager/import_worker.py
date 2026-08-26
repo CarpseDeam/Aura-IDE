@@ -79,8 +79,8 @@ class ImportJobRunner(QObject):
         worker.finished.connect(
             lambda result, error: self._on_worker_finished(thread, token, result, error)
         )
-        thread.finished.connect(thread.deleteLater)
         thread.finished.connect(lambda: self._release(thread))
+        thread.finished.connect(thread.deleteLater)
         self._running.append(thread)
         self._worker = worker
         self._thread = thread

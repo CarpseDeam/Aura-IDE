@@ -15,10 +15,10 @@ the facade supplies. A preview's ``conflict`` flag decides which action is
 conflicting preview and chose to replace, and a conflict that appears after
 the preview is the importer's refusal to surface — never a reason to retry.
 
-Staging is temporary and must not survive its session. ``cleanup`` is
-idempotent, so it is called defensively on cancel, on a failed install, on
-an abandoned or late result, on workspace rebind, and on shutdown, as well
-as after a successful install.
+Staging is temporary and must not survive its session. While an approved
+install is running, its job owns the preview and cleans it in ``finally``;
+otherwise the controller cleans defensively on cancel, abandonment, a late
+preview, workspace rebind, and shutdown. ``cleanup`` is idempotent.
 """
 from __future__ import annotations
 
@@ -93,7 +93,7 @@ class SkillImportController(QObject):
         self._preview: ImportPreview | None = None
         self._importer: SkillImporter | None = None
         #: Importers for abandoned sessions whose job is still running, kept
-        #: only so a late result can be cleaned up by its own session.
+        #: until every kind of late result releases its session state.
         self._retired: dict[int, SkillImporter] = {}
 
     # ---- state -------------------------------------------------------------
@@ -178,8 +178,9 @@ class SkillImportController(QObject):
 
     def _discard_late(self, token: int, result: object) -> None:
         """Clean a result whose session was abandoned, without showing it."""
+        importer = self._retired.pop(token, None)
         if isinstance(result, ImportPreview):
-            _cleanup(self._retired.pop(token, None) or self._importer, result)
+            _cleanup(importer, result)
 
     def _on_preview_finished(self, token: int, result: object, error: object) -> None:
         self._set_busy(False, "")
@@ -215,6 +216,11 @@ class SkillImportController(QObject):
         if not self._runner.start(token, _install_job(importer, preview, replace=replace)):
             self._finish(cleanup=True)
             self._error(_ALREADY_RUNNING)
+            return
+        # The job now owns this preview through its captured callable. Dropping
+        # the controller's reference prevents abandonment from cleaning staging
+        # while install() is still validating or copying from it.
+        self._preview = None
 
     def _on_install_finished(self, result: object, error: object) -> None:
         if error is not None:
@@ -301,7 +307,15 @@ def _staging_job(importer: SkillImporter, source: ImportSource) -> Callable[[], 
 def _install_job(
     importer: SkillImporter, preview: ImportPreview, *, replace: bool
 ) -> Callable[[], object]:
-    return lambda: importer.install(preview, replace=replace)
+    def install() -> object:
+        try:
+            return importer.install(preview, replace=replace)
+        finally:
+            # The worker owns staging once the controller successfully starts
+            # this callable, including after rebind, shutdown, or destruction.
+            _cleanup(importer, preview)
+
+    return install
 
 
 __all__ = ["SkillImportController"]
