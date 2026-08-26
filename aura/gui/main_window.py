@@ -55,6 +55,7 @@ from aura.gui.onboarding_dialog import OnboardingDialog
 from aura.gui.plan_review_controller import PlanReviewController
 from aura.gui.playground import AuraPlayground
 from aura.gui.send_handler import SendHandler
+from aura.gui.skills_manager import SkillsManagerController
 from aura.gui.status_bar import AuraStatusBar
 from aura.gui.update_dialog import UpdateDialog
 from aura.gui.widgets.aura_glow import AuraWidget
@@ -189,6 +190,14 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             chat=self._chat,
             input_panel=self._input,
             settings=self._settings,
+            workspace_root=self._workspace_root,
+            parent=self,
+        )
+        # Skills manager — the only GUI owner of SkillLibrary access. Both the
+        # composer's Skills button and /skills reach this one controller.
+        self._skills_controller = SkillsManagerController(
+            input_panel=self._input,
+            parent_widget=self,
             workspace_root=self._workspace_root,
             parent=self,
         )
@@ -602,6 +611,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     def _on_started(self) -> None:
         self._final_stream_message = {}
         self._input.set_execution_active(True)
+        self._skills_controller.set_execution_active(True)
         # Handoff follows the main conversation lifecycle, including
         # conversation-first Read Only turns that have no production session.
         self._status_bar.set_execution_active(True)
@@ -617,6 +627,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
     def _on_finished(self) -> None:
         self._input.set_execution_active(False)
+        self._skills_controller.set_execution_active(False)
         self._status_bar.set_execution_active(False)
         # Closes the assistant card and records its transcript. By this point
         # ConversationManager has committed the final assistant message to

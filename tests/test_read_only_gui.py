@@ -37,6 +37,8 @@ def _window_for_started(active_turn_read_only: bool, status_bar: AuraStatusBar):
             set_execution_active=_Recorder(),
             focus_editor=_Recorder(),
         ),
+        # Skill lifecycle actions are shut off for the length of a turn.
+        _skills_controller=SimpleNamespace(set_execution_active=_Recorder()),
         _status_bar=status_bar,
         _bridge=SimpleNamespace(active_turn_read_only=active_turn_read_only),
         _drone_controller=SimpleNamespace(
@@ -88,5 +90,10 @@ def test_handoff_tracks_bridge_start_and_finish_for_both_turn_modes(
 
             MainWindow._on_finished(window)
             assert bar._handoff_btn.isEnabled()
+            # Skill mutations are refused while the turn runs, then restored.
+            assert window._skills_controller.set_execution_active.calls == [
+                (True,),
+                (False,),
+            ]
     finally:
         bar.deleteLater()

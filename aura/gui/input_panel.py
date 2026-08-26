@@ -170,6 +170,10 @@ class InputPanel(QFrame):
 
     sent = Signal(SendPayload)
     stop_requested = Signal()
+    skills_requested = Signal()
+    #: Emitted whenever the unsent installed-skill chips change, so the Skills
+    #: manager can keep its "already added" state in step with the composer.
+    skill_selection_changed = Signal()
 
     def __init__(self, workspace_root: Path | None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -199,6 +203,7 @@ class InputPanel(QFrame):
         # Explicit installed skills are independently owned by this focused
         # widget; InputPanel only captures/restores its immutable selection.
         self._composer_skills = ComposerSkillsWidget()
+        self._composer_skills.selection_changed.connect(self.skill_selection_changed.emit)
         outer.addWidget(self._composer_skills)
 
         # Attachment chips row (hidden when empty).
@@ -242,6 +247,13 @@ class InputPanel(QFrame):
         # Controls row.
         controls = QHBoxLayout()
         controls.setSpacing(10)
+
+        self._skills_btn = QPushButton("Skills")
+        self._skills_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._skills_btn.setToolTip("Browse skills and add them to your next message.")
+        self._skills_btn.setEnabled(workspace_root is not None)
+        self._skills_btn.clicked.connect(self.skills_requested.emit)
+        controls.addWidget(self._skills_btn)
 
         controls.addStretch(1)
 
@@ -295,14 +307,23 @@ class InputPanel(QFrame):
         if root != self._workspace_root:
             self._composer_skills.clear()
         self._workspace_root = root
+        self._skills_btn.setEnabled(root is not None)
 
     def select_installed_skill(self, install_id: str, label: str) -> bool:
         """Select an installed skill by stable identity for the next send."""
         return self._composer_skills.select_installed_skill(install_id, label)
 
+    def remove_selected_skill(self, install_id: str) -> bool:
+        """Drop one selected identity's unsent chip, leaving the rest alone."""
+        return self._composer_skills.remove_installed_skill(install_id)
+
     def clear_selected_skills(self) -> None:
         """Clear unsent installed-skill chips."""
         self._composer_skills.clear()
+
+    def restore_selected_skills(self, skills: tuple[ComposerSkill, ...]) -> None:
+        """Put back a captured selection the send did not actually consume."""
+        self._composer_skills.restore(tuple(skills))
 
     def selected_skills(self) -> tuple[ComposerSkill, ...]:
         """Return the current immutable ordered selection."""
@@ -443,9 +464,17 @@ class InputPanel(QFrame):
             self._slash_hint.setText(
                 "Use /drone by itself to open the Drone Workbay."
             )
+        elif normalized == "/skills":
+            self._slash_hint.setText(
+                "/skills opens the Skills manager."
+            )
+        elif normalized.startswith("/skills "):
+            self._slash_hint.setText(
+                "Use /skills by itself to open the Skills manager."
+            )
         else:
             self._slash_hint.setText(
-                "/drone  —  Open the Drone Workbay."
+                "/drone  —  Open the Drone Workbay.        /skills  —  Browse skills."
             )
         self._slash_hint.setVisible(True)
 

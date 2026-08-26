@@ -31,6 +31,9 @@ def classify_built_in_command(text: str) -> str | None:
         return "undo"
     if normalized == "/drone":
         return "drone_enter_mode"
+    # Literal only: a message that merely talks about skills is a real request.
+    if normalized == "/skills":
+        return "skills"
 
     # Everything below is a phrase match. Only let those fire on short,
     # single-line messages: a long work request that happens to mention

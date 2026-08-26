@@ -60,6 +60,7 @@ class SendHandler(QObject):
     """
 
     drone_bay_requested = Signal()  # /drone command → open/toggle Drone Workbay
+    skills_manager_requested = Signal()  # /skills command → open the Skills manager
 
     def __init__(
         self,
@@ -130,6 +131,17 @@ class SendHandler(QObject):
             )
             return
 
+        built_in = classify_built_in_command(payload.text)
+
+        # Browsing skills is a local view over what is already installed. It
+        # never reaches a model, so it works before any provider is set up,
+        # and it leaves no trace in the conversation: no chat bubble, no
+        # History entry, no manager dump.
+        if built_in == "skills":
+            self._restore_local_command_selection(payload)
+            self.skills_manager_requested.emit()
+            return
+
         # Guard: no provider configured
         if not has_usable_provider_configuration(self._settings.provider):
             self._chat.add_error(
@@ -142,8 +154,8 @@ class SendHandler(QObject):
 
         # Drone mode checks removed — drone lifecycle removed.
 
-        built_in = classify_built_in_command(payload.text)
         if built_in is not None:
+            self._restore_local_command_selection(payload)
             self._chat.add_user(payload.text)
             self._handle_built_in_action(built_in, payload.text)
             return
@@ -171,6 +183,21 @@ class SendHandler(QObject):
             return
 
         self._finalize_send(payload, model, thinking)
+
+    def _restore_local_command_selection(self, payload: SendPayload) -> None:
+        """Give back the skill chips a local command never spent.
+
+        The composer clears itself the moment it emits a payload, but one of
+        Aura's own commands runs locally instead of consuming a model turn,
+        so the skills the user picked for their *next* message are still
+        waiting to be sent. The command text is deliberately not restored:
+        the command did run.
+        """
+        if not payload.selected_skills:
+            return
+        restore = getattr(self._input, "restore_selected_skills", None)
+        if callable(restore):
+            restore(tuple(payload.selected_skills))
 
     def handle_stop(self) -> None:
         """Cancel the current bridge response, clear the message queue, but

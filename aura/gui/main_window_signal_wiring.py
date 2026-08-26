@@ -65,6 +65,7 @@ class MainWindowSignalWiring:
 
         # ---- group 6: send handler ----
         w._send_handler.drone_bay_requested.connect(w._drone_controller.on_drone_bay_requested)
+        w._send_handler.skills_manager_requested.connect(w._skills_controller.open_manager)
 
         # ---- group 7: drone reports window ----
         w._drone_reports_window.geometry_saved.connect(w._terminal_controller._on_drone_reports_geometry_saved)
@@ -108,6 +109,7 @@ class MainWindowSignalWiring:
         # ---- group 13: input panel and footer action ----
         w._input.sent.connect(lambda p: w._send_handler.handle_send(p, w.current_model(), w.current_thinking()))
         w._input.stop_requested.connect(w._send_handler.handle_stop)
+        w._input.skills_requested.connect(w._skills_controller.open_manager)
         w._status_bar.handoff_requested.connect(w._on_handoff_requested)
 
         # ---- group 14: tree + playground ----
