@@ -11,6 +11,12 @@ The snapshot is also the one place activation state lives: activated skill
 bodies stay active for the rest of the turn, duplicate activation is inert, and
 every activation or activation failure is recorded for the Context Gearbox
 ledger.
+
+Explicitly selected skills are the one thing that starts a turn already
+active. Their full bodies are in the initial context, so there is nothing for
+``load_skills`` to fetch: they are active from the moment the snapshot is
+frozen, their resources are reachable immediately, and a redundant
+``load_skills`` for one of them is inert and reports ``already_active``.
 """
 
 from __future__ import annotations
@@ -22,6 +28,9 @@ from aura.skills.text import SkillCandidate, SkillPack
 #: Status values recorded in the activation ledger.
 STATUS_ACTIVATED = "activated"
 STATUS_ACTIVATION_FAILURE = "activation_failure"
+#: Recorded once per explicitly selected candidate, when the turn is frozen —
+#: distinct from ``STATUS_ACTIVATED`` because no ``load_skills`` call caused it.
+STATUS_EXPLICIT_PREACTIVATED = "explicit_preactivated"
 
 
 @dataclass(frozen=True)
@@ -37,6 +46,13 @@ class SkillActivationRecord:
     body_hash: str
     status: str
     was_new: bool
+    #: True when the user named this skill for the turn. A property of the
+    #: skill, not of the event — a later redundant ``load_skills`` for an
+    #: explicit skill records it too.
+    explicit: bool = False
+    #: The stable ``scope:name`` identity the explicit selection named; empty
+    #: for automatically selected candidates.
+    install_id: str = ""
 
 
 class SkillTurnState:
@@ -49,6 +65,26 @@ class SkillTurnState:
         }
         self._activated: dict[str, SkillCandidate] = {}
         self._log: list[SkillActivationRecord] = []
+        self._preactivate_explicit()
+
+    def _preactivate_explicit(self) -> None:
+        """Activate the explicitly selected candidates as the turn freezes.
+
+        Their bodies are already in the initial context, so they are active
+        before the first model round — in candidate order, and recorded in the
+        ledger as the explicit user selections they are. A candidate with no
+        loadable body is left inactive rather than recorded as activated.
+        """
+        for candidate in self._candidates:
+            if not candidate.explicit or not candidate.skill.text:
+                continue
+            self._activated[candidate.skill_id] = candidate
+            self._record(
+                candidate,
+                status=STATUS_EXPLICIT_PREACTIVATED,
+                was_new=True,
+                activated_chars=candidate.body_chars,
+            )
 
     # ---- frozen snapshot ---------------------------------------------------
 
@@ -97,6 +133,8 @@ class SkillTurnState:
                 "body_hash": record.body_hash,
                 "status": record.status,
                 "was_new": record.was_new,
+                "explicit": record.explicit,
+                "install_id": record.install_id,
             }
             for record in self._log
         ]
@@ -120,6 +158,8 @@ class SkillTurnState:
                 body_hash=candidate.body_hash,
                 status=status,
                 was_new=was_new,
+                explicit=candidate.explicit,
+                install_id=candidate.install_id,
             )
         )
 
@@ -215,10 +255,11 @@ class SkillTurnState:
     def resolve_resource(self, skill_id: str, path: str) -> dict:
         """Read one supporting resource file of an already-activated skill.
 
-        Requires the skill to have been activated this turn through
-        ``load_skills`` first — an unactivated (even if frozen-indexed)
-        skill's resources are unreachable, and resolution never touches any
-        directory but that one skill's own frozen ``source_dir``.
+        Requires the skill to be active for this turn — either explicitly
+        selected (active from the moment the snapshot froze) or activated
+        through ``load_skills``. An inactive (even if frozen-indexed) skill's
+        resources are unreachable, and resolution never touches any directory
+        but that one skill's own frozen ``source_dir``.
         """
         from aura.conversation.tools.fs_read import read_file
         from aura.skills.resources import SkillResourceError, resolve_skill_resource
@@ -256,7 +297,9 @@ def load_skills_result(state: SkillTurnState, skill_ids: list[str]) -> dict:
 
     Deterministic candidate order is preserved for the activated bodies;
     rejected ids are reported truthfully with a reason.  Duplicate activation
-    is inert and reported as ``already_active``.
+    is inert and reported as ``already_active`` — including the redundant
+    request for a skill the user explicitly selected, which was already active
+    before the first model round.
     """
     activated, rejected = state.resolve(skill_ids)
     return {
