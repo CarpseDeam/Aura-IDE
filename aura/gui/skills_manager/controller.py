@@ -16,8 +16,8 @@ which this controller owns, supplies an importer to, and refreshes from.
 It deliberately re-derives nothing. Precedence, disabled state, workspace
 markers, invalid entries, shadowing, path safety, conflict detection, and
 validation are SkillLibrary's and SkillImporter's judgements; the manager
-reports them. Nothing here writes a chat message or calls a model — a
-lifecycle or import failure is a concise local dialog and stays one.
+reports them. Creation receives only an injected normal-turn callback; this
+facade never owns a provider client or hidden generation path.
 """
 from __future__ import annotations
 
@@ -25,9 +25,11 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QObject
+from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QMessageBox, QWidget
 
+from aura.gui.skills_manager.creation_controller import SkillCreationController
+from aura.gui.skills_manager.creation_dialogs import SkillCreationPrompts
 from aura.gui.skills_manager.import_controller import SkillImportController
 from aura.gui.skills_manager.import_dialogs import ImportPrompts
 from aura.gui.skills_manager.models import SCOPE_ORDER, SkillDetail, SkillRow
@@ -50,9 +52,16 @@ _IMPORT_BUSY_MESSAGE = (
     "before changing the installed skills."
 )
 
+_CREATION_BUSY_MESSAGE = (
+    "Aura is creating a skill right now. Finish or cancel that creation before "
+    "starting another skill change."
+)
+
 
 class SkillsManagerController(QObject):
     """Owns the Skills window, its SkillLibrary access, and composer handoff."""
+
+    creation_session_changed = Signal(bool)
 
     def __init__(
         self,
@@ -63,6 +72,8 @@ class SkillsManagerController(QObject):
         library_factory: Callable[[Path], SkillLibrary] | None = None,
         importer_factory: Callable[[SkillLibrary], SkillImporter] | None = None,
         import_prompts: ImportPrompts | None = None,
+        creation_prompts: SkillCreationPrompts | None = None,
+        start_creation_turn: Callable[[str, str], bool] | None = None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -85,6 +96,16 @@ class SkillsManagerController(QObject):
         )
         self._imports.import_succeeded.connect(self._on_import_succeeded)
         self._imports.busy_changed.connect(self._on_import_busy_changed)
+        self._creation = SkillCreationController(
+            import_controller=self._imports,
+            start_turn=start_creation_turn,
+            prompts=creation_prompts,
+            dialog_parent=self._dialog_parent,
+            workspace_root=self._workspace_root,
+            parent=self,
+        )
+        self._creation.active_changed.connect(self._on_creation_active_changed)
+        self._creation.busy_changed.connect(self._on_creation_busy_changed)
 
         selection_changed = getattr(input_panel, "skill_selection_changed", None)
         self._tracks_composer_selection = selection_changed is not None
@@ -109,6 +130,7 @@ class SkillsManagerController(QObject):
         the session outright: its staged content is dropped and a result
         still in flight can no longer reach the new workspace.
         """
+        self._creation.set_workspace_root(root)
         self._imports.abandon()
         self._workspace_root = Path(root) if root is not None else None
         self._rows = {}
@@ -129,7 +151,15 @@ class SkillsManagerController(QObject):
 
     def shutdown(self) -> None:
         """Stop the import thread and drop staged content before teardown."""
+        self._creation.shutdown()
         self._imports.shutdown()
+
+    def creation_turn_finished(self, turn_id: str, *, successful: bool) -> None:
+        """Forward the exact production-turn outcome to the creation owner."""
+        self._creation.turn_finished(turn_id, successful=successful)
+
+    def creation_active(self) -> bool:
+        return self._creation.is_active()
 
     # ---- opening -----------------------------------------------------------
 
@@ -163,13 +193,18 @@ class SkillsManagerController(QObject):
             self._window.set_mutations_enabled(self._mutations_available())
 
     def _mutations_available(self) -> bool:
-        return not self._execution_active and not self._imports.is_active()
+        return (
+            not self._execution_active
+            and not self._imports.is_active()
+            and not self._creation.is_active()
+        )
 
     def _ensure_window(self) -> SkillsManagerWindow:
         if self._window is None:
             window = SkillsManagerWindow(self._parent_widget)
             window.current_row_changed.connect(self._on_current_row_changed)
             window.import_requested.connect(self._on_import_requested)
+            window.create_requested.connect(self._on_create_requested)
             window.use_requested.connect(self._on_use_requested)
             window.enable_toggle_requested.connect(self._on_enable_toggle_requested)
             window.uninstall_requested.connect(self._on_uninstall_requested)
@@ -259,9 +294,24 @@ class SkillsManagerController(QObject):
         else:
             self._imports.start_local_import()
 
+    def _on_create_requested(self) -> None:
+        """Start creation, including all guards for programmatic requests."""
+        if not self._mutations_allowed():
+            return
+        self._creation.start()
+
     def _on_import_busy_changed(self, busy: bool, message: str) -> None:
         if self._window is not None:
             self._window.set_import_busy(bool(busy), message)
+        self._sync_mutation_state()
+
+    def _on_creation_busy_changed(self, busy: bool, message: str) -> None:
+        if self._window is not None:
+            self._window.set_creation_busy(bool(busy), message)
+        self._sync_mutation_state()
+        self.creation_session_changed.emit(bool(busy))
+
+    def _on_creation_active_changed(self, _active: bool) -> None:
         self._sync_mutation_state()
 
     def _on_import_succeeded(self, install_id: str) -> None:
@@ -360,6 +410,9 @@ class SkillsManagerController(QObject):
             return False
         if self._imports.is_active():
             self._show_error("Skills", _IMPORT_BUSY_MESSAGE)
+            return False
+        if self._creation.is_active():
+            self._show_error("Skills", _CREATION_BUSY_MESSAGE)
             return False
         return True
 

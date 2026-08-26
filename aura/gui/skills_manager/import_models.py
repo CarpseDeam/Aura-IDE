@@ -43,6 +43,7 @@ IMPORT_PERMISSION_REMINDER = (
 SOURCE_FOLDER = "folder"
 SOURCE_ZIP = "zip"
 SOURCE_GITHUB = "github"
+SOURCE_GENERATED = "generated"
 
 
 class ImportDecision(str, Enum):
@@ -88,6 +89,8 @@ class ImportPreviewView:
     scripts_text: str
     diagnostics: tuple[str, ...]
     installable: bool
+    metadata_text: str = "None"
+    skill_markdown: str = ""
 
     @property
     def decision(self) -> ImportDecision:
@@ -100,6 +103,7 @@ class ImportPreviewView:
 def build_preview_view(preview: ImportPreview, source: ImportSource) -> ImportPreviewView:
     """Translate a backend preview into the shape the review dialog shows."""
     scope = preview.destination_scope
+    metadata_text, skill_markdown = _generated_content(preview, source)
     return ImportPreviewView(
         source_label=source.label,
         name=preview.name or "(no name)",
@@ -120,7 +124,34 @@ def build_preview_view(preview: ImportPreview, source: ImportSource) -> ImportPr
             for diagnostic in preview.diagnostics
         ),
         installable=bool(preview.ok),
+        metadata_text=metadata_text,
+        skill_markdown=skill_markdown,
     )
+
+
+def _generated_content(preview: ImportPreview, source: ImportSource) -> tuple[str, str]:
+    """Read review-only generated content from the importer's private copy."""
+    if source.kind != SOURCE_GENERATED:
+        return "None", ""
+    try:
+        raw = (preview.staging_dir / "SKILL.md").read_text(encoding="utf-8")
+    except OSError:
+        return "None", ""
+
+    from aura.skills.frontmatter import parse_skill_markdown
+
+    parsed = parse_skill_markdown(raw, source="generated SKILL.md")
+    lines: list[str] = []
+    for key in ("task_kinds", "path_globs", "triggers", "workspace_markers", "model"):
+        value = parsed.metadata.get(key)
+        if value in (None, "", [], ()):
+            continue
+        if isinstance(value, (list, tuple)):
+            rendered = ", ".join(str(item) for item in value)
+        else:
+            rendered = str(value)
+        lines.append(f"{key}: {rendered}")
+    return ("\n".join(lines) or "None"), raw
 
 
 __all__ = [
@@ -129,6 +160,7 @@ __all__ = [
     "SCOPE_HINTS",
     "SOURCE_FOLDER",
     "SOURCE_GITHUB",
+    "SOURCE_GENERATED",
     "SOURCE_ZIP",
     "ImportDecision",
     "ImportPreviewView",

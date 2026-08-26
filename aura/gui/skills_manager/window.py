@@ -54,6 +54,7 @@ class SkillsManagerWindow(QDialog):
 
     current_row_changed = Signal(str)
     import_requested = Signal(str)  # IMPORT_LOCAL | IMPORT_GITHUB
+    create_requested = Signal()
     use_requested = Signal(str)
     enable_toggle_requested = Signal(str, bool)
     uninstall_requested = Signal(str)
@@ -71,6 +72,7 @@ class SkillsManagerWindow(QDialog):
         self._current_id: str = ""
         self._mutations_enabled = True
         self._import_busy = False
+        self._creation_busy = False
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(14, 12, 14, 12)
@@ -105,7 +107,7 @@ class SkillsManagerWindow(QDialog):
     # ---- construction ------------------------------------------------------
 
     def _build_import_actions(self) -> QHBoxLayout:
-        """The two ways a skill gets in, plus an honest busy indicator."""
+        """The three ways a skill gets in, plus an honest busy indicator."""
         row = QHBoxLayout()
         row.setSpacing(8)
 
@@ -126,6 +128,13 @@ class SkillsManagerWindow(QDialog):
             lambda: self._request_import(IMPORT_GITHUB)
         )
         row.addWidget(self._import_github_btn)
+
+        self._create_btn = QPushButton("Create with Aura")
+        self._create_btn.setToolTip(
+            "Describe a skill in plain English, then review it before installing."
+        )
+        self._create_btn.clicked.connect(self._request_creation)
+        row.addWidget(self._create_btn)
 
         self._import_status = QLabel("")
         self._import_status.setWordWrap(True)
@@ -241,6 +250,12 @@ class SkillsManagerWindow(QDialog):
         self._import_status.setText(message if self._import_busy else "")
         self._update_actions()
 
+    def set_creation_busy(self, busy: bool, message: str = "") -> None:
+        """Present the creation session without owning any of its workflow."""
+        self._creation_busy = bool(busy)
+        self._import_status.setText(message if self._creation_busy else "")
+        self._update_actions()
+
     def import_status_text(self) -> str:
         """What the busy indicator currently says, or "" when idle."""
         return self._import_status.text()
@@ -248,6 +263,9 @@ class SkillsManagerWindow(QDialog):
     def import_actions_enabled(self) -> bool:
         """True while both import actions are offered to the user."""
         return self._import_local_btn.isEnabled() and self._import_github_btn.isEnabled()
+
+    def create_action_enabled(self) -> bool:
+        return self._create_btn.isEnabled()
 
     # ---- current row -------------------------------------------------------
 
@@ -340,13 +358,18 @@ class SkillsManagerWindow(QDialog):
         if self._imports_allowed():
             self.import_requested.emit(kind)
 
+    def _request_creation(self) -> None:
+        if self._imports_allowed():
+            self.create_requested.emit()
+
     def _imports_allowed(self) -> bool:
-        return self._mutations_enabled and not self._import_busy
+        return self._mutations_enabled and not self._import_busy and not self._creation_busy
 
     def _update_actions(self) -> None:
         allowed = self._imports_allowed()
         self._import_local_btn.setEnabled(allowed)
         self._import_github_btn.setEnabled(allowed)
+        self._create_btn.setEnabled(allowed)
 
         row = self._row(self._current_id)
         if row is None:

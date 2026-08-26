@@ -33,6 +33,7 @@ from PySide6.QtWidgets import QWidget
 from aura.gui.skills_manager.import_dialogs import ImportPrompts
 from aura.gui.skills_manager.import_models import (
     SOURCE_FOLDER,
+    SOURCE_GENERATED,
     SOURCE_GITHUB,
     SOURCE_ZIP,
     ImportDecision,
@@ -69,6 +70,11 @@ class SkillImportController(QObject):
     #: Emitted whenever the session's busy state changes, with an honest
     #: description of what is happening while it is True.
     busy_changed = Signal(bool, str)
+    #: The generated workspace folder has been copied (or definitively refused)
+    #: and its creation owner may now release the source draft.
+    generated_source_acquired = Signal(str)
+    #: The generated import's review/install lifecycle has ended.
+    generated_import_finished = Signal(str)
 
     def __init__(
         self,
@@ -92,6 +98,7 @@ class SkillImportController(QObject):
         self._source: ImportSource | None = None
         self._preview: ImportPreview | None = None
         self._importer: SkillImporter | None = None
+        self._generated_owner_id = ""
         #: Importers for abandoned sessions whose job is still running, kept
         #: until every kind of late result releases its session state.
         self._retired: dict[int, SkillImporter] = {}
@@ -133,6 +140,39 @@ class SkillImportController(QObject):
             return False
         return self._start(importer, SOURCE_GITHUB, url, url)
 
+    def start_generated_folder(
+        self,
+        folder: Path,
+        *,
+        scope,
+        owner_id: str,
+        release_source: Callable[[], None],
+    ) -> bool:
+        """Preview one generated folder through the real folder importer.
+
+        The caller already chose the destination. The worker releases the
+        workspace draft in ``finally`` only after preview_from_folder stops
+        reading it, even if this controller is later abandoned or destroyed.
+        """
+        importer = self._begin_guard()
+        if importer is None:
+            return False
+        source = ImportSource(
+            kind=SOURCE_GENERATED,
+            location=str(folder),
+            label="skill created by Aura",
+            scope=scope,
+        )
+        return self._start_source(
+            importer,
+            source,
+            owner_id=str(owner_id),
+            release_source=release_source,
+        )
+
+    def is_generated_owner(self, owner_id: str) -> bool:
+        return bool(owner_id) and self._active and self._generated_owner_id == str(owner_id)
+
     def _begin_guard(self) -> SkillImporter | None:
         """The importer this session will use, or None if it may not start."""
         if self._active:
@@ -152,14 +192,26 @@ class SkillImportController(QObject):
             return False
 
         source = ImportSource(kind=kind, location=location, label=label, scope=scope)
+        return self._start_source(importer, source)
+
+    def _start_source(
+        self,
+        importer: SkillImporter,
+        source: ImportSource,
+        *,
+        owner_id: str = "",
+        release_source: Callable[[], None] | None = None,
+    ) -> bool:
         self._token += 1
         self._active = True
         self._phase = _PHASE_PREVIEW
         self._source = source
         self._importer = importer
         self._preview = None
-        self._set_busy(True, f"Preparing “{label}”…")
-        if not self._runner.start(self._token, _staging_job(importer, source)):
+        self._generated_owner_id = owner_id
+        self._set_busy(True, f"Preparing “{source.label}”…")
+        job = _staging_job(importer, source, release_source=release_source)
+        if not self._runner.start(self._token, job):
             self._finish(cleanup=False)
             self._error(_ALREADY_RUNNING)
             return False
@@ -168,6 +220,8 @@ class SkillImportController(QObject):
     # ---- results -----------------------------------------------------------
 
     def _on_job_finished(self, token: int, result: object, error: object) -> None:
+        if self._phase == _PHASE_PREVIEW and self._generated_owner_id:
+            self.generated_source_acquired.emit(self._generated_owner_id)
         if token != self._token or not self._active:
             self._discard_late(token, result)
             return
@@ -257,6 +311,7 @@ class SkillImportController(QObject):
         self._retired.clear()
 
     def _finish(self, *, cleanup: bool) -> None:
+        generated_owner_id = self._generated_owner_id
         if cleanup and self._preview is not None:
             _cleanup(self._importer, self._preview)
         self._active = False
@@ -264,7 +319,10 @@ class SkillImportController(QObject):
         self._source = None
         self._preview = None
         self._importer = None
+        self._generated_owner_id = ""
         self._set_busy(False, "")
+        if generated_owner_id:
+            self.generated_import_finished.emit(generated_owner_id)
 
     # ---- local messaging ---------------------------------------------------
 
@@ -294,11 +352,25 @@ def _local_label(location: str) -> str:
     return cleaned.rsplit("/", 1)[-1] or cleaned
 
 
-def _staging_job(importer: SkillImporter, source: ImportSource) -> Callable[[], object]:
+def _staging_job(
+    importer: SkillImporter,
+    source: ImportSource,
+    *,
+    release_source: Callable[[], None] | None = None,
+) -> Callable[[], object]:
     """The blocking acquire-and-validate call this source needs."""
     scope = source.scope
-    if source.kind == SOURCE_FOLDER:
-        return lambda: importer.preview_from_folder(Path(source.location), destination_scope=scope)
+    if source.kind in (SOURCE_FOLDER, SOURCE_GENERATED):
+        def preview_folder() -> object:
+            try:
+                return importer.preview_from_folder(
+                    Path(source.location), destination_scope=scope
+                )
+            finally:
+                if release_source is not None:
+                    release_source()
+
+        return preview_folder
     if source.kind == SOURCE_ZIP:
         return lambda: importer.preview_from_zip(Path(source.location), destination_scope=scope)
     return lambda: importer.preview_from_github(source.location, destination_scope=scope)

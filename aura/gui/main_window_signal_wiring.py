@@ -66,6 +66,10 @@ class MainWindowSignalWiring:
         # ---- group 6: send handler ----
         w._send_handler.drone_bay_requested.connect(w._drone_controller.on_drone_bay_requested)
         w._send_handler.skills_manager_requested.connect(w._skills_controller.open_manager)
+        w._send_handler.stop_requested.connect(w._on_skill_creation_stop)
+        w._skills_controller.creation_session_changed.connect(
+            w._on_skill_creation_session_changed
+        )
 
         # ---- group 7: drone reports window ----
         w._drone_reports_window.geometry_saved.connect(w._terminal_controller._on_drone_reports_geometry_saved)

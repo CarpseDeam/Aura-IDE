@@ -123,6 +123,14 @@ class ImportReviewDialog(QDialog):
         self._summary.setStyleSheet(f"color: {FG_DIM}; font-size: 12px; background: transparent;")
         body_layout.addWidget(self._summary)
 
+        self._metadata = QLabel(f"Relevant metadata:\n{view.metadata_text}")
+        self._metadata.setWordWrap(True)
+        self._metadata.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        self._metadata.setStyleSheet(
+            f"color: {FG_DIM}; font-size: 12px; background: transparent;"
+        )
+        body_layout.addWidget(self._metadata)
+
         self._scripts = QLabel(f"Scripts or executable files: {view.scripts_text}")
         self._scripts.setWordWrap(True)
         colour = WARN if view.has_scripts else FG_DIM
@@ -139,6 +147,22 @@ class ImportReviewDialog(QDialog):
             f"color: {diag_colour}; font-size: 12px; background: transparent;"
         )
         body_layout.addWidget(self._diagnostics)
+
+        self._skill_markdown: QLabel | None = None
+        if view.skill_markdown:
+            self._skill_markdown = QLabel(
+                "Complete generated SKILL.md:\n\n" + view.skill_markdown
+            )
+            self._skill_markdown.setWordWrap(True)
+            self._skill_markdown.setTextFormat(Qt.TextFormat.PlainText)
+            self._skill_markdown.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+                | Qt.TextInteractionFlag.TextSelectableByKeyboard
+            )
+            self._skill_markdown.setStyleSheet(
+                f"color: {FG}; font-size: 12px; background: transparent;"
+            )
+            body_layout.addWidget(self._skill_markdown)
         body_layout.addStretch(1)
 
         scroll = QScrollArea()
@@ -201,8 +225,10 @@ class ImportReviewDialog(QDialog):
             (
                 self.windowTitle(),
                 self._summary.text(),
+                self._metadata.text(),
                 self._scripts.text(),
                 self._diagnostics.text(),
+                self._skill_markdown.text() if self._skill_markdown is not None else "",
                 IMPORT_PERMISSION_REMINDER,
             )
         )

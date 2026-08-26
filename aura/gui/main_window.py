@@ -90,6 +90,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # Final assistant message of the current turn, held until the turn is
         # saved so a pending handoff can run against it afterwards.
         self._final_stream_message: dict = {}
+        self._skill_creation_turn_id = ""
+        self._skill_creation_turn_failed = False
+        self._shutting_down = False
         self._use_native_chrome = os.environ.get("AURA_NATIVE_CHROME") == "1"
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(QIcon(str(icon_path())))
@@ -199,6 +202,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             input_panel=self._input,
             parent_widget=self,
             workspace_root=self._workspace_root,
+            start_creation_turn=self._start_skill_creation_turn,
             parent=self,
         )
         # Companion (mobile control plane)
@@ -388,6 +392,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                 self._main_splitter.setSizes([left_w, center_w, right_w])
 
     def closeEvent(self, event) -> None:
+        self._shutting_down = True
         # Save window geometry/state.
         geo = self.saveGeometry()
         self._settings.main_window_geometry = bytes(geo.toBase64()).decode("ascii")
@@ -638,6 +643,14 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._chat.assistant_done()
         self._chat.stop_current_aura()
         self._input.focus_editor()
+        creation_turn_id = getattr(self, "_skill_creation_turn_id", "")
+        if creation_turn_id:
+            self._skill_creation_turn_id = ""
+            failed = getattr(self, "_skill_creation_turn_failed", False)
+            self._skill_creation_turn_failed = False
+            self._skills_controller.creation_turn_finished(
+                creation_turn_id, successful=not failed
+            )
         # Settle the turn, then drain one queued item. Both are deferred so the
         # run's own completion presentation (the receipt flush scheduled by the
         # execution handler) lands first; the FIFO order guarantees the snapshot is
@@ -736,10 +749,44 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._chat.add_diff_card(tool_call_id, rel_path, old, new, decision, is_new_file)
 
     def _on_api_error(self, status: int, message: str) -> None:
+        if self._skill_creation_turn_id:
+            self._skill_creation_turn_failed = True
         self._handoff_controller.clear_on_error()
         title = f"API Error {status}" if status > 0 else "Error"
         self._chat.add_error(title, message, show_retry=True)
         self._chat.stop_current_aura()
+
+    def _start_skill_creation_turn(self, prompt: str, turn_id: str) -> bool:
+        """Launch skill authoring through the ordinary visible send path."""
+        if self._workspace_root is None or self._bridge.is_running():
+            return False
+        self._skill_creation_turn_id = str(turn_id)
+        self._skill_creation_turn_failed = False
+        started = self._send_handler.handle_send(
+            SendPayload(text=prompt, attachments=[]),
+            self.current_model(),
+            self.current_thinking(),
+        )
+        if not started:
+            self._skill_creation_turn_id = ""
+            return False
+        return True
+
+    def _on_skill_creation_session_changed(self, active: bool) -> None:
+        """Keep queued turns behind review/install, then resume normal FIFO."""
+        self._send_handler.set_queue_paused(bool(active))
+        if not active and not self._shutting_down:
+            QTimer.singleShot(
+                0,
+                lambda: self._send_handler.process_message_queue(
+                    self.current_model(), self.current_thinking()
+                ),
+            )
+
+    def _on_skill_creation_stop(self) -> None:
+        """Mark only the correlated creation turn as cancelled."""
+        if self._skill_creation_turn_id:
+            self._skill_creation_turn_failed = True
 
     def _on_handoff_requested(self) -> None:
         """Handle Continue in Fresh Chat button click."""

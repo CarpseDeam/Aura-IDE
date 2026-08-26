@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from aura.gui.skills_manager.controller import SkillsManagerController
+from aura.gui.skills_manager.creation_controller import SkillCreationController
+from aura.gui.skills_manager.creation_dialogs import SkillCreationRequest
 from aura.gui.skills_manager.import_controller import SkillImportController
 from aura.gui.skills_manager.import_models import ImportPreviewView, ImportSource
 from aura.gui.skills_manager.models import SkillDetail, SkillRow
@@ -11,6 +13,8 @@ __all__ = [
     "ImportPreviewView",
     "ImportSource",
     "SkillDetail",
+    "SkillCreationController",
+    "SkillCreationRequest",
     "SkillImportController",
     "SkillRow",
     "SkillsManagerController",

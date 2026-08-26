@@ -61,6 +61,7 @@ class SendHandler(QObject):
 
     drone_bay_requested = Signal()  # /drone command → open/toggle Drone Workbay
     skills_manager_requested = Signal()  # /skills command → open the Skills manager
+    stop_requested = Signal()  # MainWindow correlation seam; cancellation stays here
 
     def __init__(
         self,
@@ -80,6 +81,7 @@ class SendHandler(QObject):
 
         # Queued messages sent while the bridge is running.
         self._message_queue: list[QueuedItem] = []
+        self._queue_paused = False
 
     # ---- public helpers (called externally from MainWindow) -----------------
 
@@ -110,6 +112,10 @@ class SendHandler(QObject):
         """Send the next queued message, if any."""
         self._process_message_queue(model, thinking)
 
+    def set_queue_paused(self, paused: bool) -> None:
+        """Temporarily hold FIFO dequeue without dropping or reordering items."""
+        self._queue_paused = bool(paused)
+
     # ---- public API --------------------------------------------------------
 
     def handle_send(
@@ -117,7 +123,7 @@ class SendHandler(QObject):
         payload: SendPayload,
         model: str,
         thinking: ThinkingMode,
-    ) -> None:
+    ) -> bool:
         """Process a send payload: run Aura's own commands, queue if busy, or send.
 
         Anything that is not one of Aura's literal commands is an ordinary
@@ -129,7 +135,7 @@ class SendHandler(QObject):
                 "No workspace",
                 "Open a project first. Try the Demo Project to test Aura safely, or open an existing project folder.",
             )
-            return
+            return False
 
         built_in = classify_built_in_command(payload.text)
 
@@ -140,7 +146,7 @@ class SendHandler(QObject):
         if built_in == "skills":
             self._restore_local_command_selection(payload)
             self.skills_manager_requested.emit()
-            return
+            return False
 
         # Guard: no provider configured
         if not has_usable_provider_configuration(self._settings.provider):
@@ -150,7 +156,7 @@ class SendHandler(QObject):
                 "DeepSeek, OpenAI, Anthropic, Gemini, and OpenRouter are supported.\n\n"
                 "You can also open/browse a project folder before configuring AI.",
             )
-            return
+            return False
 
         # Drone mode checks removed — drone lifecycle removed.
 
@@ -158,9 +164,9 @@ class SendHandler(QObject):
             self._restore_local_command_selection(payload)
             self._chat.add_user(payload.text)
             self._handle_built_in_action(built_in, payload.text)
-            return
+            return False
 
-        if self._bridge.is_running():
+        if self._bridge.is_running() or self._queue_paused:
             item = QueuedItem(
                 text=payload.text,
                 attachments=list(payload.attachments),
@@ -170,7 +176,7 @@ class SendHandler(QObject):
             )
             self._message_queue.append(item)
             self._input.set_queued_messages(len(self._message_queue))
-            return
+            return False
 
         image_atts = [a for a in payload.attachments if a.kind == "image" and a.b64]
         if image_atts and not self._model_supports_vision(model):
@@ -180,9 +186,10 @@ class SendHandler(QObject):
                 f"{model} does not support image input. Select a vision-capable "
                 "model to send images, or remove the attached image(s).",
             )
-            return
+            return False
 
         self._finalize_send(payload, model, thinking)
+        return True
 
     def _restore_local_command_selection(self, payload: SendPayload) -> None:
         """Give back the skill chips a local command never spent.
@@ -199,12 +206,18 @@ class SendHandler(QObject):
         if callable(restore):
             restore(tuple(payload.selected_skills))
 
-    def handle_stop(self) -> None:
-        """Cancel the current bridge response, clear the message queue, but
-        preserve the current draft and attachments in the composer."""
+    def handle_stop(self, *, preserve_queue: bool = False) -> None:
+        """Cancel the response and normally clear queued messages.
+
+        A creation turn preserves queued messages for normal FIFO processing
+        after its review/install session ends. The composer draft and
+        attachments are always preserved.
+        """
+        self.stop_requested.emit()
         self._bridge.request_cancel()
-        self._message_queue.clear()
-        self._input.set_queued_messages(0)
+        if not (preserve_queue or self._queue_paused):
+            self._message_queue.clear()
+            self._input.set_queued_messages(0)
 
     def handle_retry_last(
         self,
@@ -213,7 +226,7 @@ class SendHandler(QObject):
         replay_cb=None,
     ) -> bool:
         """Rerun the most recent user turn after discarding its response."""
-        if self._bridge.is_running():
+        if self._bridge.is_running() or self._queue_paused:
             return False
 
         rewound = self._bridge.history.rewind_to_last_user_turn()
@@ -507,6 +520,8 @@ class SendHandler(QObject):
     def _process_message_queue(self, model: str, thinking: ThinkingMode) -> None:
         """Send the next queued message, if any."""
         if self._bridge.is_running():
+            return
+        if self._queue_paused:
             return
         if not self._message_queue:
             return
