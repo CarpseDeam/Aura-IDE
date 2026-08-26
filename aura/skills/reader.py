@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from aura.skills.description import derive_skill_description
+from aura.skills.diagnostics import SkillDiagnostic
 from aura.skills.library import SkillLibrary
 from aura.skills.models import Skill, SkillProvenance
 
@@ -140,6 +141,28 @@ def _read_refined_skills(workspace_root: str | Path) -> list[Skill]:
         return []
 
 
+def _report_discovery_diagnostics(diagnostics: list[SkillDiagnostic]) -> None:
+    """Log what SkillLibrary found wrong, instead of dropping it on the floor.
+
+    An installed skill that fails to load is a real, fixable problem the user
+    owns, so it belongs in the log the same way every other skills-package
+    failure does. It does *not* belong in the provider prompt: paths and
+    parser messages are operator diagnostics, and the composed prompt only
+    ever carries skill bodies. The structured objects stay available to
+    management callers through
+    :meth:`aura.skills.library.SkillLibrary.list_installed`.
+    """
+    for diagnostic in diagnostics:
+        if diagnostic.is_error:
+            logger.warning(
+                "Installed skill excluded (%s): %s [%s]", diagnostic.code, diagnostic.message, diagnostic.path
+            )
+        else:
+            logger.debug(
+                "Installed skill warning (%s): %s [%s]", diagnostic.code, diagnostic.message, diagnostic.path
+            )
+
+
 def read_skills(
     workspace_root: str | Path,
     *,
@@ -157,7 +180,8 @@ def read_skills(
     Returns empty list on any failure — never propagates exceptions.
     """
     try:
-        installed, _diagnostics = SkillLibrary(workspace_root).discover_effective_skills()
+        installed, diagnostics = SkillLibrary(workspace_root).discover_effective_skills()
+        _report_discovery_diagnostics(diagnostics)
         graduated = _read_graduated_skills(workspace_root, window_days=window_days)
         refined = _read_refined_skills(workspace_root)
         return installed + graduated + refined

@@ -294,6 +294,155 @@ def test_project_skill_can_be_uninstalled(tmp_path: Path) -> None:
     assert lib.discover_effective_skills()[0] == []
 
 
+# ── broken skills stay visible to management ────────────────────────────────
+
+
+def test_invalid_skill_md_is_listed_with_diagnostics_but_never_loaded(tmp_path: Path) -> None:
+    """Runtime drops it; the inventory keeps it, so it can be fixed."""
+    project_dir = tmp_path / "project_authored"
+    _write_skill(project_dir, "healthy")
+    broken = project_dir / "broken"
+    broken.mkdir(parents=True)
+    (broken / "SKILL.md").write_text("---\nname: [unterminated\nbody text\n", encoding="utf-8")
+
+    lib = _library(tmp_path, project_dir=project_dir)
+    skills, _diagnostics = lib.discover_effective_skills()
+    assert [s.install_id for s in skills] == ["project:healthy"]
+
+    rows = {row.installed_id: row for row in lib.list_installed(InstallScope.PROJECT)}
+    assert set(rows) == {"project:healthy", "project:broken"}
+    assert rows["project:healthy"].valid is True
+    assert rows["project:broken"].valid is False
+    assert rows["project:broken"].source_dir == broken
+    assert any(d.is_error for d in rows["project:broken"].diagnostics)
+
+
+def test_inspect_returns_diagnostics_for_a_broken_entry_instead_of_none(tmp_path: Path) -> None:
+    project_dir = tmp_path / "project_authored"
+    broken = project_dir / "unparseable"
+    broken.mkdir(parents=True)
+    (broken / "SKILL.md").write_text("---\nname: [unterminated\n", encoding="utf-8")
+
+    lib = _library(tmp_path, project_dir=project_dir)
+    inspected = lib.inspect("project:unparseable")
+
+    assert inspected is not None
+    assert inspected.valid is False
+    assert inspected.body_chars == 0
+    assert any(d.is_error for d in inspected.diagnostics)
+    assert lib.inspect("project:never-existed") is None
+
+
+def test_a_broken_entry_can_be_uninstalled(tmp_path: Path) -> None:
+    project_dir = tmp_path / "project_authored"
+    broken = project_dir / "removable-wreck"
+    broken.mkdir(parents=True)
+    (broken / "SKILL.md").write_text("---\nnot: [valid\n", encoding="utf-8")
+
+    lib = _library(tmp_path, project_dir=project_dir)
+    lib.uninstall("project:removable-wreck")
+
+    assert not broken.exists()
+    assert lib.list_installed(InstallScope.PROJECT) == []
+
+
+def test_a_broken_entry_can_be_replaced_by_a_working_import(tmp_path: Path) -> None:
+    from aura.skills.importer import SkillImporter
+
+    project_dir = tmp_path / "project_authored"
+    broken = project_dir / "fixable"
+    broken.mkdir(parents=True)
+    (broken / "SKILL.md").write_text("---\nname: [unterminated\n", encoding="utf-8")
+
+    lib = _library(tmp_path, project_dir=project_dir)
+    source = _write_skill(
+        tmp_path / "sources", "fixable", frontmatter="name: fixable\ndescription: the repaired version"
+    )
+    importer = SkillImporter(lib)
+    preview = importer.preview_from_folder(source, destination_scope=InstallScope.PROJECT)
+
+    # The broken folder still occupies the name, so replacement stays explicit.
+    assert preview.conflict is True
+    with pytest.raises(Exception):
+        importer.install(preview)
+
+    repaired = importer.preview_from_folder(source, destination_scope=InstallScope.PROJECT)
+    summary = importer.install(repaired, replace=True)
+
+    assert summary.valid is True
+    assert summary.description == "the repaired version"
+    assert [s.install_id for s in lib.discover_effective_skills()[0]] == ["project:fixable"]
+
+
+def test_malformed_legacy_json_is_listed_and_removable(tmp_path: Path) -> None:
+    project_dir = tmp_path / "project_authored"
+    project_dir.mkdir(parents=True)
+    wreck = project_dir / "corrupt.json"
+    wreck.write_text("{not valid json at all", encoding="utf-8")
+
+    lib = _library(tmp_path, project_dir=project_dir)
+    assert lib.discover_effective_skills()[0] == []
+
+    rows = lib.list_installed(InstallScope.PROJECT)
+    assert [(row.installed_id, row.valid) for row in rows] == [("project:corrupt", False)]
+    assert rows[0].source_dir is None  # a file, not a folder — never exposed as a directory
+
+    lib.uninstall("project:corrupt")
+    assert not wreck.exists()
+
+
+def test_a_broken_bundled_entry_is_listed_but_still_immutable(tmp_path: Path) -> None:
+    bundled_dir = tmp_path / "bundled"
+    broken = bundled_dir / "packaged-wreck"
+    broken.mkdir(parents=True)
+    (broken / "SKILL.md").write_text("---\nname: [unterminated\n", encoding="utf-8")
+
+    lib = _library(tmp_path, bundled_dir=bundled_dir)
+    rows = lib.list_installed(InstallScope.BUNDLED)
+    assert [(row.installed_id, row.valid) for row in rows] == [("bundled:packaged-wreck", False)]
+
+    with pytest.raises(ValueError):
+        lib.uninstall("bundled:packaged-wreck")
+    assert broken.is_dir()
+
+
+def test_a_broken_entry_does_not_shadow_a_working_one(tmp_path: Path) -> None:
+    project_dir = tmp_path / "project_authored"
+    personal_dir = tmp_path / "personal_authored"
+    broken = project_dir / "shared"
+    broken.mkdir(parents=True)
+    (broken / "SKILL.md").write_text("---\nname: [unterminated\n", encoding="utf-8")
+    _write_skill(personal_dir, "shared", body="personal version\n")
+
+    lib = _library(tmp_path, project_dir=project_dir, personal_dir=personal_dir)
+    skills, _diagnostics = lib.discover_effective_skills()
+    assert [s.install_id for s in skills] == ["personal:shared"]
+
+    rows = {row.installed_id: row for row in lib.list_installed()}
+    assert rows["personal:shared"].shadowed_by is None
+    assert rows["project:shared"].valid is False
+
+
+def test_read_skills_reports_discovery_diagnostics_without_leaking_them_into_prompts(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Broken skills must not fail silently — but only to the log."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    authored = workspace / ".aura" / "skills" / "authored"
+    broken = authored / "silent-failure"
+    broken.mkdir(parents=True)
+    (broken / "SKILL.md").write_text("---\nname: [unterminated\n", encoding="utf-8")
+
+    with caplog.at_level("WARNING", logger="aura.skills.reader"):
+        skills = read_skills(workspace)
+
+    assert all(s.install_id != "project:silent-failure" for s in skills)
+    assert any("silent-failure" in record.getMessage() for record in caplog.records)
+    # Nothing about the failure reaches a composed skill body.
+    assert not any("silent-failure" in s.text for s in skills)
+
+
 # ── no duplicate discovery paths ────────────────────────────────────────────
 
 

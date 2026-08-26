@@ -6,9 +6,17 @@ preview, install only through an explicit call. Nothing here executes
 anything staged — scripts are inert content, read only through the
 production ``read_skill_resource`` tool once a skill is installed and
 activated.
+
+A preview describes the world as it was when the preview was taken, and is
+never treated as authority over the world at install time. Staging lives in
+a temp directory and the destination lives in the user's skill folder; both
+can change in between. :meth:`SkillImporter.install` therefore re-derives
+the staged content and re-resolves the destination immediately before it
+mutates anything, and refuses if either no longer matches what was approved.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import shutil
@@ -17,6 +25,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from aura.paths import is_link_like
 from aura.skills.archive import (
     MAX_ARCHIVE_MEMBER_BYTES,
     MAX_ARCHIVE_MEMBERS,
@@ -35,10 +44,24 @@ logger = logging.getLogger(__name__)
 
 _EXECUTABLE_SUFFIXES = {".sh", ".bat", ".cmd", ".ps1", ".exe", ".py", ".rb", ".pl", ".js", ".vbs"}
 _RESOURCE_DIR_NAMES = ("scripts", "references", "assets")
+_FINGERPRINT_CHUNK = 1024 * 1024
 
 
 class SkillImportError(Exception):
     """An import could not be staged, validated, or installed."""
+
+
+@dataclass(frozen=True)
+class StagedScan:
+    """What one pass over a staged skill directory found."""
+
+    file_count: int
+    resource_dirs: tuple[str, ...]
+    has_scripts_or_executables: bool
+    #: Content hash of the whole staged tree — every relative path and every
+    #: byte. Recomputed at install time and compared against the previewed
+    #: value, so staged content cannot change after it was approved.
+    fingerprint: str
 
 
 @dataclass(frozen=True)
@@ -55,21 +78,45 @@ class ImportPreview:
     resource_dirs: tuple[str, ...]
     has_scripts_or_executables: bool
     diagnostics: tuple[SkillDiagnostic, ...] = ()
+    #: Content hash of the staged tree at preview time. Advisory to display,
+    #: authoritative at install time (see :meth:`SkillImporter.install`).
+    fingerprint: str = ""
 
     @property
     def ok(self) -> bool:
         return bool(self.name) and not any(d.is_error for d in self.diagnostics)
 
 
-def _scan_staged_dir(staged_dir: Path) -> tuple[int, tuple[str, ...], bool]:
+def _scan_staged_dir(staged_dir: Path) -> StagedScan:
+    """Describe and fingerprint a staged skill tree, refusing any link inside it.
+
+    Staging is produced by copying regular files or by extracting an archive
+    that already rejected symlink members, so a link found here was planted
+    afterwards — it is never followed, counted, or installed.
+    """
     file_count = 0
     has_scripts = False
     resource_dirs = tuple(name for name in _RESOURCE_DIR_NAMES if (staged_dir / name).is_dir())
-    for path in staged_dir.rglob("*"):
+    digest = hashlib.sha256()
+    for path in sorted(staged_dir.rglob("*"), key=lambda p: p.as_posix()):
+        if is_link_like(path):
+            raise SkillImportError(f"staged content contains a symlink or junction ({path}); refusing to install it")
         if not path.is_file():
             continue
         file_count += 1
         rel = path.relative_to(staged_dir)
+        digest.update(rel.as_posix().encode("utf-8", "replace"))
+        digest.update(b"\0")
+        try:
+            with path.open("rb") as handle:
+                while True:
+                    chunk = handle.read(_FINGERPRINT_CHUNK)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+        except OSError as exc:
+            raise SkillImportError(f"could not read staged file '{path}': {exc}") from exc
+        digest.update(b"\0")
         if rel.parts and rel.parts[0] == "scripts":
             has_scripts = True
         elif path.suffix.lower() in _EXECUTABLE_SUFFIXES:
@@ -79,12 +126,19 @@ def _scan_staged_dir(staged_dir: Path) -> tuple[int, tuple[str, ...], bool]:
                 has_scripts = has_scripts or os.access(path, os.X_OK)
             except OSError:
                 pass
-    return file_count, resource_dirs, has_scripts
+    return StagedScan(
+        file_count=file_count,
+        resource_dirs=resource_dirs,
+        has_scripts_or_executables=has_scripts,
+        fingerprint=digest.hexdigest(),
+    )
 
 
 def _validate_staged_skill(staged_dir: Path) -> tuple[str, str, list[SkillDiagnostic]]:
     """Validate a staged ``<dir>/SKILL.md`` for import. Returns (name, description, diagnostics)."""
     skill_md = staged_dir / "SKILL.md"
+    if is_link_like(skill_md):
+        return "", "", [error("linked_skill_manifest", "SKILL.md is a symlink or junction", str(skill_md))]
     if not skill_md.is_file():
         return "", "", [error("missing_skill_md", "SKILL.md not found", str(staged_dir))]
     try:
@@ -127,7 +181,14 @@ def _validate_staged_skill(staged_dir: Path) -> tuple[str, str, list[SkillDiagno
 
 
 def _stage_folder(source: Path, staging_dir: Path) -> None:
-    """Copy *source* into *staging_dir*, rejecting symlinks and oversized trees."""
+    """Copy *source* into *staging_dir*, rejecting links and oversized trees.
+
+    *source* itself is checked before anything walks it, so a junctioned or
+    symlinked import folder is refused rather than silently importing
+    whatever it points at.
+    """
+    if is_link_like(source):
+        raise SkillImportError(f"'{source}' is a symlink or junction; refusing to import it")
     if not source.is_dir():
         raise SkillImportError(f"'{source}' is not a directory")
     staging_dir.mkdir(parents=True, exist_ok=True)
@@ -138,14 +199,18 @@ def _stage_folder(source: Path, staging_dir: Path) -> None:
         rel_root = root_path.relative_to(source)
         dirnames.sort()
         for dirname in list(dirnames):
-            if (root_path / dirname).is_symlink():
-                raise SkillImportError(f"source contains a symlink directory ({root_path / dirname}); refusing to import it")
+            if is_link_like(root_path / dirname):
+                raise SkillImportError(
+                    f"source contains a symlink or junction directory ({root_path / dirname}); refusing to import it"
+                )
         dest_dir = staging_dir / rel_root
         dest_dir.mkdir(parents=True, exist_ok=True)
         for filename in sorted(filenames):
             src_file = root_path / filename
-            if src_file.is_symlink():
-                raise SkillImportError(f"source contains a symlink file ({src_file}); refusing to import it")
+            if is_link_like(src_file):
+                raise SkillImportError(
+                    f"source contains a symlink or junction file ({src_file}); refusing to import it"
+                )
             total_files += 1
             if total_files > MAX_ARCHIVE_MEMBERS:
                 raise SkillImportError(f"source has too many files (> {MAX_ARCHIVE_MEMBERS})")
@@ -171,7 +236,7 @@ class SkillImporter:
     def _finish_preview(self, staging_root: Path, staged_dir: Path, destination_scope: InstallScope) -> ImportPreview:
         name, description, diagnostics = _validate_staged_skill(staged_dir)
         conflict = bool(name) and name in self._library.existing_skill_names(destination_scope)
-        file_count, resource_dirs, has_scripts = _scan_staged_dir(staged_dir)
+        scan = _scan_staged_dir(staged_dir)
         return ImportPreview(
             staging_root=staging_root,
             staging_dir=staged_dir,
@@ -179,22 +244,27 @@ class SkillImporter:
             description=description,
             destination_scope=destination_scope,
             conflict=conflict,
-            file_count=file_count,
-            resource_dirs=resource_dirs,
-            has_scripts_or_executables=has_scripts,
+            file_count=scan.file_count,
+            resource_dirs=scan.resource_dirs,
+            has_scripts_or_executables=scan.has_scripts_or_executables,
             diagnostics=tuple(diagnostics),
+            fingerprint=scan.fingerprint,
         )
 
     def preview_from_folder(self, folder: Path, *, destination_scope: InstallScope) -> ImportPreview:
         staging_root = self._new_staging_root()
         try:
-            source = Path(folder).resolve()
+            supplied = Path(folder)
+            if is_link_like(supplied):
+                # Checked before resolve(), which would erase the evidence.
+                raise SkillImportError(f"'{supplied}' is a symlink or junction; refusing to import it")
+            source = supplied.resolve()
             staged_dir = staging_root / (source.name or "skill")
             _stage_folder(source, staged_dir)
+            return self._finish_preview(staging_root, staged_dir, destination_scope)
         except SkillImportError:
             shutil.rmtree(staging_root, ignore_errors=True)
             raise
-        return self._finish_preview(staging_root, staged_dir, destination_scope)
 
     def preview_from_zip(self, zip_path: Path, *, destination_scope: InstallScope) -> ImportPreview:
         staging_root = self._new_staging_root()
@@ -202,16 +272,13 @@ class SkillImporter:
             extract_dir = staging_root / "extracted"
             try:
                 safe_extract_zip(Path(zip_path), extract_dir)
-            except ArchiveError as exc:
-                raise SkillImportError(str(exc)) from exc
-            try:
                 staged_dir = find_skill_root(extract_dir)
             except ArchiveError as exc:
                 raise SkillImportError(str(exc)) from exc
+            return self._finish_preview(staging_root, staged_dir, destination_scope)
         except SkillImportError:
             shutil.rmtree(staging_root, ignore_errors=True)
             raise
-        return self._finish_preview(staging_root, staged_dir, destination_scope)
 
     def preview_from_github(self, url: str, *, destination_scope: InstallScope) -> ImportPreview:
         staging_root = self._new_staging_root()
@@ -221,28 +288,73 @@ class SkillImporter:
                 staged_dir = self._github_fetcher.fetch(target, staging_root)
             except GitHubImportError as exc:
                 raise SkillImportError(str(exc)) from exc
+            return self._finish_preview(staging_root, staged_dir, destination_scope)
         except SkillImportError:
             shutil.rmtree(staging_root, ignore_errors=True)
             raise
-        return self._finish_preview(staging_root, staged_dir, destination_scope)
+
+    def _reconfirm_staged(self, preview: ImportPreview) -> None:
+        """Prove the staged skill is still exactly what the preview approved.
+
+        Staging is a temp directory anyone can write to between preview and
+        install. Re-deriving the name, the validity verdict, the
+        script/executable finding, and the content fingerprint means mutable
+        staging data cannot turn an approved preview into the installation of
+        something else.
+        """
+        name, _description, diagnostics = _validate_staged_skill(preview.staging_dir)
+        scan = _scan_staged_dir(preview.staging_dir)
+        changed = (
+            name != preview.name
+            or any(d.is_error for d in diagnostics)
+            or scan.fingerprint != preview.fingerprint
+            or scan.has_scripts_or_executables != preview.has_scripts_or_executables
+            or scan.file_count != preview.file_count
+        )
+        if changed:
+            raise SkillImportError(
+                "the staged skill no longer matches the preview it was approved from; "
+                "re-run the preview before installing"
+            )
 
     def install(self, preview: ImportPreview, *, replace: bool = False) -> InstalledSkillSummary:
-        """Install a validated preview. Requires ``replace=True`` over an existing skill."""
+        """Install a validated preview. Requires ``replace=True`` over an existing skill.
+
+        The preview's ``conflict`` flag is display information only. The
+        destination is re-resolved here, immediately before the filesystem is
+        touched, because a skill can appear at that path between preview and
+        install — installing over it on the strength of a stale "no conflict"
+        reading would replace someone else's skill without ever being asked.
+        """
         if not preview.ok:
             raise SkillImportError("cannot install a preview that failed validation")
         if preview.destination_scope == InstallScope.BUNDLED:
             raise SkillImportError("cannot install into the bundled scope")
-        if preview.conflict and not replace:
+
+        dest_root = self._library.dir_for_scope(preview.destination_scope)
+        if dest_root is None:
+            raise SkillImportError(f"no directory configured for scope {preview.destination_scope.value}")
+
+        self._reconfirm_staged(preview)
+
+        dest_root.mkdir(parents=True, exist_ok=True)
+        final_dir = dest_root / preview.name
+        if is_link_like(final_dir):
+            raise SkillImportError(
+                f"'{final_dir}' is a symlink or junction; refusing to install through it. "
+                "Remove it first, then re-run the import."
+            )
+        # Live conflict, re-derived: the folder may have appeared since the
+        # preview, or the name may now be taken by a legacy JSON skill.
+        occupied = os.path.lexists(final_dir) or preview.name in self._library.existing_skill_names(
+            preview.destination_scope
+        )
+        if occupied and not replace:
             raise SkillImportError(
                 f"a skill named '{preview.name}' already exists in {preview.destination_scope.value}; "
                 "explicit replacement is required"
             )
 
-        dest_root = self._library.dir_for_scope(preview.destination_scope)
-        if dest_root is None:
-            raise SkillImportError(f"no directory configured for scope {preview.destination_scope.value}")
-        dest_root.mkdir(parents=True, exist_ok=True)
-        final_dir = dest_root / preview.name
         token = uuid.uuid4().hex[:8]
         tmp_new = dest_root / f".{preview.name}.new-{token}"
         tmp_old = dest_root / f".{preview.name}.old-{token}"
@@ -250,19 +362,19 @@ class SkillImporter:
         try:
             shutil.copytree(preview.staging_dir, tmp_new)
             try:
-                if final_dir.exists():
+                if os.path.lexists(final_dir):
                     os.replace(final_dir, tmp_old)
                 try:
                     os.replace(tmp_new, final_dir)
                 except Exception:
-                    if tmp_old.exists():
+                    if os.path.lexists(tmp_old):
                         os.replace(tmp_old, final_dir)
                     raise
             finally:
-                if tmp_old.exists():
+                if os.path.lexists(tmp_old):
                     shutil.rmtree(tmp_old, ignore_errors=True)
         finally:
-            if tmp_new.exists():
+            if os.path.lexists(tmp_new):
                 shutil.rmtree(tmp_new, ignore_errors=True)
             self.cleanup(preview)
 

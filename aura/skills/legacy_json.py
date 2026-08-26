@@ -13,10 +13,27 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from aura.paths import is_link_like
 from aura.skills.diagnostics import SkillDiagnostic, error
 from aura.skills.identity import is_valid_skill_name, normalize_skill_name
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class LegacyInvalidEntry:
+    """One legacy JSON file that could not be read, but is still addressable.
+
+    A file-level failure still has a stable identity (its file stem), so
+    management callers can list it, report why it is broken, and delete it.
+    Item-level failures inside an otherwise readable file are diagnostics
+    only — one item of a multi-item file has no separately removable
+    identity.
+    """
+
+    name: str
+    path: Path
+    diagnostics: tuple[SkillDiagnostic, ...]
 
 
 @dataclass(frozen=True)
@@ -31,26 +48,40 @@ class LegacySkillEntry:
     origin: tuple[tuple[str, str], ...] = field(default_factory=tuple)
 
 
-def read_legacy_json_skills(directory: Path) -> tuple[list[LegacySkillEntry], list[SkillDiagnostic]]:
+def read_legacy_json_skills(
+    directory: Path,
+) -> tuple[list[LegacySkillEntry], list[LegacyInvalidEntry], list[SkillDiagnostic]]:
     """Read every ``*.json`` file directly inside *directory*.
 
     Each file may hold one skill object or a list of skill objects. A file
     that fails to parse, or an item missing ``text``, is reported as a
-    diagnostic and skipped — it never aborts the rest of discovery.
+    diagnostic and skipped — it never aborts the rest of discovery. A
+    file-level failure is additionally returned as a
+    :class:`LegacyInvalidEntry` so management callers can still see and
+    remove it instead of it vanishing from the inventory.
+
+    A ``*.json`` file that is a symlink or junction is refused outright: a
+    manually planted link is never read as an installed skill.
     """
     entries: list[LegacySkillEntry] = []
+    invalid: list[LegacyInvalidEntry] = []
     diagnostics: list[SkillDiagnostic] = []
     if not directory.is_dir():
-        return entries, diagnostics
+        return entries, invalid, diagnostics
 
     for entry in sorted(directory.iterdir(), key=lambda path: path.name):
         if entry.suffix != ".json":
+            continue
+        if is_link_like(entry):
+            diagnostics.append(
+                error("linked_skill_entry", "legacy skill file is a symlink or junction", str(entry))
+            )
             continue
         try:
             raw = entry.read_text(encoding="utf-8")
             data = json.loads(raw)
         except Exception as exc:
-            diagnostics.append(error("legacy_json_unreadable", f"could not parse: {exc}", str(entry)))
+            diagnostics.append(_record_invalid(invalid, entry, "legacy_json_unreadable", f"could not parse: {exc}"))
             continue
 
         if isinstance(data, dict):
@@ -59,7 +90,7 @@ def read_legacy_json_skills(directory: Path) -> tuple[list[LegacySkillEntry], li
             items = data
         else:
             diagnostics.append(
-                error("legacy_json_shape", "expected a JSON object or list of objects", str(entry))
+                _record_invalid(invalid, entry, "legacy_json_shape", "expected a JSON object or list of objects")
             )
             continue
 
@@ -96,7 +127,24 @@ def read_legacy_json_skills(directory: Path) -> tuple[list[LegacySkillEntry], li
                     origin=origin,
                 )
             )
-    return entries, diagnostics
+    return entries, invalid, diagnostics
+
+
+def _record_invalid(
+    invalid: list[LegacyInvalidEntry], entry: Path, code: str, message: str
+) -> SkillDiagnostic:
+    """Record a file-level failure as an addressable invalid entry.
+
+    Returns the diagnostic so the caller can also add it to the scope's
+    diagnostic list. When the file stem does not normalise to a usable skill
+    name there is no stable identity to expose, so only the diagnostic is
+    produced.
+    """
+    diagnostic = error(code, message, str(entry))
+    name = normalize_skill_name(entry.stem)
+    if is_valid_skill_name(name):
+        invalid.append(LegacyInvalidEntry(name=name, path=entry, diagnostics=(diagnostic,)))
+    return diagnostic
 
 
 def _derive_name(item: dict[str, Any], entry: Path, index: int, multiple: bool) -> str:

@@ -21,6 +21,13 @@ MAX_ARCHIVE_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
 #: Hard ceiling on any single member's uncompressed size.
 MAX_ARCHIVE_MEMBER_BYTES = 20 * 1024 * 1024
 
+#: Hard ceiling on a *compressed* archive fetched over the network, applied
+#: while it streams. Every other limit here can only be checked once a
+#: complete ZIP exists on disk, which is too late to stop an endless
+#: response from filling memory or the disk. Lives beside the others so
+#: there is one place to read what an import is allowed to consume.
+MAX_COMPRESSED_DOWNLOAD_BYTES = 25 * 1024 * 1024
+
 _SYMLINK_MODE = 0xA000
 
 
