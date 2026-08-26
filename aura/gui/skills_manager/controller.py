@@ -96,6 +96,7 @@ class SkillsManagerController(QObject):
         )
         self._imports.import_succeeded.connect(self._on_import_succeeded)
         self._imports.busy_changed.connect(self._on_import_busy_changed)
+        self._imports.outstanding_job_changed.connect(self._on_import_job_changed)
         self._creation = SkillCreationController(
             import_controller=self._imports,
             start_turn=start_creation_turn,
@@ -196,6 +197,7 @@ class SkillsManagerController(QObject):
         return (
             not self._execution_active
             and not self._imports.is_active()
+            and not self._imports.has_outstanding_job()
             and not self._creation.is_active()
         )
 
@@ -305,6 +307,9 @@ class SkillsManagerController(QObject):
             self._window.set_import_busy(bool(busy), message)
         self._sync_mutation_state()
 
+    def _on_import_job_changed(self, _outstanding: bool) -> None:
+        self._sync_mutation_state()
+
     def _on_creation_busy_changed(self, busy: bool, message: str) -> None:
         if self._window is not None:
             self._window.set_creation_busy(bool(busy), message)
@@ -408,7 +413,7 @@ class SkillsManagerController(QObject):
         if self._execution_active:
             self._show_error("Skills", _BUSY_MESSAGE)
             return False
-        if self._imports.is_active():
+        if self._imports.is_active() or self._imports.has_outstanding_job():
             self._show_error("Skills", _IMPORT_BUSY_MESSAGE)
             return False
         if self._creation.is_active():

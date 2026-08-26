@@ -70,6 +70,8 @@ class SkillImportController(QObject):
     #: Emitted whenever the session's busy state changes, with an honest
     #: description of what is happening while it is True.
     busy_changed = Signal(bool, str)
+    #: Emitted when the one background job slot becomes occupied or available.
+    outstanding_job_changed = Signal(bool)
     #: The generated workspace folder has been copied (or definitively refused)
     #: and its creation owner may now release the source draft.
     generated_source_acquired = Signal(str)
@@ -108,6 +110,10 @@ class SkillImportController(QObject):
     def is_active(self) -> bool:
         """True while a session owns a question, staged content, or an install."""
         return self._active
+
+    def has_outstanding_job(self) -> bool:
+        """True while the runner still owns a logical background job slot."""
+        return self._runner.busy
 
     # ---- entry points ------------------------------------------------------
 
@@ -212,23 +218,34 @@ class SkillImportController(QObject):
         self._set_busy(True, f"Preparing “{source.label}”…")
         job = _staging_job(importer, source, release_source=release_source)
         if not self._runner.start(self._token, job):
+            if source.kind == SOURCE_GENERATED and release_source is not None:
+                # The worker takes this ownership only after start succeeds.
+                # Release first: _finish() emits generated_import_finished,
+                # which may make the creation owner discard its last lease.
+                release_source()
             self._finish(cleanup=False)
             self._error(_ALREADY_RUNNING)
             return False
+        self.outstanding_job_changed.emit(True)
         return True
 
     # ---- results -----------------------------------------------------------
 
     def _on_job_finished(self, token: int, result: object, error: object) -> None:
-        if self._phase == _PHASE_PREVIEW and self._generated_owner_id:
-            self.generated_source_acquired.emit(self._generated_owner_id)
-        if token != self._token or not self._active:
-            self._discard_late(token, result)
-            return
-        if self._phase == _PHASE_PREVIEW:
-            self._on_preview_finished(token, result, error)
-        else:
-            self._on_install_finished(result, error)
+        try:
+            if self._phase == _PHASE_PREVIEW and self._generated_owner_id:
+                self.generated_source_acquired.emit(self._generated_owner_id)
+            if token != self._token or not self._active:
+                self._discard_late(token, result)
+                return
+            if self._phase == _PHASE_PREVIEW:
+                self._on_preview_finished(token, result, error)
+            else:
+                self._on_install_finished(result, error)
+        finally:
+            # ImportJobRunner frees the logical slot before reporting. This
+            # also wakes the manager after an abandoned worker finishes.
+            self.outstanding_job_changed.emit(self._runner.busy)
 
     def _discard_late(self, token: int, result: object) -> None:
         """Clean a result whose session was abandoned, without showing it."""
@@ -271,6 +288,7 @@ class SkillImportController(QObject):
             self._finish(cleanup=True)
             self._error(_ALREADY_RUNNING)
             return
+        self.outstanding_job_changed.emit(True)
         # The job now owns this preview through its captured callable. Dropping
         # the controller's reference prevents abandonment from cleaning staging
         # while install() is still validating or copying from it.

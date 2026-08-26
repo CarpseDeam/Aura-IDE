@@ -29,7 +29,11 @@ from aura.gui.skills_manager.creation_dialogs import (  # noqa: E402
     SkillCreationRequest,
 )
 from aura.gui.skills_manager.import_dialogs import ImportReviewDialog  # noqa: E402
-from aura.gui.skills_manager.import_models import ImportDecision  # noqa: E402
+from aura.gui.skills_manager.import_models import (  # noqa: E402
+    SOURCE_FOLDER,
+    ImportDecision,
+    ImportSource,
+)
 from aura.skills.identity import InstallScope  # noqa: E402
 from aura.skills.importer import SkillImporter  # noqa: E402
 from aura.skills.library import SkillLibrary  # noqa: E402
@@ -84,8 +88,10 @@ class _CreationPrompts:
     def __init__(self) -> None:
         self.request = SkillCreationRequest("Help with widgets")
         self.errors: list[str] = []
+        self.ask_count = 0
 
     def ask(self, _parent):
+        self.ask_count += 1
         return self.request
 
     def show_error(self, _parent, message: str) -> None:
@@ -153,6 +159,7 @@ class _Harness:
         monkeypatch.setattr("aura.gui.skills_manager.controller.QMessageBox", self.dialogs)
         self.input = InputPanel(self.workspace)
         self.turns: list[tuple[str, str]] = []
+        self.history_entries: list[str] = []
         self.next_turn_id = "creation-turn-1"
         self.refuse_turn = False
         self.preview_calls: list[tuple[Path, InstallScope]] = []
@@ -179,6 +186,7 @@ class _Harness:
             return False
         self.next_turn_id = turn_id
         self.turns.append((turn_id, prompt))
+        self.history_entries.append(prompt)
         return True
 
     def start(self) -> Path:
@@ -351,6 +359,124 @@ def test_programmatic_creation_is_refused_during_a_production_turn(harness) -> N
     assert not harness.controller.creation_active()
     assert harness.turns == []
     assert harness.dialogs.warnings
+
+
+def test_abandoned_import_worker_blocks_creation_until_its_slot_is_released(
+    harness, qapp
+) -> None:
+    harness.preview_gate = threading.Event()
+    source_root = harness.workspace / "slow-import-source"
+    source = _write_skill(source_root, "slow-import")
+    importer = harness.controller._new_importer()
+    assert importer is not None
+    import_source = ImportSource(
+        kind=SOURCE_FOLDER,
+        location=str(source),
+        label="slow-import",
+        scope=InstallScope.PROJECT,
+    )
+    assert harness.controller._imports._start_source(importer, import_source)
+    assert harness.preview_entered.wait(timeout=5)
+
+    harness.controller._imports.abandon()
+    assert not harness.controller._imports.is_active()
+    assert harness.controller._imports.has_outstanding_job()
+    assert not harness.controller.window.create_action_enabled()
+    assert not harness.controller.window.import_actions_enabled()
+
+    asks_before = harness.creation_prompts.ask_count
+    harness.controller._on_create_requested()
+    drafts = harness.workspace / ".aura" / "skills" / "drafts"
+    assert harness.creation_prompts.ask_count == asks_before
+    assert harness.turns == []
+    assert harness.history_entries == []
+    assert not drafts.exists()
+    assert not harness.controller.creation_active()
+    assert harness.dialogs.warnings
+
+    harness.preview_gate.set()
+    assert _pump(qapp, harness.controller.window.create_action_enabled)
+    assert not harness.controller._imports.has_outstanding_job()
+    assert harness.controller.window.import_actions_enabled()
+
+
+def test_generated_runner_refusal_releases_draft_before_completion(
+    harness, monkeypatch
+) -> None:
+    draft = harness.start()
+    _write_skill(draft, "widget-helper")
+    lease = harness.controller._creation._lease
+    assert lease is not None
+    release = lease.release
+    events: list[tuple[str, bool]] = []
+    queue_holds: list[bool] = []
+    refreshes: list[None] = []
+    reveals: list[str] = []
+
+    def release_and_record() -> None:
+        events.append(("release", draft.exists()))
+        release()
+
+    monkeypatch.setattr(lease, "release", release_and_record)
+    monkeypatch.setattr(
+        harness.controller._imports._runner,
+        "start",
+        lambda _token, _job: False,
+    )
+    monkeypatch.setattr(
+        harness.controller,
+        "refresh",
+        lambda: refreshes.append(None),
+    )
+    monkeypatch.setattr(
+        harness.controller.window,
+        "select_row",
+        lambda install_id: reveals.append(install_id) or False,
+    )
+    harness.controller.creation_session_changed.connect(queue_holds.append)
+    harness.controller._imports.generated_import_finished.connect(
+        lambda _owner_id: events.append(("complete", draft.exists()))
+    )
+
+    harness.finish()
+
+    assert events == [("release", True), ("complete", False)]
+    assert not draft.exists()
+    assert not harness.controller.creation_active()
+    assert queue_holds[-1] is False
+    assert harness.import_prompts.views == []
+    assert harness.install_calls == []
+    assert refreshes == []
+    assert reveals == []
+
+
+def test_successful_generated_worker_owns_draft_until_copy_finishes(
+    harness, qapp, monkeypatch
+) -> None:
+    harness.preview_gate = threading.Event()
+    draft = harness.start()
+    _write_skill(draft, "widget-helper")
+    lease = harness.controller._creation._lease
+    assert lease is not None
+    release = lease.release
+    releases: list[bool] = []
+
+    def release_and_record() -> None:
+        releases.append(draft.exists())
+        release()
+
+    monkeypatch.setattr(lease, "release", release_and_record)
+    harness.finish()
+    assert harness.preview_entered.wait(timeout=5)
+    assert draft.exists()
+    assert releases == []
+
+    harness.preview_gate.set()
+    harness.settle(qapp)
+    assert releases == [True]
+    assert not draft.exists()
+    assert harness.import_prompts.views
+    assert harness.install_calls == [(InstallScope.PROJECT, False)]
 
 
 @pytest.mark.parametrize("failure", ["stopped", "model", "missing", "review", "install"])
