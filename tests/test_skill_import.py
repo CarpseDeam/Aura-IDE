@@ -694,3 +694,75 @@ def test_import_never_executes_a_staged_script(tmp_path: Path, monkeypatch: pyte
 
     assert not marker.exists()
     assert preview.has_scripts_or_executables is True
+
+
+# ── an unexpected staging failure leaves nothing behind ─────────────────────
+
+
+def _staging_roots_under(tmp_dir: Path) -> list[Path]:
+    return sorted(child for child in tmp_dir.iterdir() if child.name.startswith("aura-skill-import-"))
+
+
+@pytest.fixture()
+def staging_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Give the importer a staging home this test can inspect afterwards."""
+    home = tmp_path / "staging"
+    home.mkdir()
+    monkeypatch.setattr("tempfile.tempdir", str(home), raising=False)
+    return home
+
+
+def test_unexpected_staging_failure_removes_the_new_staging_root(
+    tmp_path: Path, staging_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-SkillImportError escaping staging must not leak its staging root."""
+    source = _write_skill_folder(tmp_path / "sources", "boom-skill")
+    importer = SkillImporter(_library(tmp_path))
+
+    def _explode(*_args, **_kwargs):
+        raise RuntimeError("staging blew up in an unexpected way")
+
+    monkeypatch.setattr("aura.skills.importer._stage_folder", _explode)
+
+    with pytest.raises(RuntimeError, match="unexpected way"):
+        importer.preview_from_folder(source, destination_scope=InstallScope.PROJECT)
+
+    assert _staging_roots_under(staging_dir) == []
+
+
+def test_unexpected_preview_failure_removes_the_new_staging_root(
+    tmp_path: Path, staging_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same guarantee when final preview construction is what fails."""
+    source = _write_skill_folder(tmp_path / "sources", "late-boom")
+    importer = SkillImporter(_library(tmp_path))
+
+    def _explode(*_args, **_kwargs):
+        raise MemoryError("scan blew up after staging succeeded")
+
+    monkeypatch.setattr("aura.skills.importer._scan_staged_dir", _explode)
+
+    with pytest.raises(MemoryError, match="after staging succeeded"):
+        importer.preview_from_folder(source, destination_scope=InstallScope.PROJECT)
+
+    assert _staging_roots_under(staging_dir) == []
+
+
+def test_unexpected_zip_and_github_failures_remove_their_staging_roots(
+    tmp_path: Path, staging_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ZIP and GitHub staging carry the same guarantee as folder staging."""
+    importer = SkillImporter(_library(tmp_path), github_fetcher=_FakeGitHubFetcher(tmp_path / "nowhere"))
+
+    def _explode(*_args, **_kwargs):
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr("aura.skills.importer.safe_extract_zip", _explode)
+    with pytest.raises(RuntimeError):
+        importer.preview_from_zip(tmp_path / "missing.zip", destination_scope=InstallScope.PERSONAL)
+    assert _staging_roots_under(staging_dir) == []
+
+    monkeypatch.setattr("aura.skills.importer.parse_github_url", _explode)
+    with pytest.raises(RuntimeError):
+        importer.preview_from_github("https://github.com/acme/widgets", destination_scope=InstallScope.PERSONAL)
+    assert _staging_roots_under(staging_dir) == []

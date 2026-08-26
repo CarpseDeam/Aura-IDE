@@ -4,48 +4,51 @@ Everything the manager knows about installed skills comes from
 :class:`aura.skills.library.SkillLibrary`: the inventory, which entries are
 effective in this workspace, what one skill contains, and every enable,
 disable, or uninstall. This controller binds that library to the current
-workspace, translates its answers into the presentation shapes the window
-renders, hands a chosen skill to the composer, and keeps the two in sync.
+workspace, hands a chosen skill to the composer, and keeps the two in sync.
+
+Two responsibilities are deliberately elsewhere. Turning library answers
+into rows and details is
+:mod:`aura.gui.skills_manager.presentation`'s, and one import at a time —
+source, staging, review, installation — belongs to
+:class:`aura.gui.skills_manager.import_controller.SkillImportController`,
+which this controller owns, supplies an importer to, and refreshes from.
 
 It deliberately re-derives nothing. Precedence, disabled state, workspace
-markers, invalid entries, shadowing, and path safety are SkillLibrary's
-judgements; the manager reports them. Nothing here writes a chat message or
-calls a model — a lifecycle failure is a concise local dialog and stays one.
+markers, invalid entries, shadowing, path safety, conflict detection, and
+validation are SkillLibrary's and SkillImporter's judgements; the manager
+reports them. Nothing here writes a chat message or calls a model — a
+lifecycle or import failure is a concise local dialog and stays one.
 """
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QObject
 from PySide6.QtWidgets import QMessageBox, QWidget
 
-from aura.gui.skills_manager.models import SCOPE_ORDER, SkillDetail, SkillRow, scope_label
-from aura.gui.skills_manager.window import SkillsManagerWindow
-from aura.skills.identity import InstalledSkillId, InstallScope
-from aura.skills.library import InstalledSkillSummary, SkillInspection, SkillLibrary
+from aura.gui.skills_manager.import_controller import SkillImportController
+from aura.gui.skills_manager.import_dialogs import ImportPrompts
+from aura.gui.skills_manager.models import SCOPE_ORDER, SkillDetail, SkillRow
+from aura.gui.skills_manager.presentation import build_detail, build_row
+from aura.gui.skills_manager.redaction import redact_paths
+from aura.gui.skills_manager.window import IMPORT_GITHUB, SkillsManagerWindow
+from aura.skills.importer import SkillImporter
+from aura.skills.library import SkillLibrary
 
 logger = logging.getLogger(__name__)
 
-_INVALID_DESCRIPTION = "This skill could not be read. Open it for the details."
-
 _BUSY_MESSAGE = (
     "Aura is working on a turn right now. Wait until it finishes before "
-    "enabling, disabling, or uninstalling a skill — an active turn may still "
-    "be reading one of these skills."
+    "importing, replacing, enabling, disabling, or uninstalling a skill — an "
+    "active turn may still be reading one of these skills."
 )
 
-#: Absolute filesystem locations, wherever a library message happens to carry
-#: one. Where Aura keeps skills is not part of this surface, so a path is
-#: redacted before anything reaches the window.
-_ABSOLUTE_PATH = re.compile(r"(?:^|(?<=[\s'\"(\[]))(?:[A-Za-z]:[\\/]|\\\\|/)[^\s'\")\]]*")
-
-
-def _redact_paths(text: object) -> str:
-    """Return *text* with any absolute filesystem path replaced."""
-    return _ABSOLUTE_PATH.sub("<path>", str(text or "")).strip()
+_IMPORT_BUSY_MESSAGE = (
+    "Aura is importing a skill right now. Wait until that import finishes "
+    "before changing the installed skills."
+)
 
 
 class SkillsManagerController(QObject):
@@ -58,6 +61,8 @@ class SkillsManagerController(QObject):
         parent_widget: QWidget | None = None,
         workspace_root: Path | None = None,
         library_factory: Callable[[Path], SkillLibrary] | None = None,
+        importer_factory: Callable[[SkillLibrary], SkillImporter] | None = None,
+        import_prompts: ImportPrompts | None = None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -65,9 +70,21 @@ class SkillsManagerController(QObject):
         self._parent_widget = parent_widget
         self._workspace_root = Path(workspace_root) if workspace_root is not None else None
         self._library_factory = library_factory or SkillLibrary
+        self._importer_factory = importer_factory or SkillImporter
         self._window: SkillsManagerWindow | None = None
         self._rows: dict[str, SkillRow] = {}
         self._execution_active = False
+
+        # One import at a time, owned outright: this controller supplies the
+        # importer and reacts to the outcome, and knows nothing about staging.
+        self._imports = SkillImportController(
+            importer_factory=self._new_importer,
+            prompts=import_prompts,
+            dialog_parent=self._dialog_parent,
+            parent=self,
+        )
+        self._imports.import_succeeded.connect(self._on_import_succeeded)
+        self._imports.busy_changed.connect(self._on_import_busy_changed)
 
         selection_changed = getattr(input_panel, "skill_selection_changed", None)
         self._tracks_composer_selection = selection_changed is not None
@@ -87,7 +104,12 @@ class SkillsManagerController(QObject):
         Project skills belong to the workspace they are installed in, so the
         old rows are dropped outright rather than filtered; an open manager
         is rebuilt against the new workspace immediately.
+
+        An import belongs to the workspace it started in, so a rebind ends
+        the session outright: its staged content is dropped and a result
+        still in flight can no longer reach the new workspace.
         """
+        self._imports.abandon()
         self._workspace_root = Path(root) if root is not None else None
         self._rows = {}
         if self._window is not None:
@@ -103,8 +125,11 @@ class SkillsManagerController(QObject):
         off for the duration. Inventory and composer selection stay live.
         """
         self._execution_active = bool(active)
-        if self._window is not None:
-            self._window.set_mutations_enabled(not self._execution_active)
+        self._sync_mutation_state()
+
+    def shutdown(self) -> None:
+        """Stop the import thread and drop staged content before teardown."""
+        self._imports.shutdown()
 
     # ---- opening -----------------------------------------------------------
 
@@ -129,13 +154,22 @@ class SkillsManagerController(QObject):
             return
         rows = self._build_rows()
         self._rows = {row.install_id: row for row in rows}
-        window.set_mutations_enabled(not self._execution_active)
+        self._sync_mutation_state()
         window.set_rows(rows)
+
+    def _sync_mutation_state(self) -> None:
+        """Every mutation — import included — is off while either owner is busy."""
+        if self._window is not None:
+            self._window.set_mutations_enabled(self._mutations_available())
+
+    def _mutations_available(self) -> bool:
+        return not self._execution_active and not self._imports.is_active()
 
     def _ensure_window(self) -> SkillsManagerWindow:
         if self._window is None:
             window = SkillsManagerWindow(self._parent_widget)
             window.current_row_changed.connect(self._on_current_row_changed)
+            window.import_requested.connect(self._on_import_requested)
             window.use_requested.connect(self._on_use_requested)
             window.enable_toggle_requested.connect(self._on_enable_toggle_requested)
             window.uninstall_requested.connect(self._on_uninstall_requested)
@@ -171,7 +205,7 @@ class SkillsManagerController(QObject):
         effective, _diagnostics = library.discover_effective_skills()
         effective_ids = {skill.install_id for skill in effective if skill.install_id}
         selected_ids = self._selected_install_ids()
-        rows = [_row_for(summary, effective_ids, selected_ids) for summary in summaries]
+        rows = [build_row(summary, effective_ids, selected_ids) for summary in summaries]
         # Alphabetical within each scope, so a broken entry sits where its
         # name says it should rather than at the end of its group.
         rows.sort(key=lambda row: (SCOPE_ORDER.index(row.scope), row.name.lower()))
@@ -201,7 +235,50 @@ class SkillsManagerController(QObject):
         except Exception:
             logger.debug("skills manager: inspect failed for %s", install_id, exc_info=True)
             inspection = None
-        return _detail_for(row, inspection)
+        return build_detail(row, inspection)
+
+    # ---- import -------------------------------------------------------------
+
+    def _new_importer(self) -> SkillImporter | None:
+        """The importer one import session will use, bound to this workspace."""
+        library = self._library()
+        if library is None:
+            return None
+        try:
+            return self._importer_factory(library)
+        except Exception:
+            logger.debug("skills manager: could not build SkillImporter", exc_info=True)
+            return None
+
+    def _on_import_requested(self, kind: str) -> None:
+        """Start an import, or refuse it — including a programmatic request."""
+        if not self._mutations_allowed():
+            return
+        if str(kind) == IMPORT_GITHUB:
+            self._imports.start_github_import()
+        else:
+            self._imports.start_local_import()
+
+    def _on_import_busy_changed(self, busy: bool, message: str) -> None:
+        if self._window is not None:
+            self._window.set_import_busy(bool(busy), message)
+        self._sync_mutation_state()
+
+    def _on_import_succeeded(self, install_id: str) -> None:
+        """Show what was just installed, without putting it in the composer.
+
+        The user still chooses “Use in next message”, and an unsent chip for
+        a skill that was just replaced in place is left exactly as it was.
+        """
+        self.refresh()
+        window = self._window
+        if window is None or not install_id:
+            return
+        if not window.select_row(install_id):
+            # A search filter can hide a freshly installed row; clearing it
+            # is the only way the reveal means anything.
+            window.set_search_text("")
+            window.select_row(install_id)
 
     # ---- composer handoff --------------------------------------------------
 
@@ -246,7 +323,7 @@ class SkillsManagerController(QObject):
             logger.debug("skills manager: set_enabled failed for %s", install_id, exc_info=True)
             self._show_error(
                 "Skills",
-                f"Aura could not {verb} “{row.name}”: {_redact_paths(exc)}",
+                f"Aura could not {verb} “{row.name}”: {redact_paths(exc)}",
             )
             return
         if not enabled:
@@ -268,7 +345,7 @@ class SkillsManagerController(QObject):
             logger.debug("skills manager: uninstall failed for %s", install_id, exc_info=True)
             self._show_error(
                 "Skills",
-                f"Aura could not uninstall “{row.name}”: {_redact_paths(exc)}",
+                f"Aura could not uninstall “{row.name}”: {redact_paths(exc)}",
             )
             return
         self._remove_composer_chip(install_id)
@@ -277,8 +354,12 @@ class SkillsManagerController(QObject):
         self.refresh()
 
     def _mutations_allowed(self) -> bool:
+        """Refuse a mutation whenever someone else owns the skills on disk."""
         if self._execution_active:
             self._show_error("Skills", _BUSY_MESSAGE)
+            return False
+        if self._imports.is_active():
+            self._show_error("Skills", _IMPORT_BUSY_MESSAGE)
             return False
         return True
 
@@ -300,81 +381,6 @@ class SkillsManagerController(QObject):
         if self._window is not None and self._window.isVisible():
             return self._window
         return self._parent_widget
-
-
-def _row_for(
-    summary: InstalledSkillSummary,
-    effective_ids: set[str],
-    selected_ids: set[str],
-) -> SkillRow:
-    usable = summary.installed_id in effective_ids
-    description = summary.description or ("" if summary.valid else _INVALID_DESCRIPTION)
-    return SkillRow(
-        install_id=summary.installed_id,
-        scope=summary.scope.value,
-        name=summary.name,
-        description=_redact_paths(description),
-        status_text=_status_text(summary, usable),
-        enabled=summary.enabled,
-        valid=summary.valid,
-        usable=usable,
-        already_selected=summary.installed_id in selected_ids,
-        can_uninstall=summary.scope != InstallScope.BUNDLED,
-    )
-
-
-def _status_text(summary: InstalledSkillSummary, usable: bool) -> str:
-    """Say, in the user's terms, why a row is or is not in play."""
-    if not summary.valid:
-        return "Invalid"
-    if not summary.enabled:
-        return "Disabled"
-    if summary.shadowed_by:
-        winner = InstalledSkillId.parse(summary.shadowed_by)
-        if winner is not None:
-            return f"Shadowed by the {scope_label(winner.scope.value).lower()} skill"
-        return "Shadowed"
-    if not usable:
-        return "Not available in this workspace"
-    return "Enabled"
-
-
-def _detail_for(row: SkillRow, inspection: SkillInspection | None) -> SkillDetail:
-    description = row.description
-    fields: list[tuple[str, str]] = []
-    diagnostics: tuple[str, ...] = ()
-
-    if inspection is not None:
-        if inspection.description:
-            description = inspection.description
-        if inspection.model:
-            fields.append(("Model", inspection.model))
-        if inspection.task_kinds:
-            fields.append(("Task kinds", ", ".join(inspection.task_kinds)))
-        if inspection.path_globs:
-            fields.append(("Paths", ", ".join(inspection.path_globs)))
-        if inspection.triggers:
-            fields.append(("Triggers", ", ".join(inspection.triggers)))
-        if inspection.resource_entries:
-            fields.append(("Resources", ", ".join(inspection.resource_entries)))
-        elif inspection.has_resources:
-            fields.append(("Resources", "included with this skill"))
-        if inspection.body_chars:
-            fields.append(("Instructions", f"{inspection.body_chars:,} characters"))
-        diagnostics = tuple(
-            f"{diagnostic.severity.value}: {diagnostic.code} — {_redact_paths(diagnostic.message)}"
-            for diagnostic in inspection.diagnostics
-        )
-
-    return SkillDetail(
-        install_id=row.install_id,
-        name=row.name,
-        scope_label=row.scope_label,
-        status_text=row.status_text,
-        description=_redact_paths(description),
-        fields=tuple((label, _redact_paths(value)) for label, value in fields),
-        diagnostics=diagnostics,
-    )
 
 
 __all__ = ["SkillsManagerController"]

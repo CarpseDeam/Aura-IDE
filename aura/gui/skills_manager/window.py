@@ -28,6 +28,10 @@ from PySide6.QtWidgets import (
 from aura.gui.skills_manager.models import SCOPE_LABELS, SCOPE_ORDER, SkillDetail, SkillRow
 from aura.gui.theme import BG, BG_ALT, BORDER, FG, FG_DIM, FG_MUTED
 
+#: Payloads of :attr:`SkillsManagerWindow.import_requested`.
+IMPORT_LOCAL = "local"
+IMPORT_GITHUB = "github"
+
 _ID_ROLE = Qt.ItemDataRole.UserRole
 
 #: Shown under the actions so the capability boundary is never in doubt.
@@ -49,6 +53,7 @@ class SkillsManagerWindow(QDialog):
     """Searchable Project / Personal / Bundled inventory with a detail pane."""
 
     current_row_changed = Signal(str)
+    import_requested = Signal(str)  # IMPORT_LOCAL | IMPORT_GITHUB
     use_requested = Signal(str)
     enable_toggle_requested = Signal(str, bool)
     uninstall_requested = Signal(str)
@@ -65,10 +70,13 @@ class SkillsManagerWindow(QDialog):
         self._groups: dict[str, QTreeWidgetItem] = {}
         self._current_id: str = ""
         self._mutations_enabled = True
+        self._import_busy = False
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(14, 12, 14, 12)
         outer.setSpacing(10)
+
+        outer.addLayout(self._build_import_actions())
 
         self._search = QLineEdit()
         self._search.setPlaceholderText("Search skills by name, description, scope, or state")
@@ -95,6 +103,37 @@ class SkillsManagerWindow(QDialog):
         self._update_actions()
 
     # ---- construction ------------------------------------------------------
+
+    def _build_import_actions(self) -> QHBoxLayout:
+        """The two ways a skill gets in, plus an honest busy indicator."""
+        row = QHBoxLayout()
+        row.setSpacing(8)
+
+        self._import_local_btn = QPushButton("Import Folder/ZIP")
+        self._import_local_btn.setToolTip(
+            "Import a skill from a folder or a ZIP archive on this computer."
+        )
+        self._import_local_btn.clicked.connect(
+            lambda: self._request_import(IMPORT_LOCAL)
+        )
+        row.addWidget(self._import_local_btn)
+
+        self._import_github_btn = QPushButton("Install from GitHub")
+        self._import_github_btn.setToolTip(
+            "Install a skill from a public GitHub repository or directory URL."
+        )
+        self._import_github_btn.clicked.connect(
+            lambda: self._request_import(IMPORT_GITHUB)
+        )
+        row.addWidget(self._import_github_btn)
+
+        self._import_status = QLabel("")
+        self._import_status.setWordWrap(True)
+        self._import_status.setStyleSheet(
+            f"color: {FG_DIM}; font-size: 11px; background: transparent;"
+        )
+        row.addWidget(self._import_status, 1)
+        return row
 
     def _build_tree(self) -> QWidget:
         self._tree = QTreeWidget()
@@ -188,9 +227,27 @@ class SkillsManagerWindow(QDialog):
         self._detail_body.setText(_detail_body_text(detail))
 
     def set_mutations_enabled(self, enabled: bool) -> None:
-        """Allow or forbid enable/disable/uninstall without hiding the inventory."""
+        """Allow or forbid every mutation without hiding the inventory.
+
+        Importing and replacing are mutations too, so the import actions go
+        with enable/disable/uninstall rather than with browsing.
+        """
         self._mutations_enabled = bool(enabled)
         self._update_actions()
+
+    def set_import_busy(self, busy: bool, message: str = "") -> None:
+        """Show what the running import is doing, and keep the rest usable."""
+        self._import_busy = bool(busy)
+        self._import_status.setText(message if self._import_busy else "")
+        self._update_actions()
+
+    def import_status_text(self) -> str:
+        """What the busy indicator currently says, or "" when idle."""
+        return self._import_status.text()
+
+    def import_actions_enabled(self) -> bool:
+        """True while both import actions are offered to the user."""
+        return self._import_local_btn.isEnabled() and self._import_github_btn.isEnabled()
 
     # ---- current row -------------------------------------------------------
 
@@ -279,7 +336,18 @@ class SkillsManagerWindow(QDialog):
         self._update_actions()
         self.current_row_changed.emit(self._current_id)
 
+    def _request_import(self, kind: str) -> None:
+        if self._imports_allowed():
+            self.import_requested.emit(kind)
+
+    def _imports_allowed(self) -> bool:
+        return self._mutations_enabled and not self._import_busy
+
     def _update_actions(self) -> None:
+        allowed = self._imports_allowed()
+        self._import_local_btn.setEnabled(allowed)
+        self._import_github_btn.setEnabled(allowed)
+
         row = self._row(self._current_id)
         if row is None:
             self._use_btn.setText("Use in next message")
@@ -354,4 +422,9 @@ def _detail_body_text(detail: SkillDetail) -> str:
     return "\n\n".join(blocks)
 
 
-__all__ = ["PERMISSION_REMINDER", "SkillsManagerWindow"]
+__all__ = [
+    "IMPORT_GITHUB",
+    "IMPORT_LOCAL",
+    "PERMISSION_REMINDER",
+    "SkillsManagerWindow",
+]

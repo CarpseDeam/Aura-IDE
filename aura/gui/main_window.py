@@ -400,6 +400,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._settings.playground_vertical_splitter_sizes = playground_vert
         save_settings(self._settings)
         self._companion_controller.stop()
+        # Ends any in-flight skill import: staged content is dropped and the
+        # import thread is stopped before this window goes away.
+        self._skills_controller.shutdown()
         self._pricing_controller.shutdown()
         self._bridge.shutdown()
         # Closes the Windows MCP subprocess. Without this the server outlives

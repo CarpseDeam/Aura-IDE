@@ -262,7 +262,10 @@ class SkillImporter:
             staged_dir = staging_root / (source.name or "skill")
             _stage_folder(source, staged_dir)
             return self._finish_preview(staging_root, staged_dir, destination_scope)
-        except SkillImportError:
+        except Exception:
+            # A staging root this call created must never outlive the call
+            # that failed — including when the failure was not one this
+            # module raised. The original exception is re-raised unchanged.
             shutil.rmtree(staging_root, ignore_errors=True)
             raise
 
@@ -276,7 +279,10 @@ class SkillImporter:
             except ArchiveError as exc:
                 raise SkillImportError(str(exc)) from exc
             return self._finish_preview(staging_root, staged_dir, destination_scope)
-        except SkillImportError:
+        except Exception:
+            # A staging root this call created must never outlive the call
+            # that failed — including when the failure was not one this
+            # module raised. The original exception is re-raised unchanged.
             shutil.rmtree(staging_root, ignore_errors=True)
             raise
 
@@ -289,7 +295,10 @@ class SkillImporter:
             except GitHubImportError as exc:
                 raise SkillImportError(str(exc)) from exc
             return self._finish_preview(staging_root, staged_dir, destination_scope)
-        except SkillImportError:
+        except Exception:
+            # A staging root this call created must never outlive the call
+            # that failed — including when the failure was not one this
+            # module raised. The original exception is re-raised unchanged.
             shutil.rmtree(staging_root, ignore_errors=True)
             raise
 
