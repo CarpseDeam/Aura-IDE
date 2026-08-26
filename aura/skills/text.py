@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
 from pathlib import Path
 
 from aura.skills.eviction import (
@@ -9,13 +8,27 @@ from aura.skills.eviction import (
     apply_eviction_mode,
     compute_eviction_verdicts,
 )
-from aura.skills.identity import InstalledSkillId
+from aura.skills.explicit_selection import (
+    explicit_candidate,
+    format_explicit_skill_entry,
+    format_explicit_skills,
+    resolve_explicit_skills,
+)
 from aura.skills.models import (
     Skill,
     SkillProvenance,
     compute_skill_id,
     skill_body_hash,
     skill_label,
+)
+from aura.skills.pack_models import (
+    EXPLICIT_CANDIDATE_CONFLICT,
+    EXPLICIT_MALFORMED,
+    EXPLICIT_UNAVAILABLE,
+    SkillCandidate,
+    SkillPack,
+    SkillRecord,
+    UnresolvedSkillReference,
 )
 from aura.skills.reader import read_skills
 from aura.skills.selection import (
@@ -24,131 +37,25 @@ from aura.skills.selection import (
     score_skills,
 )
 
+__all__ = [
+    "EXPLICIT_CANDIDATE_CONFLICT",
+    "EXPLICIT_MALFORMED",
+    "EXPLICIT_UNAVAILABLE",
+    "SkillCandidate",
+    "SkillPack",
+    "SkillRecord",
+    "UnresolvedSkillReference",
+    "build_skill_context",
+    "build_skill_context_with_ids",
+    "build_skill_pack",
+    "format_explicit_skill_entry",
+    "format_skill_index",
+    "format_skills",
+]
+
 logger = logging.getLogger(__name__)
 
 _MAX_REPORTED_SKIPPED = 20
-
-#: Why an explicitly requested installed skill could not be activated.
-EXPLICIT_MALFORMED = "malformed"
-EXPLICIT_UNAVAILABLE = "unavailable"
-
-
-@dataclass(frozen=True)
-class UnresolvedSkillReference:
-    """One explicitly requested installed skill that could not be activated.
-
-    Reported instead of being dropped, so the send layer can refuse the turn
-    locally rather than let a user-selected skill vanish silently.
-    """
-
-    reference: str
-    status: str
-    reason: str
-
-
-@dataclass(frozen=True)
-class SkillRecord:
-    """One inspectable decision about a single skill for this turn."""
-
-    skill_id: str
-    label: str
-    provenance: str
-    reason: str
-    char_count: int
-
-
-@dataclass(frozen=True)
-class SkillCandidate:
-    """One selected skill of the frozen per-turn candidate index.
-
-    Carries everything the dedicated ``load_skills`` tool needs to resolve an
-    activation against the *frozen* snapshot: the stable id, a one-line
-    description, the deterministic selection reason, body metrics, and the full
-    ``Skill`` (so a body is served from the snapshot, never a re-scan).
-    """
-
-    skill_id: str
-    label: str
-    provenance: str
-    description: str
-    reason: str
-    index_chars: int
-    body_chars: int
-    body_hash: str
-    has_resources: bool
-    eager_guard: bool
-    skill: Skill
-    #: Characters this candidate actually contributes to the initial prompt as
-    #: an eager guard — the bounded excerpt, not the whole body. Zero for
-    #: authored/bundled candidates, which contribute an index line instead.
-    guard_chars: int = 0
-    #: True when the user named this skill for the turn rather than terrain
-    #: selecting it. Explicit candidates carry their full body in the initial
-    #: context and begin the frozen turn already active.
-    explicit: bool = False
-    #: The stable ``scope:name`` identity the explicit selection named. Empty
-    #: for automatically selected candidates, which have no user-facing
-    #: reference — and always distinct from ``skill_id``, which stays the
-    #: content-addressed per-turn candidate id.
-    install_id: str = ""
-    #: Characters this candidate contributes to the explicitly-selected
-    #: section — its heading line plus its full body. Zero for automatic
-    #: candidates.
-    explicit_chars: int = 0
-
-
-@dataclass(frozen=True)
-class SkillPack:
-    """This turn's frozen skill selection plus why each was indexed or skipped.
-
-    ``text`` is the *initial* skill context block: the full bodies of the
-    explicitly selected skills, then a compact deterministic index for
-    automatically selected authored/bundled candidates plus eagerly injected
-    guard text for graduated/refined candidates.  Full *automatic*
-    authored/bundled bodies are deliberately absent here — they become
-    available only through ``load_skills``.
-    """
-
-    text: str = ""
-    index_chars: int = 0
-    guard_chars: int = 0
-    #: Characters the explicitly-selected full-body section contributes.
-    explicit_chars: int = 0
-    candidates: tuple[SkillCandidate, ...] = field(default_factory=tuple)
-    skipped: tuple[SkillRecord, ...] = field(default_factory=tuple)
-    #: Explicit references that named no activatable installed skill, in
-    #: supplied order.  Never raised — reported, so a caller can refuse.
-    unresolved_explicit: tuple[UnresolvedSkillReference, ...] = field(
-        default_factory=tuple
-    )
-
-    @property
-    def skill_ids(self) -> list[str]:
-        return [candidate.skill_id for candidate in self.candidates]
-
-    @property
-    def explicit_candidates(self) -> tuple[SkillCandidate, ...]:
-        """Explicitly selected candidates, in the supplied selection order."""
-        return tuple(c for c in self.candidates if c.explicit)
-
-    @property
-    def selected(self) -> tuple[SkillRecord, ...]:
-        """Compatibility projection of candidates onto the old record shape.
-
-        Kept so older inspection callers that only need ids/labels/reasons keep
-        working; production ledger rendering uses ``candidates`` directly.
-        """
-        return tuple(
-            SkillRecord(
-                skill_id=candidate.skill_id,
-                label=candidate.label,
-                provenance=candidate.provenance,
-                reason=candidate.reason,
-                char_count=_candidate_prompt_chars(candidate),
-            )
-            for candidate in self.candidates
-        )
-
 
 # Provenance precedence order for the frozen candidate snapshot, so the index
 # and ``load_skills`` echo workspace-authored, then bundled, then graduated,
@@ -169,14 +76,6 @@ _SKILL_LOADING_GUIDANCE = (
 )
 
 _SKILL_INDEX_HEADER = "### Skills"
-
-_EXPLICIT_SKILL_HEADER = "### Explicitly Selected Skills"
-
-_EXPLICIT_SKILL_GUIDANCE = (
-    "These skills were explicitly selected for this request and are already "
-    "active — their full instructions follow, so load_skills is neither "
-    "needed nor useful for them. Follow them for this request."
-)
 
 # Graduated and refined guards stay eager because they encode a hazard the
 # runtime has actually hit, and a hazard warning that arrives only on request
@@ -269,46 +168,6 @@ def _format_index_entry(skill: Skill, reason: str) -> str:
     )
 
 
-def format_explicit_skill_entry(skill: Skill, install_id: str) -> str:
-    """One explicitly selected skill's full-body entry.
-
-    Unlike the automatic index line, this carries the whole body: the user
-    asked for this skill by its stable installed identity, so withholding the
-    procedure behind ``load_skills`` would just cost a round trip.
-    """
-    description = skill.description or "no description"
-    return (
-        f"#### {skill_label(skill)} ({install_id}) — {description}\n"
-        f"{skill.text.strip()}"
-    )
-
-
-def format_explicit_skills(resolved: list[tuple[str, Skill]]) -> tuple[str, int]:
-    """Format the explicitly-selected section, in the supplied order.
-
-    Returns ``(text, explicit_chars)``.  Empty selection yields ``("", 0)``,
-    so a turn with no explicit skills composes exactly as it always has.
-    """
-    if not resolved:
-        return "", 0
-    parts = [_EXPLICIT_SKILL_HEADER, _EXPLICIT_SKILL_GUIDANCE]
-    parts.extend(
-        format_explicit_skill_entry(skill, install_id)
-        for install_id, skill in resolved
-    )
-    text = "\n\n".join(parts)
-    return text, len(text)
-
-
-def _candidate_prompt_chars(candidate: SkillCandidate) -> int:
-    """Characters *this* candidate contributes to the initial skill context."""
-    if candidate.explicit:
-        return candidate.explicit_chars
-    if candidate.eager_guard:
-        return candidate.guard_chars
-    return candidate.index_chars
-
-
 def format_skill_index(
     chosen: list[Skill],
     reasons_by_id: dict[str, str],
@@ -351,95 +210,6 @@ def format_skill_index(
     return "\n\n".join(part for part in parts if part), index_chars, guard_chars
 
 
-def _resolve_explicit_skills(
-    skills: list[Skill],
-    references: tuple[str, ...],
-) -> tuple[list[tuple[str, Skill]], list[UnresolvedSkillReference]]:
-    """Resolve stable ``scope:name`` references against the effective skills.
-
-    Resolution reads nothing of its own: the candidates are exactly what the
-    runtime reader already returned, so a disabled, invalid, shadowed, or
-    workspace-inapplicable installed skill is simply absent and therefore
-    unresolvable.  Supplied order is preserved, surrounding whitespace is
-    normalized, repeated references collapse to their first occurrence, and
-    anything that resolves to nothing is reported rather than dropped.
-    """
-    by_install_id = {skill.install_id: skill for skill in skills if skill.install_id}
-    resolved: list[tuple[str, Skill]] = []
-    unresolved: list[UnresolvedSkillReference] = []
-    seen_references: set[str] = set()
-    seen_candidates: set[str] = set()
-
-    for raw in references:
-        reference = raw.strip() if isinstance(raw, str) else ""
-        parsed = InstalledSkillId.parse(reference)
-        key = str(parsed) if parsed is not None else reference.casefold()
-        if key in seen_references:
-            continue
-        seen_references.add(key)
-
-        if parsed is None:
-            unresolved.append(
-                UnresolvedSkillReference(
-                    reference=reference,
-                    status=EXPLICIT_MALFORMED,
-                    reason="not a valid scope:name installed skill reference",
-                )
-            )
-            continue
-
-        installed_id = str(parsed)
-        skill = by_install_id.get(installed_id)
-        if skill is None:
-            unresolved.append(
-                UnresolvedSkillReference(
-                    reference=installed_id,
-                    status=EXPLICIT_UNAVAILABLE,
-                    reason=(
-                        "no enabled installed skill with this identity is "
-                        "available in this workspace"
-                    ),
-                )
-            )
-            continue
-
-        # Two installed skills can share a body, and therefore a candidate id.
-        # The first reference owns the candidate; the second is already active
-        # through it, so it is neither duplicated nor reported unresolved.
-        candidate_id = compute_skill_id(skill)
-        if candidate_id in seen_candidates:
-            continue
-        seen_candidates.add(candidate_id)
-        resolved.append((installed_id, skill))
-
-    return resolved, unresolved
-
-
-def _explicit_candidate(install_id: str, skill: Skill) -> SkillCandidate:
-    """Build one frozen candidate for an explicitly selected installed skill.
-
-    Keeps the content-derived candidate id and body hash every candidate
-    carries, and adds the explicit metadata and character accounting the
-    Context Gearbox ledger needs to describe the selection truthfully.
-    """
-    return SkillCandidate(
-        skill_id=compute_skill_id(skill),
-        label=skill_label(skill),
-        provenance=skill.provenance.value,
-        description=skill.description or "",
-        reason=f"explicitly selected by the user ({install_id})",
-        index_chars=0,
-        body_chars=len(skill.text),
-        body_hash=skill_body_hash(skill),
-        has_resources=skill.has_resources,
-        eager_guard=False,
-        skill=skill,
-        explicit=True,
-        install_id=install_id,
-        explicit_chars=len(format_explicit_skill_entry(skill, install_id)),
-    )
-
-
 def build_skill_pack(
     workspace_root: str | Path,
     *,
@@ -474,14 +244,14 @@ def build_skill_pack(
     """
     try:
         skills = read_skills(workspace_root)
-        explicit, unresolved = _resolve_explicit_skills(skills, explicit_install_ids)
+        explicit, unresolved = resolve_explicit_skills(skills, explicit_install_ids)
         if not skills:
             return SkillPack(unresolved_explicit=tuple(unresolved))
 
         explicit_ids = {compute_skill_id(skill) for _reference, skill in explicit}
         explicit_text, explicit_chars = format_explicit_skills(explicit)
         explicit_candidates = [
-            _explicit_candidate(install_id, skill) for install_id, skill in explicit
+            explicit_candidate(install_id, skill) for install_id, skill in explicit
         ]
 
         if not has_terrain_signal(

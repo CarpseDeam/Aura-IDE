@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from aura.conversation.tools.registry import ToolRegistry
+from aura.conversation.tools.schemas.skills import READ_SKILL_RESOURCE_TOOL_DEF
 from aura.skills.library import SkillLibrary
 from aura.skills.models import compute_skill_id, skill_body_hash
 from aura.skills.text import SkillCandidate, SkillPack
@@ -275,3 +276,18 @@ def test_registry_rejects_read_skill_resource_with_no_frozen_state(tmp_path: Pat
         skill_turn_state=None,
     )
     assert result.ok is False
+
+
+def test_resource_tool_description_covers_both_activation_paths_and_id_sources() -> None:
+    function = READ_SKILL_RESOURCE_TOOL_DEF["function"]
+    description = function["description"]
+    skill_id_description = function["parameters"]["properties"]["skill_id"][
+        "description"
+    ]
+
+    assert "explicitly selected" in description
+    assert "load_skills activated" in description
+    assert "must already be activated" not in description
+    assert "Explicitly Selected Skills section" in skill_id_description
+    assert "automatic skill" in skill_id_description
+    assert "returned by load_skills" in skill_id_description

@@ -42,17 +42,23 @@ READ_SKILL_RESOURCE_TOOL_DEF: dict[str, Any] = {
         "name": "read_skill_resource",
         "description": (
             "Read one supporting resource file (references, scripts, or assets) that ships "
-            "alongside an activated skill's SKILL.md. The skill must already be activated for "
-            "this turn via load_skills — resources are not reachable before that, and only that "
-            "skill's own directory is reachable, never a sibling or unrelated skill. This is "
-            "read-only and never executes anything: a script file is read as text, never run."
+            "alongside an active skill's SKILL.md. A skill is active either because the user "
+            "explicitly selected it for this turn or because load_skills activated it. Only "
+            "that skill's own frozen directory is reachable, never a sibling or unrelated "
+            "skill. This is read-only and never executes anything: a script file is read as "
+            "text, never run."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "skill_id": {
                     "type": "string",
-                    "description": "The activated skill's id, as returned by load_skills.",
+                    "description": (
+                        "The active content-derived candidate skill_id. For an explicitly "
+                        "selected skill, use the id displayed in the Explicitly Selected "
+                        "Skills section. For an automatic skill, use the id returned by "
+                        "load_skills."
+                    ),
                 },
                 "path": {
                     "type": "string",

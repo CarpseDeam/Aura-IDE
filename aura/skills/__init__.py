@@ -15,13 +15,15 @@ from aura.skills.models import (
     skill_body_hash,
     skill_label,
 )
-from aura.skills.reader import read_skills
-from aura.skills.selection import score_skills, select_relevant_skills
-from aura.skills.text import (
+from aura.skills.pack_models import (
     SkillCandidate,
     SkillPack,
     SkillRecord,
     UnresolvedSkillReference,
+)
+from aura.skills.reader import read_skills
+from aura.skills.selection import score_skills, select_relevant_skills
+from aura.skills.text import (
     build_skill_context,
     build_skill_context_with_ids,
     build_skill_pack,

@@ -14,9 +14,11 @@ import pytest
 
 from aura.skills.library import SkillLibrary
 from aura.skills.text import (
+    EXPLICIT_CANDIDATE_CONFLICT,
     EXPLICIT_MALFORMED,
     EXPLICIT_UNAVAILABLE,
     build_skill_pack,
+    format_explicit_skill_entry,
 )
 from aura.skills.turn_state import (
     STATUS_ACTIVATED,
@@ -141,6 +143,7 @@ def test_explicit_skill_contributes_its_full_body_under_an_explicit_section(
         assert line in pack.text
     assert "project:python-testing" in pack.text
     assert "test-first discipline" in pack.text
+    assert "Supporting resources: none" in pack.text
     # Character accounting the Context Gearbox ledger needs, per candidate and
     # for the section as a whole.
     candidate = _explicit(pack)[0]
@@ -151,6 +154,30 @@ def test_explicit_skill_contributes_its_full_body_under_an_explicit_section(
     assert pack.index_chars == 0 and pack.guard_chars == 0
     # The compatibility record projection reports the explicit contribution.
     assert pack.selected[0].char_count == candidate.explicit_chars
+
+
+def test_explicit_prompt_exposes_both_ids_and_resource_availability(
+    workspace: Path,
+) -> None:
+    _install(
+        workspace,
+        "python-testing",
+        body="Always run pytest -q first.",
+        with_resources=True,
+    )
+
+    pack = build_skill_pack(
+        workspace, explicit_install_ids=("project:python-testing",)
+    )
+    candidate = _explicit(pack)[0]
+    entry = format_explicit_skill_entry(candidate.skill, candidate.install_id)
+
+    assert "Installed identity: project:python-testing" in pack.text
+    assert f"Candidate skill_id: {candidate.skill_id}" in pack.text
+    assert "Supporting resources: present" in pack.text
+    assert "read_skill_resource" in pack.text
+    assert candidate.explicit_chars == len(entry)
+    assert pack.explicit_chars == len(pack.text)
 
 
 def test_explicit_candidate_keeps_its_content_derived_id_and_hash(
@@ -199,6 +226,84 @@ def test_explicit_selection_order_is_preserved_and_duplicates_collapse(
     assert [c.install_id for c in _explicit(pack)] == ["project:zebra", "project:alpha"]
     assert pack.text.index("Zebra procedure.") < pack.text.index("Alpha procedure.")
     assert pack.text.count("Zebra procedure.") == 1
+    assert pack.unresolved_explicit == ()
+
+
+def test_same_body_different_installs_report_conflict_and_freeze_first_resources(
+    workspace: Path,
+) -> None:
+    first_dir = _install(
+        workspace,
+        "first",
+        body="Shared procedure.",
+        with_resources=True,
+    )
+    second_dir = _install(
+        workspace,
+        "second",
+        body="Shared procedure.",
+        with_resources=True,
+    )
+    # Make the parsed SKILL.md bodies byte-identical while keeping distinct
+    # installed identities and resource roots.
+    shared_body = "# Shared\n\nShared procedure.\n"
+    for directory, name in ((first_dir, "first"), (second_dir, "second")):
+        (directory / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: shared\n---\n{shared_body}",
+            encoding="utf-8",
+        )
+    (first_dir / "references" / "api.md").write_text(
+        "first installation resource\n", encoding="utf-8"
+    )
+    (second_dir / "references" / "api.md").write_text(
+        "second installation resource\n", encoding="utf-8"
+    )
+
+    first_pack = build_skill_pack(
+        workspace,
+        explicit_install_ids=("project:first", "project:second"),
+    )
+
+    assert [candidate.install_id for candidate in _explicit(first_pack)] == [
+        "project:first"
+    ]
+    assert "project:second" not in first_pack.text
+    assert len(first_pack.unresolved_explicit) == 1
+    conflict = first_pack.unresolved_explicit[0]
+    assert (conflict.reference, conflict.status) == (
+        "project:second",
+        EXPLICIT_CANDIDATE_CONFLICT,
+    )
+    assert "project:first" in conflict.reason
+    assert first_pack.candidates[0].skill_id in conflict.reason
+
+    first_read = read_skill_resource_result(
+        SkillTurnState(first_pack),
+        first_pack.candidates[0].skill_id,
+        "references/api.md",
+    )
+    assert first_read["ok"] is True
+    assert first_read["content"].strip() == "first installation resource"
+
+    reversed_pack = build_skill_pack(
+        workspace,
+        explicit_install_ids=("project:second", "project:first"),
+    )
+    assert [candidate.install_id for candidate in _explicit(reversed_pack)] == [
+        "project:second"
+    ]
+    assert [(item.reference, item.status) for item in reversed_pack.unresolved_explicit] == [
+        ("project:first", EXPLICIT_CANDIDATE_CONFLICT)
+    ]
+    assert reversed_pack.candidates[0].skill_id == first_pack.candidates[0].skill_id
+
+    reversed_read = read_skill_resource_result(
+        SkillTurnState(reversed_pack),
+        reversed_pack.candidates[0].skill_id,
+        "references/api.md",
+    )
+    assert reversed_read["ok"] is True
+    assert reversed_read["content"].strip() == "second installation resource"
 
 
 def test_explicit_skills_lead_the_automatically_selected_candidates(

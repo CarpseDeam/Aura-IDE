@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from aura.skills.text import SkillCandidate, SkillPack
+from aura.skills.pack_models import SkillCandidate, SkillPack
 
 #: Status values recorded in the activation ledger.
 STATUS_ACTIVATED = "activated"
