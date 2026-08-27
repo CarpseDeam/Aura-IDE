@@ -52,7 +52,10 @@ Name: "{userprograms}\{#MyAppName}\{#MyAppName}"; Filename: "{app}\{#MyAppExeNam
 Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\{#MyAppExeName}"; AppUserModelID: "{#MyAppUserModelID}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: postinstall nowait skipifsilent
+; Exactly one of these two routes is ever eligible: ManualInstallLaunch is the
+; complement of AutoUpdateLaunch, so an in-app update (/LAUNCHAFTERUPDATE=1)
+; never also offers or runs the manual post-install launch.
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: postinstall nowait skipifsilent; Check: ManualInstallLaunch
 Filename: "{app}\{#MyAppExeName}"; Flags: nowait skipifdoesntexist; Check: AutoUpdateLaunch
 
 [Code]
@@ -62,4 +65,9 @@ var
 begin
   CmdValue := ExpandConstant('{param:LAUNCHAFTERUPDATE|0}');
   Result := (CmdValue = '1');
+end;
+
+function ManualInstallLaunch: Boolean;
+begin
+  Result := not AutoUpdateLaunch;
 end;

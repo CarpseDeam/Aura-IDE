@@ -21,6 +21,7 @@ from scripts.aura_build import assets, cli, config, environment, release
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ENTRY_POINT = REPO_ROOT / "scripts" / "build_nuitka.py"
+INSTALLER_SCRIPT = REPO_ROOT / "scripts" / "installer" / "Aura.iss"
 STUB_PYTHON = Path("python.exe")
 
 
@@ -422,6 +423,50 @@ def test_production_build_modules_stay_small() -> None:
     for module in sorted(package_dir.glob("*.py")):
         line_count = len(module.read_text(encoding="utf-8").splitlines())
         assert line_count < 500, f"{module.name} has {line_count} lines"
+
+
+# ── Installer launch routes ──────────────────────────────────────────────────
+
+
+def installer_run_entries() -> list[str]:
+    """The [Run] directive lines of the Inno Setup script, comments excluded."""
+    lines = INSTALLER_SCRIPT.read_text(encoding="utf-8").splitlines()
+    start = lines.index("[Run]") + 1
+    entries: list[str] = []
+    for line in lines[start:]:
+        stripped = line.strip()
+        if stripped.startswith("["):
+            break
+        if stripped and not stripped.startswith(";"):
+            entries.append(stripped)
+    return entries
+
+
+def test_installer_launch_routes_are_mutually_exclusive() -> None:
+    entries = installer_run_entries()
+    assert len(entries) == 2
+
+    manual = [entry for entry in entries if "postinstall" in entry]
+    automatic = [entry for entry in entries if "postinstall" not in entry]
+    assert len(manual) == 1 and len(automatic) == 1
+
+    # Neither route may run unguarded: the manual checkbox is suppressed during an
+    # in-app update, and the automatic launch only fires during one.
+    assert "Check: ManualInstallLaunch" in manual[0]
+    assert "Check: AutoUpdateLaunch" in automatic[0]
+
+
+def test_manual_install_launch_is_the_complement_of_the_update_launch() -> None:
+    source = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+    assert "function ManualInstallLaunch: Boolean;" in source
+    assert "Result := not AutoUpdateLaunch;" in source
+
+
+def test_update_launch_route_remains_controlled_by_launchafterupdate() -> None:
+    source = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+    assert "function AutoUpdateLaunch: Boolean;" in source
+    assert "{param:LAUNCHAFTERUPDATE|0}" in source
+    assert "/LAUNCHAFTERUPDATE=1" in (REPO_ROOT / "aura" / "updater.py").read_text(encoding="utf-8")
 
 
 # ── Playwright runtime packaging ─────────────────────────────────────────────
