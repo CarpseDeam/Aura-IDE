@@ -60,6 +60,7 @@ class _FakeBridge(QObject):
     executionStarted = Signal(str)
     executionFinished = Signal(str, bool, str)
     executionCancelled = Signal(str)
+    executionToolCallStart = Signal(str, str, str)
     executionToolResult = Signal(str, str, str, bool, str, dict)
     executionFileEditLifecycle = Signal(str, str, str, str, list, str)
     executionWorkspaceReconcileRequested = Signal(str, str)
@@ -307,6 +308,8 @@ def test_handler_api_error_marks_pane_status_without_a_chat_card(qapp) -> None:
 def test_handler_finished_success_adds_no_chat_card(qapp) -> None:
     bridge, chat, playground, _handler = _make_handler(qapp)
 
+    bridge.executionStarted.emit("run-1")
+    bridge.executionToolCallStart.emit("run-1", "call-1", "read_file")
     bridge.executionFinished.emit("run-1", True, "completed")
 
     assert chat.error_calls == []
@@ -315,11 +318,14 @@ def test_handler_finished_success_adds_no_chat_card(qapp) -> None:
 
 
 def test_handler_finished_failure_adds_no_chat_card(qapp) -> None:
-    """A failed finish (e.g. validation_failed) still leaves Progress at
-    Error, but must never synthesize a chat card — the model's own final
-    response, and terminal output already in the terminal, are the record."""
+    """A failed finish (e.g. validation_failed) still leaves an activated
+    run's Progress at Error, but must never synthesize a chat card — the
+    model's own final response, and terminal output already in the terminal,
+    are the record."""
     bridge, chat, playground, _handler = _make_handler(qapp)
 
+    bridge.executionStarted.emit("run-1")
+    bridge.executionToolCallStart.emit("run-1", "call-1", "read_file")
     bridge.executionFinished.emit("run-1", False, "harness_error")
 
     assert chat.error_calls == []
