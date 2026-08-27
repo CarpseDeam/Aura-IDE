@@ -7,12 +7,14 @@ import threading
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from aura.client import deepseek as ds
 from aura.client.anthropic_stream import _to_anthropic_messages
 from aura.client.chat_completions_transport import _strip_foreign_message_keys
-from aura.client.deepseek_responses import project_responses_input
 from aura.client.events import ApiError, Done, ToolCallStart, ToolResult, Usage
 from aura.client.hosted_search import AURA_HOSTED_SEARCH_KEY, safe_web_url
+from aura.client.responses_request import project_responses_input
 from aura.conversation import ConversationManager, History
 from aura.conversation.persistence import load_conversation, save_conversation
 from aura.conversation.tools import ToolRegistry
@@ -526,17 +528,122 @@ def test_non_search_chat_turn_keeps_exact_client_tool_surface() -> None:
     assert requests[0]["tools"] == [LOCAL_TOOL]
 
 
+READ_ONLY_TOOL_NAMES = {
+    "read_file", "grep_search", "glob", "git_status", "git_diff",
+    "git_log", "git_show", "git_log_file", "git_branch_list",
+    "git_stash_list", "git_stash_show",
+}
+
+
+def _function_tool_names(request: dict[str, Any]) -> list[str]:
+    return [
+        str(tool.get("name") or "")
+        for tool in request.get("tools") or []
+        if tool.get("type") == "function"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("provider", "model"),
+    [("openai", "gpt-5.5"), ("deepseek", "deepseek-v4-flash")],
+)
+def test_read_only_turn_keeps_hosted_search_and_only_local_read_tools(
+    tmp_path, provider: str, model: str
+) -> None:
+    """Hosted search is observational, so Read Only turns keep it on purpose.
+
+    It rides inside the selected provider's own request and never enters
+    ToolRunner, so the local client-tool surface stays exactly the existing
+    read/git set.
+    """
+    requests: list[dict[str, Any]] = []
+
+    def create(**kwargs):
+        requests.append(kwargs)
+        return iter([SimpleNamespace(
+            type="response.completed",
+            response=_completed(_message("planned")),
+        )])
+
+    registry = ToolRegistry(tmp_path, read_only=True)
+    list(_client(provider, create).stream(
+        messages=[{"role": "user", "content": "plan this change"}],
+        tools=registry.tool_defs(),
+        model=model,
+        thinking="high",
+    ))
+
+    assert _tool_types(requests[0])[-1] == "web_search"
+    assert set(_function_tool_names(requests[0])) == READ_ONLY_TOOL_NAMES
+
+
+def test_read_only_never_receives_mutation_tools_or_an_aura_web_search_function(
+    tmp_path,
+) -> None:
+    requests: list[dict[str, Any]] = []
+
+    def create(**kwargs):
+        requests.append(kwargs)
+        return iter([SimpleNamespace(
+            type="response.completed",
+            response=_completed(_message("planned")),
+        )])
+
+    registry = ToolRegistry(tmp_path, read_only=True)
+    list(_client("openai", create).stream(
+        messages=[{"role": "user", "content": "plan this change"}],
+        tools=registry.tool_defs(),
+        model="gpt-5.5",
+        thinking="high",
+    ))
+
+    names = set(_function_tool_names(requests[0]))
+    assert names.isdisjoint({
+        "apply_patch", "shell", "update_task_checklist", "write_file",
+        "delete_file", "edit_godot_scene", "install_godot_editor_bridge",
+        "web_search",
+    })
+    # Hosted search is a provider server tool, never an Aura client function.
+    assert "web_search" not in names
+    assert {"type": "web_search"} in requests[0]["tools"]
+
+
+def test_production_and_read_only_share_the_same_hosted_search_surface(
+    tmp_path,
+) -> None:
+    requests: list[dict[str, Any]] = []
+
+    def create(**kwargs):
+        requests.append(kwargs)
+        return iter([SimpleNamespace(
+            type="response.completed",
+            response=_completed(_message("done")),
+        )])
+
+    production = ToolRegistry(tmp_path)
+    read_only = ToolRegistry(tmp_path, read_only=True)
+    for registry in (production, read_only):
+        list(_client("openai", create).stream(
+            messages=[{"role": "user", "content": "go"}],
+            tools=registry.tool_defs(),
+            model="gpt-5.5",
+            thinking="high",
+        ))
+
+    assert requests[0]["tools"][-1] == requests[1]["tools"][-1] == {"type": "web_search"}
+    assert "apply_patch" in _function_tool_names(requests[0])
+    assert "apply_patch" not in _function_tool_names(requests[1])
+
+
 def test_read_only_local_policy_is_unchanged_and_search_links_reject_unsafe_urls(tmp_path) -> None:
     from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication([])
     registry = ToolRegistry(tmp_path, read_only=True)
     names = {tool["function"]["name"] for tool in registry.tool_defs()}
-    assert names == {
-        "read_file", "grep_search", "glob", "git_status", "git_diff",
-        "git_log", "git_show", "git_log_file", "git_branch_list",
-        "git_stash_list", "git_stash_show",
-    }
+    assert names == READ_ONLY_TOOL_NAMES
+    # No client-side Aura web_search proxy joins the local catalog; provider
+    # hosted search is a server tool inside the request, not a local tool.
     assert "web_search" not in names
     assert safe_web_url("javascript:alert(1)") == ""
     assert safe_web_url("file:///C:/secret") == ""

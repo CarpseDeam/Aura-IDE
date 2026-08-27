@@ -33,6 +33,7 @@ from aura.client.hosted_search import (
     hosted_search_metadata,
 )
 from aura.client.reasoning import resolve_reasoning_request
+from aura.client.responses_continuation import AURA_PROVIDER_REASONING_KEY
 from aura.config import ProviderId, ThinkingMode
 
 _log = logging.getLogger(__name__)
@@ -40,7 +41,11 @@ _log = logging.getLogger(__name__)
 FIRST_STREAM_EVENT_TIMEOUT_SECONDS = 60.0
 CHAT_INTER_EVENT_TIMEOUT_SECONDS = 180.0
 REASONING_REPLAY_PLACEHOLDER = "[No reasoning was recorded for this step.]"
-_FOREIGN_MESSAGE_KEYS = ("reasoning_signature", AURA_HOSTED_SEARCH_KEY)
+_FOREIGN_MESSAGE_KEYS = (
+    "reasoning_signature",
+    AURA_HOSTED_SEARCH_KEY,
+    AURA_PROVIDER_REASONING_KEY,
+)
 
 
 def _strip_foreign_message_keys(

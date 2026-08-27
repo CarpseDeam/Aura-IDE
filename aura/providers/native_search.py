@@ -5,6 +5,17 @@ provider/model/transport can expose hosted web search.  The result is immutable
 and contains the exact server-tool projection for that request protocol.
 Credentials are deliberately absent: native search shares the selected
 provider request and therefore its existing authentication and lifecycle.
+
+A model is admitted only when current official primary documentation says that
+exact family supports that exact hosted tool.  An unsupported model simply
+omits hosted search: there is no secondary request, no proxy, and no fallback
+to another provider.
+
+Read Only turns are included on purpose.  Hosted search is observational, it
+lives inside the selected provider's own request, and it never reaches Aura's
+ToolRunner — so it is compatible with Read Only, which is Aura's planning and
+conversation mode.  Read Only still exposes only its existing local read/git
+client tools; nothing here adds a client-side Aura ``web_search`` function.
 """
 
 from __future__ import annotations
@@ -111,15 +122,54 @@ def native_web_search_capability(
     return None
 
 
+# Model families that specialize in something other than text generation and
+# never carry a hosted text web-search tool.
+_SPECIALIZED_MODEL_TOKENS: tuple[str, ...] = (
+    "audio",
+    "image",
+    "realtime",
+    "transcribe",
+    "tts",
+)
+
+# A trailing dated snapshot suffix, e.g. ``gpt-4.1-mini-2025-04-14``.
+_DATED_SNAPSHOT = re.compile(r"-\d{4}-\d{2}-\d{2}$")
+
+# Exactly the OpenAI models documented for the stable Responses ``web_search``
+# tool, plus their size aliases. Anchored on both ends so no unrelated
+# specialized variant is admitted by a shared prefix.
+_OPENAI_RESPONSES_SEARCH_MODEL = re.compile(
+    r"^(?:gpt-5(?:\.\d+)?(?:-(?:mini|nano|pro))?|gpt-4\.1(?:-mini)?|o4-mini)$"
+)
+
+
+def _base_model_id(model: str) -> str:
+    """Return the lowercase model id with a dated snapshot suffix removed."""
+    return _DATED_SNAPSHOT.sub("", str(model or "").strip().lower())
+
+
 def _openai_responses_search_model(model: str) -> bool:
-    """Models Aura can truthfully route through Responses hosted search."""
-    return (
-        model.startswith(("gpt-4o", "gpt-4.1", "gpt-5", "o3", "o4"))
-        and not any(
-            token in model
-            for token in ("audio", "image", "realtime", "transcribe", "tts")
-        )
-    )
+    """Models OpenAI documents for the stable Responses ``web_search`` tool.
+
+    The documented surface is the GPT-5 family, GPT-4.1 and GPT-4.1 Mini, and
+    ``o4-mini``.  Deliberately excluded:
+
+    * GPT-4o — only the deprecated Chat Completions ``*-search-preview``
+      models ever carried search for that family, never Responses
+      ``web_search``;
+    * GPT-4.1 Nano — the GPT-4.1 documentation covers GPT-4.1 and GPT-4.1
+      Mini only, so a broad ``gpt-4.1`` prefix would over-claim;
+    * ``gpt-5-search-api`` and ``gpt-5-chat-latest`` — a Chat Completions
+      search model and a non-reasoning chat alias, neither documented for the
+      Responses tool; and
+    * audio, image, realtime, transcription, and TTS variants.
+
+    Aliases and dated snapshots of a genuinely supported model are admitted.
+    """
+    base = _base_model_id(model)
+    if any(token in base for token in _SPECIALIZED_MODEL_TOKENS):
+        return False
+    return bool(_OPENAI_RESPONSES_SEARCH_MODEL.match(base))
 
 
 def _anthropic_dynamic_filtering_model(model: str) -> bool:

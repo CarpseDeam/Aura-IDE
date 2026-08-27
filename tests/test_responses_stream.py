@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from aura.client.deepseek_responses import ResponsesProductionStreamParser
 from aura.client.events import ContentDelta, ToolCallEnd, ToolCallStart, Usage
 from aura.client.hosted_search import AURA_HOSTED_SEARCH_KEY
+from aura.client.responses_stream import ResponsesProductionStreamParser
 
 
 def _usage():

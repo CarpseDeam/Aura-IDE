@@ -83,6 +83,14 @@ class ToolCatalog:
         Reading an explicitly authorized external location is not a separate
         capability and never changes this catalog: ``read_file`` and
         ``grep_search`` accept such a path directly.
+
+        Provider-hosted web search is likewise not in this catalog, in either
+        mode. It is a server tool inside the selected provider's own request,
+        owned by ``aura.providers.native_search``; it never becomes a client
+        function and never reaches ToolRunner. That is why a Read Only turn
+        can still be grounded on the web while this catalog stays exactly the
+        existing local read/git surface — no ``apply_patch``, no ``shell``, no
+        lifecycle or dynamic mutation tools, and no Aura ``web_search`` proxy.
         """
         if read_only:
             tools: list[dict[str, Any]] = [

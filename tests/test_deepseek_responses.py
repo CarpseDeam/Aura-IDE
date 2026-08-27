@@ -13,12 +13,12 @@ import pytest
 from aura.backends.api import APIAgentBackend
 from aura.client import deepseek as ds
 from aura.client import responses_transport as rt
-from aura.client.deepseek_responses import (
-    ResponsesProductionStreamParser,
+from aura.client.events import ApiError, Done, ReasoningDelta, ToolCallEnd, ToolCallStart, Usage
+from aura.client.responses_request import (
     build_responses_request,
     project_responses_input,
 )
-from aura.client.events import ApiError, Done, ReasoningDelta, ToolCallEnd, ToolCallStart, Usage
+from aura.client.responses_stream import ResponsesProductionStreamParser
 from aura.conversation import ConversationManager, History
 from aura.conversation.tools import ToolRegistry
 from aura.model_streams import PRODUCTION_STREAM_HOOK, ModelStreamRegistry

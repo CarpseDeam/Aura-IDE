@@ -11,8 +11,8 @@ from openai import OpenAI
 
 from aura.client.anthropic_stream import _stream_anthropic
 from aura.client.chat_completions_transport import stream_chat_completions
-from aura.client.deepseek_responses import build_responses_request
 from aura.client.events import Event
+from aura.client.responses_request import build_responses_request
 from aura.client.responses_transport import stream_responses
 from aura.config import (
     ProviderId,

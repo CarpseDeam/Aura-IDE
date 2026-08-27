@@ -11,8 +11,8 @@ from typing import Any
 
 from openai import APIError, APIStatusError
 
-from aura.client.deepseek_responses import ResponsesProductionStreamParser
 from aura.client.events import ApiError, Done, Event
+from aura.client.responses_stream import ResponsesProductionStreamParser
 
 _log = logging.getLogger(__name__)
 
