@@ -8,25 +8,21 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from aura.resources import get_resource_path
-
 
 @dataclass
 class BrowserChoice:
-    """Describes a detected or fallback browser option."""
+    """Describes a detected installed browser option."""
 
     id: str
     label: str
     channel: str | None
     executable_path: str | None
-    source: str  # "installed" or "playwright"
 
 
 def _detect_installed_browsers() -> list[BrowserChoice]:
     """Detect installed browsers on the current platform.
 
-    Returns an ordered list of BrowserChoice objects — Chrome, Edge,
-    Brave (if found), always ending with the Playwright Chromium fallback.
+    Returns installed Chrome, Edge, and Brave choices in that order.
 
     This function does NOT import or touch Playwright, making it mockable.
     """
@@ -64,7 +60,6 @@ def _detect_installed_browsers() -> list[BrowserChoice]:
             label="Google Chrome",
             channel="chrome",
             executable_path=None,
-            source="installed",
         ))
 
     # --- Edge (channel="msedge") ---
@@ -92,7 +87,6 @@ def _detect_installed_browsers() -> list[BrowserChoice]:
             label="Microsoft Edge",
             channel="msedge",
             executable_path=None,
-            source="installed",
         ))
 
     # --- Brave (only if simple; no Playwright channel, uses executable_path) ---
@@ -122,17 +116,7 @@ def _detect_installed_browsers() -> list[BrowserChoice]:
             label="Brave",
             channel=None,
             executable_path=brave_path,
-            source="installed",
         ))
-
-    # Always append the Playwright Chromium fallback
-    choices.append(BrowserChoice(
-        id="chromium",
-        label="Playwright Chromium",
-        channel=None,
-        executable_path=None,
-        source="playwright",
-    ))
 
     return choices
 
@@ -181,9 +165,9 @@ class BrowserRuntime:
     def start(self) -> bool:
         """Launch Playwright browser and create a browsing context.
 
-        Attempts each detected browser in priority order (Chrome, Edge,
-        Brave, Playwright Chromium fallback) and uses the first one that
-        succeeds.  Returns True on success.  On total failure sets
+        Attempts each detected installed browser in priority order (Chrome,
+        Edge, Brave) and uses the first one that succeeds. Returns True on
+        success. On total failure sets
         ``_unavailable_reason`` (including attempted route chain) and
         returns False — never raises.
         """
@@ -191,6 +175,7 @@ class BrowserRuntime:
         self._browser_id = ""
         self._browser_label = ""
         self._browser_source = ""
+        self._unavailable_reason = ""
 
         # --- subprocess.Popen guard -----------------------------------
         # Playwright's ``sync_playwright().start()`` spawns a Node.js
@@ -219,17 +204,20 @@ class BrowserRuntime:
         # ----------------------------------------------------------------
 
         try:
+            choices = _detect_installed_browsers()
+            if not choices:
+                self._unavailable_reason = (
+                    "Browse Monitor requires installed Google Chrome, "
+                    "Microsoft Edge, or Brave."
+                )
+                return False
+
             try:
                 import playwright.sync_api  # noqa: F401
             except ImportError as exc:
                 self._unavailable_reason = str(exc)
                 return False
 
-            # Frozen/packaged detection
-            if getattr(sys, "frozen", False) or hasattr(sys, "_MEIPASS") or "__compiled__" in globals():
-                os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(get_resource_path("ms-playwright"))
-
-            choices = _detect_installed_browsers()
             last_error = ""
 
             for choice in choices:
@@ -265,42 +253,26 @@ class BrowserRuntime:
                     # Success — record route metadata
                     self._browser_id = choice.id
                     self._browser_label = choice.label
-                    self._browser_source = choice.source
+                    self._browser_source = "installed"
                     return True
 
                 except Exception as exc:
                     self._attempted_routes.append(choice.id)
                     last_error = str(exc)
                     # Tear down partial state before trying next route
-                    if self._context is not None:
-                        self._context.close()
-                        self._context = None
-                    if self._browser is not None:
-                        self._browser.close()
-                        self._browser = None
-                    if self._pw is not None:
-                        self._pw.stop()
-                        self._pw = None
+                    self._cleanup()
 
             # All routes failed
             self._unavailable_reason = (
-                f"All browser routes failed: {', '.join(self._attempted_routes)}. "
-                f"Last error: {last_error}"
+                "Browse Monitor requires installed Google Chrome, Microsoft Edge, or Brave. "
+                f"Installed browser routes failed: {', '.join(self._attempted_routes)}. "
+                f"Final error: {last_error}"
             )
             return False
 
         except Exception as exc:
             self._unavailable_reason = str(exc)
-            # Tear down partial state — we are already in the error path
-            if self._context is not None:
-                self._context.close()
-                self._context = None
-            if self._browser is not None:
-                self._browser.close()
-                self._browser = None
-            if self._pw is not None:
-                self._pw.stop()
-                self._pw = None
+            self._cleanup()
             return False
 
         # --- restore original Popen ---------------------------------
@@ -312,12 +284,21 @@ class BrowserRuntime:
 
     def close(self) -> None:
         """Shut down the browser and clean up resources."""
-        if self._context is not None:
-            self._context.close()
-            self._context = None
-        if self._browser is not None:
-            self._browser.close()
-            self._browser = None
-        if self._pw is not None:
-            self._pw.stop()
-            self._pw = None
+        self._cleanup()
+
+    def _cleanup(self) -> None:
+        """Best-effort teardown that always clears every owned resource."""
+        context, self._context = self._context, None
+        browser, self._browser = self._browser, None
+        playwright, self._pw = self._pw, None
+
+        for resource, operation in (
+            (context, "close"),
+            (browser, "close"),
+            (playwright, "stop"),
+        ):
+            if resource is not None:
+                try:
+                    getattr(resource, operation)()
+                except Exception:
+                    pass

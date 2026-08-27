@@ -13,10 +13,11 @@ import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
-from scripts.aura_build import cli, config, environment, release
+from scripts.aura_build import assets, cli, config, environment, release
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ENTRY_POINT = REPO_ROOT / "scripts" / "build_nuitka.py"
@@ -92,6 +93,9 @@ def test_packaged_feature_flags_are_preserved() -> None:
         "--include-package=aura",
         "--include-package=relay",
         "--include-package=playwright",
+        "--include-package-data=playwright",
+        "--include-package=greenlet",
+        "--include-package=pyee",
         "--nofollow-import-to=charset_normalizer",
         "--nofollow-import-to=click",
         "--nofollow-import-to=google",
@@ -418,3 +422,49 @@ def test_production_build_modules_stay_small() -> None:
     for module in sorted(package_dir.glob("*.py")):
         line_count = len(module.read_text(encoding="utf-8").splitlines())
         assert line_count < 500, f"{module.name} has {line_count} lines"
+
+
+# ── Playwright runtime packaging ─────────────────────────────────────────────
+
+
+def test_build_tooling_never_installs_chromium() -> None:
+    source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (REPO_ROOT / "scripts" / "aura_build").glob("*.py")
+    )
+    assert "playwright install chromium" not in source
+    assert "bundle_chromium" not in source
+
+
+def test_stale_distribution_browser_payload_is_removed(tmp_path: Path) -> None:
+    dist = tmp_path / "Aura.dist"
+    stale_browser = dist / "ms-playwright" / "chromium-old" / "chrome.exe"
+    stale_browser.parent.mkdir(parents=True)
+    stale_browser.write_bytes(b"old browser")
+
+    assets.remove_distribution_browser_payload(dist)
+
+    assert not (dist / "ms-playwright").exists()
+
+
+def test_playwright_validation_needs_driver_assets_but_no_browser_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dist = tmp_path / "Aura.dist"
+    driver = dist / "playwright" / "driver"
+    package = driver / "package"
+    (package / "lib").mkdir(parents=True)
+    for path in (driver / "node.exe", package / "package.json", package / "cli.js"):
+        path.write_bytes(b"present")
+    subprocess_run = MagicMock(return_value=SimpleNamespace(stdout="sync_api: OK\ngreenlet: OK\npyee: OK\n"))
+    monkeypatch.setattr(assets.subprocess, "run", subprocess_run)
+
+    assets.validate_playwright_bundle(dist, STUB_PYTHON)
+
+    assert not (dist / "ms-playwright").exists()
+    command = subprocess_run.call_args.args[0]
+    assert command[:2] == [str(STUB_PYTHON), "-c"]
+    assert "playwright.sync_api" in command[2]
+    assert "greenlet" in command[2]
+    assert "pyee" in command[2]
+    assert all("install" not in str(part) for part in command)

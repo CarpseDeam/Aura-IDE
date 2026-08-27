@@ -14,7 +14,6 @@ from pathlib import Path
 
 from scripts.aura_build.assets import (
     bundle_builtin_drones,
-    bundle_chromium,
     bundle_drones,
     copy_raw_source_packages,
     directory_size,
@@ -22,6 +21,7 @@ from scripts.aura_build.assets import (
     format_size,
     normalize_dist_dir,
     prewarm_grammars,
+    remove_distribution_browser_payload,
     validate_playwright_bundle,
 )
 from scripts.aura_build.config import (
@@ -219,6 +219,8 @@ def create_nuitka_command(
         "--include-package=uvicorn",
         "--include-package=playwright",
         "--include-package-data=playwright",
+        "--include-package=greenlet",
+        "--include-package=pyee",
         f"--include-data-file={UPDATER_HELPER_SOURCE}={UPDATER_HELPER_DIST_NAME}",
         f"--output-dir={OUTPUT_DIR}",
         f"--output-filename={APP_NAME}",
@@ -342,8 +344,8 @@ def _run_phases(
     with timeline.phase("grammar preparation"):
         prewarm_grammars(final_dist_dir, python_exe)
 
-    with timeline.phase("Chromium preparation & validation"):
-        bundle_chromium(final_dist_dir, python_exe)
+    with timeline.phase("Playwright runtime validation"):
+        remove_distribution_browser_payload(final_dist_dir)
         validate_playwright_bundle(final_dist_dir, python_exe)
 
     timeline.dist_bytes = directory_size(final_dist_dir)

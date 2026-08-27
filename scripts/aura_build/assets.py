@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import sys
@@ -242,57 +241,38 @@ def prewarm_grammars(final_dist_dir: Path, python_exe: Path) -> None:
     print(f"Grammar prewarm complete: {len(entries)} file(s) in {grammar_dir}")
 
 
-# Chromium / Playwright
+# Playwright runtime
 
 
-def bundle_chromium(final_dist_dir: Path, python_exe: Path) -> None:
-    """Install Chromium browser into the dist using Playwright's CLI."""
+def remove_distribution_browser_payload(final_dist_dir: Path) -> None:
+    """Remove a stale distribution-local Playwright browser payload."""
     browsers_dir = final_dist_dir / "ms-playwright"
-    browsers_dir.mkdir(parents=True, exist_ok=True)
-    env = os.environ.copy()
-    env["PLAYWRIGHT_BROWSERS_PATH"] = str(browsers_dir)
-
-    print("Installing Chromium for bundled Playwright...")
-    try:
-        subprocess.run(
-            [str(python_exe), "-m", "playwright", "install", "chromium"],
-            env=env, check=True, capture_output=True, text=True,
-        )
-    except subprocess.CalledProcessError as exc:
-        print(f"Chromium install failed:\n{exc.stdout}\n{exc.stderr}")
-        raise SystemExit("Chromium bundle failed; aborting build.") from exc
-
-    entries = list(browsers_dir.rglob("*"))
-    if not entries:
-        raise SystemExit("Chromium install produced no files; aborting build.")
-    print(f"Chromium bundled: {len(entries)} file(s) in {browsers_dir}")
+    if browsers_dir.exists():
+        shutil.rmtree(browsers_dir)
+        print(f"Removed stale distribution browser payload: {browsers_dir}")
 
 
 def validate_playwright_bundle(final_dist_dir: Path, python_exe: Path) -> None:
-    """Validate Playwright is properly bundled in the dist.
+    """Validate the packaged Playwright runtime without requiring a browser.
 
     Checks:
-    1. Bundled Chromium exists at ms-playwright/chromium-*
-    2. import playwright + playwright.sync_api + greenlet + pyee work
+    1. Playwright's packaged Node driver and JavaScript assets exist.
+    2. playwright.sync_api, greenlet, and pyee import in the build environment.
     """
-    browsers_dir = final_dist_dir / "ms-playwright"
+    driver_dir = final_dist_dir / "playwright" / "driver"
+    required_assets = (
+        driver_dir / "node.exe",
+        driver_dir / "package" / "package.json",
+        driver_dir / "package" / "cli.js",
+        driver_dir / "package" / "lib",
+    )
+    missing = [path for path in required_assets if not path.exists()]
+    if missing:
+        details = "\n".join(f"  - {path}" for path in missing)
+        raise SystemExit(f"Playwright runtime validation FAILED: missing packaged driver assets:\n{details}")
+    print(f"Playwright packaged driver assets: OK ({driver_dir})")
 
-    # Check 1: Verify bundled Chromium
-    if not browsers_dir.exists():
-        raise SystemExit(
-            "Playwright bundle validation FAILED: ms-playwright directory not found.\n"
-            "Chromium was not bundled. Run bundle_chromium() before validation."
-        )
-    chromium_dirs = list(browsers_dir.glob("chromium-*"))
-    if not chromium_dirs:
-        raise SystemExit(
-            "Playwright bundle validation FAILED: no chromium-* directory in ms-playwright.\n"
-            "Chromium install produced no browser entry."
-        )
-    print(f"Playwright bundle: Chromium found ({chromium_dirs[0].name})")
-
-    # Check 2: Verify playwright + greenlet + pyee are importable from the build venv
-    print("Validating Playwright imports...")
+    print("Validating Playwright runtime imports...")
     import_script = (
         "import sys; "
         "import playwright; print('playwright:', playwright.__file__); "
@@ -311,4 +291,4 @@ def validate_playwright_bundle(final_dist_dir: Path, python_exe: Path) -> None:
         print(f"Playwright import validation FAILED:\n{exc.stdout}\n{exc.stderr}")
         raise SystemExit("Playwright bundle validation failed: imports broken.") from exc
 
-    print("Playwright bundle validation: OK")
+    print("Playwright runtime validation: OK (no browser payload required)")
