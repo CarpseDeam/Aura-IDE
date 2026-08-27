@@ -5,7 +5,8 @@ from typing import Any
 
 from aura.conversation.tools._types import ToolExecResult
 from aura.drones.store import DroneStore
-from aura.research.adapter import WEB_RESEARCH_DRONE_ID
+
+WEB_RESEARCH_DRONE_ID = "web-research"
 
 _log = logging.getLogger(__name__)
 
@@ -386,14 +387,17 @@ class DroneHandlersMixin:
 
 
 def _web_research_drone_retired_result() -> ToolExecResult:
-    """Reject the retired browser-based research Drone in favor of web_search."""
+    """Reject the retired browser research Drone with truthful guidance."""
     return ToolExecResult(
         ok=False,
         payload={
             "ok": False,
             "status": "unsupported",
             "failure_class": "drone_retired_unsupported",
-            "error": "The 'web-research' Drone is retired. Use web_search instead.",
+            "error": (
+                "The 'web-research' Drone is retired. Use the selected "
+                "provider/model's native web search when it is supported."
+            ),
         },
     )
 

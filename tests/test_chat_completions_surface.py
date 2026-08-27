@@ -35,8 +35,8 @@ def test_chat_completions_keeps_tools_but_omits_tool_choice() -> None:
             return iter([response_chunk])
 
     client = deepseek.DeepSeekClient.__new__(deepseek.DeepSeekClient)
-    client._provider = "openai"
-    client._base_url = "https://api.openai.com/v1"
+    client._provider = "compatible_provider"
+    client._base_url = "https://example.invalid/v1"
     client._chat_protocol = "openai_chat"
     client._requires_reasoning_replay = False
     client._timeout = SimpleNamespace(connect=10.0, read=None)

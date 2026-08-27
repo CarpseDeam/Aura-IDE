@@ -26,6 +26,12 @@ from aura.client.events import (
     ToolCallStart,
     Usage,
 )
+from aura.client.hosted_search import (
+    AURA_HOSTED_SEARCH_KEY,
+    citation_from,
+    citation_markdown,
+    hosted_search_metadata,
+)
 from aura.client.reasoning import resolve_reasoning_request
 from aura.config import ProviderId, ThinkingMode
 
@@ -34,7 +40,7 @@ _log = logging.getLogger(__name__)
 FIRST_STREAM_EVENT_TIMEOUT_SECONDS = 60.0
 CHAT_INTER_EVENT_TIMEOUT_SECONDS = 180.0
 REASONING_REPLAY_PLACEHOLDER = "[No reasoning was recorded for this step.]"
-_FOREIGN_MESSAGE_KEYS = ("reasoning_signature",)
+_FOREIGN_MESSAGE_KEYS = ("reasoning_signature", AURA_HOSTED_SEARCH_KEY)
 
 
 def _strip_foreign_message_keys(
@@ -88,6 +94,7 @@ def stream_chat_completions(
     cancel_event: threading.Event | None = None,
     temperature: float = 0.7,
     requires_reasoning_replay: bool = False,
+    hosted_search_tool: dict[str, Any] | None = None,
 ) -> Iterator[Event]:
     """Stream the existing OpenAI-compatible Chat Completions request."""
     outbound = _strip_foreign_message_keys(messages)
@@ -97,11 +104,14 @@ def stream_chat_completions(
         "stream": True,
         "stream_options": {"include_usage": True},
     }
-    if tools:
+    projected_tools = list(tools or [])
+    if hosted_search_tool:
+        projected_tools.append(dict(hosted_search_tool))
+    if projected_tools:
         # The model always chooses freely between prose and tool calls, and
         # may emit a complete parallel batch. Aura never forces a tool call
         # and never disables parallel tool use.
-        kwargs["tools"] = tools
+        kwargs["tools"] = projected_tools
 
     effective_thinking: ThinkingMode = thinking
     if requires_reasoning_replay and effective_thinking != "off":
@@ -178,6 +188,7 @@ def stream_chat_completions(
     finish_reason: str | None = None
     usage_emitted = False
     dsml_parser = DsmlParser(start_index=1000)
+    hosted_search_citations: list[dict[str, str]] = []
 
     def _yield_dsml_events(events: Iterator[Event]) -> Iterator[Event]:
         for event in events:
@@ -349,8 +360,19 @@ def stream_chat_completions(
         if delta.content:
             yield from _yield_dsml_events(dsml_parser.push(delta.content))
 
+        for annotation in getattr(delta, "annotations", None) or []:
+            citation = citation_from(annotation)
+            if citation is not None:
+                hosted_search_citations.append(citation)
+
         if delta.tool_calls:
             for tool_call in delta.tool_calls:
+                # OpenRouter server tools are executed by OpenRouter. Only
+                # ordinary client function calls enter Aura's ToolRunner.
+                if getattr(tool_call, "type", "function") != "function":
+                    continue
+                if getattr(tool_call, "function", None) is None:
+                    continue
                 index = tool_call.index
                 slot = tool_calls.setdefault(
                     index,
@@ -392,6 +414,14 @@ def stream_chat_completions(
 
     yield from _yield_dsml_events(dsml_parser.flush())
 
+    citation_suffix = citation_markdown(
+        hosted_search_citations,
+        "".join(content_buf),
+    )
+    if citation_suffix:
+        content_buf.append(citation_suffix)
+        yield ContentDelta(citation_suffix)
+
     for index in sorted(tool_calls):
         if index in seen_starts:
             yield ToolCallEnd(index=index)
@@ -414,5 +444,12 @@ def stream_chat_completions(
                     json.loads(tool_call["function"]["arguments"])
                 except json.JSONDecodeError:
                     pass
+    metadata = hosted_search_metadata(
+        provider=provider,
+        tool_type=str((hosted_search_tool or {}).get("type") or ""),
+        citations=hosted_search_citations,
+    )
+    if metadata is not None:
+        full_message[AURA_HOSTED_SEARCH_KEY] = metadata
 
     yield Done(finish_reason=finish_reason, full_message=full_message)

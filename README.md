@@ -182,7 +182,7 @@ See [Providers](docs/providers.md) for supported backends and configuration deta
 - **Project-aware validation** — project profiles, syntax probes, focused terminal checks, and changed-file context guide validation.
 - **Run-and-watch verification** — start a process, observe its output over a bounded window, and retain the result.
 - **Git integration** — status, diff, commit, snapshots, restore support, `/undo`, and automatic `.aura/` ignore setup.
-- **Web research** — an Aura-owned browser controller and read-only research Drone support sourced external research when a task needs current information.
+- **Provider-native web search** — the selected production provider and model own hosted search in the same request when their current transport supports it; unsupported combinations omit search without switching providers.
 - **MCP integration** — connect stdio Model Context Protocol servers and expose their tools through Aura's tool registry.
 - **Update support** — packaged Windows builds support in-app updates, while source checkouts can inspect upstream update state.
 

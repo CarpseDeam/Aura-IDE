@@ -1,7 +1,10 @@
 import json
 import threading
 from collections.abc import Iterator
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any
+
+from packaging.version import InvalidVersion, Version
 
 from aura.client.events import (
     ApiError,
@@ -11,6 +14,12 @@ from aura.client.events import (
     ReasoningDelta,
     Usage,
 )
+from aura.client.hosted_search import (
+    AURA_HOSTED_SEARCH_KEY,
+    citation_from,
+    citation_markdown,
+    hosted_search_metadata,
+)
 from aura.providers.base import normalize_thinking_mode
 from aura.providers.google_cloud.cooldown import CooldownManager
 from aura.providers.google_cloud.errors import classify_error
@@ -19,6 +28,7 @@ from aura.providers.google_cloud.mapping import (
     aura_tools_to_google_declarations,
 )
 from aura.providers.google_cloud.signatures import encode_signature_safe
+from aura.providers.native_search import native_web_search_capability
 
 
 class GoogleCloudClient:
@@ -129,14 +139,20 @@ class GoogleCloudClient:
             messages,
             google_call_metadata=self._call_metadata,
         )
-        google_tools = aura_tools_to_google_declarations(tools or [])
+        projected_tools, search_capability = _google_tool_projection(
+            tools or [],
+            model=model,
+            transport_supports_combined_tools=(
+                _google_combined_tools_transport_supported()
+            ),
+        )
 
         # Build config
         config_kwargs: dict[str, Any] = {}
         if system_instruction:
             config_kwargs["system_instruction"] = system_instruction
-        if google_tools:
-            config_kwargs["tools"] = [{"function_declarations": google_tools}]
+        if projected_tools:
+            config_kwargs["tools"] = projected_tools
         thinking_config = _google_thinking_config(genai.types, model, thinking)
         if thinking_config is not None:
             config_kwargs["thinking_config"] = thinking_config
@@ -188,6 +204,8 @@ class GoogleCloudClient:
         usage_emitted = False
         prompt_tokens = 0
         completion_tokens = 0
+        hosted_search_citations: list[dict[str, str]] = []
+        hosted_search_queries: list[str] = []
 
         try:
             client = self._get_client()
@@ -223,6 +241,20 @@ class GoogleCloudClient:
                     continue
 
                 candidate = chunk.candidates[0]
+                grounding_metadata = getattr(candidate, "grounding_metadata", None)
+                if grounding_metadata is not None:
+                    for raw_query in (
+                        getattr(grounding_metadata, "web_search_queries", None) or []
+                    ):
+                        query = str(raw_query or "").strip()
+                        if query and query not in hosted_search_queries:
+                            hosted_search_queries.append(query)
+                    for raw_chunk in (
+                        getattr(grounding_metadata, "grounding_chunks", None) or []
+                    ):
+                        citation = citation_from(raw_chunk)
+                        if citation is not None:
+                            hosted_search_citations.append(citation)
                 if getattr(candidate, "finish_reason", None):
                     finish_reason = candidate.finish_reason
 
@@ -296,6 +328,14 @@ class GoogleCloudClient:
             return
 
         # Build full message
+        citation_suffix = citation_markdown(
+            hosted_search_citations,
+            "".join(content_buf),
+        )
+        if citation_suffix:
+            content_buf.append(citation_suffix)
+            yield ContentDelta(citation_suffix)
+
         full_message: dict[str, Any] = {
             "role": "assistant",
             "content": "".join(content_buf),
@@ -315,8 +355,50 @@ class GoogleCloudClient:
                         json.loads(tc["function"]["arguments"])
                     except json.JSONDecodeError:
                         pass
+        metadata = hosted_search_metadata(
+            provider="google_cloud",
+            tool_type="google_search",
+            citations=hosted_search_citations,
+            calls=[
+                {"query": query, "status": "completed"}
+                for query in hosted_search_queries
+            ],
+        )
+        if metadata is not None:
+            full_message[AURA_HOSTED_SEARCH_KEY] = metadata
 
         yield Done(finish_reason=finish_reason, full_message=full_message)
+
+
+def _google_combined_tools_transport_supported() -> bool:
+    """Whether the installed google-genai transport supports tool mixing."""
+    try:
+        installed = Version(version("google-genai"))
+    except (PackageNotFoundError, InvalidVersion):
+        return False
+    return installed > Version("2.0.0")
+
+
+def _google_tool_projection(
+    tools: list[dict[str, Any]],
+    *,
+    model: str,
+    transport_supports_combined_tools: bool,
+) -> tuple[list[dict[str, Any]], Any]:
+    """Project hosted Google Search and Aura functions without tradeoffs."""
+    declarations = aura_tools_to_google_declarations(tools)
+    capability = native_web_search_capability(
+        "google_cloud",
+        model,
+        transport="google_genai",
+        transport_supports_combined_tools=transport_supports_combined_tools,
+    )
+    projected: list[dict[str, Any]] = []
+    if capability is not None:
+        projected.append(dict(capability.tool))
+    if declarations:
+        projected.append({"function_declarations": declarations})
+    return projected, capability
 
 
 def _google_thinking_config(types_module: Any, model: str, thinking: str) -> Any | None:

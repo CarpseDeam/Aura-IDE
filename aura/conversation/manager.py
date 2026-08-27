@@ -296,11 +296,6 @@ class ConversationManager:
         self._last_skill_turn = None
         self._tools.set_turn_skill_state(None)
 
-        # Web research is offered when the search backend is genuinely
-        # configured — never because Aura read the user's sentence. Resolved
-        # once per turn so the catalog, and the provider's cached request
-        # prefix, stay identical across the turn's rounds.
-        self._tools.refresh_web_search_availability()
         # Freeze this real user turn's skill candidates once, so load_skills
         # resolves against the same deterministic selection that produced the
         # initial skill index — never a recomputation per round.
@@ -314,8 +309,8 @@ class ConversationManager:
         self._tool_round_runner.begin_turn()
 
         # The model-facing tool catalog is resolved exactly once per turn,
-        # after web-search availability, the frozen skill turn state, and
-        # begin_turn() are all in place. Every provider request and tool-round
+        # after the frozen skill turn state and begin_turn() are in place.
+        # Every provider request and tool-round
         # preflight in this send reuses this same snapshot; capabilities
         # added, removed, connected, disconnected, or edited while this send
         # is running take effect on the next send, not midway through this

@@ -32,6 +32,13 @@ from aura.client.events import (
     ToolCallStart,
     Usage,
 )
+from aura.client.hosted_search import (
+    AURA_HOSTED_SEARCH_KEY,
+    citation_from,
+    citation_markdown,
+    hosted_search_metadata,
+    matching_wire_blocks,
+)
 from aura.client.reasoning import (
     EFFORT_EXPLICIT,
     EFFORT_OMITTED_DISABLED,
@@ -46,6 +53,7 @@ _log = logging.getLogger(__name__)
 def _to_anthropic_messages(
     messages: list[dict[str, Any]],
     *,
+    provider: str = "anthropic",
     reconstruct_thinking: bool = True,
 ) -> tuple[str | None, list[dict[str, Any]]]:
     system_parts: list[str] = []
@@ -106,6 +114,13 @@ def _to_anthropic_messages(
             if isinstance(signature, str) and signature:
                 thinking_block["signature"] = signature
             content_blocks.append(thinking_block)
+
+        # Provider-hosted search blocks belong to Anthropic, not Aura's tool
+        # runner. Replay them only back to the provider that produced them so
+        # a real client tool call later in the same response retains its server
+        # context without leaking Anthropic wire fields after a provider switch.
+        if role == "assistant":
+            content_blocks.extend(matching_wire_blocks(msg, provider))
 
         # 2. Handle Content (Text/Images)
         content = msg.get("content")
@@ -396,6 +411,17 @@ def _merge_anthropic_usage(target: dict[str, int], raw: Any) -> None:
         target["completion_tokens"] = output_tokens
 
 
+def _merge_anthropic_server_usage(target: dict[str, Any], raw: Any) -> None:
+    """Preserve provider-reported hosted-tool usage without fabrication."""
+    if not isinstance(raw, dict):
+        return
+    server_usage = raw.get("server_tool_use")
+    if isinstance(server_usage, dict):
+        for key, value in server_usage.items():
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                target[str(key)] = value
+
+
 def _finalize_anthropic_tool_call(tool_call: dict[str, Any]) -> dict[str, Any]:
     arguments = tool_call["function"].get("arguments") or "{}"
     try:
@@ -416,6 +442,7 @@ def _stream_anthropic(
     temperature: float,
     provider: str = "anthropic",
     requires_reasoning_replay: bool = True,
+    hosted_search_tool: dict[str, Any] | None = None,
 ) -> Iterator[Event]:
     profile = anthropic_thinking_profile(
         provider, reconstruct_thinking=requires_reasoning_replay
@@ -425,6 +452,7 @@ def _stream_anthropic(
     # own ``content`` carries the continuity for that mode.
     system, anthropic_messages = _to_anthropic_messages(
         messages,
+        provider=provider,
         reconstruct_thinking=profile.reconstruct_thinking and thinking != "off",
     )
     body: dict[str, Any] = {
@@ -436,6 +464,8 @@ def _stream_anthropic(
     if system:
         body["system"] = system
     anthropic_tools = _to_anthropic_tools(tools or [])
+    if hosted_search_tool:
+        anthropic_tools.append(dict(hosted_search_tool))
     if anthropic_tools:
         # No ``tool_choice``: the model chooses freely between prose and tool
         # calls, and parallel tool use is left enabled.
@@ -473,6 +503,10 @@ def _stream_anthropic(
     signature_buf: list[str] = []
     tool_calls: dict[int, dict[str, Any]] = {}
     seen_tool_starts: set[int] = set()
+    hosted_search_blocks: list[dict[str, Any]] = []
+    hosted_search_calls: list[dict[str, Any]] = []
+    hosted_search_citations: list[dict[str, str]] = []
+    hosted_search_usage: dict[str, Any] = {}
     finish_reason: str | None = None
     usage = {
         "prompt_tokens": 0,
@@ -595,12 +629,16 @@ def _stream_anthropic(
                     ev_type = event.get("type")
 
                     if ev_type == "message_start":
-                        _merge_anthropic_usage(usage, event.get("message", {}).get("usage"))
+                        raw_usage = event.get("message", {}).get("usage")
+                        _merge_anthropic_usage(usage, raw_usage)
+                        _merge_anthropic_server_usage(hosted_search_usage, raw_usage)
                         continue
                     if ev_type == "message_delta":
                         delta = event.get("delta") or {}
                         finish_reason = delta.get("stop_reason") or finish_reason
-                        _merge_anthropic_usage(usage, event.get("usage"))
+                        raw_usage = event.get("usage")
+                        _merge_anthropic_usage(usage, raw_usage)
+                        _merge_anthropic_server_usage(hosted_search_usage, raw_usage)
                         continue
                     if ev_type == "content_block_start":
                         block = event.get("content_block") or {}
@@ -634,6 +672,30 @@ def _stream_anthropic(
                                 id=tool_calls[index]["id"],
                                 name=tool_calls[index]["function"]["name"],
                             )
+                        elif block.get("type") == "server_tool_use":
+                            hosted_search_blocks.append(dict(block))
+                            hosted_search_calls.append(
+                                {
+                                    "item_id": str(block.get("id") or ""),
+                                    "status": "started",
+                                    "name": str(block.get("name") or ""),
+                                }
+                            )
+                        elif block.get("type") == "web_search_tool_result":
+                            hosted_search_blocks.append(dict(block))
+                            tool_use_id = str(block.get("tool_use_id") or "")
+                            for call in hosted_search_calls:
+                                if call.get("item_id") == tool_use_id:
+                                    call["status"] = "completed"
+                            for result in block.get("content") or []:
+                                citation = citation_from(result)
+                                if citation is not None:
+                                    hosted_search_citations.append(citation)
+                        elif block.get("type") == "text":
+                            for raw_citation in block.get("citations") or []:
+                                citation = citation_from(raw_citation)
+                                if citation is not None:
+                                    hosted_search_citations.append(citation)
                         continue
                     if ev_type == "content_block_delta":
                         index = int(event.get("index", 0))
@@ -659,18 +721,14 @@ def _stream_anthropic(
                                 signature_buf.append(sig)
                         elif delta_type == "input_json_delta":
                             chunk = delta.get("partial_json") or ""
-                            if chunk:
-                                slot = tool_calls.setdefault(
-                                    index,
-                                    {
-                                        "id": "",
-                                        "type": "function",
-                                        "function": {"name": "", "arguments": ""},
-                                    },
-                                )
+                            if chunk and index in seen_tool_starts:
+                                slot = tool_calls[index]
                                 slot["function"]["arguments"] += chunk
-                                if index in seen_tool_starts:
-                                    yield ToolCallArgsDelta(index=index, args_chunk=chunk)
+                                yield ToolCallArgsDelta(index=index, args_chunk=chunk)
+                        elif delta_type == "citations_delta":
+                            citation = citation_from(delta.get("citation") or delta)
+                            if citation is not None:
+                                hosted_search_citations.append(citation)
                         continue
                     if ev_type == "content_block_stop":
                         index = int(event.get("index", 0))
@@ -694,6 +752,14 @@ def _stream_anthropic(
     if any(usage.values()):
         yield Usage(**usage)
 
+    citation_suffix = citation_markdown(
+        hosted_search_citations,
+        "".join(content_buf),
+    )
+    if citation_suffix:
+        content_buf.append(citation_suffix)
+        yield ContentDelta(citation_suffix)
+
     full_message: dict[str, Any] = {
         "role": "assistant",
         "content": "".join(content_buf),
@@ -708,5 +774,15 @@ def _stream_anthropic(
             _finalize_anthropic_tool_call(tool_calls[i])
             for i in sorted(tool_calls)
         ]
+    metadata = hosted_search_metadata(
+        provider=provider,
+        tool_type=str((hosted_search_tool or {}).get("type") or ""),
+        citations=hosted_search_citations,
+        calls=hosted_search_calls,
+        wire_blocks=hosted_search_blocks,
+        usage=hosted_search_usage,
+    )
+    if metadata is not None:
+        full_message[AURA_HOSTED_SEARCH_KEY] = metadata
 
     yield Done(finish_reason=finish_reason, full_message=full_message)

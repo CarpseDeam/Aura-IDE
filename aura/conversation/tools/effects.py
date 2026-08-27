@@ -97,7 +97,6 @@ BUILTIN_TOOL_EFFECTS: dict[str, ToolEffect] = {
     "git_branch_list": ToolEffect.OBSERVATION,
     "git_stash_list": ToolEffect.OBSERVATION,
     "git_stash_show": ToolEffect.OBSERVATION,
-    "web_search": ToolEffect.OBSERVATION,
     "get_workspace_snapshot": ToolEffect.OBSERVATION,
     "search_project_memory": ToolEffect.OBSERVATION,
     "load_skills": ToolEffect.OBSERVATION,

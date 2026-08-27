@@ -15,7 +15,6 @@ from aura.conversation.tools.schemas import (
     REVIEW_IMPLEMENTATION_PLAN_TOOL_DEF,
     TASK_CHECKLIST_TOOL_DEF,
     TERMINAL_TOOL_DEF,
-    WEB_SEARCH_TOOL_DEF,
 )
 
 # Godot remains implemented and registered, but is not part of the ordinary
@@ -62,7 +61,6 @@ class ToolCatalog:
         read_only: bool,
         dynamic_schemas: list[dict[str, Any]] | None = None,
         mcp_schemas: list[dict[str, Any]] | None = None,
-        web_search: bool = False,
         plan_review: bool = False,
         skills_active: bool = False,
     ) -> list[dict[str, Any]]:
@@ -76,9 +74,7 @@ class ToolCatalog:
         the exposed catalog — and therefore the provider's cached request
         prefix — never moves between rounds.
 
-        ``web_search`` adds ``web_search`` when the search backend is
-        genuinely configured. ``plan_review`` adds
-        ``review_implementation_plan`` when Plan Review is required for this
+        ``plan_review`` adds ``review_implementation_plan`` when Plan Review is required for this
         turn (never in read-only mode: nothing read-only can mutate, so there
         is nothing for a plan to gate). ``skills_active`` adds ``load_skills``
         and ``read_skill_resource`` only when this turn's frozen skill index
@@ -111,8 +107,6 @@ class ToolCatalog:
                 + [dict(APPLY_PATCH_TOOL_DEF)]
                 + [dict(TERMINAL_TOOL_DEF)]
             )
-            if web_search:
-                tools.append(dict(WEB_SEARCH_TOOL_DEF))
             if plan_review:
                 tools.append(dict(REVIEW_IMPLEMENTATION_PLAN_TOOL_DEF))
 

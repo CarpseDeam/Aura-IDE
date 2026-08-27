@@ -22,7 +22,6 @@ from aura.conversation.tools._godot_scene_mixin import GodotSceneHandlersMixin
 from aura.conversation.tools._memory_mixin import MemoryHandlersMixin
 from aura.conversation.tools._plan_review_mixin import PlanReviewHandlersMixin
 from aura.conversation.tools._read_mixin import ReadHandlersMixin
-from aura.conversation.tools._research_mixin import ResearchHandlersMixin
 from aura.conversation.tools._search_mixin import SearchHandlersMixin
 from aura.conversation.tools._task_checklist_mixin import TaskChecklistHandlersMixin
 from aura.conversation.tools._types import ApprovalCallback, ToolExecResult
@@ -68,7 +67,6 @@ class ToolRegistry(
     MemoryHandlersMixin,
     DiagnosticHandlersMixin,
     DroneHandlersMixin,
-    ResearchHandlersMixin,
     WorkspaceHandlersMixin,
     PlanReviewHandlersMixin,
 ):
@@ -114,12 +112,6 @@ class ToolRegistry(
         # decide whether ``load_skills`` belongs in the catalog this turn.
         # Set once per real user turn via ``set_turn_skill_state``.
         self._turn_skill_state: Any = None
-        # Whether the production catalog offers web research. Depends only on
-        # whether the search backend is genuinely configured; it is re-resolved
-        # once per real user turn and held for that turn's whole duration, so
-        # the exposed catalog — and therefore the provider's cached request
-        # prefix — never moves between rounds.
-        self._web_search: bool = False
         # Plan Review — required/approved state for the active turn, and the
         # GUI-thread proxy that pauses the tool loop for human review. The
         # state always exists (required defaults to False); the proxy is
@@ -226,36 +218,12 @@ class ToolRegistry(
         return self._plan_review_proxy
 
     @property
-    def web_search_enabled(self) -> bool:
-        """Whether this turn's production catalog offers ``web_search``."""
-        return self._web_search
-
-    def refresh_web_search_availability(self) -> None:
-        """Re-resolve whether the web-search backend is actually usable.
-
-        Availability is a fact about configuration — whether the search
-        provider has a credential — and never a judgement about what the user
-        asked for. Called once at the start of ``send()`` so a key added in
-        Settings takes effect on the next turn while the catalog stays fixed
-        for the duration of the turn in flight.
-        """
-        from aura.config import has_api_key
-        from aura.research.native import SEARCH_PROVIDER_ID
-
-        try:
-            self._web_search = bool(has_api_key(SEARCH_PROVIDER_ID))
-        except Exception:
-            # Withhold rather than assert: a capability that cannot be
-            # confirmed must not be offered as available.
-            self._web_search = False
-
-    @property
     def active_cancel_event(self) -> threading.Event | None:
         """The cancel event of the tool call currently executing, if any.
 
-        Handlers that run long external work (web search) read this so they
-        stop with the rest of the turn. It is the caller's event, relayed —
-        not a second cancellation authority.
+        Handlers that run long external work read this so they stop with the
+        rest of the turn. It is the caller's event, relayed — not a second
+        cancellation authority.
         """
         return self._cancel_event
 
@@ -286,7 +254,6 @@ class ToolRegistry(
             read_only=self._read_only,
             dynamic_schemas=dynamic_schemas or None,
             mcp_schemas=mcp_schemas or None,
-            web_search=self._web_search,
             plan_review=(not self._read_only) and self._plan_review.required,
             skills_active=skills_active,
         )
@@ -553,7 +520,6 @@ TOOL_HANDLERS["save_to_project_memory"] = ToolRegistry._handle_save_to_project_m
 TOOL_HANDLERS["run_diagnostic_command"] = ToolRegistry._handle_run_diagnostic_command
 TOOL_HANDLERS["get_workspace_snapshot"] = ToolRegistry._handle_get_workspace_snapshot
 TOOL_HANDLERS["summon_drone"] = ToolRegistry._handle_summon_drone
-TOOL_HANDLERS["web_search"] = ToolRegistry._handle_web_search
 TOOL_HANDLERS["launch_read_only_drone"] = ToolRegistry._handle_launch_read_only_drone
 TOOL_HANDLERS["run_read_only_drone"] = ToolRegistry._handle_run_read_only_drone
 TOOL_HANDLERS["check_drone_run"] = ToolRegistry._handle_check_drone_run

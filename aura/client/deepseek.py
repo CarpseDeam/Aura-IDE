@@ -11,19 +11,16 @@ from openai import OpenAI
 
 from aura.client.anthropic_stream import _stream_anthropic
 from aura.client.chat_completions_transport import stream_chat_completions
-from aura.client.deepseek_responses import build_deepseek_responses_request
+from aura.client.deepseek_responses import build_responses_request
 from aura.client.events import Event
-from aura.client.responses_transport import (
-    stream_deepseek_responses,
-    stream_native_web_search,
-)
-from aura.client.responses_web_search import build_native_web_search_request
+from aura.client.responses_transport import stream_responses
 from aura.config import (
     ProviderId,
     ThinkingMode,
     get_provider,
     resolve_api_key,
 )
+from aura.providers.native_search import native_web_search_capability
 
 
 class DeepSeekClient:
@@ -93,24 +90,42 @@ class DeepSeekClient:
         temperature: float = 0.7,
     ) -> Iterator[Event]:
         """Select the configured protocol and delegate the stream execution."""
-        if self._uses_deepseek_responses(model):
-            request = build_deepseek_responses_request(
+        if self._uses_responses(model):
+            capability = native_web_search_capability(
+                self._provider,
+                model,
+                transport="responses",
+            )
+            request = build_responses_request(
+                provider=self._provider,
                 messages=messages,
                 tools=tools,
+                hosted_tools=[capability.tool] if capability is not None else None,
                 model=model,
                 thinking=thinking,
                 temperature=temperature,
             )
-            yield from stream_deepseek_responses(
+            yield from stream_responses(
                 client=self._client,
                 request=request,
+                provider=self._provider,
                 model=model,
                 thinking=thinking,
+                hosted_tool_type=(
+                    str(capability.tool.get("type") or "")
+                    if capability is not None
+                    else ""
+                ),
                 cancel_event=cancel_event,
             )
             return
 
         if self._chat_protocol == "anthropic_messages":
+            capability = native_web_search_capability(
+                self._provider,
+                model,
+                transport="anthropic_messages",
+            )
             yield from _stream_anthropic(
                 api_key=self._api_key,
                 base_url=self._chat_base_url,
@@ -122,9 +137,17 @@ class DeepSeekClient:
                 temperature=temperature,
                 provider=self._provider,
                 requires_reasoning_replay=self._requires_reasoning_replay,
+                hosted_search_tool=(
+                    capability.tool if capability is not None else None
+                ),
             )
             return
 
+        capability = native_web_search_capability(
+            self._provider,
+            model,
+            transport="openai_chat",
+        )
         yield from stream_chat_completions(
             client=self._client,
             provider=self._provider,
@@ -138,32 +161,17 @@ class DeepSeekClient:
             cancel_event=cancel_event,
             temperature=temperature,
             requires_reasoning_replay=self._requires_reasoning_replay,
+            hosted_search_tool=(
+                capability.tool if capability is not None else None
+            ),
         )
 
-    def _uses_deepseek_responses(self, model: str) -> bool:
-        """Return whether this direct DeepSeek V4 turn uses Responses."""
+    def _uses_responses(self, model: str) -> bool:
+        """Return whether this selected production turn uses Responses."""
         return (
-            self._provider == "deepseek"
-            and str(model).lower().startswith("deepseek-v4-")
-        )
-
-    def stream_responses_web_search(
-        self,
-        question: str,
-        context: str | None = None,
-        model: str | None = None,
-        cancel_event: threading.Event | None = None,
-    ) -> Iterator[Event]:
-        """Stream native Responses web search as normalized Aura events."""
-        cfg = get_provider(self._provider)
-        request = build_native_web_search_request(
-            question=question,
-            context=context,
-            model=model or cfg.default_model,
-        )
-        yield from stream_native_web_search(
-            client=self._client,
-            provider=self._provider,
-            request=request,
-            cancel_event=cancel_event,
+            self._provider == "openai"
+            or (
+                self._provider == "deepseek"
+                and str(model).lower().startswith("deepseek-v4-")
+            )
         )

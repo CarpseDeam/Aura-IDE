@@ -21,7 +21,6 @@ CORE_SEARCH = "core_search"
 CORE_EDIT = "core_edit"
 CORE_TERMINAL = "core_terminal"
 CORE_TODO = "core_todo"
-CORE_WEB = "core_web"
 
 GIT = "git"
 CODE_INTEL = "code_intel"
@@ -42,7 +41,6 @@ CAPABILITY_TOOLS: dict[str, frozenset[str]] = {
     CORE_EDIT: frozenset({"apply_patch"}),
     CORE_TERMINAL: frozenset({"shell"}),
     CORE_TODO: frozenset({"update_task_checklist"}),
-    CORE_WEB: frozenset({"web_search"}),
     # Targeted/context read helpers that stay outside the production surface.
     BULK_READ: frozenset({
         "read_file_range",

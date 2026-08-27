@@ -21,6 +21,7 @@ class _StreamLabel(QLabel):
         self.setMinimumWidth(0)
         self.setWordWrap(True)
         self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.setOpenExternalLinks(True)
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self._italic = italic
         if italic:

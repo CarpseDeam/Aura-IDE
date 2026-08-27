@@ -276,7 +276,7 @@ PROVIDER_CATALOG: dict[str, dict] = {
     "deepseek": {
         "label": "DeepSeek",
         # Ordinary API root — kept intact for model discovery, pricing/catalog
-        # work, native Responses web search, and every other non-chat path.
+        # work, and every other non-chat path.
         "base_url": "https://api.deepseek.com",
         # Direct V4 chat/tool turns use the native stateless Responses API at
         # this base URL. The client keeps Chat Completions for non-V4 DeepSeek

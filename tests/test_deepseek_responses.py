@@ -14,9 +14,9 @@ from aura.backends.api import APIAgentBackend
 from aura.client import deepseek as ds
 from aura.client import responses_transport as rt
 from aura.client.deepseek_responses import (
-    DeepSeekResponsesStreamParser,
-    build_deepseek_responses_request,
-    project_deepseek_responses_input,
+    ResponsesProductionStreamParser,
+    build_responses_request,
+    project_responses_input,
 )
 from aura.client.events import ApiError, Done, ReasoningDelta, ToolCallEnd, ToolCallStart, Usage
 from aura.conversation import ConversationManager, History
@@ -89,7 +89,7 @@ def test_projection_is_stateless_ordered_and_does_not_mutate_history() -> None:
     ]
     before = copy.deepcopy(messages)
 
-    instructions, items = project_deepseek_responses_input(messages)
+    instructions, items = project_responses_input(messages, provider="deepseek")
 
     assert instructions == "system"
     assert [item.get("type", item.get("role")) for item in items] == [
@@ -124,9 +124,11 @@ def test_history_stays_canonical_when_request_is_projected() -> None:
     })
     before = copy.deepcopy(history.messages)
 
-    request = build_deepseek_responses_request(
+    request = build_responses_request(
+        provider="deepseek",
         messages=history.for_api(),
         tools=None,
+        hosted_tools=None,
         model="deepseek-v4-flash",
         thinking="max",
     )
@@ -140,9 +142,11 @@ def test_history_stays_canonical_when_request_is_projected() -> None:
     [("off", "none"), ("high", "high"), ("max", "max")],
 )
 def test_responses_thinking_mapping_and_temperature(mode: str, wire_effort: str) -> None:
-    request = build_deepseek_responses_request(
+    request = build_responses_request(
+        provider="deepseek",
         messages=[{"role": "user", "content": "hello"}],
         tools=None,
+        hosted_tools=None,
         model="deepseek-v4-flash",
         thinking=mode,
         temperature=0.25,
@@ -180,15 +184,19 @@ def test_responses_request_translates_tools_and_keeps_append_only_prefix() -> No
         {"role": "tool", "tool_call_id": "call-1", "content": "x"},
     ]
 
-    first = build_deepseek_responses_request(
+    first = build_responses_request(
+        provider="deepseek",
         messages=first_messages,
         tools=[tool],
+        hosted_tools=None,
         model="deepseek-v4-flash",
         thinking="max",
     )
-    second = build_deepseek_responses_request(
+    second = build_responses_request(
+        provider="deepseek",
         messages=second_messages,
         tools=[tool],
+        hosted_tools=None,
         model="deepseek-v4-flash",
         thinking="max",
     )
@@ -204,7 +212,7 @@ def test_responses_request_translates_tools_and_keeps_append_only_prefix() -> No
 
 
 def test_responses_parser_emits_reasoning_usage_and_call_id_not_item_id() -> None:
-    parser = DeepSeekResponsesStreamParser()
+    parser = ResponsesProductionStreamParser(provider="deepseek")
     item = SimpleNamespace(
         type="function_call",
         id="fc-provider-output-item",
@@ -241,7 +249,7 @@ def test_responses_parser_emits_reasoning_usage_and_call_id_not_item_id() -> Non
 
 
 def test_responses_parser_keeps_parallel_calls_in_output_order() -> None:
-    parser = DeepSeekResponsesStreamParser()
+    parser = ResponsesProductionStreamParser(provider="deepseek")
     calls = [
         SimpleNamespace(
             type="function_call",

@@ -57,7 +57,7 @@ def test_catalog_composition_preserves_read_only_and_production_order() -> None:
 
     # Read-only: the compact observation surface (read_file, glob, grep_search
     # -- in READ_TOOL_DEFS's own relative order) plus every git tool. No
-    # optional capability (load_skills, web_search, ...) is active by default.
+    # optional capability (load_skills, plan review, ...) is active by default.
     assert read_only == ["read_file", "glob", "grep_search"] + _names(GIT_TOOL_DEFS)
 
     # Production: exactly the five built-ins, in build order. No optional

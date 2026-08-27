@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html as _html
 import re
+from urllib.parse import urlsplit
 
 from PySide6.QtGui import QTextDocument
 
@@ -18,6 +19,22 @@ except ImportError:  # pragma: no cover — declared in pyproject, but soft-fail
     _HAVE_PYGMENTS = False
 
 _CODE_FENCE_RE = re.compile(r"```([A-Za-z0-9_+\-.]*)\n(.*?)(?:```|\Z)", re.DOTALL)
+_HREF_RE = re.compile(r'\s+href=(?P<quote>["\'])(?P<url>.*?)(?P=quote)', re.IGNORECASE)
+
+
+def _strip_unsafe_links(value: str) -> str:
+    """Keep only HTTP(S) anchors at the final Markdown/HTML boundary."""
+    def replace(match: re.Match[str]) -> str:
+        url = _html.unescape(match.group("url")).strip()
+        try:
+            parsed = urlsplit(url)
+        except ValueError:
+            return ""
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+            return ""
+        return match.group(0)
+
+    return _HREF_RE.sub(replace, value)
 
 
 def _render_code_block(lang: str, code: str) -> str:
@@ -84,6 +101,7 @@ def _render_markdown_with_code(text: str, color: str | None = None, italic: bool
     doc = QTextDocument()
     doc.setMarkdown(intermediate)
     html = doc.toHtml()
+    html = _strip_unsafe_links(html)
 
     # 1. Strip hardcoded colors that QTextDocument bakes into elements.
     html = re.sub(r"color\s*:\s*#[0-9a-fA-F]+\s*;?", "", html)

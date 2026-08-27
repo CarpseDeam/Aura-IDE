@@ -205,39 +205,9 @@ def test_tool_order_and_schemas_are_stable_across_rounds(tmp_path) -> None:
 # ── 2. optional capabilities join only under their explicit conditions ──────
 
 
-def test_web_search_joins_only_a_research_turn_and_nothing_else_moves() -> None:
-    plain = _names(_production_defs(web_search=False))
-    research = _names(_production_defs(web_search=True))
-
-    assert "web_search" not in plain
-    assert "web_search" in research
-    # The rest of the catalog is byte-identical and in the same order, so a
-    # research turn does not reshuffle the cached request prefix.
-    assert [n for n in research if n != "web_search"] == plain
-
-
-def test_the_registry_holds_the_web_search_decision_for_the_whole_turn(
-    tmp_path, monkeypatch,
-) -> None:
-    """Availability resolves from configuration once; rounds never re-resolve."""
+def test_hosted_web_search_never_joins_the_local_tool_catalog(tmp_path) -> None:
     registry = ToolRegistry(workspace_root=tmp_path)
-
-    assert registry.web_search_enabled is False
     assert "web_search" not in _names(registry.tool_defs())
-
-    # The backend is configured: the turn's catalog offers web research.
-    monkeypatch.setattr("aura.config.has_api_key", lambda provider_id: True)
-    registry.refresh_web_search_availability()
-
-    first = registry.tool_defs()
-    second = registry.tool_defs()
-
-    assert "web_search" in _names(first)
-    assert first == second, "the catalog moved between rounds of the same turn"
-    # tool_defs() never re-resolves availability mid-turn: even a config
-    # change only takes effect at the next turn's explicit refresh.
-    monkeypatch.setattr("aura.config.has_api_key", lambda provider_id: False)
-    assert "web_search" in _names(registry.tool_defs())
 
 
 def test_load_skills_joins_only_when_the_turn_has_frozen_candidates(tmp_path) -> None:
@@ -306,7 +276,7 @@ def test_no_separate_external_read_tool_exists(tmp_path) -> None:
 
 def test_production_descriptions_contain_no_retired_workflow_phrases() -> None:
     offenders: dict[str, list[str]] = {}
-    for tool in _production_defs(web_search=True):
+    for tool in _production_defs():
         blob = json.dumps(tool["function"]).lower()
         hits = [p for p in RETIRED_WORKFLOW_PHRASES if p in blob]
         if hits:
@@ -317,14 +287,14 @@ def test_production_descriptions_contain_no_retired_workflow_phrases() -> None:
 
 def test_every_production_tool_still_describes_itself() -> None:
     """Stripping coaching must not leave a tool undocumented."""
-    for tool in _production_defs(web_search=True):
+    for tool in _production_defs():
         description = str(tool["function"].get("description") or "").strip()
         assert len(description) >= 40, tool["function"]["name"]
 
 
 def test_the_production_schema_shrank() -> None:
     """The production surface stays small now that it is five tools plus options."""
-    defs = _production_defs(web_search=True)
+    defs = _production_defs()
 
     assert len(defs) <= 8
     assert len(json.dumps(defs)) < 12_000

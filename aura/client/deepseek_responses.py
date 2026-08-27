@@ -1,4 +1,4 @@
-"""DeepSeek V4 Responses projection, request construction, and parsing."""
+"""Shared production Responses projection, construction, and parsing."""
 
 from __future__ import annotations
 
@@ -12,6 +12,12 @@ from aura.client.events import (
     ToolCallArgsDelta,
     ToolCallEnd,
     ToolCallStart,
+)
+from aura.client.hosted_search import (
+    AURA_HOSTED_SEARCH_KEY,
+    citation_markdown,
+    citations_from_response_item,
+    hosted_search_metadata,
 )
 from aura.client.responses_common import (
     TERMINAL_RESPONSE_STATUSES,
@@ -75,14 +81,19 @@ def _responses_content(value: Any, *, role: str) -> str | list[dict[str, Any]]:
     return parts
 
 
-def project_deepseek_responses_input(
+def project_responses_input(
     messages: list[dict[str, Any]],
+    *,
+    provider: str,
 ) -> tuple[str | None, list[dict[str, Any]]]:
     """Project canonical Aura messages onto stateless Responses input items.
 
     Fresh dictionaries are constructed, so canonical history is never rewritten.
-    Reasoning fields, provider output-item ids, signatures, and Aura-local
-    bookkeeping are intentionally not represented on the wire.
+    Reasoning fields, foreign-provider metadata, signatures, and Aura-local
+    bookkeeping are intentionally not represented on the wire. Matching
+    Responses hosted-search call items are replayed only to the provider that
+    produced them, preserving same-turn server context without contaminating a
+    later request after a provider switch.
     """
     instructions: str | None = None
     input_items: list[dict[str, Any]] = []
@@ -99,6 +110,18 @@ def project_deepseek_responses_input(
 
         if role in {"user", "assistant"}:
             content = _responses_content(message.get("content", ""), role=role)
+            if role == "assistant":
+                hosted = message.get(AURA_HOSTED_SEARCH_KEY)
+                if (
+                    isinstance(hosted, Mapping)
+                    and hosted.get("provider") == provider
+                    and isinstance(hosted.get("wire_items"), list)
+                ):
+                    input_items.extend(
+                        dict(item)
+                        for item in hosted["wire_items"]
+                        if isinstance(item, Mapping)
+                    )
             if role == "user" or _visible_text(message.get("content", "")):
                 input_items.append({"role": role, "content": content})
 
@@ -149,20 +172,28 @@ def project_deepseek_responses_input(
     return instructions, input_items
 
 
-def build_deepseek_responses_request(
+def build_responses_request(
     *,
+    provider: str,
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None,
+    hosted_tools: list[dict[str, Any]] | None,
     model: str,
     thinking: ThinkingMode,
     temperature: float = 0.7,
 ) -> dict[str, Any]:
-    """Build one stateless DeepSeek V4 Responses request."""
-    instructions, input_items = project_deepseek_responses_input(messages)
+    """Build one stateless production Responses request."""
+    instructions, input_items = project_responses_input(messages, provider=provider)
     mode = normalize_thinking_mode(thinking) or "high"
     # Aura's internal/UI/settings value for no reasoning is "off"; the wire
     # API rejects that literal and requires "none" instead.
-    wire_effort = "none" if mode == "off" else mode
+    wire_effort = (
+        "none"
+        if mode == "off"
+        else "xhigh"
+        if provider == "openai" and mode == "max"
+        else mode
+    )
     request: dict[str, Any] = {
         "model": model,
         "input": input_items,
@@ -171,7 +202,8 @@ def build_deepseek_responses_request(
     }
     if instructions is not None:
         request["instructions"] = instructions
-    translated_tools = translate_to_responses_tools(tools)
+    translated_tools = translate_to_responses_tools(tools) or []
+    translated_tools.extend(dict(tool) for tool in (hosted_tools or []))
     if translated_tools:
         request["tools"] = translated_tools
     if mode == "off":
@@ -179,14 +211,16 @@ def build_deepseek_responses_request(
     return request
 
 
-class DeepSeekResponsesStreamParser:
-    """Normalize one DeepSeek production Responses stream.
+class ResponsesProductionStreamParser:
+    """Normalize one OpenAI-compatible production Responses stream.
 
     A function call is exposed only after its argument stream is complete;
     terminal incomplete/failed responses never produce an executable ``Done``.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, provider: str, hosted_tool_type: str = "") -> None:
+        self.provider = provider
+        self.hosted_tool_type = hosted_tool_type
         self.status = "in_progress"
         self.reasoning = ""
         self.text = ""
@@ -199,6 +233,11 @@ class DeepSeekResponsesStreamParser:
         self._usage_emitted = False
         self._calls: dict[int, dict[str, Any]] = {}
         self._item_indexes: dict[str, int] = {}
+        self.citations: list[dict[str, str]] = []
+        self.web_search_calls: list[dict[str, Any]] = []
+        self._search_items: list[dict[str, Any]] = []
+        self._seen_search_ids: set[str] = set()
+        self._citations_emitted = False
 
     @property
     def terminal(self) -> bool:
@@ -228,12 +267,18 @@ class DeepSeekResponsesStreamParser:
         if event_type == "response.created":
             response = _attr(event, "response")
             self.response_id = str(_attr(response, "id", "") or "")
-        elif event_type == "response.reasoning_text.delta":
+        elif event_type in {
+            "response.reasoning_text.delta",
+            "response.reasoning_summary_text.delta",
+        }:
             delta = str(_attr(event, "delta", "") or "")
             if delta:
                 self.reasoning += delta
                 events.append(ReasoningDelta(delta))
-        elif event_type == "response.reasoning_text.done":
+        elif event_type in {
+            "response.reasoning_text.done",
+            "response.reasoning_summary_text.done",
+        }:
             text = str(_attr(event, "text", "") or "")
             if text:
                 self.reasoning = text
@@ -249,6 +294,7 @@ class DeepSeekResponsesStreamParser:
         elif event_type == "response.output_item.added":
             item = _attr(event, "item")
             if item is not None:
+                self._note_hosted_item(item)
                 self._note_function_item(
                     item,
                     self._event_index(event, item),
@@ -258,6 +304,7 @@ class DeepSeekResponsesStreamParser:
         elif event_type == "response.output_item.done":
             item = _attr(event, "item")
             if item is not None:
+                self._note_hosted_item(item)
                 self._note_function_item(
                     item,
                     self._event_index(event, item),
@@ -281,6 +328,8 @@ class DeepSeekResponsesStreamParser:
                 slot["arguments"] = arguments
             slot["complete"] = True
             self._end_call(index, events)
+        elif event_type.startswith("response.web_search_call."):
+            self._note_search_event(event, event_type.rsplit(".", 1)[-1])
         elif event_type == "response.completed":
             response = _attr(event, "response")
             if response is not None:
@@ -311,13 +360,87 @@ class DeepSeekResponsesStreamParser:
             calls = self._completed_tool_calls()
             if calls:
                 message["tool_calls"] = calls
+        metadata = hosted_search_metadata(
+            provider=self.provider,
+            tool_type=self.hosted_tool_type or "web_search",
+            citations=self.citations,
+            calls=self.web_search_calls,
+        )
+        if metadata is not None:
+            if self._search_items:
+                metadata["wire_items"] = [dict(item) for item in self._search_items]
+            message[AURA_HOSTED_SEARCH_KEY] = metadata
         return message
 
     def failure_message(self) -> str:
         if self.status == "incomplete":
             reason = f" ({self.incomplete_reason})" if self.incomplete_reason else ""
-            return f"DeepSeek Responses stream incomplete{reason}. No tool calls were executed."
-        return self.error or "DeepSeek Responses stream failed. No tool calls were executed."
+            return f"{self.provider} Responses stream incomplete{reason}. No tool calls were executed."
+        return self.error or f"{self.provider} Responses stream failed. No tool calls were executed."
+
+    def emit_citation_suffix(self) -> list[Event]:
+        """Append provider citations once, before the terminal ``Done``."""
+        if self._citations_emitted:
+            return []
+        self._citations_emitted = True
+        suffix = citation_markdown(self.citations, self.text)
+        if not suffix:
+            return []
+        self.text += suffix
+        return [ContentDelta(suffix)]
+
+    def _note_search_event(self, event: Any, status: str) -> None:
+        item_id = str(_attr(event, "item_id", "") or "")
+        entry = {
+            key: value
+            for key, value in (
+                ("item_id", item_id),
+                ("status", status),
+                ("action", _attr(event, "action", "")),
+                ("queries", _attr(event, "queries", [])),
+            )
+            if value not in ("", None, [])
+        }
+        if item_id:
+            for existing in self.web_search_calls:
+                if existing.get("item_id") == item_id:
+                    existing.update(entry)
+                    return
+            self._seen_search_ids.add(item_id)
+        self.web_search_calls.append(entry)
+
+    def _note_hosted_item(self, item: Any) -> None:
+        item_type = str(_attr(item, "type", "") or "")
+        if item_type == "message":
+            self.citations.extend(citations_from_response_item(item))
+            return
+        if item_type != "web_search_call":
+            return
+        item_id = str(_attr(item, "id", "") or "")
+        status = str(_attr(item, "status", "") or "in_progress")
+        action = _attr(item, "action")
+        entry: dict[str, Any] = {"item_id": item_id, "status": status}
+        if action is not None:
+            entry["action"] = str(_attr(action, "type", "") or "")
+            queries = _attr(action, "queries")
+            if isinstance(queries, list):
+                entry["queries"] = [str(query) for query in queries]
+        self._note_search_event(entry, status)
+        wire_item = {"type": "web_search_call", "id": item_id, "status": status}
+        if action is not None:
+            wire_item["action"] = (
+                dict(action) if isinstance(action, Mapping) else {
+                    key: _attr(action, key)
+                    for key in ("type", "query", "queries", "url")
+                    if _attr(action, key, None) is not None
+                }
+            )
+        if item_id and item_id not in {value.get("id") for value in self._search_items}:
+            self._search_items.append(wire_item)
+        elif item_id:
+            for existing in self._search_items:
+                if existing.get("id") == item_id:
+                    existing.update(wire_item)
 
     def _event_index(self, event: Any, item: Any = None) -> int:
         raw = _attr(event, "output_index", None)
@@ -382,6 +505,7 @@ class DeepSeekResponsesStreamParser:
             for index, item in enumerate(output):
                 item_type = _attr(item, "type")
                 if item_type == "message":
+                    self._note_hosted_item(item)
                     text = _message_output_text(item)
                     if text:
                         self.text = text
@@ -394,6 +518,8 @@ class DeepSeekResponsesStreamParser:
                     slot = self._calls[index]
                     slot["complete"] = True
                     self._end_call(index, events)
+                elif item_type == "web_search_call":
+                    self._note_hosted_item(item)
         self.finish_reason = "tool_calls" if self._completed_tool_calls() else "stop"
 
     def _set_incomplete(self, response: Any, events: list[Event]) -> None:
@@ -411,7 +537,7 @@ class DeepSeekResponsesStreamParser:
         self.error = str(
             _attr(error, "message", "")
             or _attr(response, "message", "")
-            or "DeepSeek Responses stream failed"
+            or f"{self.provider} Responses stream failed"
         )
 
     def _record_usage(self, response: Any, events: list[Event]) -> None:
@@ -458,7 +584,9 @@ def _message_output_text(item: Any) -> str:
 
 
 def _reasoning_output_text(item: Any) -> str:
-    content = _attr(item, "content", None)
+    content = _attr(item, "summary", None)
+    if not isinstance(content, list):
+        content = _attr(item, "content", None)
     if isinstance(content, str):
         return content
     if not isinstance(content, list):

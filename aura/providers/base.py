@@ -64,8 +64,8 @@ class ProviderSpec:
     # Completions) or ``"anthropic_messages"`` (Anthropic Messages). It is read
     # once by the provider client; no call site infers it from the provider id.
     # ``chat_base_url`` overrides the API root used *only* for chat requests
-    # (falls back to ``base_url``), so non-chat paths — model discovery,
-    # pricing, native Responses web search — keep using the ordinary base URL.
+    # (falls back to ``base_url``), so non-chat paths such as model discovery
+    # and pricing keep using the ordinary base URL.
     # ``requires_reasoning_replay`` applies to transports that still need prior
     # assistant reasoning re-encoded for a tool round — currently the legacy
     # DeepSeek Chat Completions path and native Anthropic. Canonical History
