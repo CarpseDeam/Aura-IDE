@@ -58,7 +58,7 @@ from aura.gui.send_handler import SendHandler
 from aura.gui.skills_manager import SkillsManagerController
 from aura.gui.status_bar import AuraStatusBar
 from aura.gui.update_dialog import UpdateDialog
-from aura.gui.widgets.aura_glow import AuraWidget
+from aura.gui.widgets.aura_glow import AuraPhaseDriver, AuraWidget
 from aura.gui.window_chrome import WindowChromeMixin
 
 
@@ -166,7 +166,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         center_layout.setContentsMargins(20, 0, 20, 16)
         center_layout.setSpacing(0)
 
-        self._chat = ChatView()
+        self._aura_phase_driver = AuraPhaseDriver(self)
+        self._chat = ChatView(self._aura_phase_driver)
         self._chat.setParent(self)
         # Production execution projects into the workspace, so the chat keeps
         # its compact tool presentation.
@@ -217,7 +218,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
         self._playground_aura = AuraWidget(
             self._playground,
-            glow_color="#00e5ff",
+            phase_driver=self._aura_phase_driver,
             glow_spread=16,
             parent=self,
         )

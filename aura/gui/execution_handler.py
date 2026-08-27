@@ -154,7 +154,7 @@ class ExecutionEventHandler(QObject):
         # chat aura alive and point the user at the workspace instead of
         # duplicating the transcript into the chat.
         self._mark_chat_working_in_workspace()
-        self._playground.set_glow_state("coding")
+        self._playground.start_aura()
         self._playground.begin_assistant()
         self.execution_started.emit()
 

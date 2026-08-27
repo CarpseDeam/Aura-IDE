@@ -201,9 +201,9 @@ class AuraPlayground(QWidget):
     def set_aura_wrapper(self, wrapper: AuraWidget) -> None:
         self._aura_wrapper = wrapper
 
-    def set_glow_state(self, state: str) -> None:
+    def start_aura(self) -> None:
         if self._aura_wrapper:
-            self._aura_wrapper.set_glow_state(state)
+            self._aura_wrapper.start_aura()
 
     def set_active_run_card(self, card: QWidget) -> None:
         """Insert a run card into the playground layout (below the stack)."""

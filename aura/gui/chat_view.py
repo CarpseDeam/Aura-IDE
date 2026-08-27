@@ -29,11 +29,10 @@ from aura.gui.cards.plan_review_card import PlanReviewCard
 from aura.gui.cards.user_card import UserCard
 from aura.gui.controllers import ToolStreamController
 from aura.gui.theme import (
-    ACCENT,
     FG,
     FG_ITALIC,
 )
-from aura.gui.widgets.aura_glow import AuraWidget
+from aura.gui.widgets.aura_glow import AuraPhaseDriver, AuraWidget
 
 
 class ChatView(QScrollArea):
@@ -45,8 +44,9 @@ class ChatView(QScrollArea):
     _BOTTOM_THRESHOLD_PX = 64
     _BOTTOM_SAFE_MARGIN_PX = 44
 
-    def __init__(self) -> None:
+    def __init__(self, aura_phase_driver: AuraPhaseDriver) -> None:
         super().__init__()
+        self._aura_phase_driver = aura_phase_driver
         self.setMinimumWidth(0)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setWidgetResizable(True)
@@ -353,11 +353,15 @@ class ChatView(QScrollArea):
         card = AssistantCard(compact_tools=self._compact_tools, parent=self)
         card._chat_view = self
         self._current_assistant = card
-        wrapper = AuraWidget(card, glow_color=ACCENT, glow_spread=16, parent=self)
+        wrapper = AuraWidget(
+            card,
+            phase_driver=self._aura_phase_driver,
+            glow_spread=16,
+            parent=self,
+        )
         self._current_aura = wrapper
         self._add_card(wrapper)
         wrapper.start_aura()
-        wrapper.set_glow_state("thinking")
         self._current_assistant_transcript_parts = []
         self._current_assistant_transcript_recorded = False
         return card
@@ -484,8 +488,6 @@ class ChatView(QScrollArea):
 
     def append_reasoning(self, text: str) -> None:
         self.current_assistant().append_reasoning(text)
-        if self._current_aura is not None:
-            self._current_aura.set_glow_state("thinking")
         self._request_scroll_to_bottom()
 
     def append_content(self, text: str) -> None:
@@ -493,19 +495,12 @@ class ChatView(QScrollArea):
         # The first content delta means reasoning is done.
         if not ac._content_label.isVisible():
             ac.reasoning_done()
-        # On first content delta, ensure the glow is in "thinking" state
-        # (important for assistants that don't produce reasoning content).
-        if not ac._content_label.isVisible() and self._current_aura is not None:
-            self._current_aura.set_glow_state("thinking")
         ac.append_content(text)
         if self._record_transcript:
             self._current_assistant_transcript_parts.append(text)
         self._request_scroll_to_bottom()
 
     def add_tool_call(self, tool_call_id: str, name: str) -> None:
-        if self._current_aura is not None:
-            self._current_aura.set_glow_state("coding")
-
         ac = self.current_assistant()
         ac.notify_compact_tool_start(name)
         self._compact_tool_names[tool_call_id] = name
