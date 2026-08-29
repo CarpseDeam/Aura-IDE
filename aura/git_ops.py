@@ -633,7 +633,6 @@ _AURA_GITIGNORE_ENTRIES = (
     "/.aura/memory.db",
     "/.aura/project.json",
     "/.aura/toolist.txt",
-    "/.aura/drones/runs/",
 )
 
 
@@ -654,14 +653,6 @@ def _is_broad_aura_ignore(line: str) -> bool:
         ".aura/**",
         "/.aura/*",
         "/.aura/**",
-        ".aura/drones",
-        ".aura/drones/",
-        "/.aura/drones",
-        "/.aura/drones/",
-        ".aura/drones/*",
-        ".aura/drones/**",
-        "/.aura/drones/*",
-        "/.aura/drones/**",
     }
     return stripped in broad_patterns
 
@@ -670,7 +661,7 @@ def ensure_aura_gitignored(workspace_root: Path) -> None:
     """Manage an explicit allowlist of runtime Aura paths in .gitignore.
 
     Ensures private/runtime .aura paths are ignored while allowing
-    repo-owned paths like .aura/drones/ to be tracked.
+    repo-owned .aura paths to be tracked.
 
     All failures (missing permissions, disk full, etc.) are silently ignored
     so callers never need to handle exceptions from this function.

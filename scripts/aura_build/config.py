@@ -21,12 +21,6 @@ FINAL_EXE_NAME = f"{APP_NAME}.exe"
 UPDATER_HELPER_SOURCE = Path(PACKAGE_NAME) / "windows_updater.cmd"
 UPDATER_HELPER_DIST_NAME = "AuraUpdater.cmd"
 
-DRONES_SOURCE_REL = Path(".aura") / "drones"
-DRONES_DEST_REL = Path(".aura") / "drones"
-
-BUILTIN_DRONES_SOURCE_REL = Path("aura") / "drones" / "bundled"
-BUILTIN_DRONES_DEST_REL = Path("aura") / "drones" / "bundled"
-
 PRODUCTION_PROMPT_SOURCE_REL = Path("aura") / "production_prompt.md"
 PRODUCTION_PROMPT_DEST_REL = Path("aura") / "production_prompt.md"
 

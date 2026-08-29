@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
-
 if TYPE_CHECKING:
     from aura.gui.main_window import MainWindow
 
@@ -38,7 +36,6 @@ class MainWindowSignalWiring:
         w._toolbar.read_only_toggled.connect(w._on_read_only_toggled)
         w._toolbar.plan_review_toggled.connect(w._settings_controller.on_plan_review_toggled)
         w._toolbar.auto_approve_toggled.connect(w._settings_controller.on_auto_approve_toggled)
-        w._toolbar.auto_summon_drones_toggled.connect(w._settings_controller.on_auto_summon_drones_toggled)
         w._toolbar.update_requested.connect(w._on_open_update)
         w._toolbar.settings_requested.connect(w._settings_controller.open_settings)
         w._toolbar.logs_requested.connect(w._open_logs_folder)
@@ -52,32 +49,19 @@ class MainWindowSignalWiring:
         w._left_pane.new_project_requested.connect(w._workspace_controller.on_create_new_project)
         w._left_pane.production_model_changed.connect(lambda: w._refresh_status_bar())
         w._left_pane.production_thinking_changed.connect(lambda: w._refresh_status_bar())
-        w._left_pane.drone_selected.connect(lambda folder: w._drone_controller.on_drone_folder_selected(folder.name))
-        w._left_pane.new_drone_requested.connect(w._drone_controller.on_create_drone)
 
         # ---- group 4: launchpad ----
         w._launchpad.open_existing_requested.connect(w._workspace_controller.on_open_existing)
         w._launchpad.create_new_requested.connect(w._workspace_controller.on_create_new_project)
         w._launchpad.create_demo_requested.connect(w._workspace_controller.on_create_demo_project)
 
-        # ---- group 5: chat ----
-        w._chat.droneRunFocusRequested.connect(w._drone_controller.on_focus_drone_run)
-
         # ---- group 6: send handler ----
-        w._send_handler.drone_bay_requested.connect(w._drone_controller.on_drone_bay_requested)
+        w._send_handler.agents_requested.connect(w._agents_controller.on_agents_requested)
         w._send_handler.skills_manager_requested.connect(w._skills_controller.open_manager)
         w._send_handler.stop_requested.connect(w._on_skill_creation_stop)
         w._skills_controller.creation_session_changed.connect(
             w._on_skill_creation_session_changed
         )
-
-        # ---- group 7: drone reports window ----
-        w._drone_reports_window.geometry_saved.connect(w._terminal_controller._on_drone_reports_geometry_saved)
-        w._drone_reports_window.visibility_changed.connect(lambda _visible: w._drone_controller.sync_drone_tab_checked())
-        # ---- group 8: MainWindow drone signals ----
-        w.droneRunFinishedOnUiThread.connect(w._drone_controller.on_drone_finished, Qt.ConnectionType.QueuedConnection)
-        w.droneStatusChangedOnUiThread.connect(w._drone_controller.on_drone_status_changed)
-        w.droneReceiptReadyOnUiThread.connect(w._drone_controller.on_drone_receipt)
 
         # ---- group 9: execution handler + playground ----
         w._execution_handler.usage_updated.connect(w._refresh_status_bar)
@@ -92,8 +76,7 @@ class MainWindowSignalWiring:
         checkpoint_tab = w._edge_rail.checkpoint_tab
         if checkpoint_tab is not None:
             checkpoint_tab.clicked.connect(lambda: w._on_open_checkpoints())
-        w._edge_rail.droneBayRequested.connect(w._drone_controller.on_drone_bay_requested)
-        w._edge_rail.droneRunFocusRequested.connect(w._drone_controller.on_focus_drone_run)
+        w._edge_rail.agentsRequested.connect(w._agents_controller.on_agents_requested)
         w._edge_rail.companionRequested.connect(w._on_open_companion_popout)
 
         # ---- group 12: bridge ↔ view ----

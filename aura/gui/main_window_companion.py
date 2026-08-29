@@ -43,9 +43,6 @@ class MainWindowCompanionController(QObject):
     def update_settings(self, settings) -> None:
         self._companion.update_settings(settings)
 
-    def set_drone_runner(self, runner) -> None:
-        self._companion.set_drone_runner(runner)
-
     def set_workspace_root(self, path: str) -> None:
         self._companion.set_workspace_root(path)
 

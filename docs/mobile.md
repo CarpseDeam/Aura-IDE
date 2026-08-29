@@ -16,7 +16,6 @@ The relay is optional. You can run a local relay for LAN-only access, or use a h
 - **Browse conversations** — View threads within a project
 - **Chat with Aura** — Send messages and get real-time streaming responses
 - **View receipts** — Browse completed run receipts
-- **Check drone status** — See active drone runs
 
 ## Connection Model
 

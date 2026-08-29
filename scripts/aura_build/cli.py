@@ -13,8 +13,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from scripts.aura_build.assets import (
-    bundle_builtin_drones,
-    bundle_drones,
     copy_raw_source_packages,
     directory_size,
     find_created_dist_dir,
@@ -336,10 +334,6 @@ def _run_phases(
 
     with timeline.phase("manual package copies"):
         copy_raw_source_packages(final_dist_dir, python_exe)
-
-    with timeline.phase("drone & resource preparation"):
-        bundle_drones(root, final_dist_dir)
-        bundle_builtin_drones(root, final_dist_dir)
 
     with timeline.phase("grammar preparation"):
         prewarm_grammars(final_dist_dir, python_exe)

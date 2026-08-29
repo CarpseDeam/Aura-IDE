@@ -411,8 +411,7 @@ p {
   line-height: 1.5;
 }
 
-.value-icon,
-.drone-number {
+.value-icon {
   display: block;
   margin-bottom: 22px;
   color: var(--blue);
@@ -734,8 +733,7 @@ p {
   gap: 14px;
 }
 
-.access-card,
-.drone-card {
+.access-card {
   min-width: 0;
   padding: 25px;
   border: 1px solid var(--border);
@@ -748,13 +746,11 @@ p {
   background: linear-gradient(145deg, var(--blue-soft), var(--panel) 55%);
 }
 
-.access-card h3,
-.drone-card h3 {
+.access-card h3 {
   font-size: 1.08rem;
 }
 
-.access-card p,
-.drone-card p {
+.access-card p {
   margin-bottom: 0;
   color: var(--text-muted);
   font-size: 0.86rem;
@@ -893,29 +889,6 @@ p {
 .phone-front {
   z-index: 2;
   transform: translate(-24px, 24px) rotate(3deg);
-}
-
-.drone-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-}
-
-.drone-card {
-  min-height: 220px;
-}
-
-.drone-card .drone-number {
-  margin-bottom: 62px;
-}
-
-.drone-card-success {
-  border-color: rgba(158, 206, 106, 0.32);
-  background: linear-gradient(145deg, var(--green-soft), var(--panel) 55%);
-}
-
-.drone-card-success .drone-number {
-  color: var(--green);
 }
 
 .support-section > .wrap {
@@ -1085,7 +1058,6 @@ p {
   .proof-lead-grid,
   .proof-secondary-grid,
   .access-grid,
-  .drone-grid,
   .companion-layout {
     grid-template-columns: 1fr;
   }

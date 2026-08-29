@@ -28,7 +28,6 @@ INSPECT = "inspect"
 BULK_READ = "bulk_read"
 DIAGNOSTICS = "diagnostics"
 SNAPSHOT = "snapshot"
-DRONES = "drones"
 GODOT = "godot"
 
 CAPABILITY_TOOLS: dict[str, frozenset[str]] = {
@@ -71,7 +70,6 @@ CAPABILITY_TOOLS: dict[str, frozenset[str]] = {
     }),
     DIAGNOSTICS: frozenset({"run_diagnostic_command"}),
     SNAPSHOT: frozenset({"get_workspace_snapshot"}),
-    DRONES: frozenset({"run_read_only_drone", "register_drone_folder"}),
     GODOT: frozenset({
         "inspect_godot_assets",
         "inspect_godot_asset_preview",

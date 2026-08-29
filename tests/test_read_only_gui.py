@@ -30,7 +30,6 @@ class _Recorder:
 
 def _window_for_started(active_turn_read_only: bool, status_bar: AuraStatusBar):
     switch_to_workspace = _Recorder()
-    sync_drone_tab_checked = _Recorder()
     return SimpleNamespace(
         _final_stream_message={},
         _input=SimpleNamespace(
@@ -41,17 +40,13 @@ def _window_for_started(active_turn_read_only: bool, status_bar: AuraStatusBar):
         _skills_controller=SimpleNamespace(set_execution_active=_Recorder()),
         _status_bar=status_bar,
         _bridge=SimpleNamespace(active_turn_read_only=active_turn_read_only),
-        _drone_controller=SimpleNamespace(
-            is_workbay_open=lambda: False,
-            sync_drone_tab_checked=sync_drone_tab_checked,
-        ),
         _playground=SimpleNamespace(switch_to_workspace=switch_to_workspace),
         _chat=SimpleNamespace(
             assistant_done=_Recorder(),
             stop_current_aura=_Recorder(),
         ),
         _settle_finished_turn=_Recorder(),
-    ), switch_to_workspace, sync_drone_tab_checked
+    ), switch_to_workspace
 
 
 @pytest.mark.parametrize("active_turn_read_only", [True, False])
@@ -60,13 +55,12 @@ def test_started_keeps_collaborative_presentation_but_switches_production(
 ) -> None:
     bar = AuraStatusBar()
     try:
-        window, switch_to_workspace, sync_drone_tab_checked = _window_for_started(
+        window, switch_to_workspace = _window_for_started(
             active_turn_read_only, bar
         )
         MainWindow._on_started(window)
 
         assert not bar._handoff_btn.isEnabled()
-        assert sync_drone_tab_checked.calls == [()]
         if active_turn_read_only:
             assert switch_to_workspace.calls == []
         else:
@@ -83,7 +77,7 @@ def test_handoff_tracks_bridge_start_and_finish_for_both_turn_modes(
     bar = AuraStatusBar()
     try:
         for active_turn_read_only in (True, False):
-            window, _switch, _sync = _window_for_started(active_turn_read_only, bar)
+            window, _switch = _window_for_started(active_turn_read_only, bar)
 
             MainWindow._on_started(window)
             assert not bar._handoff_btn.isEnabled()

@@ -41,7 +41,7 @@ def test_toolbar_has_no_expanding_spacer_between_logs_and_settings(qapp) -> None
 
 def test_edge_tab_rail_is_fixed_width_and_compact(qapp) -> None:
     """The rail must size itself to its own content (terminal/checkpoint/
-    drone/companion tabs + pips), not stretch to fill a parent column."""
+    agents/companion tabs), not stretch to fill a parent column."""
     from aura.gui.edge_rails import EdgeTabRail
 
     rail = EdgeTabRail()
@@ -93,7 +93,7 @@ def test_main_window_central_widget_is_just_the_splitter_no_rail_gutter() -> Non
 def test_old_scattered_position_edge_tabs_pattern_does_not_return() -> None:
     import inspect
 
-    from aura.gui import main_window, main_window_drones, main_window_terminal
+    from aura.gui import main_window, main_window_agents, main_window_terminal
 
-    for module in (main_window, main_window_drones, main_window_terminal):
+    for module in (main_window, main_window_agents, main_window_terminal):
         assert "_position_edge_tabs" not in inspect.getsource(module)

@@ -190,7 +190,6 @@ class AuraStatusBar(QStatusBar):
     def __init__(self, parent=None, show_resize_grip: bool = True) -> None:
         super().__init__(parent)
 
-        self._drone_label: QLabel | None = None
         self._resize_grip_allowed = show_resize_grip
 
         # Left side: workspace path only

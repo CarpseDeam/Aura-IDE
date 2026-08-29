@@ -48,18 +48,6 @@ class MainWindowTerminalController(QObject):
         self._window._settings.terminal_window_geometry = geometry
         save_settings(self._window._settings)
 
-    def _on_drone_reports_geometry_saved(self, geometry: str) -> None:
-        if self._window._settings.drone_reports_window_geometry == geometry:
-            return
-        self._window._settings.drone_reports_window_geometry = geometry
-        save_settings(self._window._settings)
-
-    def _on_drone_workbay_geometry_saved(self, geometry: str) -> None:
-        if self._window._settings.drone_workbay_window_geometry == geometry:
-            return
-        self._window._settings.drone_workbay_window_geometry = geometry
-        save_settings(self._window._settings)
-
     def _dim_terminal_tab_after_success(self) -> None:
         if self._window._edge_rail.state == "success":
             self._window._edge_rail.set_state("dim")

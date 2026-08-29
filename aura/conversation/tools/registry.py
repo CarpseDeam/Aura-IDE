@@ -13,7 +13,6 @@ from aura.codebase_index.tool import search_codebase as _search_codebase  # noqa
 from aura.conversation.plan_review import PlanReviewState, blocked_tool_payload
 from aura.conversation.tools._code_intel_mixin import CodeIntelHandlersMixin
 from aura.conversation.tools._diagnostic_mixin import DiagnosticHandlersMixin
-from aura.conversation.tools._drone_mixin import DroneHandlersMixin
 from aura.conversation.tools._git_mixin import GitHandlersMixin
 from aura.conversation.tools._godot_asset_preview_mixin import GodotAssetPreviewHandlersMixin
 from aura.conversation.tools._godot_assets_mixin import GodotAssetHandlersMixin
@@ -66,7 +65,6 @@ class ToolRegistry(
     TaskChecklistHandlersMixin,
     MemoryHandlersMixin,
     DiagnosticHandlersMixin,
-    DroneHandlersMixin,
     WorkspaceHandlersMixin,
     PlanReviewHandlersMixin,
 ):
@@ -519,12 +517,6 @@ TOOL_HANDLERS["search_project_memory"] = ToolRegistry._handle_search_project_mem
 TOOL_HANDLERS["save_to_project_memory"] = ToolRegistry._handle_save_to_project_memory
 TOOL_HANDLERS["run_diagnostic_command"] = ToolRegistry._handle_run_diagnostic_command
 TOOL_HANDLERS["get_workspace_snapshot"] = ToolRegistry._handle_get_workspace_snapshot
-TOOL_HANDLERS["summon_drone"] = ToolRegistry._handle_summon_drone
-TOOL_HANDLERS["launch_read_only_drone"] = ToolRegistry._handle_launch_read_only_drone
-TOOL_HANDLERS["run_read_only_drone"] = ToolRegistry._handle_run_read_only_drone
-TOOL_HANDLERS["check_drone_run"] = ToolRegistry._handle_check_drone_run
-TOOL_HANDLERS["register_drone_folder"] = ToolRegistry._handle_register_drone_folder
-TOOL_HANDLERS["declare_ui_contract"] = ToolRegistry._handle_declare_ui_contract
 TOOL_HANDLERS["code_intel_outline"] = ToolRegistry._handle_code_intel_outline
 TOOL_HANDLERS["code_intel_references"] = ToolRegistry._handle_code_intel_references
 TOOL_HANDLERS["code_intel_dependents"] = ToolRegistry._handle_code_intel_dependents

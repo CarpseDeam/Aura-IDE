@@ -3,12 +3,11 @@ from __future__ import annotations
 
 from enum import Enum, auto
 
-from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QFrame, QToolButton, QVBoxLayout, QWidget
 
 from aura.config import media_path
-from aura.gui.drones.drone_rail_pip import DroneRailPip
 from aura.gui.theme import (
     ACCENT,
     ACCENT_HOVER,
@@ -35,8 +34,7 @@ class EdgeTabRail(QFrame):
     a terminal tab with expand/collapse/hide states and a checkpoint tab."""
 
     terminalTabToggled = Signal(bool)  # True=expanded, False=collapsed
-    droneBayRequested = Signal()
-    droneRunFocusRequested = Signal(str)
+    agentsRequested = Signal()
     companionRequested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -46,10 +44,8 @@ class EdgeTabRail(QFrame):
         self._terminal_tab: QToolButton | None = None
         self._checkpoint_tab: QToolButton | None = None
         self._terminal_container: QWidget | None = None
-        self._drone_tab: QToolButton | None = None
+        self._agents_tab: QToolButton | None = None
         self._companion_tab: QToolButton | None = None
-        self._drone_run_pips: dict[str, DroneRailPip] = {}
-        self._summon_animations: dict[str, tuple[QToolButton, QPropertyAnimation]] = {}
         self._corner_widget: QWidget | None = None
         self._setup_ui()
 
@@ -68,15 +64,7 @@ class EdgeTabRail(QFrame):
         self._rail_layout.setContentsMargins(0, 0, 0, 0)
         self._rail_layout.setSpacing(6)
 
-        self._drone_run_stack = QWidget(self)
-        self._drone_run_stack.setObjectName("droneRunStack")
-        self._drone_run_stack_layout = QVBoxLayout(self._drone_run_stack)
-        self._drone_run_stack_layout.setContentsMargins(0, 0, 0, 0)
-        self._drone_run_stack_layout.setSpacing(4)
-        self._drone_run_stack_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)
-
         self._rail_layout.addStretch(1)
-        self._rail_layout.addWidget(self._drone_run_stack, alignment=Qt.AlignmentFlag.AlignCenter)
         self._rail_layout.addSpacing(2)
 
         self._terminal_tab = QToolButton(self)
@@ -102,18 +90,18 @@ class EdgeTabRail(QFrame):
         self._checkpoint_tab.setStyleSheet(self._checkpoint_tab_style())
         self._rail_layout.addWidget(self._checkpoint_tab)
 
-        self._drone_tab = QToolButton(self)
-        self._drone_tab.setObjectName("edgeDroneTab")
-        self._drone_tab.setToolTip("Drone Bay")
-        self._drone_tab.setIcon(QIcon(str(media_path("drone_bot.svg"))))
-        self._drone_tab.setIconSize(QSize(22, 22))
-        self._drone_tab.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        self._drone_tab.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._drone_tab.setCheckable(True)
-        self._drone_tab.setFixedSize(40, 44)
-        self._drone_tab.clicked.connect(lambda: self.droneBayRequested.emit())
-        self._drone_tab.setStyleSheet(self._drone_tab_style())
-        self._rail_layout.addWidget(self._drone_tab)
+        self._agents_tab = QToolButton(self)
+        self._agents_tab.setObjectName("edgeAgentsTab")
+        self._agents_tab.setToolTip("Agents")
+        self._agents_tab.setIcon(QIcon(str(media_path("agents_bot.svg"))))
+        self._agents_tab.setIconSize(QSize(22, 22))
+        self._agents_tab.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self._agents_tab.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._agents_tab.setCheckable(True)
+        self._agents_tab.setFixedSize(40, 44)
+        self._agents_tab.clicked.connect(lambda: self.agentsRequested.emit())
+        self._agents_tab.setStyleSheet(self._agents_tab_style())
+        self._rail_layout.addWidget(self._agents_tab)
 
         # Companion phone badge
         self._companion_tab = QToolButton(self)
@@ -151,8 +139,8 @@ class EdgeTabRail(QFrame):
         return self._checkpoint_tab
 
     @property
-    def drone_tab(self) -> QToolButton | None:
-        return self._drone_tab
+    def agents_tab(self) -> QToolButton | None:
+        return self._agents_tab
 
     @property
     def companion_tab(self) -> QToolButton | None:
@@ -187,139 +175,6 @@ class EdgeTabRail(QFrame):
         else:  # "disabled" or other
             tab.setStyleSheet(self._companion_tab_style(accent=FG_DIM, bg="#161b33"))
             tab.setToolTip("Companion — Disabled")
-
-    def add_drone_run_pip(self, run_id: str, drone_name: str) -> None:
-        if run_id in self._drone_run_pips:
-            return
-        pip = DroneRailPip(self)
-        pip.setToolTip(f"{drone_name}: summoning")
-        pip.focused.connect(lambda rid=run_id: self.droneRunFocusRequested.emit(rid))
-        pip.set_summoning()
-        pip.begin_launch_animation()
-        self._drone_run_pips[run_id] = pip
-        self._drone_run_stack_layout.addWidget(pip, alignment=Qt.AlignmentFlag.AlignCenter)
-        QTimer.singleShot(0, lambda rid=run_id: self._play_summon_animation(rid))
-
-    def set_drone_run_pip_state(self, run_id: str, drone_name: str, state: str) -> None:
-        pip = self._drone_run_pips.get(run_id)
-        if pip is None:
-            return
-        normalized = self._normalize_drone_state(state)
-        label = normalized.replace("_", " ")
-        pip.setToolTip(f"{drone_name}: {label}")
-        if normalized == "summoning":
-            pip.set_summoning()
-        elif normalized == "completed":
-            pip.set_completed()
-        elif normalized in {"failed", "timed_out"}:
-            pip.set_error()
-        elif normalized == "cancelled":
-            pip.set_cancelled()
-        elif normalized == "waiting_for_approval":
-            pip.set_waiting_for_approval()
-        elif normalized == "running":
-            pip.set_running()
-        elif normalized == "waiting_for_loop":
-            pip.set_looping_idle()
-
-    def remove_drone_run_pip(self, run_id: str) -> None:
-        ghost, animation = self._summon_animations.pop(run_id, (None, None))
-        if animation is not None:
-            animation.stop()
-        if ghost is not None:
-            ghost.deleteLater()
-        pip = self._drone_run_pips.pop(run_id, None)
-        if pip is None:
-            return
-        self._drone_run_stack_layout.removeWidget(pip)
-        pip.deleteLater()
-
-    def rekey_drone_run_pip(self, old_run_id: str, new_run_id: str) -> None:
-        """Move a pip widget from old_run_id to new_run_id without visual disruption."""
-        pip = self._drone_run_pips.pop(old_run_id, None)
-        if pip is not None:
-            try:
-                pip.focused.disconnect()
-            except RuntimeError:
-                pass
-            pip.focused.connect(lambda rid=new_run_id: self.droneRunFocusRequested.emit(rid))
-            self._drone_run_pips[new_run_id] = pip
-
-    def _play_summon_animation(self, run_id: str) -> None:
-        pip = self._drone_run_pips.get(run_id)
-        if pip is None:
-            return
-        if self._drone_tab is None:
-            pip.finish_launch_animation()
-            return
-
-        ghost = QToolButton(self)
-        ghost.setObjectName("edgeDroneRunSummonGhost")
-        ghost.setIcon(QIcon(str(media_path("drone_bot.svg"))))
-        ghost.setIconSize(QSize(12, 12))
-        ghost.setFixedSize(18, 18)
-        ghost.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        ghost.setStyleSheet(
-            "QToolButton#edgeDroneRunSummonGhost {"
-            "  background: #14303a;"
-            "  border: 1px solid #7dcfff;"
-            "  border-radius: 9px;"
-            "  padding: 0px;"
-            "}"
-        )
-
-        start = self._centered_child_pos(self._drone_tab, ghost.size())
-        pip_origin = pip.mapTo(self, QPoint(0, 0))
-        end = QPoint(
-            pip_origin.x() + (pip.width() - ghost.width()) // 2,
-            pip_origin.y() + (pip.height() - ghost.height()) // 2,
-        )
-        ghost.move(start)
-        ghost.show()
-        ghost.raise_()
-
-        animation = QPropertyAnimation(ghost, b"pos", self)
-        animation.setDuration(540)
-        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-        animation.setStartValue(start)
-        animation.setEndValue(end)
-        animation.finished.connect(
-            lambda rid=run_id, g=ghost, a=animation: self._finish_summon_animation(rid, g, a)
-        )
-        self._summon_animations[run_id] = (ghost, animation)
-        animation.start()
-
-    def _finish_summon_animation(
-        self,
-        run_id: str,
-        ghost: QToolButton,
-        animation: QPropertyAnimation,
-    ) -> None:
-        self._summon_animations.pop(run_id, None)
-        animation.deleteLater()
-        ghost.deleteLater()
-        pip = self._drone_run_pips.get(run_id)
-        if pip is not None:
-            pip.finish_launch_animation()
-
-    @staticmethod
-    def _centered_child_pos(child: QWidget, target_size: QSize) -> QPoint:
-        rect = child.geometry()
-        return QPoint(
-            rect.center().x() - target_size.width() // 2,
-            rect.center().y() - target_size.height() // 2,
-        )
-
-    @staticmethod
-    def _normalize_drone_state(state: str) -> str:
-        normalized = state.strip().lower().replace(" ", "_").replace("-", "_")
-        if normalized in {"waiting", "approval", "waiting_approval"}:
-            return "waiting_for_approval"
-        if normalized in {"done", "success"}:
-            return "completed"
-        if normalized == "error":
-            return "failed"
-        return normalized
 
     # ------------------------------------------------------------------
     # Stylesheets
@@ -356,9 +211,9 @@ class EdgeTabRail(QFrame):
             "}"
         )
 
-    def _drone_tab_style(self) -> str:
+    def _agents_tab_style(self) -> str:
         return (
-            "QToolButton#edgeDroneTab {"
+            "QToolButton#edgeAgentsTab {"
             "  background: #161b33;"
             f"  color: {LABEL_FILES};"
             f"  border: 1px solid {ACCENT};"
@@ -369,19 +224,19 @@ class EdgeTabRail(QFrame):
             "  border-bottom-right-radius: 8px;"
             "  padding: 0px;"
             "}"
-            "QToolButton#edgeDroneTab:hover {"
+            "QToolButton#edgeAgentsTab:hover {"
             "  background: #1d2f55;"
             f"  color: {ACCENT_HOVER};"
             f"  border-color: {LABEL_FILES};"
             "  border-left: none;"
             "}"
-            "QToolButton#edgeDroneTab:checked {"
+            "QToolButton#edgeAgentsTab:checked {"
             "  background: #221b44;"
             f"  color: {LABEL_PROJECTS};"
             f"  border-color: {LABEL_PROJECTS};"
             "  border-left: none;"
             "}"
-            "QToolButton#edgeDroneTab:checked:hover {"
+            "QToolButton#edgeAgentsTab:checked:hover {"
             "  background: #2a245f;"
             f"  color: {FG};"
             f"  border-color: {ACCENT_HOVER};"

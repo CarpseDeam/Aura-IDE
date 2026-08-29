@@ -59,7 +59,7 @@ class SendHandler(QObject):
     and processes the /undo git command.
     """
 
-    drone_bay_requested = Signal()  # /drone command → open/toggle Drone Workbay
+    agents_requested = Signal()  # /agents command → open/toggle the Agents page
     skills_manager_requested = Signal()  # /skills command → open the Skills manager
     stop_requested = Signal()  # MainWindow correlation seam; cancellation stays here
 
@@ -157,8 +157,6 @@ class SendHandler(QObject):
                 "You can also open/browse a project folder before configuring AI.",
             )
             return False
-
-        # Drone mode checks removed — drone lifecycle removed.
 
         if built_in is not None:
             self._restore_local_command_selection(payload)
@@ -295,8 +293,6 @@ class SendHandler(QObject):
             _log.info("turn_target_files %s", ", ".join(target_files))
         self._bridge.set_turn_target_files(target_files)
 
-    # ---- drone construction --------------------------------------------------
-
     # ---- undo --------------------------------------------------------------
     def _handle_built_in_action(self, action: str, text: str = "") -> None:
         """Run one of Aura's own literal commands locally, without the model."""
@@ -315,8 +311,8 @@ class SendHandler(QObject):
         if action == "git_log":
             self._handle_git_log()
             return
-        if action == "drone_enter_mode":
-            self.drone_bay_requested.emit()
+        if action == "agents_enter_mode":
+            self.agents_requested.emit()
             return
         self._chat.add_error("Built-in action", f"Unsupported action: {action}")
 

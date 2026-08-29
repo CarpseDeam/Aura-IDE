@@ -456,13 +456,13 @@ class InputPanel(QFrame):
             return
 
         normalized = text.strip().lower()
-        if normalized == "/drone":
+        if normalized == "/agents":
             self._slash_hint.setText(
-                "/drone opens the Drone Workbay."
+                "/agents opens the Agents page."
             )
-        elif normalized.startswith("/drone "):
+        elif normalized.startswith("/agents "):
             self._slash_hint.setText(
-                "Use /drone by itself to open the Drone Workbay."
+                "Use /agents by itself to open the Agents page."
             )
         elif normalized == "/skills":
             self._slash_hint.setText(
@@ -474,7 +474,7 @@ class InputPanel(QFrame):
             )
         else:
             self._slash_hint.setText(
-                "/drone  —  Open the Drone Workbay.        /skills  —  Browse skills."
+                "/agents  —  Open the Agents page.        /skills  —  Browse skills."
             )
         self._slash_hint.setVisible(True)
 

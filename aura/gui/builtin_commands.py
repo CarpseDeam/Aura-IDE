@@ -29,8 +29,8 @@ def classify_built_in_command(text: str) -> str | None:
 
     if normalized == "/undo":
         return "undo"
-    if normalized == "/drone":
-        return "drone_enter_mode"
+    if normalized == "/agents":
+        return "agents_enter_mode"
     # Literal only: a message that merely talks about skills is a real request.
     if normalized == "/skills":
         return "skills"

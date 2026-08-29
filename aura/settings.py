@@ -66,7 +66,6 @@ class AppSettings:
     restore_last_conversation: bool = True
     temperature: float = 0.7
     auto_approve: bool = False
-    auto_summon_drones: bool = False
     #: When True, Aura pauses before the first workspace mutation of a real
     #: user turn so the user can review/edit the implementation plan via the
     #: ``review_implementation_plan`` tool. Off by default so existing
@@ -74,8 +73,6 @@ class AppSettings:
     review_plan_before_changes: bool = False
     sandbox_mode: str = DEFAULT_SANDBOX_MODE
     terminal_window_geometry: str = ""
-    drone_reports_window_geometry: str = ""
-    drone_workbay_window_geometry: str = ""
     main_window_geometry: str = ""
     main_window_state: str = ""
     main_splitter_sizes: list[int] = field(default_factory=list)
@@ -106,10 +103,6 @@ class AppSettings:
             s.first_launch_done = data["first_launch_done"]
         if isinstance(data.get("terminal_window_geometry"), str):
             s.terminal_window_geometry = data["terminal_window_geometry"]
-        if isinstance(data.get("drone_reports_window_geometry"), str):
-            s.drone_reports_window_geometry = data["drone_reports_window_geometry"]
-        if isinstance(data.get("drone_workbay_window_geometry"), str):
-            s.drone_workbay_window_geometry = data["drone_workbay_window_geometry"]
         if isinstance(data.get("main_window_geometry"), str):
             s.main_window_geometry = data["main_window_geometry"]
         if isinstance(data.get("main_window_state"), str):
@@ -139,8 +132,6 @@ class AppSettings:
                 s.temperature = max(0.0, min(2.0, float(raw)))
         if isinstance(data.get("auto_approve"), bool):
             s.auto_approve = data["auto_approve"]
-        if isinstance(data.get("auto_summon_drones"), bool):
-            s.auto_summon_drones = data["auto_summon_drones"]
         if isinstance(data.get("review_plan_before_changes"), bool):
             s.review_plan_before_changes = data["review_plan_before_changes"]
         if isinstance(data.get("sandbox_mode"), str) and data["sandbox_mode"] in ("host", "docker", "wasm"):

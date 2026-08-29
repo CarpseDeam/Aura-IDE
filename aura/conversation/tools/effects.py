@@ -8,7 +8,7 @@ from the tool's name:
 * ``mutation``             — changes workspace files or the open scene.
 * ``command/validation``   — runs an external command or validation process.
 * ``bookkeeping/control``  — records or controls conversation/tool state
-  (TODO, dispatch, memory, drone registration), not a user-visible edit.
+  (TODO, dispatch, memory), not a user-visible edit.
 
 The model is owned by the tool catalog and registry:
 
@@ -101,25 +101,17 @@ BUILTIN_TOOL_EFFECTS: dict[str, ToolEffect] = {
     "search_project_memory": ToolEffect.OBSERVATION,
     "load_skills": ToolEffect.OBSERVATION,
     "read_skill_resource": ToolEffect.OBSERVATION,
-    "launch_read_only_drone": ToolEffect.OBSERVATION,
-    "run_read_only_drone": ToolEffect.OBSERVATION,
-    "check_drone_run": ToolEffect.OBSERVATION,
     # --- mutation: changes workspace files or the open scene ---
     "apply_patch": ToolEffect.MUTATION,
     "edit_godot_scene": ToolEffect.MUTATION,
     "edit_godot_editor": ToolEffect.MUTATION,
     "edit_godot_asset_preview": ToolEffect.MUTATION,
     "install_godot_editor_bridge": ToolEffect.MUTATION,
-    # Writes a drone folder's ui_contract.json through the approved atomic
-    # write path — a workspace mutation, never bookkeeping that writes.
-    "declare_ui_contract": ToolEffect.MUTATION,
     # --- command/validation: runs an external command or validation ---
     "shell": ToolEffect.COMMAND,
     "run_diagnostic_command": ToolEffect.COMMAND,
     # --- bookkeeping/control: tracks or controls conversation/tool state ---
     "update_task_checklist": ToolEffect.BOOKKEEPING,
-    "summon_drone": ToolEffect.BOOKKEEPING,
-    "register_drone_folder": ToolEffect.BOOKKEEPING,
     "save_to_project_memory": ToolEffect.BOOKKEEPING,
     "review_implementation_plan": ToolEffect.BOOKKEEPING,
 }

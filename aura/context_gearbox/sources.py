@@ -43,13 +43,6 @@ GUI_RULES = """### gui_rules
 - The focused check for UI-adjacent changes is a GUI test or selfcheck.
 - Do not invent parallel UI paths when an existing seam exists."""
 
-DRONE_RULES = """### drone_rules
-- Keep the run loop owned by the card or harness.
-- Keep runs bounded and preserve structured receipts.
-- Do not create a duplicate canonical drone folder.
-- Preserve run history and existing receipt behavior.
-- Do not mix drone runtime changes with unrelated UI polish."""
-
 PROVIDER_RULES = """### provider_rules
 - Never leak keys, tokens, or provider secrets.
 - Preserve provider selection and settings behavior.
@@ -69,7 +62,6 @@ BUILD_PIPELINE_RULES = """### build_pipeline_rules
 
 _SCOPED_PACK_TEXT: dict[str, str] = {
     "gui_rules": GUI_RULES,
-    "drone_rules": DRONE_RULES,
     "provider_rules": PROVIDER_RULES,
     "build_pipeline_rules": BUILD_PIPELINE_RULES,
 }
@@ -132,29 +124,6 @@ _SCOPED_PACK_RULES: dict[str, _ScopedPackRule] = {
             "layout",
             "screen",
             "theme",
-        ),
-    ),
-    "drone_rules": _ScopedPackRule(
-        scope_name="drone",
-        path_prefixes=(
-            "aura/drones/",
-            "aura/gui/drone",
-            "drones/",
-            "bundled_drones/",
-        ),
-        path_globs=(
-            "**/drone_manifest*.json",
-            "**/drone_manifests/**",
-            "**/drone_templates/**",
-            "**/drone*/templates/**",
-        ),
-        task_hints=(
-            "drone",
-            "loop",
-            "capability runner",
-            "runner",
-            "receipt",
-            "bounded run",
         ),
     ),
     "provider_rules": _ScopedPackRule(
@@ -240,11 +209,6 @@ CONTEXT_SOURCES: tuple[ContextSource, ...] = (
         source_id="gui_rules",
         kind="scoped_coding_pack",
         reason="target files or task kind match GUI scope",
-    ),
-    ContextSource(
-        source_id="drone_rules",
-        kind="scoped_coding_pack",
-        reason="target files or task kind match drone scope",
     ),
     ContextSource(
         source_id="provider_rules",
@@ -640,7 +604,7 @@ def _single_scoped_pack_applies(
     task_kind: str | None,
     normalized_targets: tuple[str, ...],
 ) -> bool:
-    # Validating a GUI/provider/build/drone file must not pull in that
+    # Validating a GUI/provider/build file must not pull in that
     # subsystem's implementation guidance.
     if _is_validation_task_kind(task_kind):
         return False

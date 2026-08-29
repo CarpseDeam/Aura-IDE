@@ -8,8 +8,6 @@ from uuid import uuid4
 __all__ = [
     "CompanionProject",
     "CompanionThread",
-    "ActiveRunSummary",
-    "ReceiptSummary",
     "make_envelope",
     "parse_command",
 ]
@@ -32,31 +30,6 @@ class CompanionThread:
     title: str
     updated_at: str
     is_current: bool = False
-
-    def to_dict(self) -> dict:
-        return asdict(self)
-
-
-@dataclass
-class ActiveRunSummary:
-    run_id: str
-    kind: Literal["production", "drone"]
-    label: str
-    status: str
-    started_at: str | None = None
-
-    def to_dict(self) -> dict:
-        return asdict(self)
-
-
-@dataclass
-class ReceiptSummary:
-    run_id: str
-    kind: Literal["drone", "production"]
-    label: str
-    status: str
-    completed_at: str
-    summary: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)

@@ -61,8 +61,6 @@ REMOVED_PRODUCTION_TOOLS: frozenset[str] = frozenset({
     "run_diagnostic_command",
     "run_and_watch",
     "get_workspace_snapshot",
-    "run_read_only_drone",
-    "register_drone_folder",
     "write_file",
     "patch_file",
     "delete_file",

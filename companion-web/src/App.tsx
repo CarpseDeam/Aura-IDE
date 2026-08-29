@@ -5,15 +5,11 @@ import { tokens } from './ui/theme'
 import DesktopsScreen from './screens/Desktops'
 import ProjectsScreen from './screens/Projects'
 import ChatScreen from './screens/Chat'
-import RunsScreen from './screens/Runs'
-import ReceiptsScreen from './screens/Receipts'
 import LoginScreen from './screens/Login'
 
 const navItems = [
   { path: '/chat', label: 'Command', icon: '◐' },
   { path: '/projects', label: 'Switch', icon: '▤' },
-  { path: '/runs', label: 'Activity', icon: '▷' },
-  { path: '/receipts', label: 'Receipts', icon: '⌗' },
 ];
 
 function BottomNav() {
@@ -100,8 +96,6 @@ function AppLayout() {
           <Route path="/desktops" element={<DesktopsScreen />} />
           <Route path="/projects" element={<ProjectsScreen />} />
           <Route path="/chat/:threadId?" element={<ChatScreen />} />
-          <Route path="/runs" element={<RunsScreen />} />
-          <Route path="/receipts" element={<ReceiptsScreen />} />
           <Route path="/" element={<Navigate to={defaultRoute} replace />} />
           <Route path="*" element={<Navigate to={defaultRoute} replace />} />
         </Routes>

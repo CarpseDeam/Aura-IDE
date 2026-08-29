@@ -47,16 +47,9 @@ class AutomationPage(QWidget):
         )
         form.addRow("", self._auto_approve_chk)
 
-        self._auto_summon_drones_chk = GlassSwitch(
-            "Auto-summon Drones: Launch suggested Drones without approval",
-            getattr(self._settings, "auto_summon_drones", False),
-        )
-        form.addRow("", self._auto_summon_drones_chk)
-
         layout.addLayout(form)
         layout.addStretch()
 
     def collect_settings(self, settings: AppSettings) -> None:
         settings.restore_last_conversation = self._restore_chk.isChecked()
         settings.auto_approve = self._auto_approve_chk.isChecked()
-        settings.auto_summon_drones = self._auto_summon_drones_chk.isChecked()

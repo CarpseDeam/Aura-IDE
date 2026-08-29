@@ -130,8 +130,8 @@ def _wired(
     panel.skills_requested.connect(controller.open_manager)
     handler.skills_manager_requested.connect(controller.open_manager)
 
-    drones: list[int] = []
-    handler.drone_bay_requested.connect(lambda: drones.append(1))
+    agents: list[int] = []
+    handler.agents_requested.connect(lambda: agents.append(1))
 
     return SimpleNamespace(
         workspace=workspace,
@@ -141,7 +141,7 @@ def _wired(
         handler=handler,
         controller=controller,
         opens=opens,
-        drones=drones,
+        agents=agents,
     )
 
 
@@ -181,7 +181,7 @@ def test_near_misses_stay_ordinary_prompts(text: str) -> None:
 
 def test_existing_built_in_commands_are_unchanged() -> None:
     assert classify_built_in_command("/undo") == "undo"
-    assert classify_built_in_command("/drone") == "drone_enter_mode"
+    assert classify_built_in_command("/agents") == "agents_enter_mode"
     assert classify_built_in_command("git status") == "git_status"
     assert classify_built_in_command("fix the failing widget test") is None
 
@@ -247,7 +247,7 @@ def test_an_ordinary_message_mentioning_skills_still_sends(
 # ── the composer keeps what a local command never spent ──────────────────────
 
 
-@pytest.mark.parametrize("command", ["/skills", "/drone"])
+@pytest.mark.parametrize("command", ["/skills", "/agents"])
 def test_selected_chips_survive_a_local_command(
     tmp_path: Path, monkeypatch, qapp, command: str
 ) -> None:

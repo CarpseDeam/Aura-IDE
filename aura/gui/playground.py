@@ -129,11 +129,9 @@ class AuraPlayground(QWidget):
         if outer_splitter_sizes is not None and len(outer_splitter_sizes) == 2 and sum(outer_splitter_sizes) > 0 and all(v >= 40 for v in outer_splitter_sizes):
             self._outer_splitter.setSizes(outer_splitter_sizes)
 
-        # Stacked widget: index 0 = workspace view; Chain Editor uses a dynamic index
+        # Stacked widget: index 0 = workspace view.
         self._stack = QStackedWidget(self)
         self._stack.addWidget(self._outer_splitter)  # index 0
-        self._chain_editor: QWidget | None = None
-        self._chain_editor_index: int | None = None
 
         layout.addWidget(self._stack, 1)
 
@@ -148,36 +146,8 @@ class AuraPlayground(QWidget):
         self._file_edit_projection = FileEditProjection(self._code_editor)
         self._workspace_root: Path | None = None
 
-        # Active drone run card (shown below the stack widget)
-        self._run_cards: dict[str, QWidget] = {}
-        self._run_cards_host = QWidget(self)
-        self._run_cards_layout = QVBoxLayout(self._run_cards_host)
-        self._run_cards_layout.setContentsMargins(10, 6, 10, 10)
-        self._run_cards_layout.setSpacing(8)
-        self._run_cards_host.hide()
-        layout.addWidget(self._run_cards_host)
-
         # Aura wrapper reference for atmospheric synchronization
         self._aura_wrapper: AuraWidget | None = None
-
-    def set_chain_editor(self, chain_editor: QWidget) -> None:
-        """Add or replace the chain editor at a dynamic stack index."""
-        if self._chain_editor is not None:
-            self._stack.removeWidget(self._chain_editor)
-            self._chain_editor.deleteLater()
-        self._chain_editor = chain_editor
-        self._chain_editor_index = self._stack.addWidget(chain_editor)
-
-    def toggle_chain_editor(self) -> None:
-        """Switch the stacked widget to the chain editor view."""
-        if self._chain_editor is not None and self._stack.currentIndex() != self._chain_editor_index:
-            self._stack.setCurrentIndex(self._chain_editor_index)
-            self.set_workspace_header("WORKFLOW EDITOR", show_close_all=False)
-
-    def hide_chain_editor(self) -> None:
-        """Switch back to workspace from chain editor."""
-        if self._stack.currentIndex() == self._chain_editor_index:
-            self.switch_to_workspace()
 
     def set_workspace_header(self, text: str, show_close_all: bool = True) -> None:
         """Update the header label and visibility of Close All button."""
@@ -190,56 +160,12 @@ class AuraPlayground(QWidget):
             self._stack.setCurrentIndex(0)
             self.set_workspace_header("WORKSPACE", show_close_all=True)
 
-    def is_chain_editor_open(self) -> bool:
-        """Return True if the chain editor is currently displayed in the stack."""
-        return self._chain_editor is not None and self._stack.currentIndex() == self._chain_editor_index
-
-    def refresh_drone_bay(self) -> None:
-        if hasattr(self, '_drone_bay') and self._drone_bay is not None and hasattr(self._drone_bay, 'refresh'):
-            self._drone_bay.refresh()
-
     def set_aura_wrapper(self, wrapper: AuraWidget) -> None:
         self._aura_wrapper = wrapper
 
     def start_aura(self) -> None:
         if self._aura_wrapper:
             self._aura_wrapper.start_aura()
-
-    def set_active_run_card(self, card: QWidget) -> None:
-        """Insert a run card into the playground layout (below the stack)."""
-        self.clear_active_run_card()
-        self.add_run_card("__active__", card)
-
-    def clear_active_run_card(self) -> None:
-        """Remove the run card from the layout and destroy it."""
-        self.clear_run_cards()
-
-    def add_run_card(self, run_id: str, card: QWidget) -> None:
-        """Insert or replace one Drone run/receipt card."""
-        self.remove_run_card(run_id)
-        self._run_cards[run_id] = card
-        self._run_cards_layout.addWidget(card)
-        self._run_cards_host.show()
-        card.show()
-
-    def remove_run_card(self, run_id: str) -> None:
-        card = self._run_cards.pop(run_id, None)
-        if card is None:
-            return
-        self._run_cards_layout.removeWidget(card)
-        card.deleteLater()
-        if not self._run_cards:
-            self._run_cards_host.hide()
-
-    def clear_run_cards(self) -> None:
-        for run_id in list(self._run_cards):
-            self.remove_run_card(run_id)
-
-    def focus_run_card(self, run_id: str) -> None:
-        card = self._run_cards.get(run_id)
-        if card is not None:
-            self.switch_to_workspace()
-            card.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def stop_aura(self) -> None:
         if self._aura_wrapper:

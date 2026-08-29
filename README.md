@@ -123,7 +123,7 @@ Aura treats model-generated changes like a teammate's pull request. The controls
 - **Diff approval** — write tools produce a unified diff before mutation when approval is enabled. Approve or reject one change, or handle the remaining batch together.
 - **Automatic backups** — existing files are copied to `.aura/backups/` before write operations.
 - **Read-only mode** — write tools are removed from the model's tool list at the registry level.
-- **Bounded scope** — WorkArtifacts keep the current item and allowed files visible; Drones can add explicit write policies and path limits.
+- **Bounded scope** — WorkArtifacts keep the current item and allowed files visible.
 - **Visible validation** — commands, outcomes, missing tools, and failures remain available for inspection.
 - **Git safety tools** — status, diff, commits, snapshots, restore support, and `/undo` are built into the workflow.
 - **Encrypted API keys** — saved keys use machine-derived Fernet encryption; environment variables are also supported.
@@ -134,7 +134,7 @@ These controls reduce risk, but they do not replace reviewing the plan, diffs, a
 
 **Your phone steers Aura. Your desktop does the work.**
 
-Companion is a remote control, not a separate IDE. The desktop owns the workspace and execution; the phone can browse projects and conversations, send messages, follow live execution, check Drone status, and inspect receipts.
+Companion is a remote control, not a separate IDE. The desktop owns the workspace and execution; the phone can browse projects and conversations, send messages, and follow live execution.
 
 <p align="center">
   <img src="media/phone-home.jpg" alt="Aura Companion home screen showing desktop connection and recent activity" width="260">
@@ -142,32 +142,6 @@ Companion is a remote control, not a separate IDE. The desktop owns the workspac
 </p>
 
 Enable Companion on the desktop, pair from the phone browser, and connect through a local or hosted relay. The desktop must remain running. See [Mobile Companion](docs/mobile.md) for setup and connection details.
-
-## Drones
-
-**Drones are saved robot chores for repeatable work.**
-
-- Save a repeatable project job instead of explaining it again.
-- Run it on demand or on a schedule.
-- Apply read-only or write-approval policies and bounded execution rules.
-- Keep a receipt from each run.
-
-Drones are useful for recurring research, maintenance, checks, and other project tasks where the job should remain consistent across runs.
-
-<details>
-<summary>Developer details</summary>
-
-Each Drone is folder-backed and defined by a `drone.json` manifest.
-
-- **Command Drones** launch an entrypoint, receive one JSON object on stdin, and return one JSON object on stdout.
-- **Harness-lap Drones** run a bounded job through Aura's production conversation harness.
-- Write policies include `read_only`, `ask_before_writes`, and `normal_diff_approval`.
-- Read-only Drones can run in parallel; write-capable Drones share a single write lane so approval flows do not compete.
-- Run receipts are stored per workspace under `.aura/drones/runs/`.
-
-See [Drones](docs/drones.md) for manifest fields, execution contracts, policies, and construction rules.
-
-</details>
 
 ## Providers
 

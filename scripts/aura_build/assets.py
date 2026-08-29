@@ -8,22 +8,12 @@ import sys
 from pathlib import Path
 
 from scripts.aura_build.config import (
-    BUILTIN_DRONES_DEST_REL,
-    BUILTIN_DRONES_SOURCE_REL,
-    DRONES_DEST_REL,
-    DRONES_SOURCE_REL,
     FINAL_DIST_NAME,
     FINAL_EXE_NAME,
     OUTPUT_DIR,
     RAW_SOURCE_PACKAGES,
     SUPPORTED_GRAMMARS,
 )
-
-_COPY_IGNORE = shutil.ignore_patterns(
-    "__pycache__", ".pytest_cache", "*.pyc", "*.pyo",
-    "*.tmp", "*.swp", "*~", "*.bak",
-)
-
 
 # Dist discovery and normalization
 
@@ -108,76 +98,6 @@ def copy_raw_source_packages(final_dist_dir: Path, python_exe: Path) -> None:
         if target.exists():
             shutil.rmtree(target)
         shutil.copytree(source, target)
-
-
-# Drone bundles
-
-
-def bundle_drones(root: Path, final_dist_dir: Path) -> None:
-    """Copy bundled drone definitions from repo .aura/drones into the dist folder."""
-    source = root / DRONES_SOURCE_REL
-    dest = final_dist_dir / DRONES_DEST_REL
-
-    if not source.exists():
-        print("Repo .aura/drones not found; skipping drone bundle.")
-        return
-
-    # Remove any stale destination so leftover bundled drones don't persist
-    if dest.exists():
-        shutil.rmtree(dest, ignore_errors=True)
-
-    excluded_dirs = {"runs", "logs", "__pycache__", ".pytest_cache"}
-
-    bundled = []
-    for entry in sorted(source.iterdir()):
-        if not entry.is_dir():
-            continue
-        if entry.name in excluded_dirs:
-            continue
-        if entry.name.startswith("."):
-            continue
-        drone_json = entry / "drone.json"
-        if not drone_json.exists():
-            continue
-
-        shutil.copytree(entry, dest / entry.name, ignore=_COPY_IGNORE)
-        bundled.append(entry.name)
-
-    if bundled:
-        print(f"Bundled {len(bundled)} drone(s): {', '.join(bundled)}")
-    else:
-        print("No drones found to bundle.")
-
-
-def bundle_builtin_drones(root: Path, final_dist_dir: Path) -> None:
-    """Copy built-in drone definitions from aura/drones/bundled into the dist.
-
-    DroneStore._bundled_drones_root() loads from this path at runtime.
-    """
-    source = root / BUILTIN_DRONES_SOURCE_REL
-    dest = final_dist_dir / BUILTIN_DRONES_DEST_REL
-
-    if not source.exists():
-        print("aura/drones/bundled not found; skipping built-in drone bundle.")
-        return
-
-    if dest.exists():
-        shutil.rmtree(dest, ignore_errors=True)
-
-    bundled = []
-    for entry in sorted(source.iterdir()):
-        if not entry.is_dir():
-            continue
-        drone_json = entry / "drone.json"
-        if not drone_json.exists():
-            continue
-        shutil.copytree(entry, dest / entry.name, ignore=_COPY_IGNORE)
-        bundled.append(entry.name)
-
-    if bundled:
-        print(f"Bundled {len(bundled)} built-in drone(s): {', '.join(bundled)}")
-    else:
-        print("No built-in drones found to bundle.")
 
 
 # Tree-sitter grammars

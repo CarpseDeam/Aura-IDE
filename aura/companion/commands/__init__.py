@@ -17,7 +17,6 @@ class CommandContext:
         settings: AppSettings — the current settings snapshot.
         send_fn: Callable that accepts a raw envelope dict.
         bridge: The ConversationBridge, or None.
-        drone_runner: The DroneRunner, or None.
         project_store: A ProjectStore instance, or None.
         on_conversation_selected: Callback firing
             conversation_selected_by_companion signal (project_root, conversation_path).
@@ -27,7 +26,6 @@ class CommandContext:
     settings: AppSettings
     send_fn: Callable[[dict], None]
     bridge: Any = None
-    drone_runner: Any = None
     project_store: Any = None
     on_conversation_selected: Callable | None = None
 

@@ -32,7 +32,6 @@ These are what the Models settings page and the left sidebar edit.
 | `temperature`                 | float   | `0.7`                    | Production temperature (0.0–2.0)                          |
 | `restore_last_conversation`   | bool    | `true`                   | Restore the last conversation on launch                   |
 | `auto_approve`                | bool    | `false`                  | Skip diff approval for writes                             |
-| `auto_summon_drones`          | bool    | `false`                  | Summon suggested drones without a confirmation card       |
 | `sandbox_mode`                | str     | `"host"`                 | Execution sandbox: `"host"`, `"docker"`, `"wasm"`        |
 | `max_tool_rounds`             | int     | `50`                     | Maximum tool call rounds per conversation                 |
 | `tavily_api_key`              | str     | `""`                     | Tavily search API key                                     |
@@ -46,7 +45,7 @@ These are what the Models settings page and the left sidebar edit.
 
 Accessed from the gear icon in the bottom-left corner. Organized into pages:
 
-- **General** — Auto-Approve, Auto-Summon Drones, Tavily API key, tool rounds
+- **General** — Auto-Approve, Tavily API key, tool rounds
 - **Models** — Production provider, model, thinking mode, and temperature
 - **Backends** — API vs CLI backend selection
 - **Sandbox** — Execution sandbox mode

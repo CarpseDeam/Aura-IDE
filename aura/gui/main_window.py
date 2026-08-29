@@ -7,7 +7,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-from PySide6.QtCore import QByteArray, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QByteArray, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (
     QDialog,
@@ -36,13 +36,12 @@ from aura.gui._screen import clamp_to_screen
 from aura.gui.chat_view import ChatView
 from aura.gui.checkpoint_dialog import CheckpointDialog
 from aura.gui.conv_persistence import ConversationPersistence
-from aura.gui.drones.drone_reports_window import DroneReportsWindow
 from aura.gui.edge_rail_host import ExternalEdgeRailHost
 from aura.gui.execution_handler import ExecutionEventHandler
 from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.left_pane import LeftPane
+from aura.gui.main_window_agents import MainWindowAgentsController
 from aura.gui.main_window_companion import MainWindowCompanionController
-from aura.gui.main_window_drones import MainWindowDroneController
 from aura.gui.main_window_handoff import MainWindowHandoffController
 from aura.gui.main_window_pricing import MainWindowPricingController
 from aura.gui.main_window_settings import MainWindowSettingsController
@@ -80,10 +79,6 @@ class _ShrinkableStack(QStackedWidget):
 
 
 class MainWindow(WindowChromeMixin, QMainWindow):
-    droneRunFinishedOnUiThread = Signal(str)
-    droneStatusChangedOnUiThread = Signal(str, str, str)  # run_id, drone_name, status
-    droneReceiptReadyOnUiThread = Signal(object, str)
-
     def __init__(self) -> None:
         super().__init__()
         self._checkpoint_dialog: CheckpointDialog | None = None
@@ -136,7 +131,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
         self.setStatusBar(self._status_bar)
 
-        self._drone_controller = MainWindowDroneController(self)
+        self._agents_controller = MainWindowAgentsController(self)
         self._terminal_controller = MainWindowTerminalController(self)
 
         # ----- splitter ----
@@ -226,13 +221,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._playground.set_workspace_root(self._workspace_root)
         self._playground.set_read_only_mode(False)
 
-
-        # Floating Drone Reports window. Active run cards live here instead of
-        # consuming space in the production/workspace area.
-        self._drone_reports_window = DroneReportsWindow(
-            self,
-            initial_geometry=self._settings.drone_reports_window_geometry,
-        )
         # Execution event handler — owns session usage, forwards bridge signals
         # to chat / playground UI components.
         self._execution_handler = ExecutionEventHandler(
@@ -322,7 +310,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._terminal_tab = self._edge_rail.terminal_tab
         self._terminal_container = self._edge_rail.terminal_container
         self._corner_widget = self._edge_rail.corner_widget
-        self._drone_controller.sync_drone_tab_checked()
+        self._agents_controller.sync_agents_tab_checked()
 
         # Sync companion badge after rail exists (status may have fired before rail was created)
         self._companion_controller.sync_edge_rail_status()
@@ -343,7 +331,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._signal_wiring.wire()
 
         QTimer.singleShot(0, lambda: self._left_pane.refresh_projects(self._workspace_root))
-        QTimer.singleShot(0, lambda: self._left_pane.refresh_drones(self._workspace_root))
 
         self._refresh_status_bar()
 
@@ -624,15 +611,11 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # Handoff follows the main conversation lifecycle, including
         # conversation-first Read Only turns that have no production session.
         self._status_bar.set_execution_active(True)
-        # Production turns switch from Drone Bay to workspace so the user sees
-        # the run — but collaborative Read Only turns keep the current chat /
-        # playground presentation, including Workflow Studio if it is open.
-        if (
-            not self._bridge.active_turn_read_only
-            and not self._drone_controller.is_workbay_open()
-        ):
+        # Production turns switch to the workspace so the user sees the run —
+        # but collaborative Read Only turns keep the current chat / playground
+        # presentation.
+        if not self._bridge.active_turn_read_only:
             self._playground.switch_to_workspace()
-        self._drone_controller.sync_drone_tab_checked()
 
     def _on_finished(self) -> None:
         self._input.set_execution_active(False)
@@ -708,21 +691,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     def _on_tool_result(self, tool_id: str, name: str, ok: bool, result: str, extras: dict) -> None:
         self._chat.set_tool_result(tool_id, ok, result)
 
-        if ok and name == "summon_drone" and extras.get("summon_drone"):
-            run_id = self._drone_controller.handle_summon_drone_result(tool_id, extras)
-            if run_id:
-                drone_name = str(
-                    extras.get("drone_name")
-                    or extras.get("drone_id")
-                    or "Drone"
-                )
-                self._chat.add_drone_run_badge(run_id, drone_name)
-
-        # Normal Drone Bay refresh for successful folder registrations.
-        if ok and name == "register_drone_folder" and extras.get("drone_saved"):
-            self._drone_controller.refresh_drone_context()
-            if self._drone_controller.drone_workbay_window is not None and self._drone_controller.drone_workbay_window.isVisible():
-                self._drone_controller.drone_workbay_window.chain_editor.refresh_roster()
         if ok and name == "read_file":
             try:
                 import json

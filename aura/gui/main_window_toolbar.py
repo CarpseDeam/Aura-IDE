@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from aura.config import media_path
-from aura.gui.theme import LABEL_APPROVE, LABEL_DRONES, LABEL_PLAN, LABEL_READ_ONLY
+from aura.gui.theme import LABEL_APPROVE, LABEL_PLAN, LABEL_READ_ONLY
 from aura.gui.widgets.glass_switch import GlassSwitch
 
 
@@ -30,7 +30,6 @@ class MainWindowToolbar(QToolBar):
     read_only_toggled = Signal(bool)
     plan_review_toggled = Signal(bool)
     auto_approve_toggled = Signal(bool)
-    auto_summon_drones_toggled = Signal(bool)
     update_requested = Signal()
     settings_requested = Signal()
     logs_requested = Signal()
@@ -91,16 +90,6 @@ class MainWindowToolbar(QToolBar):
         self._auto_approve_switch.toggled.connect(self.auto_approve_toggled.emit)
         self.addWidget(self._auto_approve_switch)
 
-        self.addWidget(_toolbar_separator())
-
-        self._auto_summon_drones_switch = GlassSwitch(
-            "Drones",
-            getattr(self._settings, "auto_summon_drones", False),
-            vertical=True,
-            accent_color=LABEL_DRONES,
-        )
-        self._auto_summon_drones_switch.toggled.connect(self.auto_summon_drones_toggled.emit)
-        self.addWidget(self._auto_summon_drones_switch)
         self.refresh_auto_toggle_tooltips()
 
         # Icon-only style.
@@ -184,7 +173,6 @@ class MainWindowToolbar(QToolBar):
         self._settings = settings
         self.set_plan_review(getattr(settings, "review_plan_before_changes", False))
         self.set_auto_approve(settings.auto_approve)
-        self.set_auto_summon_drones(getattr(settings, "auto_summon_drones", False))
         self.refresh_auto_toggle_tooltips()
 
     def set_plan_review(self, checked: bool) -> None:
@@ -195,10 +183,6 @@ class MainWindowToolbar(QToolBar):
         self._auto_approve_switch.setChecked(checked)
         self.refresh_auto_toggle_tooltips()
 
-    def set_auto_summon_drones(self, checked: bool) -> None:
-        self._auto_summon_drones_switch.setChecked(checked)
-        self.refresh_auto_toggle_tooltips()
-
     def refresh_auto_toggle_tooltips(self) -> None:
         self._plan_review_switch.setToolTip(
             "Plan review: when ON, Aura pauses before workspace changes so you "
@@ -206,9 +190,6 @@ class MainWindowToolbar(QToolBar):
         )
         self._auto_approve_switch.setToolTip(
             "Auto-approve: when ON, file diffs are applied without confirmation. When OFF, you review and approve each change."
-        )
-        self._auto_summon_drones_switch.setToolTip(
-            "Auto-summon Drones: when ON, Aura launches suggested Drones without a confirmation card. When OFF, you approve each Drone summon."
         )
 
     def update_maximize_icon(self, maximized: bool) -> None:

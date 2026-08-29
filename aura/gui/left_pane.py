@@ -322,8 +322,6 @@ class LeftPane(QFrame):
     new_project_requested = Signal()
     production_model_changed = Signal(str)
     production_thinking_changed = Signal(str)
-    drone_selected = Signal(Path)
-    new_drone_requested = Signal()
 
     def __init__(self, workspace_root: Path | None, parent=None) -> None:
         super().__init__(parent)
@@ -770,6 +768,3 @@ class LeftPane(QFrame):
         result = store.rename_thread(project, thread_id, new_title)
         if result is not None:
             self.refresh_projects(self._last_workspace_root)
-
-    def refresh_drones(self, active_root: Path | None) -> None:
-        return

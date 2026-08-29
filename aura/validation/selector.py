@@ -22,7 +22,6 @@ ValidationPlan = dict[str, Any]
 
 _KIND_LABELS: dict[str, str] = {
     "gui": "GUI",
-    "drone": "drone",
     "provider": "provider",
     "build": "build",
     "general_python": "general Python",
@@ -193,18 +192,7 @@ def select_validation_plan(
             test_suggestions_skipped=_test_skipped,
         )
 
-    # 3. Drone validation
-    if _any_matches(all_candidates, _DRONE_PATTERNS) or "drone_rules" in loaded_sources:
-        _c = _focused_python_commands(changed_py_files, "python -m compileall aura/drones")
-        return _plan(
-            kind="drone",
-            commands=_c + _test_cmds + ["python -m aura --selfcheck"],
-            reason="Drone files changed",
-            confidence="focused",
-            test_suggestions_skipped=_test_skipped,
-        )
-
-    # 4. Provider validation
+    # 3. Provider validation
     if _any_matches(all_candidates, _PROVIDER_PATTERNS) or "provider_rules" in loaded_sources:
         _c = _focused_python_commands(changed_py_files, "python -m compileall aura/providers aura/backends aura/client")
         return _plan(
@@ -215,7 +203,7 @@ def select_validation_plan(
             test_suggestions_skipped=_test_skipped,
         )
 
-    # 5. Build validation
+    # 4. Build validation
     if _any_matches(all_candidates, _BUILD_PATTERNS) or "build_pipeline_rules" in loaded_sources:
         _c = _focused_python_commands(changed_py_files, "python -m compileall scripts/")
         return _plan(
@@ -227,7 +215,7 @@ def select_validation_plan(
             test_suggestions_skipped=_test_skipped,
         )
 
-    # 6. General Python validation
+    # 5. General Python validation
     python_dirs = _collect_python_dirs(all_candidates)
     if python_dirs:
         compile_command = "python -m compileall " + " ".join(sorted(python_dirs))
@@ -244,7 +232,7 @@ def select_validation_plan(
             test_suggestions_skipped=_test_skipped,
         )
 
-    # 7. Not applicable
+    # 6. Not applicable
     return _plan(
         kind="not_applicable",
         commands=[],
@@ -454,17 +442,6 @@ _GUI_PATTERNS: list[str] = [
     "media/ui_assets/**",
     "media/**/ui/**",
     "media/**/*ui*",
-]
-
-_DRONE_PATTERNS: list[str] = [
-    "aura/drones/*",
-    "aura/drones/**/*",
-    "aura/gui/drone*",
-    "drones/*",
-    "bundled_drones/*",
-    "**/drone_manifest*.json",
-    "**/drone_manifests/**",
-    "**/drone_templates/**",
 ]
 
 _PROVIDER_PATTERNS: list[str] = [

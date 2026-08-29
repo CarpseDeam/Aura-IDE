@@ -29,9 +29,7 @@ from aura.companion.commands.conversations import (
     handle_conversation_list,
     handle_conversation_select,
 )
-from aura.companion.commands.drones import handle_drone_list_recent, handle_drone_status
 from aura.companion.commands.projects import handle_project_list_recent
-from aura.companion.commands.receipts import handle_receipt_list_recent
 from aura.companion.defaults import DEFAULT_HOSTED_COMPANION_WEB_URL
 from aura.companion.local_relay import (
     LocalRelayError,
@@ -95,7 +93,6 @@ class CompanionManager(QObject):
         self._relay_workers: list[tuple[QThread, _RelayConnectWorker]] = []
         self._connection_generation = 0
         self._bridge: Any = None
-        self._drone_runner: Any = None
         self._project_store: Any = None
         self._router = CompanionCommandRouter()
         self._register_command_handlers()
@@ -121,18 +118,6 @@ class CompanionManager(QObject):
             "conversation.history",
             lambda msg: handle_conversation_history(msg, self._make_command_context()),
         )
-        self._router.register(
-            "drone.list_recent",
-            lambda msg: handle_drone_list_recent(msg, self._make_command_context()),
-        )
-        self._router.register(
-            "drone.status",
-            lambda msg: handle_drone_status(msg, self._make_command_context()),
-        )
-        self._router.register(
-            "receipt.list_recent",
-            lambda msg: handle_receipt_list_recent(msg, self._make_command_context()),
-        )
         # Manager-internal handlers (stay in CompanionManager for this pass)
         self._router.register("chat.send", self._handle_chat_send)
         self._router.register("chat.cancel", self._handle_chat_cancel)
@@ -146,7 +131,6 @@ class CompanionManager(QObject):
             settings=self._settings,
             send_fn=self.send_event,
             bridge=self._bridge,
-            drone_runner=self._drone_runner,
             project_store=self._project_store,
             on_conversation_selected=self.conversation_selected_by_companion.emit,
         )
@@ -214,9 +198,6 @@ class CompanionManager(QObject):
             bridge.streamDone.connect(self._on_bridge_stream_done)
             bridge.apiError.connect(self._on_bridge_api_error)
             bridge.finished.connect(self._on_bridge_finished)
-
-    def set_drone_runner(self, runner: Any) -> None:
-        self._drone_runner = runner
 
     def set_project_store(self, store: Any) -> None:
         self._project_store = store

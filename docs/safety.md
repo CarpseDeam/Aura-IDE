@@ -31,7 +31,7 @@ Before every write operation, the existing file is backed up to `.aura/backups/<
 
 ## Read-Only Mode
 
-When enabled (Settings → General or via a read-only drone policy), all write tools are stripped from the AI's tool list. The AI can read files, search, and discuss but cannot modify anything. This is enforced at the tool registry level — writes are not just blocked by the UI, they are invisible to the model.
+When enabled (Settings → General), all write tools are stripped from the AI's tool list. The AI can read files, search, and discuss but cannot modify anything. This is enforced at the tool registry level — writes are not just blocked by the UI, they are invisible to the model.
 
 ## API Key Encryption
 

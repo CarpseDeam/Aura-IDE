@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
 )
 
 from aura.config import save_settings, save_workspace_root
-from aura.drones.construction_context import clear_drone_construction
 from aura.git_ops import git_init, is_git_repo
 
 logger = logging.getLogger(__name__)
@@ -243,10 +242,8 @@ class MainWindowWorkspaceController(QObject):
         self._check_git_async(path)
 
     def _retarget_workspace(self, root_path: Path, *, restore_last: bool = True) -> None:
-        from aura.drones.store import _project_root_for_drone_storage
-        storage_root = _project_root_for_drone_storage(root_path).resolve()
+        storage_root = Path(root_path).resolve()
         window = self._window
-        clear_drone_construction()
         if window._workspace_root is not None and window._workspace_root.resolve() != storage_root:
             window._persistence.new_conversation()
         window._workspace_root = storage_root
@@ -297,9 +294,6 @@ class MainWindowWorkspaceController(QObject):
             t1 = time.perf_counter()
             window._left_pane.refresh_projects(window._workspace_root, schedule_backfill=True)
             logger.info("refresh_projects done in %.3fs", time.perf_counter() - t1)
-            t2 = time.perf_counter()
-            window._left_pane.refresh_drones(window._workspace_root)
-            logger.info("refresh_drones done in %.3fs", time.perf_counter() - t2)
 
         QTimer.singleShot(0, _do_refresh_after_load)
 
@@ -334,15 +328,11 @@ class MainWindowWorkspaceController(QObject):
             t0 = time.perf_counter()
             window._left_pane.refresh_projects(path, schedule_backfill=True)
             logger.info("refresh_projects done in %.3fs", time.perf_counter() - t0)
-            t1 = time.perf_counter()
-            window._left_pane.refresh_drones(path)
-            logger.info("refresh_drones done in %.3fs", time.perf_counter() - t1)
 
         QTimer.singleShot(0, _do_refresh_after_load)
 
-        # Close drone workbay when workspace root changes
-        window._drone_controller.hide_workbay()
-        clear_drone_construction()
+        # Close the Agents page when the workspace root changes.
+        window._agents_controller.hide_page()
         window._refresh_status_bar()
         return str(path)
 

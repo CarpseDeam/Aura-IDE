@@ -73,8 +73,6 @@ def _proposal_context(text: str, line: int | None, radius: int = 4) -> dict:
 
 _AURA_DELETE_ALLOWED_PREFIXES = (
     ".aura/tmp/",
-    ".aura/drones/",
-    ".aura/drone-build/",
     ".aura/startup-smoke-profile/",
 )
 
