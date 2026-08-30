@@ -15,14 +15,14 @@ import pytest
 pytest.importorskip("PySide6.QtWidgets")
 
 from PySide6.QtCore import Qt  # noqa: E402
-from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
+from PySide6.QtWidgets import QApplication, QMessageBox, QWidget  # noqa: E402
 
 from aura.agents.graph_local_state import WorkflowLocalState  # noqa: E402
 from aura.agents.graph_store import AgentGraphStore  # noqa: E402
 from aura.agents.local_state import AgentLocalState, AgentPermission  # noqa: E402
 from aura.agents.models import AgentScope, AgentThinking  # noqa: E402
 from aura.agents.store import AgentStore  # noqa: E402
-from aura.gui.agents_page import INHERIT_TARGET_LABEL, ProviderChoices  # noqa: E402
+from aura.gui.agents_page import ModelChoices  # noqa: E402
 from aura.gui.main_window_agents import MainWindowAgentsController  # noqa: E402
 
 
@@ -42,11 +42,13 @@ class _Tab:
         return self.checked
 
 
-#: A fixed two-entry catalog, so the provider control is asserted against
-#: known options rather than whatever the real catalog happens to hold.
-_CHOICES = ProviderChoices(
-    providers=(("anthropic", "Anthropic"), ("openai", "OpenAI")),
-    models={"anthropic": ("claude-sonnet-4-6",), "openai": ("gpt-5.5",)},
+#: A fixed model list for Aura's pretend current provider, so the model
+#: control is asserted against known options rather than whatever the real
+#: catalog happens to hold. There is no provider list, because an agent has
+#: no provider to choose.
+_CHOICES = ModelChoices(
+    models=("claude-sonnet-4-6", "gpt-5.5"),
+    current_model="claude-sonnet-4-6",
 )
 
 
@@ -219,44 +221,66 @@ def test_editing_and_saving_keeps_the_id_and_rewrites_the_file(wired) -> None:
     assert saved.thinking is AgentThinking.MAX
 
 
-def test_choosing_a_provider_and_model_replaces_inheriting(wired) -> None:
+def test_the_editor_has_a_model_control_and_no_provider_control(wired) -> None:
+    """An Agent never pins a provider, so there is nowhere to pick one."""
     agent_id = _seed(wired.store, AgentScope.PROJECT, "Reviewer")
     wired.controller.on_agents_requested()
     page = wired.controller.agents_page
     page.select_agent(agent_id)
 
-    # An inherited target names no model at all, so the model control has
-    # nothing to offer until a provider is chosen.
-    assert page._provider.currentText() == INHERIT_TARGET_LABEL
-    assert page._model.isEnabled() is False
-
-    page._provider.setCurrentIndex(page._provider.findData("anthropic"))
     assert page._model.isEnabled() is True
-    page._model.setCurrentText("claude-sonnet-4-6")
+    assert not hasattr(page, "_provider")
+    assert not hasattr(page._editor, "provider")
+    assert "provider" not in {
+        field.lower() for field in type(page.draft()).__dataclass_fields__
+    }
+
+
+def test_the_model_control_offers_the_current_providers_models(wired) -> None:
+    agent_id = _seed(wired.store, AgentScope.PROJECT, "Reviewer")
+    wired.controller.on_agents_requested()
+    page = wired.controller.agents_page
+    page.select_agent(agent_id)
+
+    listed = [page._model.itemText(index) for index in range(page._model.count())]
+
+    assert listed == [
+        "Use Aura's current model (claude-sonnet-4-6)",
+        "claude-sonnet-4-6",
+        "gpt-5.5",
+    ]
+    assert page._model.itemData(0) == ""
+
+
+def test_an_agent_with_no_model_keeps_the_inherit_choice_when_saved(wired) -> None:
+    agent_id = _seed(wired.store, AgentScope.PROJECT, "Reviewer")
+    wired.controller.on_agents_requested()
+    page = wired.controller.agents_page
+    page.select_agent(agent_id)
+
+    assert wired.store.get(agent_id).model == ""
+    assert page._model.currentData() == ""
+    assert "aura's current model" in page._model.currentText().lower()
+
     page._save_btn.click()
 
-    saved = wired.store.get(agent_id)
-    assert saved is not None
-    assert saved.target.provider == "anthropic"
-    assert saved.target.model == "claude-sonnet-4-6"
-    assert saved.target.inherits is False
+    assert wired.store.get(agent_id).model == ""
 
 
-def test_returning_to_inherit_drops_the_model_too(wired) -> None:
+def test_choosing_an_explicit_model_is_saved_without_a_provider(wired) -> None:
     agent_id = _seed(wired.store, AgentScope.PROJECT, "Reviewer")
     wired.controller.on_agents_requested()
     page = wired.controller.agents_page
     page.select_agent(agent_id)
-    page._provider.setCurrentIndex(page._provider.findData("openai"))
+
     page._model.setCurrentText("gpt-5.5")
     page._save_btn.click()
 
-    page._provider.setCurrentIndex(0)
-    page._save_btn.click()
-
     saved = wired.store.get(agent_id)
     assert saved is not None
-    assert saved.target.inherits is True
+    assert saved.model == "gpt-5.5"
+    text = wired.store.path_for(AgentScope.PROJECT, agent_id).read_text(encoding="utf-8")
+    assert "provider" not in text.lower()
 
 
 def test_deleting_removes_the_file_and_every_local_decision(wired) -> None:
@@ -265,7 +289,7 @@ def test_deleting_removes_the_file_and_every_local_decision(wired) -> None:
     page = wired.controller.agents_page
     page.select_agent(agent_id)
     page.availability_changed.emit(agent_id, True)
-    page.permission_changed.emit(agent_id, AgentPermission.WORKTREE_EDIT_TERMINAL.value)
+    page.permission_changed.emit(agent_id, AgentPermission.READ_WRITE.value)
 
     page.select_agent(agent_id)
     page._delete_btn.click()
@@ -318,10 +342,10 @@ def test_choosing_a_permission_records_it_locally_only(wired) -> None:
     page.select_agent(agent_id)
 
     page._permission.setCurrentIndex(
-        page._permission.findData(AgentPermission.WORKTREE_EDIT_TERMINAL.value)
+        page._permission.findData(AgentPermission.READ_WRITE.value)
     )
 
-    assert wired.state.permission(agent_id) is AgentPermission.WORKTREE_EDIT_TERMINAL
+    assert wired.state.permission(agent_id) is AgentPermission.READ_WRITE
     definition_text = wired.store.path_for(AgentScope.PROJECT, agent_id).read_text(
         encoding="utf-8"
     )
@@ -329,14 +353,35 @@ def test_choosing_a_permission_records_it_locally_only(wired) -> None:
     assert "permission" not in definition_text.lower()
 
 
-def test_the_page_warns_that_terminal_commands_are_not_sandboxed(wired) -> None:
+def test_the_permission_control_offers_exactly_two_choices(wired) -> None:
+    agent_id = _seed(wired.store, AgentScope.PROJECT, "Reviewer")
     wired.controller.on_agents_requested()
+    page = wired.controller.agents_page
+    page.select_agent(agent_id)
 
-    warning = wired.controller.agents_page._warning.text().lower()
+    listed = [
+        (page._permission.itemText(index), page._permission.itemData(index))
+        for index in range(page._permission.count())
+    ]
 
-    assert "run as you" in warning
-    assert "does not sandbox" in warning
-    assert wired.controller.agents_page._warning.isVisibleTo(wired.controller.agents_page)
+    assert listed == [("Read only", "read_only"), ("Read / Write", "read_write")]
+
+
+def test_the_window_carries_no_terminal_warning_of_any_kind(wired) -> None:
+    """The warning line is gone, and nothing replaced it."""
+    from PySide6.QtWidgets import QLabel
+
+    wired.controller.on_agents_requested()
+    page = wired.controller.agents_page
+
+    assert not hasattr(page, "_warning")
+    texts = " ".join(
+        label.text().lower() for label in page.findChildren(QLabel)
+    ) + " ".join(
+        str(widget.toolTip()).lower() for widget in page.findChildren(QWidget)
+    )
+    assert "does not sandbox" not in texts
+    assert "run as you" not in texts
 
 
 # ── a running turn ───────────────────────────────────────────────────────────
@@ -382,7 +427,7 @@ def test_mutations_arriving_during_a_turn_are_refused(wired) -> None:
     wired.controller.set_execution_active(True)
     page.create_requested.emit("project")
     page.availability_changed.emit(agent_id, True)
-    page.permission_changed.emit(agent_id, AgentPermission.WORKTREE_EDIT.value)
+    page.permission_changed.emit(agent_id, AgentPermission.READ_WRITE.value)
     page.delete_requested.emit("project", agent_id)
 
     assert [row.agent_id for row in wired.store.list_summaries()] == [agent_id]

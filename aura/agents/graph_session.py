@@ -1,10 +1,12 @@
 """The workflow that is open, and everything that can happen to it.
 
 One workspace's workflows, the one currently being authored, the undo stack
-behind it, and this user's two private decisions about it — whether Aura may
-call it, and that it was the last one open. Holding those together is what
-lets the page's controller be about drawing and signals rather than about
-storage.
+behind it, and this user's two private decisions about it — which one is
+selected, and whether Aura may call that one during an ordinary conversation.
+Holding those together is what lets the page's controller be about drawing and
+signals rather than about storage, and it is why this object outlives the
+Agents window: the toolbar's Agents switch has to be answerable before anyone
+has opened it.
 
 Nothing here is Qt-aware, so the whole lifecycle of a workflow — created,
 renamed, edited, undone, switched off, deleted — is exercisable without a
@@ -130,6 +132,17 @@ class WorkflowSession:
         if chosen != self._graph_id:
             self._graph_id = chosen
             self._history = None
+        # The session's open graph is the selected graph. Persist a fallback
+        # selection as well as an explicit click, otherwise the first valid
+        # workflow is visible in the picker but the master gate has no
+        # selected id to authorize. set_selected also switches the gate off
+        # when the fallback differs, which prevents authority following a
+        # deleted or newly discovered workflow.
+        try:
+            if state.selected_id() != chosen:
+                state.set_selected(chosen)
+        except WorkflowLocalStateError:
+            logger.debug("agents: could not remember the selected workflow")
         row = self._summaries.get(chosen)
         self._graph = row.graph if row is not None else None
         if self._graph is not None and self._history is None:
@@ -194,25 +207,31 @@ class WorkflowSession:
         self.reload()
         return removed
 
-    # ---- the private switch ------------------------------------------------
+    # ---- the master gate ---------------------------------------------------
 
-    def is_available(self) -> bool:
-        state = self.state()
-        row = self.summary
-        if state is None or row is None:
-            return False
-        try:
-            return state.is_available(row.graph_id)
-        except WorkflowLocalStateError:
-            return False
-
-    def set_available(self, available: bool) -> None:
-        """Switch the open workflow on or off for Aura, privately."""
+    def is_enabled(self) -> bool:
+        """Whether Aura may call the open workflow during a conversation."""
         state = self.state()
         row = self.summary
         if state is None or row is None or not row.valid:
+            return False
+        try:
+            return state.is_enabled()
+        except WorkflowLocalStateError:
+            return False
+
+    def set_enabled(self, enabled: bool) -> None:
+        """Switch the open workflow on or off for Aura, privately.
+
+        With nothing open, or a workflow that did not load, there is nothing
+        to grant, so this switches off rather than recording an authority
+        that points at no workflow.
+        """
+        state = self.state()
+        if state is None:
             return
-        state.set_available(row.graph_id, bool(available))
+        row = self.summary
+        state.set_enabled(bool(enabled) and row is not None and row.valid)
 
     def _remember_selection(self, graph_id: str) -> None:
         state = self.state()

@@ -12,6 +12,14 @@ writes a definition. Making an agent available, or changing what it may do,
 writes only local state — so a definition that arrives with a project is
 inactive and read-only until the person sitting in front of it says
 otherwise, and nothing they decide is ever written back into the project.
+
+This controller also owns the workflow session, and therefore the Agents
+switch in the main toolbar. The session lives here rather than in the Agents
+window because the switch must be answerable — and honest — before that window
+has ever been opened: which workflow is selected, whether it is complete
+enough to run, and whether this user has said Aura may run it are facts about
+the workspace, not about a window being on screen. The switch is a view of
+those facts, and freezing them for a submitted turn happens here too.
 """
 
 from __future__ import annotations
@@ -21,11 +29,13 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QObject
+from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QMessageBox, QWidget
 
-from aura.agents.graph_local_state import WorkflowLocalState
+from aura.agents.graph_local_state import WorkflowLocalState, WorkflowLocalStateError
+from aura.agents.graph_session import WorkflowSession
 from aura.agents.graph_store import AgentGraphStore
+from aura.agents.graph_validation import solid_execution_order, validate_graph
 from aura.agents.identity import is_valid_agent_id
 from aura.agents.local_state import (
     DEFAULT_PERMISSION,
@@ -33,15 +43,17 @@ from aura.agents.local_state import (
     AgentLocalStateError,
     AgentPermission,
 )
-from aura.agents.models import AgentDefinition, AgentScope, ModelTarget
+from aura.agents.models import AgentDefinition, AgentScope
 from aura.agents.roster import EMPTY_AGENT_ROSTER, AgentTurnRoster, resolve_agent_turn_roster
 from aura.agents.store import AgentStore, AgentStoreError, AgentSummary
+from aura.agents.workflow_plan import WorkflowRunPlan, freeze_workflow_plan
 from aura.gui.agents_page import (
     AgentDetail,
     AgentDraft,
     AgentRow,
     AgentsPage,
-    ProviderChoices,
+    ModelChoices,
+    catalog_choices,
 )
 from aura.gui.agents_presenter import agent_detail, agent_row
 from aura.gui.main_window_agents_graphs import AgentsGraphController
@@ -61,6 +73,10 @@ NEW_AGENT_INSTRUCTIONS = "Describe how this agent should work."
 class MainWindowAgentsController(QObject):
     """Owns the Agents page, its storage, and this user's local decisions."""
 
+    #: ``(enabled, available)`` for the toolbar's Agents switch, emitted
+    #: whenever either could have changed.
+    workflow_gate_changed = Signal(bool, bool)
+
     def __init__(
         self,
         window: MainWindow,
@@ -72,7 +88,9 @@ class MainWindowAgentsController(QObject):
         graph_store_factory: Callable[[Path], AgentGraphStore] | None = None,
         workflow_state_factory: Callable[[Path], WorkflowLocalState] | None = None,
         parent_widget: QWidget | None = None,
-        choices: ProviderChoices | None = None,
+        choices: ModelChoices | None = None,
+        model_context: Callable[[], tuple[str, str, str]] | None = None,
+        workflow_runner: Callable[[], object] | None = None,
     ) -> None:
         super().__init__(parent)
         self._window = window
@@ -86,10 +104,19 @@ class MainWindowAgentsController(QObject):
         self._graph_store_factory = graph_store_factory or self._default_graph_store
         self._workflow_state_factory = workflow_state_factory or WorkflowLocalState
         self._choices = choices
+        self._model_context = model_context
+        self._workflow_runner = workflow_runner
         self._agents_page: AgentsPage | None = None
         self._graphs: AgentsGraphController | None = None
         self._summaries: dict[str, AgentSummary] = {}
         self._execution_active = False
+        # The session is owned here, not by the Agents window, so the toolbar
+        # gate is answerable whether or not that window has ever been built.
+        self._workflow_session = WorkflowSession(
+            self._workspace_root,
+            store_factory=self._graph_store_factory,
+            state_factory=self._workflow_state_factory,
+        )
 
     # ---- lifecycle ---------------------------------------------------------
 
@@ -113,12 +140,14 @@ class MainWindowAgentsController(QObject):
         """
         self._workspace_root = Path(root) if root is not None else None
         self._summaries = {}
+        self._workflow_session.rebind(self._workspace_root)
         if self._graphs is not None:
             self._graphs.set_workspace_root(self._workspace_root)
         if self._agents_page is not None:
             self._agents_page.set_rows(())
             if self._agents_page.isVisible():
                 self.refresh()
+        self.refresh_workflow_gate()
 
     def available_agent_ids(self) -> tuple[str, ...]:
         """The ordered ids this user has made available to Aura, here.
@@ -166,6 +195,147 @@ class MainWindowAgentsController(QObject):
             logger.debug("agents: could not freeze the submitted roster", exc_info=True)
             return EMPTY_AGENT_ROSTER
 
+    # ---- the toolbar's Agents switch ---------------------------------------
+
+    @property
+    def workflow_session(self) -> WorkflowSession:
+        """The one session that answers which workflow is selected, and how."""
+        return self._workflow_session
+
+    def workflow_gate(self) -> tuple[bool, bool]:
+        """``(enabled, available)`` for the switch, read from disk.
+
+        *available* is whether there is a selected workflow complete enough to
+        run at all: with none, the switch has nothing it could turn on, so it
+        is offered as unavailable rather than as a decision with no effect.
+        """
+        if not self._workflow_session.bound:
+            return False, False
+        try:
+            self._workflow_session.reload()
+        except Exception:
+            logger.debug("agents: could not read the workflow session", exc_info=True)
+            return False, False
+        available = self._selected_workflow_runnable()
+        if not available:
+            # Masking an old True value in the widget is not enough: if a
+            # shared definition later becomes valid again, that stale bit
+            # would silently revive its authority. Invalid or missing means
+            # off in the private state itself.
+            try:
+                self._workflow_session.set_enabled(False)
+            except WorkflowLocalStateError:
+                logger.debug("agents: could not switch off an invalid workflow")
+            return False, False
+        try:
+            enabled = self._workflow_session.is_enabled()
+        except Exception:
+            logger.debug("agents: could not read the workflow gate", exc_info=True)
+            enabled = False
+        return enabled, available
+
+    def refresh_workflow_gate(self) -> None:
+        """Tell whoever draws the switch what it should be showing."""
+        enabled, available = self.workflow_gate()
+        self.workflow_gate_changed.emit(enabled, available)
+
+    def set_workflow_enabled(self, enabled: bool) -> None:
+        """Record the user's answer to the switch, privately, and re-read it."""
+        try:
+            self._workflow_session.set_enabled(bool(enabled))
+        except WorkflowLocalStateError as exc:
+            self._show_error("Agents", str(exc))
+        self.refresh_workflow_gate()
+
+    def capture_workflow_run_plan(
+        self, *, model: str, thinking: str
+    ) -> WorkflowRunPlan | None:
+        """Freeze the workflow this submitted turn may run, if any.
+
+        Returns None whenever the switch is off — which is the ordinary case,
+        and the whole of what "off" means: no plan, so no workflow tool and no
+        workflow prompt material anywhere in the turn.
+        """
+        enabled, _available = self.workflow_gate()
+        if not enabled:
+            return None
+        provider, _model, _thinking = self._current_model_context()
+        plan, errors = self._freeze_plan(provider, model, thinking)
+        if plan is None and errors:
+            logger.info("agents: workflow not runnable this turn: %s", "; ".join(errors))
+        return plan
+
+    def freeze_open_workflow(self) -> tuple[WorkflowRunPlan | None, tuple[str, ...]]:
+        """Freeze the open workflow for a manual Run, gate or no gate.
+
+        Run is the authoring gesture: it runs what is in front of the person
+        who asked for it, so it deliberately never consults the switch.
+        """
+        provider, model, thinking = self._current_model_context()
+        return self._freeze_plan(provider, model, thinking)
+
+    def _freeze_plan(
+        self, provider: str, model: str, thinking: str
+    ) -> tuple[WorkflowRunPlan | None, tuple[str, ...]]:
+        store = self._store()
+        state = self._state()
+        if store is None or state is None:
+            return None, ("no workspace is open",)
+        return freeze_workflow_plan(
+            self._workflow_session.graph,
+            definitions=store,
+            permissions=state,
+            agent_scopes=self._agent_scopes(),
+            provider=provider,
+            model=model,
+            thinking=thinking,
+        )
+
+    def _selected_workflow_runnable(self) -> bool:
+        graph = self._workflow_session.graph
+        if graph is None:
+            return False
+        verdict = validate_graph(graph, agents=self._agent_scopes())
+        return verdict.runnable and bool(solid_execution_order(graph))
+
+    def _current_model_context(self) -> tuple[str, str, str]:
+        """Aura's own provider, model, and thinking, as the window has them."""
+        if self._model_context is not None:
+            try:
+                provider, model, thinking = self._model_context()
+                return str(provider or ""), str(model or ""), str(thinking or "off")
+            except Exception:
+                logger.debug("agents: could not read Aura's model context", exc_info=True)
+        window = self._window
+        settings = getattr(window, "_settings", None)
+        provider = str(getattr(settings, "provider", "") or "")
+        model = ""
+        thinking = "off"
+        for attribute, target in (("current_model", "model"), ("current_thinking", "thinking")):
+            getter = getattr(window, attribute, None)
+            if callable(getter):
+                try:
+                    value = str(getter() or "")
+                except Exception:
+                    value = ""
+                if target == "model":
+                    model = value
+                elif value:
+                    thinking = value
+        return provider, model, thinking
+
+    def model_choices(self) -> ModelChoices:
+        """The editor's model list, built for Aura's current provider."""
+        if self._choices is not None:
+            return self._choices
+        provider, model, _thinking = self._current_model_context()
+        return catalog_choices(provider, model)
+
+    def refresh_model_choices(self) -> None:
+        """Re-list the editor's models after Aura's provider or model moved."""
+        if self._agents_page is not None and self._choices is None:
+            self._agents_page.set_model_choices(self.model_choices())
+
     def set_execution_active(self, active: bool) -> None:
         """Keep the page browsable during a turn, but freeze every change."""
         self._execution_active = bool(active)
@@ -198,7 +368,7 @@ class MainWindowAgentsController(QObject):
 
     def _ensure_page(self) -> AgentsPage:
         if self._agents_page is None:
-            page = AgentsPage(self._parent_widget, choices=self._choices)
+            page = AgentsPage(self._parent_widget, choices=self.model_choices())
             page.visibility_changed.connect(lambda _visible: self.sync_agents_tab_checked())
             page.current_row_changed.connect(self._on_current_row_changed)
             page.create_requested.connect(self._on_create_requested)
@@ -210,14 +380,15 @@ class MainWindowAgentsController(QObject):
             self._agents_page = page
             self._graphs = AgentsGraphController(
                 page,
-                workspace_root=self._workspace_root,
+                session=self._workflow_session,
                 agent_summaries=self.agent_summaries,
                 mutations_allowed=self._mutations_allowed,
-                store_factory=self._graph_store_factory,
-                state_factory=self._workflow_state_factory,
+                workflow_runner=self._workflow_runner,
+                run_plan=self.freeze_open_workflow,
                 parent_widget=self._parent_widget,
                 parent=self,
             )
+            self._graphs.gate_changed.connect(self.refresh_workflow_gate)
         return self._agents_page
 
     @property
@@ -285,9 +456,13 @@ class MainWindowAgentsController(QObject):
             return
         rows = self._build_rows()
         page.set_mutations_enabled(not self._execution_active)
+        if self._choices is None:
+            page.set_model_choices(self.model_choices())
         page.set_rows(rows)
         if self._graphs is not None:
             self._graphs.refresh()
+        else:
+            self.refresh_workflow_gate()
         self._on_current_row_changed(page.current_source_key())
 
     def _build_rows(self) -> tuple[AgentRow, ...]:
@@ -387,9 +562,7 @@ class MainWindowAgentsController(QObject):
                     name=draft.name,
                     description=draft.description,
                     instructions=draft.instructions,
-                    target=ModelTarget.explicit(draft.provider, draft.model)
-                    if draft.provider or draft.model
-                    else ModelTarget.inherited(),
+                    model=draft.model,
                     thinking=draft.thinking,
                 )
             )

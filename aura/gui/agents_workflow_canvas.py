@@ -11,11 +11,28 @@ answers all of that and hands back the next drawing.
 
 The view adds the things a canvas is expected to do: wheel zoom under the
 cursor, middle-button pan, rubber-band selection, Delete, and undo/redo.
+
+While a run is in flight the scene also shows where the work has got to. Run
+state is pushed onto the existing items rather than redrawn as a new graph,
+because a run does not change the document and rebuilding the canvas under a
+person mid-run would throw away their selection and their scroll position for
+nothing. The step that is running breathes on Aura's own halo clock — the
+same duration and floor the desktop halo uses — so one idea reads the same
+way everywhere in the product.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+import math
+
+from PySide6.QtCore import (
+    QAbstractAnimation,
+    QPointF,
+    QRectF,
+    Qt,
+    QVariantAnimation,
+    Signal,
+)
 from PySide6.QtGui import QBrush, QColor, QKeySequence, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QGraphicsPathItem, QGraphicsScene, QGraphicsView
 
@@ -29,6 +46,7 @@ from aura.gui.agents_workflow_edge import (
 )
 from aura.gui.agents_workflow_node import NodeVisual, WorkflowNodeItem
 from aura.gui.theme import ACCENT, BG, BORDER, FG_MUTED
+from aura.gui.widgets.aura_glow import AuraPhaseDriver
 
 #: Zoom bounds, so a canvas can never be scrolled into a state nobody can
 #: read or find their way back from.
@@ -36,6 +54,10 @@ MIN_SCALE = 0.35
 MAX_SCALE = 2.6
 
 _GRID_SPACING = 28.0
+
+#: The one state that animates. Everything else a run reports is a settled
+#: fact and is drawn as one.
+_PULSING_STATE = "running"
 
 
 class WorkflowScene(QGraphicsScene):
@@ -59,6 +81,17 @@ class WorkflowScene(QGraphicsScene):
         self._link_source = ""
         self._link_kind: ConnectionKind | None = None
         self._link_preview: QGraphicsPathItem | None = None
+        self._node_run_states: dict[str, str] = {}
+        self._edge_run_states: dict[str, str] = {}
+        # Aura's halo clock, borrowed rather than re-tuned: same duration,
+        # same floor, so a running step breathes at the product's own pace.
+        self._pulse = AuraPhaseDriver.BREATH_FLOOR
+        self._pulse_anim = QVariantAnimation(self)
+        self._pulse_anim.setStartValue(0.0)
+        self._pulse_anim.setEndValue(1.0)
+        self._pulse_anim.setDuration(AuraPhaseDriver.BREATH_DURATION_MS)
+        self._pulse_anim.setLoopCount(-1)
+        self._pulse_anim.valueChanged.connect(self._on_pulse)
         self.selectionChanged.connect(self._emit_selection)
 
     # ---- drawing one workflow ----------------------------------------------
@@ -120,6 +153,9 @@ class WorkflowScene(QGraphicsScene):
             self._edges[edge.connection_id] = item
 
         self._restore_selection(selected_nodes, selected_edges)
+        # A rebuild makes new items, so whatever a run had already reported
+        # is re-applied rather than lost.
+        self._apply_run_states()
         self.setSceneRect(self.itemsBoundingRect().adjusted(-260.0, -200.0, 260.0, 200.0))
         self.update()
 
@@ -129,6 +165,54 @@ class WorkflowScene(QGraphicsScene):
             node.set_editable(self._editable)
         for edge in self._edges.values():
             edge.set_editable(self._editable)
+
+    # ---- what a run is doing -----------------------------------------------
+
+    def set_run_states(
+        self, nodes: dict[str, str], connections: dict[str, str] | None = None
+    ) -> None:
+        """Show where a run has got to. An empty pair clears every mark."""
+        self._node_run_states = {str(k): str(v) for k, v in (nodes or {}).items()}
+        self._edge_run_states = {
+            str(k): str(v) for k, v in (connections or {}).items()
+        }
+        self._apply_run_states()
+
+    @property
+    def run_states(self) -> dict[str, str]:
+        """The node states currently drawn, for whoever wants to assert on them."""
+        return dict(self._node_run_states)
+
+    def _apply_run_states(self) -> None:
+        for node_id, item in self._nodes.items():
+            item.set_run_state(self._node_run_states.get(node_id, ""))
+            item.set_pulse(self._pulse)
+        for edge_id, item in self._edges.items():
+            item.set_run_state(self._edge_run_states.get(edge_id, ""))
+            item.set_pulse(self._pulse)
+        self._sync_pulse_clock()
+
+    def _sync_pulse_clock(self) -> None:
+        """Run the clock only while something is actually breathing."""
+        pulsing = _PULSING_STATE in self._node_run_states.values() or (
+            _PULSING_STATE in self._edge_run_states.values()
+        )
+        state = self._pulse_anim.state()
+        if pulsing and state != QAbstractAnimation.State.Running:
+            self._pulse_anim.start()
+        elif not pulsing and state == QAbstractAnimation.State.Running:
+            self._pulse_anim.stop()
+            self._pulse = 1.0
+
+    def _on_pulse(self, value: float) -> None:
+        floor = AuraPhaseDriver.BREATH_FLOOR
+        self._pulse = floor + (1.0 - floor) * math.sin(float(value) * math.pi)
+        for node_id, item in self._nodes.items():
+            if self._node_run_states.get(node_id) == _PULSING_STATE:
+                item.set_pulse(self._pulse)
+        for edge_id, item in self._edges.items():
+            if self._edge_run_states.get(edge_id) == _PULSING_STATE:
+                item.set_pulse(self._pulse)
 
     def set_placeholder(self, text: str) -> None:
         self._placeholder = text

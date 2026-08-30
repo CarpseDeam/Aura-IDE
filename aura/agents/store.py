@@ -25,7 +25,7 @@ from pathlib import Path
 
 from aura.agents.document import parse_agent_document, render_agent_document
 from aura.agents.identity import AgentScope, is_valid_agent_id, new_agent_id
-from aura.agents.models import AgentDefinition, AgentThinking, ModelTarget
+from aura.agents.models import AgentDefinition, AgentThinking
 from aura.agents.validation import agent_name_error, delegation_description_error
 from aura.conversation.tools.fs_write import atomic_write_bytes
 from aura.paths import data_dir, first_link_like_component, is_link_like
@@ -215,7 +215,7 @@ class AgentStore:
         name: str,
         description: str,
         instructions: str,
-        target: ModelTarget | None = None,
+        model: str = "",
         thinking: AgentThinking = AgentThinking.INHERIT,
     ) -> AgentDefinition:
         """Mint an id and write a new definition into *scope*'s directory."""
@@ -225,7 +225,7 @@ class AgentStore:
             name=str(name or "").strip(),
             description=str(description or "").strip(),
             instructions=str(instructions or "").strip(),
-            target=target or ModelTarget.inherited(),
+            model=str(model or "").strip(),
             thinking=thinking,
         )
         self._validate(definition)
@@ -289,10 +289,6 @@ class AgentStore:
             raise AgentStoreError(description_error)
         if not definition.instructions:
             raise AgentStoreError("An agent needs instructions.")
-        if not definition.target.is_complete:
-            raise AgentStoreError(
-                "Choose either to inherit Aura's provider and model, or to name both."
-            )
         collision = any(
             row.agent_id == definition.agent_id and row.scope is not definition.scope
             for row in self.list_summaries()

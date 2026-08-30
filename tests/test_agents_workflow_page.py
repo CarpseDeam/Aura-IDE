@@ -163,14 +163,14 @@ def test_a_personal_workflow_is_created_outside_the_project(wired) -> None:
 def test_deleting_a_workflow_forgets_every_private_decision_about_it(wired) -> None:
     page, graphs = _new_workflow(wired)
     graph_id = graphs.current_graph.graph_id
-    page.workflow_bar.availability_changed.emit(True)
+    wired.controller.set_workflow_enabled(True)
 
     page.workflow_bar.delete_requested.emit()
     wired.app.processEvents()
 
     assert wired.graphs.get(graph_id) is None
-    assert wired.state.available_ids() == ()
     assert wired.state.selected_id() == ""
+    assert wired.state.is_enabled() is False
 
 
 # ── placing agents ───────────────────────────────────────────────────────────
@@ -473,20 +473,111 @@ def test_a_turn_freezes_the_canvas_but_keeps_it_readable(wired) -> None:
     assert page.scene.editable is True
 
 
-# ── the workflow-level switch ────────────────────────────────────────────────
+# ── the graph window carries no availability control at all ──────────────────
 
 
-def test_making_a_workflow_available_writes_only_private_state(wired) -> None:
+def test_the_graph_window_has_no_available_to_aura_control(wired) -> None:
+    """One availability concept, and it is not in this window."""
+    from PySide6.QtWidgets import QCheckBox, QWidget
+
+    page, _graphs = _new_workflow(wired)
+    bar = page.workflow_bar
+
+    assert not hasattr(bar, "available")
+    assert not hasattr(bar, "set_available")
+    assert not hasattr(bar, "availability_changed")
+    assert not hasattr(page, "set_workflow_available")
+    assert bar.findChildren(QCheckBox) == []
+    labels = " ".join(
+        str(widget.toolTip()) for widget in bar.findChildren(QWidget)
+    ).lower()
+    assert "available to aura" not in labels
+
+
+def test_invalidating_the_selected_workflow_switches_its_private_gate_off(
+    wired,
+) -> None:
+    reviewer = _agent(wired.agents, AgentScope.PROJECT, "Reviewer")
     page, graphs = _new_workflow(wired)
-    graph_id = graphs.current_graph.graph_id
-    path = wired.graphs.path_for(AgentScope.PROJECT, graph_id)
-    before = path.read_text(encoding="utf-8")
+    _drop(wired, page, reviewer, 0.0, 0.0)
+    graph = graphs.current_graph
+    (step,) = [node for node in graph.nodes if node.is_agent]
+    page.scene.connect_requested.emit(graph.task_node.node_id, step.node_id, "step")
+    page.scene.connect_requested.emit(step.node_id, graph.result_node.node_id, "step")
+    wired.app.processEvents()
 
-    page.workflow_bar.availability_changed.emit(True)
+    assert wired.controller.workflow_gate() == (False, True)
+    wired.controller.set_workflow_enabled(True)
+    assert wired.state.is_enabled() is True
 
-    assert wired.state.is_available(graph_id) is True
-    assert path.read_text(encoding="utf-8") == before
-    assert page.workflow_bar.available.isChecked() is True
+    (edge,) = graphs.current_graph.outgoing(step.node_id, ConnectionKind.STEP)
+    wired.graphs.save(graphs.current_graph.without_connection(edge.connection_id))
 
-    page.workflow_bar.availability_changed.emit(False)
-    assert wired.state.available_ids() == ()
+    assert wired.controller.workflow_gate() == (False, False)
+    assert wired.state.is_enabled() is False
+
+
+def test_manual_run_uses_the_injected_runner_even_when_the_gate_is_off(
+    wired, monkeypatch
+) -> None:
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QInputDialog
+
+    page, graphs = _new_workflow(wired)
+    sentinel_runner = object()
+    plan = SimpleNamespace(name="Manual workflow")
+    started: list[tuple[object, object, str]] = []
+    graphs._workflow_runner = lambda: sentinel_runner
+    graphs._run_plan = lambda: (plan, ())
+    monkeypatch.setattr(
+        QInputDialog,
+        "getMultiLineText",
+        staticmethod(lambda *args, **kwargs: ("Ephemeral task", True)),
+    )
+    monkeypatch.setattr(
+        graphs.runs,
+        "start",
+        lambda runner, frozen, task: started.append((runner, frozen, task)) or True,
+    )
+
+    assert wired.state.is_enabled() is False
+    graphs._on_run_requested()
+
+    assert started == [(sentinel_runner, plan, "Ephemeral task")]
+    assert "Ephemeral task" not in wired.graphs.path_for(
+        graphs.current_graph.scope, graphs.current_graph.graph_id
+    ).read_text(encoding="utf-8")
+
+
+def test_run_states_are_visible_on_steps_and_solid_handoffs_only(wired) -> None:
+    from aura.gui.agents_workflow_presenter import run_edge_states
+
+    reviewer = _agent(wired.agents, AgentScope.PROJECT, "Reviewer")
+    helper = _agent(wired.agents, AgentScope.PROJECT, "Helper")
+    page, graphs = _new_workflow(wired)
+    _drop(wired, page, reviewer, 0.0, 0.0)
+    _drop(wired, page, helper, 0.0, 150.0)
+    step, dashed_helper = [node for node in graphs.current_graph.nodes if node.is_agent]
+    graph = graphs.current_graph
+    page.scene.connect_requested.emit(graph.task_node.node_id, step.node_id, "step")
+    page.scene.connect_requested.emit(step.node_id, graph.result_node.node_id, "step")
+    page.scene.connect_requested.emit(step.node_id, dashed_helper.node_id, "sub_agent")
+    wired.app.processEvents()
+    graph = graphs.current_graph
+
+    node_states = {step.node_id: "running", dashed_helper.node_id: "cancelled"}
+    page.set_run_states(node_states, run_edge_states(graph, node_states))
+
+    assert page.scene.node_items[step.node_id].run_state == "running"
+    assert page.scene.node_items[dashed_helper.node_id].run_state == "cancelled"
+    solid = graph.connections_of_kind(ConnectionKind.STEP)
+    dashed = graph.connections_of_kind(ConnectionKind.SUB_AGENT)
+    assert {page.scene.edge_items[edge.connection_id].run_state for edge in solid} == {
+        "running"
+    }
+    assert page.scene.edge_items[dashed[0].connection_id].run_state == ""
+
+    succeeded = {step.node_id: "succeeded"}
+    page.set_run_states(succeeded, run_edge_states(graph, succeeded))
+    assert page.scene.node_items[step.node_id].run_state == "succeeded"

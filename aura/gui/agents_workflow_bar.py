@@ -1,10 +1,12 @@
 """The strip above the canvas: which workflow, and what may be done to it.
 
-Choosing, creating, renaming, and deleting a workflow all live here, next to
-the one switch that is not part of any workflow at all: whether Aura may use
-it. That switch is this user's private decision about this workspace, so the
-bar shows it as a personal choice and says so, rather than letting it look
-like a property of a file that might be shared.
+Choosing, creating, renaming, and deleting a workflow live here, and so does
+running one by hand. Run and Stop are deliberately not connected to the
+Agents switch in the main toolbar: that switch decides whether *Aura* may
+reach for this workflow mid-conversation, and someone authoring a workflow
+needs to try it long before they are willing to hand it to anybody. So this
+bar can always run the workflow it has open, and it says nothing at all
+about availability — there is exactly one such control, and it is not here.
 """
 
 from __future__ import annotations
@@ -14,7 +16,6 @@ from dataclasses import dataclass
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QHBoxLayout,
     QLabel,
@@ -24,8 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aura.agents.graph_local_state import AVAILABILITY_LABEL, AVAILABILITY_NOTE
-from aura.gui.theme import FG, FG_DIM, SUCCESS, WARN
+from aura.gui.theme import FG_DIM, SUCCESS, WARN
 
 SCOPE_LABELS: dict[str, str] = {"project": "Project", "personal": "Personal"}
 
@@ -52,18 +52,21 @@ class WorkflowRow:
 
 
 class WorkflowBar(QWidget):
-    """Workflow selection, lifecycle, and the private availability switch."""
+    """Workflow selection, lifecycle, and running the open one by hand."""
 
     workflow_selected = Signal(str)  # graph id
     create_requested = Signal(str)  # scope key
     rename_requested = Signal()
     delete_requested = Signal()
-    availability_changed = Signal(bool)
+    run_requested = Signal()
+    stop_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._rows: tuple[WorkflowRow, ...] = ()
         self._mutations_enabled = True
+        self._runnable = False
+        self._running = False
         self._loading = False
 
         row = QHBoxLayout(self)
@@ -110,11 +113,21 @@ class WorkflowBar(QWidget):
         self.status.setStyleSheet("font-size: 11px; background: transparent;")
         row.addWidget(self.status)
 
-        self.available = QCheckBox(AVAILABILITY_LABEL)
-        self.available.setToolTip(AVAILABILITY_NOTE)
-        self.available.setStyleSheet(f"color: {FG}; background: transparent;")
-        self.available.toggled.connect(self._emit_availability)
-        row.addWidget(self.available)
+        self.run_button = QPushButton("Run")
+        self.run_button.setObjectName("primary")
+        self.run_button.setToolTip(
+            "Run this workflow once, now. Independent of the Agents switch in "
+            "the toolbar."
+        )
+        self.run_button.clicked.connect(self._request_run)
+        row.addWidget(self.run_button)
+
+        self.stop_button = QPushButton("Stop")
+        self.stop_button.setToolTip("Request cancellation of this workflow run.")
+        self.stop_button.clicked.connect(self.stop_requested)
+        row.addWidget(self.stop_button)
+
+        self._update_run_actions()
 
     # ---- what the page sets ------------------------------------------------
 
@@ -140,12 +153,20 @@ class WorkflowBar(QWidget):
             self._loading = False
         self._update_actions()
 
-    def set_available(self, available: bool) -> None:
-        self._loading = True
-        try:
-            self.available.setChecked(bool(available))
-        finally:
-            self._loading = False
+    def set_runnable(self, runnable: bool) -> None:
+        """Whether the open workflow is complete enough to be run at all."""
+        self._runnable = bool(runnable)
+        self._update_run_actions()
+
+    def set_running(self, running: bool) -> None:
+        """Swap Run for Stop while a run is in flight.
+
+        Selection and editing stay live during a run: the run is working from
+        a plan frozen when it started, so nothing the user does to the canvas
+        now can reach it.
+        """
+        self._running = bool(running)
+        self._update_run_actions()
 
     def set_status(self, text: str, *, ok: bool = True) -> None:
         self.status.setStyleSheet(
@@ -165,7 +186,14 @@ class WorkflowBar(QWidget):
         self.new_button.setEnabled(self._mutations_enabled)
         self.rename_button.setEnabled(self._mutations_enabled and has_workflow)
         self.delete_button.setEnabled(self._mutations_enabled and has_workflow)
-        self.available.setEnabled(self._mutations_enabled and has_workflow)
+        self._update_run_actions()
+
+    def _update_run_actions(self) -> None:
+        has_workflow = bool(self.current_graph_id())
+        self.run_button.setEnabled(
+            has_workflow and self._runnable and not self._running
+        )
+        self.stop_button.setEnabled(self._running)
 
     # ---- user intent -------------------------------------------------------
 
@@ -186,11 +214,9 @@ class WorkflowBar(QWidget):
         if self._mutations_enabled and self.current_graph_id():
             self.delete_requested.emit()
 
-    def _emit_availability(self, checked: bool) -> None:
-        if self._loading or not self._mutations_enabled:
-            return
-        if self.current_graph_id():
-            self.availability_changed.emit(bool(checked))
+    def _request_run(self) -> None:
+        if self._runnable and not self._running and self.current_graph_id():
+            self.run_requested.emit()
 
 
 __all__ = ["SCOPE_LABELS", "WorkflowBar", "WorkflowRow"]

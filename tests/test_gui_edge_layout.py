@@ -39,6 +39,58 @@ def test_toolbar_has_no_expanding_spacer_between_logs_and_settings(qapp) -> None
             assert widget.sizePolicy().horizontalPolicy() != QSizePolicy.Policy.Expanding
 
 
+def test_agents_is_the_third_glass_switch_in_the_historical_toolbar_slot(qapp) -> None:
+    from aura.gui.main_window_toolbar import MainWindowToolbar
+    from aura.gui.theme import LABEL_AGENTS
+    from aura.gui.widgets.glass_switch import GlassSwitch
+
+    toolbar = MainWindowToolbar(AppSettings())
+    switches = [
+        toolbar.widgetForAction(action)
+        for action in toolbar.actions()
+        if isinstance(toolbar.widgetForAction(action), GlassSwitch)
+    ]
+
+    assert switches == [
+        toolbar._plan_review_switch,
+        toolbar._auto_approve_switch,
+        toolbar._agents_switch,
+    ]
+    assert [switch._label_text for switch in switches] == ["Plan", "Approve", "Agents"]
+    assert toolbar._agents_switch._accent_color == LABEL_AGENTS
+    assert toolbar._agents_switch.isChecked() is False
+    assert toolbar._agents_switch.isEnabled() is False
+
+
+def test_agents_switch_is_controller_driven_and_emits_user_intent(qapp) -> None:
+    from aura.gui.main_window_toolbar import MainWindowToolbar
+
+    toolbar = MainWindowToolbar(AppSettings())
+    toggled: list[bool] = []
+    toolbar.agents_toggled.connect(toggled.append)
+
+    toolbar.set_agents_available(True)
+    toolbar.set_agents_enabled(True)
+
+    assert toolbar.agents_enabled() is True
+    assert toolbar._agents_switch.isEnabled() is True
+    assert toggled == []
+
+    toolbar._agents_switch.toggled.emit(False)
+    assert toggled == [False]
+
+
+def test_initial_agents_gate_refresh_happens_after_signal_wiring() -> None:
+    import inspect
+
+    from aura.gui.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow.__init__)
+    assert source.index("self._signal_wiring.wire()") < source.index(
+        "self._agents_controller.refresh_workflow_gate()"
+    )
+
+
 def test_edge_tab_rail_is_fixed_width_and_compact(qapp) -> None:
     """The rail must size itself to its own content (terminal/checkpoint/
     agents/companion tabs), not stretch to fill a parent column."""

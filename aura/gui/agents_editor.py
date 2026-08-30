@@ -1,7 +1,15 @@
-"""Agent definition/form widgets, separate from roster and page ownership."""
+"""Agent definition/form widgets, separate from roster and page ownership.
+
+There is no provider control here, and its absence is the design rather than
+a hidden default. An agent runs on whichever provider Aura itself is set to
+for the turn that invoked it, so a reusable agent — a project one especially
+— cannot pin somebody else's machine to a service they have no key for. What
+is selectable is the model, listed for Aura's current provider and resolved
+under it. An agent that names none runs whatever model Aura is running.
+"""
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
@@ -16,11 +24,10 @@ from PySide6.QtWidgets import (
 )
 
 from aura.agents.local_state import PERMISSION_ORDER, AgentPermission
-from aura.agents.models import THINKING_ORDER, AgentThinking
+from aura.agents.models import CURRENT_MODEL_LABEL, THINKING_ORDER, AgentThinking
 from aura.agents.validation import MAX_AGENT_DESCRIPTION_CHARS, MAX_AGENT_NAME_CHARS
 from aura.gui.theme import BG, DANGER, FG, FG_DIM
 
-INHERIT_TARGET_LABEL = "Inherit Aura's provider and model"
 SCOPE_LABELS: dict[str, str] = {"project": "Project", "personal": "Personal"}
 
 
@@ -31,7 +38,6 @@ class AgentDetail:
     name: str
     description: str
     instructions: str
-    provider: str
     model: str
     thinking: AgentThinking
     permission: AgentPermission
@@ -49,33 +55,35 @@ class AgentDraft:
     name: str
     description: str
     instructions: str
-    provider: str = ""
     model: str = ""
     thinking: AgentThinking = AgentThinking.INHERIT
 
 
 @dataclass(frozen=True)
-class ProviderChoices:
-    providers: tuple[tuple[str, str], ...] = ()
-    models: dict[str, tuple[str, ...]] = field(default_factory=dict)
+class ModelChoices:
+    """The models an agent may be pointed at, and the one Aura is on.
+
+    Both come from Aura's *current* provider, because that is the provider
+    every agent will run under. ``current_model`` is what an agent that names
+    no model of its own actually runs, so it is what the control shows for
+    one — never a blank box the user has to interpret.
+    """
+
+    models: tuple[str, ...] = ()
+    current_model: str = ""
 
 
-def catalog_choices() -> ProviderChoices:
+def catalog_choices(provider: str = "", current_model: str = "") -> ModelChoices:
+    """The model list for *provider*, or an empty one it is safe to render."""
     try:
         from aura.providers.registry import ProviderRegistry
 
-        specs = ProviderRegistry().all()
+        registry = ProviderRegistry()
+        spec = registry.get(provider) if registry.has(provider) else None
     except Exception:
-        return ProviderChoices()
-    return ProviderChoices(
-        providers=tuple(
-            (pid, getattr(spec, "label", pid)) for pid, spec in sorted(specs.items())
-        ),
-        models={
-            pid: tuple(sorted(getattr(spec, "models", {}) or {}))
-            for pid, spec in specs.items()
-        },
-    )
+        return ModelChoices(current_model=str(current_model or ""))
+    models = tuple(sorted(getattr(spec, "models", {}) or {})) if spec else ()
+    return ModelChoices(models=models, current_model=str(current_model or ""))
 
 
 class AgentEditor(QWidget):
@@ -85,7 +93,7 @@ class AgentEditor(QWidget):
     delete_requested = Signal(str, str)
     permission_changed = Signal(str, str)
 
-    def __init__(self, choices: ProviderChoices, parent: QWidget | None = None) -> None:
+    def __init__(self, choices: ModelChoices, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._choices = choices
         self._detail: AgentDetail | None = None
@@ -127,20 +135,17 @@ class AgentEditor(QWidget):
         self.instructions.setMinimumHeight(140)
         layout.addLayout(_labelled("Instructions", self.instructions), 1)
 
-        self.provider = QComboBox()
-        self.provider.addItem(INHERIT_TARGET_LABEL, "")
-        for provider_id, label in choices.providers:
-            self.provider.addItem(label, provider_id)
-        self.provider.currentIndexChanged.connect(lambda _index: self._sync_models())
-
+        # Editable so a model Aura's cached catalog has not caught up with can
+        # still be typed; the list is what the current provider advertises.
         self.model = QComboBox()
         self.model.setEditable(True)
         self.model.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        target_row = QHBoxLayout()
-        target_row.setSpacing(8)
-        target_row.addLayout(_labelled("Provider", self.provider), 1)
-        target_row.addLayout(_labelled("Model", self.model), 1)
-        layout.addLayout(target_row)
+        self.model.setToolTip(
+            "The model this agent runs, under whichever provider Aura is set "
+            "to. An agent never chooses a provider."
+        )
+        self._load_models()
+        layout.addLayout(_labelled("Model", self.model))
 
         self.thinking = QComboBox()
         for mode in THINKING_ORDER:
@@ -203,20 +208,38 @@ class AgentEditor(QWidget):
     def draft(self) -> AgentDraft | None:
         if self._detail is None:
             return None
-        provider = str(self.provider.currentData() or "")
+        model_text = self.model.currentText().strip()
+        model_index = self.model.currentIndex()
+        model_data = self.model.currentData()
+        model = (
+            str(model_data or "")
+            if model_index >= 0
+            and model_data is not None
+            and model_text == self.model.itemText(model_index)
+            else model_text
+        )
         return AgentDraft(
             agent_id=self._detail.agent_id,
             scope=self._detail.scope,
             name=self.name.text().strip(),
             description=self.description.text().strip(),
             instructions=self.instructions.toPlainText().strip(),
-            provider=provider,
-            model=self.model.currentText().strip() if provider else "",
+            model=model,
             thinking=(
                 AgentThinking.parse(self.thinking.currentData())
                 or AgentThinking.INHERIT
             ),
         )
+
+    def set_choices(self, choices: ModelChoices) -> None:
+        """Re-list the models after Aura's provider or model changed."""
+        self._choices = choices
+        self._loading = True
+        try:
+            self._load_models()
+            self._select_model(self._detail.model if self._detail is not None else "")
+        finally:
+            self._loading = False
 
     def render(self) -> None:
         detail = self._detail
@@ -229,8 +252,7 @@ class AgentEditor(QWidget):
                 self.name.clear()
                 self.description.clear()
                 self.instructions.clear()
-                self.provider.setCurrentIndex(0)
-                self.model.setCurrentText("")
+                self._select_model("")
                 self.thinking.setCurrentIndex(0)
                 self.permission.setCurrentIndex(0)
             else:
@@ -244,27 +266,33 @@ class AgentEditor(QWidget):
                 self.name.setText(detail.name)
                 self.description.setText(detail.description)
                 self.instructions.setPlainText(detail.instructions)
-                self._select_data(self.provider, detail.provider)
-                self._sync_models()
-                self.model.setCurrentText(detail.model)
+                self._select_model(detail.model)
                 self._select_data(self.thinking, detail.thinking.value)
                 self._select_data(self.permission, detail.permission.value)
         finally:
             self._loading = False
         self._update_actions()
 
-    def _sync_models(self) -> None:
-        provider = str(self.provider.currentData() or "")
-        current = self.model.currentText()
+    def _load_models(self) -> None:
+        """Fill the list with what Aura's current provider offers."""
         self.model.blockSignals(True)
         self.model.clear()
-        if provider:
-            self.model.addItems(list(self._choices.models.get(provider, ())))
-            self.model.setCurrentText(current)
-        else:
-            self.model.setCurrentText("")
+        inherit_label = f"Use {CURRENT_MODEL_LABEL}"
+        if self._choices.current_model:
+            inherit_label += f" ({self._choices.current_model})"
+        self.model.addItem(inherit_label, "")
+        for model in self._choices.models:
+            self.model.addItem(model, model)
         self.model.blockSignals(False)
-        self.model.setEnabled(bool(provider) and self._editable())
+
+    def _select_model(self, model: str) -> None:
+        """Select inherit, a catalog model, or an explicitly typed model id."""
+        value = str(model or "").strip()
+        index = self.model.findData(value)
+        if index >= 0:
+            self.model.setCurrentIndex(index)
+        else:
+            self.model.setCurrentText(value)
 
     def _editable(self) -> bool:
         return self._mutations_enabled and self._detail is not None
@@ -276,8 +304,7 @@ class AgentEditor(QWidget):
             widget.setEnabled(self._detail is not None)
         self.instructions.setReadOnly(not editable)
         self.instructions.setEnabled(self._detail is not None)
-        self.provider.setEnabled(editable)
-        self.model.setEnabled(editable and bool(self.provider.currentData()))
+        self.model.setEnabled(editable)
         self.thinking.setEnabled(editable)
         self.permission.setEnabled(editable)
         self.save_button.setEnabled(editable)
@@ -316,10 +343,9 @@ def _labelled(text: str, widget: QWidget) -> QVBoxLayout:
 
 
 __all__ = [
-    "INHERIT_TARGET_LABEL",
     "AgentDetail",
     "AgentDraft",
     "AgentEditor",
-    "ProviderChoices",
+    "ModelChoices",
     "catalog_choices",
 ]

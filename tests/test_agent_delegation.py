@@ -10,8 +10,9 @@ What this file holds Aura to:
   frozen read/search/read-only-Git catalog it cannot step outside of;
 * it cannot delegate again, cannot write, and cannot reach a skill, an MCP
   tool, or the root's transcript;
-* provider and model are either fully inherited or fully named, and a target
-  that cannot be resolved fails the *delegation*, not the conversation;
+* the provider is Aura's submitted-turn provider, while the model is inherited
+  or explicitly selected, and a target that cannot be resolved fails the
+  *delegation*, not the conversation;
 * the user's Stop stops the child, through the root turn's own event;
 * exactly one paired tool result reaches canonical root History, and it is
   the structured result — never the child's messages.
@@ -29,13 +30,13 @@ from aura.agents.child_prompt import compose_child_system_prompt
 from aura.agents.delegation import DelegationFailure, DelegationResult, DelegationStatus
 from aura.agents.identity import AgentScope
 from aura.agents.local_state import AgentLocalState, AgentPermission
-from aura.agents.models import AgentDefinition, AgentThinking, ModelTarget
+from aura.agents.models import AgentDefinition, AgentThinking
 from aura.agents.roster import (
     AgentRosterEntry,
     AgentTurnRoster,
     resolve_agent_turn_roster,
 )
-from aura.agents.runtime import AgentDelegationRunner, resolve_model_target
+from aura.agents.runtime import AgentDelegationRunner, resolve_agent_model
 from aura.agents.store import AgentStore
 from aura.client import ApiError, ContentDelta, Done, Event, ToolResult, Usage
 from aura.conversation.history import AVAILABLE_AGENT_IDS_KEY, History
@@ -57,7 +58,7 @@ def _definition(
     name: str = "Reviewer",
     description: str = "Reviews a change for defects.",
     instructions: str = INSTRUCTIONS,
-    target: ModelTarget | None = None,
+    model: str = "",
     thinking: AgentThinking = AgentThinking.INHERIT,
 ) -> AgentDefinition:
     return AgentDefinition(
@@ -66,7 +67,7 @@ def _definition(
         name=name,
         description=description,
         instructions=instructions,
-        target=target or ModelTarget.inherited(),
+        model=model,
         thinking=thinking,
     )
 
@@ -203,7 +204,7 @@ def test_the_single_schema_projection_states_the_frozen_grant() -> None:
         entries=(
             AgentRosterEntry(
                 definition=_definition(),
-                permission=AgentPermission.WORKTREE_EDIT,
+                permission=AgentPermission.READ_WRITE,
             ),
         )
     )
@@ -218,7 +219,7 @@ def test_the_single_schema_projection_states_the_frozen_grant() -> None:
         )
     )
 
-    assert AgentPermission.WORKTREE_EDIT.label in block
+    assert AgentPermission.READ_WRITE.label in block
     assert "cannot edit anything" not in block
     assert INSTRUCTIONS not in block
 
@@ -232,14 +233,14 @@ def test_the_roster_keeps_the_users_own_order(workspace: Path) -> None:
     second = store.create(
         AgentScope.PROJECT, name="Beta", description="b", instructions="b"
     )
-    state.set_permission(second.agent_id, AgentPermission.WORKTREE_EDIT)
+    state.set_permission(second.agent_id, AgentPermission.READ_WRITE)
 
     roster = resolve_agent_turn_roster(
         (second.agent_id, first.agent_id), definitions=store, permissions=state
     )
 
     assert roster.ids == (second.agent_id, first.agent_id)
-    assert roster.entries[0].permission is AgentPermission.WORKTREE_EDIT
+    assert roster.entries[0].permission is AgentPermission.READ_WRITE
     assert roster.entries[1].permission is AgentPermission.READ_ONLY
 
 
@@ -523,13 +524,13 @@ def test_a_concurrent_delegation_is_refused_rather_than_run(workspace: Path) -> 
 # ── provider and model resolution ────────────────────────────────────────────
 
 
-def test_an_inheriting_agent_runs_the_turns_own_provider_and_model() -> None:
-    resolved, failure, _message = resolve_model_target(
-        ModelTarget.inherited(),
+def test_an_agent_with_no_model_runs_the_turns_own_provider_and_model() -> None:
+    resolved, failure, _message = resolve_agent_model(
+        "",
         AgentThinking.INHERIT,
-        inherited_provider="anthropic",
-        inherited_model="claude-x",
-        inherited_thinking="high",
+        provider="anthropic",
+        turn_model="claude-x",
+        turn_thinking="high",
     )
 
     assert failure is None
@@ -540,18 +541,19 @@ def test_an_inheriting_agent_runs_the_turns_own_provider_and_model() -> None:
     )
 
 
-def test_an_explicit_pair_overrides_inheritance_including_thinking() -> None:
-    resolved, failure, _message = resolve_model_target(
-        ModelTarget.explicit("openai", "gpt-x"),
+def test_an_explicit_model_resolves_under_the_turns_provider() -> None:
+    """The agent picks the model; the provider is always Aura's own."""
+    resolved, failure, _message = resolve_agent_model(
+        "gpt-x",
         AgentThinking.MAX,
-        inherited_provider="deepseek",
-        inherited_model="deepseek-chat",
-        inherited_thinking="off",
+        provider="deepseek",
+        turn_model="deepseek-chat",
+        turn_thinking="off",
     )
 
     assert failure is None
     assert (resolved.provider, resolved.model, resolved.thinking) == (
-        "openai",
+        "deepseek",
         "gpt-x",
         "max",
     )
@@ -565,57 +567,45 @@ def test_every_hosted_api_provider_can_back_an_agent() -> None:
     ]
     assert hosted, "there must be at least one hosted provider"
     for provider in hosted:
-        resolved, failure, message = resolve_model_target(
-            ModelTarget.explicit(provider, "some-model"),
+        resolved, failure, message = resolve_agent_model(
+            "some-model",
             AgentThinking.INHERIT,
-            inherited_provider="",
-            inherited_model="",
-            inherited_thinking="off",
+            provider=provider,
+            turn_model="",
+            turn_thinking="off",
         )
         assert failure is None, f"{provider}: {message}"
         assert resolved.provider == provider
 
 
-@pytest.mark.parametrize(
-    "target, expected",
-    [
-        (ModelTarget(provider="openai", model=""), DelegationFailure.MODEL_TARGET_INCOMPLETE),
-        (ModelTarget(provider="", model="gpt-x"), DelegationFailure.MODEL_TARGET_INCOMPLETE),
-        (ModelTarget.explicit("not_a_provider", "m"), DelegationFailure.PROVIDER_UNKNOWN),
-    ],
-)
-def test_an_unresolvable_target_refuses_rather_than_falling_back(
-    target: ModelTarget, expected: DelegationFailure
-) -> None:
-    resolved, failure, message = resolve_model_target(
-        target,
+def test_an_unknown_turn_provider_refuses_rather_than_falling_back() -> None:
+    resolved, failure, message = resolve_agent_model(
+        "gpt-x",
         AgentThinking.INHERIT,
-        inherited_provider="deepseek",
-        inherited_model="deepseek-chat",
-        inherited_thinking="off",
+        provider="not_a_provider",
+        turn_model="deepseek-chat",
+        turn_thinking="off",
     )
 
     assert resolved is None
-    assert failure is expected
+    assert failure is DelegationFailure.PROVIDER_UNKNOWN
     assert message
 
 
-def test_nothing_to_inherit_is_a_refusal_not_a_default() -> None:
-    resolved, failure, _message = resolve_model_target(
-        ModelTarget.inherited(),
+def test_no_model_anywhere_is_a_refusal_not_a_default() -> None:
+    resolved, failure, _message = resolve_agent_model(
+        "",
         AgentThinking.INHERIT,
-        inherited_provider="",
-        inherited_model="",
-        inherited_thinking="off",
+        provider="deepseek",
+        turn_model="",
+        turn_thinking="off",
     )
 
     assert resolved is None
     assert failure is DelegationFailure.MODEL_TARGET_INCOMPLETE
 
 
-def test_a_local_or_cli_provider_is_refused_for_now(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_a_local_or_cli_provider_is_refused_for_now() -> None:
     from aura.providers.registry import provider_registry
 
     cli = [
@@ -623,12 +613,12 @@ def test_a_local_or_cli_provider_is_refused_for_now(
     ]
     if not cli:
         pytest.skip("this build registers only hosted providers")
-    resolved, failure, _message = resolve_model_target(
-        ModelTarget.explicit(cli[0], "m"),
+    resolved, failure, _message = resolve_agent_model(
+        "m",
         AgentThinking.INHERIT,
-        inherited_provider="",
-        inherited_model="",
-        inherited_thinking="off",
+        provider=cli[0],
+        turn_model="",
+        turn_thinking="off",
     )
 
     assert resolved is None
@@ -650,8 +640,8 @@ def test_an_unconfigured_provider_fails_the_delegation_not_the_conversation(
     assert backend.requests == []
 
 
-def test_a_definition_carries_no_credential_or_url() -> None:
-    definition = _definition(target=ModelTarget.explicit("openai", "gpt-x"))
+def test_a_definition_carries_no_provider_credential_or_url() -> None:
+    definition = _definition(model="gpt-x")
     fields = set(definition.__dataclass_fields__)
 
     assert fields == {
@@ -660,10 +650,9 @@ def test_a_definition_carries_no_credential_or_url() -> None:
         "name",
         "description",
         "instructions",
-        "target",
+        "model",
         "thinking",
     }
-    assert set(definition.target.__dataclass_fields__) == {"provider", "model"}
 
 
 # ── failure, cancellation, and the shape that comes back ─────────────────────

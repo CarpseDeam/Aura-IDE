@@ -50,13 +50,13 @@ class DelegationFailure(str, Enum):
     TASK_MISSING = "task_missing"
     #: No workspace is open, so a child has nothing it may legitimately read.
     WORKSPACE_REQUIRED = "workspace_required"
-    #: The definition names a provider this build does not know.
+    #: Aura's submitted turn names a provider this build does not know.
     PROVIDER_UNKNOWN = "provider_unknown"
     #: The provider is known but has no usable credentials on this machine.
     PROVIDER_NOT_CONFIGURED = "provider_not_configured"
     #: The provider is real but cannot back an agent yet (CLI or local kinds).
     PROVIDER_UNSUPPORTED = "provider_unsupported"
-    #: Half a model target: a provider without a model, or the reverse.
+    #: Neither an explicit Agent model nor Aura's current model could resolve.
     MODEL_TARGET_INCOMPLETE = "model_target_incomplete"
     #: The provider failed while the child was running.
     PROVIDER_ERROR = "provider_error"

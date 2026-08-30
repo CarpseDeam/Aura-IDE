@@ -32,7 +32,8 @@ from aura.paths import data_dir
 
 logger = logging.getLogger(__name__)
 
-_STATE_VERSION = 1
+#: Bumped when the former three-way grant became Read only / Read / Write.
+_STATE_VERSION = 2
 
 
 class AgentLocalStateError(RuntimeError):
@@ -42,15 +43,21 @@ class AgentLocalStateError(RuntimeError):
 class AgentPermission(str, Enum):
     """What a user has locally allowed one agent to do.
 
-    The three grants are ordered, least to most: reading is always allowed,
-    editing happens only inside an isolated worktree, and running terminal
-    commands is a separate, deliberate step beyond editing. ``READ_ONLY`` is
-    the default for every agent the user has not explicitly decided about.
+    There are two, and the gap between them is the whole authority model.
+    ``READ_ONLY`` reads and nothing else, and is what every agent the user has
+    not decided about starts as. ``READ_WRITE`` is the isolated writable
+    capability: edits land in a runtime-owned linked Git worktree and terminal
+    commands are available *there*. Neither ever writes the canonical
+    workspace — a result reaches it only when the user approves applying the
+    retained change set.
+
+    Older private state named a third grant, splitting editing from running
+    commands. Reading normalizes both of those to ``READ_WRITE``, in one
+    direction, and the next write persists only these two values.
     """
 
     READ_ONLY = "read_only"
-    WORKTREE_EDIT = "worktree_edit"
-    WORKTREE_EDIT_TERMINAL = "worktree_edit_terminal"
+    READ_WRITE = "read_write"
 
     @property
     def label(self) -> str:
@@ -58,11 +65,12 @@ class AgentPermission(str, Enum):
 
     @property
     def allows_edit(self) -> bool:
-        return self is not AgentPermission.READ_ONLY
+        return self is AgentPermission.READ_WRITE
 
     @property
     def allows_terminal(self) -> bool:
-        return self is AgentPermission.WORKTREE_EDIT_TERMINAL
+        """True exactly when editing is allowed — in the same worktree."""
+        return self is AgentPermission.READ_WRITE
 
     @classmethod
     def parse(cls, raw: object) -> "AgentPermission | None":
@@ -70,36 +78,35 @@ class AgentPermission(str, Enum):
             return raw
         if not isinstance(raw, str):
             return None
+        text = raw.strip().lower()
+        if text in _LEGACY_PERMISSIONS:
+            return _LEGACY_PERMISSIONS[text]
         try:
-            return cls(raw.strip().lower())
+            return cls(text)
         except ValueError:
             return None
 
 
 _PERMISSION_LABELS: dict[AgentPermission, str] = {
     AgentPermission.READ_ONLY: "Read only",
-    AgentPermission.WORKTREE_EDIT: "Edit in isolated worktree",
-    AgentPermission.WORKTREE_EDIT_TERMINAL: "Edit in isolated worktree + terminal",
+    AgentPermission.READ_WRITE: "Read / Write",
+}
+
+#: The two grants an older local-state file could hold, and the single grant
+#: each of them now means. Read-only compatibility: nothing writes these back.
+_LEGACY_PERMISSIONS: dict[str, AgentPermission] = {
+    "worktree_edit": AgentPermission.READ_WRITE,
+    "worktree_edit_terminal": AgentPermission.READ_WRITE,
 }
 
 #: Display order for the permission control, least authority first.
 PERMISSION_ORDER: tuple[AgentPermission, ...] = (
     AgentPermission.READ_ONLY,
-    AgentPermission.WORKTREE_EDIT,
-    AgentPermission.WORKTREE_EDIT_TERMINAL,
+    AgentPermission.READ_WRITE,
 )
 
 #: What every agent starts as, everywhere, for everyone.
 DEFAULT_PERMISSION = AgentPermission.READ_ONLY
-
-#: The warning the management surface must show wherever terminal authority
-#: can be granted. Terminal access is not a sandbox boundary and must never
-#: be presented as one.
-TERMINAL_WARNING = (
-    "Terminal commands run as you, on this machine, with your own account's "
-    "access. Aura does not sandbox them at the OS level — an isolated worktree "
-    "separates an agent's edits, not what a command it runs can reach."
-)
 
 
 def workspace_key(workspace_root: Path | str) -> str:
@@ -239,15 +246,16 @@ class AgentLocalState:
             for item in available
             if isinstance(item, str) and is_valid_agent_id(item)
         ]
-        clean_permissions = {
-            str(key): str(value)
-            for key, value in permissions.items()
-            if (
-                isinstance(key, str)
-                and is_valid_agent_id(key)
-                and AgentPermission.parse(value) is not None
-            )
-        }
+        # Parse, then keep the parsed value rather than the raw one: a grant
+        # written under the older three-way vocabulary is normalized here,
+        # once, and the next _save writes only the current two values.
+        clean_permissions: dict[str, str] = {}
+        for key, value in permissions.items():
+            if not (isinstance(key, str) and is_valid_agent_id(key)):
+                continue
+            parsed = AgentPermission.parse(value)
+            if parsed is not None:
+                clean_permissions[key] = parsed.value
         if for_write and (
             len(clean_available) != len(available)
             or len(clean_permissions) != len(permissions)
@@ -289,7 +297,6 @@ class AgentLocalState:
 __all__ = [
     "DEFAULT_PERMISSION",
     "PERMISSION_ORDER",
-    "TERMINAL_WARNING",
     "AgentLocalState",
     "AgentLocalStateError",
     "AgentPermission",

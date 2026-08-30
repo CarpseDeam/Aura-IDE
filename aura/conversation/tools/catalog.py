@@ -18,6 +18,7 @@ from aura.conversation.tools.schemas import (
     TASK_CHECKLIST_TOOL_DEF,
     TERMINAL_TOOL_DEF,
     build_delegate_agent_tool_def,
+    build_run_workflow_tool_def,
 )
 
 # Godot remains implemented and registered, but is not part of the ordinary
@@ -103,6 +104,7 @@ class ToolCatalog:
         plan_review: bool = False,
         skills_active: bool = False,
         agents: tuple[dict[str, str], ...] | None = None,
+        workflow: dict[str, Any] | None = None,
         agent_change_sets: bool = False,
     ) -> list[dict[str, Any]]:
         """Build tool definitions for the production catalog.
@@ -127,6 +129,15 @@ class ToolCatalog:
         single-agent Aura has always offered. The rows carry each eligible
         agent's id, display name, and short description; an agent's full
         instructions are the child's brief and never enter this catalog.
+
+        ``workflow`` adds ``run_agent_workflow``, and only when this turn
+        froze a complete plan for a workflow the user switched on in the
+        toolbar. With the switch off there is no plan, so there is no tool and
+        no sentence about workflows anywhere in the request: the catalog and
+        the prompt weigh exactly what they weighed before the feature existed.
+        The row carries the workflow's name, its description, and each step's
+        agent name and assignment — the shape of the hand-off, never an
+        agent's instructions.
 
         Reading an explicitly authorized external location is not a separate
         capability and never changes this catalog: ``read_file`` and
@@ -172,6 +183,9 @@ class ToolCatalog:
 
         if agents:
             tools.append(build_delegate_agent_tool_def(agents))
+
+        if workflow:
+            tools.append(build_run_workflow_tool_def(workflow))
 
         if agent_change_sets:
             if read_only:

@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from aura.agents.graph_models import (
+    ConnectionKind,
     WorkflowConnection,
     WorkflowGraph,
     WorkflowNode,
@@ -107,6 +108,31 @@ def connection_info(
     )
 
 
+def run_edge_states(
+    graph: WorkflowGraph, node_states: Mapping[str, str]
+) -> dict[str, str]:
+    """What each solid connection shows, derived from the steps it joins.
+
+    A line carries work *into* the box at its end, so it wears that box's
+    state — except the last line, which arrives at the Aura Result and has no
+    step of its own to speak for, so it wears the state of the step it left.
+    Dashed sub-agent lines are authoring metadata in this phase and never
+    show a run state, because nothing runs along them.
+    """
+    states: dict[str, str] = {}
+    for edge in graph.connections_of_kind(ConnectionKind.STEP):
+        target = graph.node(edge.target_id)
+        source = graph.node(edge.source_id)
+        state = ""
+        if target is not None and target.is_agent:
+            state = str(node_states.get(target.node_id, ""))
+        elif source is not None and source.is_agent:
+            state = str(node_states.get(source.node_id, ""))
+        if state:
+            states[edge.connection_id] = state
+    return states
+
+
 def node_label(node: WorkflowNode | None, agents: Mapping[str, AgentSummary]) -> str:
     """A short name for one node, for use in a sentence about a connection."""
     if node is None:
@@ -147,5 +173,6 @@ __all__ = [
     "node_label",
     "node_visuals",
     "occurrence_info",
+    "run_edge_states",
     "workflow_info",
 ]

@@ -128,6 +128,7 @@ class ChildExecutor:
         workspace_root: Path,
         permission: AgentPermission,
         worktree: AgentWorktree | None = None,
+        workflow_step: bool = False,
     ) -> tuple[DelegationResult, tuple[dict[str, Any], ...]]:
         definition = entry.definition
         started = time.monotonic()
@@ -139,6 +140,7 @@ class ChildExecutor:
                 permission=permission,
                 change_set_id=worktree.change_set_id if worktree else "",
                 base_sha=worktree.base_sha if worktree else "",
+                workflow_step=workflow_step,
             )
         )
         history.append_user_text(task)

@@ -1,4 +1,4 @@
-"""The root's ``delegate_agent`` handler.
+"""The root's ``delegate_agent`` and ``run_agent_workflow`` handlers.
 
 This is a thin, deliberate seam.  It resolves the requested id against the
 turn's frozen roster, refuses anything that is not on it, and hands the run to
@@ -20,7 +20,7 @@ from aura.conversation.tools._types import ApprovalCallback, ToolExecResult
 
 
 class AgentDelegationHandlersMixin:
-    """Handler for the root-only ``delegate_agent`` tool."""
+    """Handlers for the root-only Agent delegation and workflow tools."""
 
     def _handle_delegate_agent(
         self, args: dict[str, Any], approval_cb: ApprovalCallback, reject_all: bool
@@ -86,6 +86,66 @@ class AgentDelegationHandlersMixin:
             ok=result.ok,
             payload=result.payload(),
             extras=extras,
+        )
+
+    def _handle_run_agent_workflow(
+        self, args: dict[str, Any], approval_cb: ApprovalCallback, reject_all: bool
+    ) -> ToolExecResult:
+        """Run this turn's one frozen workflow, or refuse truthfully.
+
+        There is no workflow to name: the plan was frozen with the turn, and a
+        turn that froze none has no such tool in its catalog at all. Reaching
+        here without one therefore means something went wrong, and it is said
+        plainly rather than resolved into whatever workflow is open now.
+        """
+        from aura.agents.delegation import DelegationFailure
+        from aura.agents.workflow_runner import WorkflowRunResult
+
+        plan = self._turn_workflow_plan
+        if plan is None:
+            result = WorkflowRunResult.failure(
+                "",
+                DelegationFailure.DELEGATION_UNAVAILABLE,
+                "No Agent workflow is available on this turn.",
+            )
+            return ToolExecResult(ok=False, payload=result.payload())
+
+        runner = self._agent_workflow_runner
+        if runner is None:
+            result = WorkflowRunResult.failure(
+                plan.graph_id,
+                DelegationFailure.DELEGATION_UNAVAILABLE,
+                "Agent workflows are not available in this runtime.",
+                workflow_name=plan.name,
+            )
+            return ToolExecResult(ok=False, payload=result.payload())
+
+        if plan.writable:
+            from aura.conversation.tools.effects import ToolEffect
+
+            if self._read_only or self._plan_review.blocks(ToolEffect.MUTATION):
+                result = WorkflowRunResult.failure(
+                    plan.graph_id,
+                    DelegationFailure.ROOT_MUTATION_FORBIDDEN,
+                    "This workflow has a step with a Read / Write grant, but the "
+                    "frozen root turn forbids mutation. Aura did not downgrade "
+                    "the grant or start the workflow.",
+                    workflow_name=plan.name,
+                )
+                return ToolExecResult(ok=False, payload=result.payload())
+
+        # The turn's own cancel event, relayed by the tool round — never a
+        # second cancellation authority created here.
+        result = runner.run(
+            plan, str(args.get("task") or ""), cancel_event=self.active_cancel_event
+        )
+        return ToolExecResult(
+            ok=result.ok,
+            payload=result.payload(),
+            extras={
+                "workflow_graph_id": result.graph_id,
+                "workflow_status": result.status.value,
+            },
         )
 
     def _handle_list_agent_change_sets(

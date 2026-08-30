@@ -35,6 +35,25 @@ from aura.gui.theme import (
     WARN,
 )
 
+#: What a box says about a run, and the colour it says it in. The keys are
+#: :class:`aura.agents.workflow_runner.WorkflowStepState` values; the canvas
+#: is handed strings so nothing here has to import the runtime.
+RUN_STATE_COLORS: dict[str, str] = {
+    "running": ACCENT,
+    "succeeded": SUCCESS,
+    "failed": DANGER,
+    "cancelled": WARN,
+    "skipped": FG_MUTED,
+}
+
+RUN_STATE_LABELS: dict[str, str] = {
+    "running": "Running",
+    "succeeded": "Done",
+    "failed": "Failed",
+    "cancelled": "Stopped",
+    "skipped": "Not run",
+}
+
 NODE_WIDTH = 196.0
 NODE_HEIGHT = 68.0
 NODE_RADIUS = 9.0
@@ -80,6 +99,8 @@ class WorkflowNodeItem(QGraphicsObject):
         super().__init__(parent)
         self._visual = visual
         self._editable = True
+        self._run_state = ""
+        self._pulse = 1.0
         self._press_position = QPointF()
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
@@ -106,6 +127,23 @@ class WorkflowNodeItem(QGraphicsObject):
     def set_visual(self, visual: NodeVisual) -> None:
         self._visual = visual
         self._apply_visual()
+        self.update()
+
+    @property
+    def run_state(self) -> str:
+        return self._run_state
+
+    def set_run_state(self, state: str) -> None:
+        """Show what this step is doing, without rebuilding the canvas."""
+        state = str(state or "")
+        if state == self._run_state:
+            return
+        self._run_state = state
+        self.update()
+
+    def set_pulse(self, value: float) -> None:
+        """One frame of the shared breathing clock, while this step runs."""
+        self._pulse = max(0.0, min(1.0, float(value)))
         self.update()
 
     def set_editable(self, editable: bool) -> None:
@@ -159,12 +197,23 @@ class WorkflowNodeItem(QGraphicsObject):
         painter.setRenderHint(painter.RenderHint.Antialiasing, True)
         body = QRectF(0.0, 0.0, NODE_WIDTH, NODE_HEIGHT)
 
+        run_color = RUN_STATE_COLORS.get(self._run_state)
         painter.setBrush(QBrush(QColor(_fill_for(visual.kind))))
-        painter.setPen(QPen(QColor(_border_for(visual, self.isSelected())), 2.0
-                            if self.isSelected() or visual.invalid else 1.0))
+        if run_color is not None:
+            border = QColor(run_color)
+            if self._run_state == "running":
+                # Only the opacity breathes; the geometry never moves, so a
+                # running box reads as alive without drifting on the canvas.
+                border.setAlphaF(self._pulse)
+            painter.setPen(QPen(border, 2.4))
+        else:
+            painter.setPen(QPen(QColor(_border_for(visual, self.isSelected())), 2.0
+                                if self.isSelected() or visual.invalid else 1.0))
         painter.drawRoundedRect(body, NODE_RADIUS, NODE_RADIUS)
 
-        accent = QColor(_accent_for(visual))
+        accent = QColor(run_color) if run_color is not None else QColor(_accent_for(visual))
+        if run_color is not None and self._run_state == "running":
+            accent.setAlphaF(self._pulse)
         painter.setBrush(QBrush(accent))
         painter.setPen(Qt.PenStyle.NoPen)
         stripe = QPainterPath()
@@ -198,12 +247,15 @@ class WorkflowNodeItem(QGraphicsObject):
             ),
         )
 
-        if visual.kind.is_fixed:
-            painter.setPen(QPen(QColor(FG_MUTED)))
+        badge = RUN_STATE_LABELS.get(self._run_state) or (
+            visual.kind.label if visual.kind.is_fixed else ""
+        )
+        if badge:
+            painter.setPen(QPen(QColor(run_color or FG_MUTED)))
             painter.drawText(
                 QRectF(NODE_WIDTH - 92.0, 8.0, 80.0, 16.0),
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                visual.kind.label,
+                badge,
             )
 
     # ---- Qt interaction ----------------------------------------------------
@@ -332,6 +384,8 @@ def _border_for(visual: NodeVisual, selected: bool) -> str:
 
 
 __all__ = [
+    "RUN_STATE_COLORS",
+    "RUN_STATE_LABELS",
     "NODE_HEIGHT",
     "NODE_RADIUS",
     "NODE_WIDTH",

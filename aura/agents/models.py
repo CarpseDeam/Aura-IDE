@@ -6,13 +6,16 @@ is *allowed to do* — permission is private local state
 (:mod:`aura.agents.local_state`), so a definition committed to a repository
 can never hand itself authority on someone else's machine.
 
-Both model-target fields move together: an agent either inherits the
-provider and model Aura is currently using, or names both explicitly. Half a
-target is not a fallback, it is a mistake, and the reader reports it as one.
+A definition never names a provider. An agent runs on whichever provider
+Aura itself is set to for the turn that invoked it, so a reusable agent — a
+project one especially — cannot pin a machine to a provider its owner has no
+key for. What a definition *may* name is a model, and that model is resolved
+under Aura's current provider. An empty model means "whatever model Aura is
+running", which is what a brand-new agent starts as.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 
 from aura.agents.identity import AgentScope
@@ -24,7 +27,7 @@ class AgentThinking(str, Enum):
     ``INHERIT`` means "whatever Aura is set to", and is the default. The
     other three are the same modes the user can pick for Aura itself
     (:data:`aura.providers.base.THINKING_MODES`), named identically so the
-    value can be handed straight to a provider when delegation lands.
+    value can be handed straight to a provider.
     """
 
     INHERIT = "inherit"
@@ -68,34 +71,8 @@ THINKING_ORDER: tuple[AgentThinking, ...] = (
     AgentThinking.MAX,
 )
 
-
-@dataclass(frozen=True)
-class ModelTarget:
-    """Which provider and model answer for an agent.
-
-    Empty strings on both fields mean "inherit". Exactly one filled field is
-    invalid — see the module docstring.
-    """
-
-    provider: str = ""
-    model: str = ""
-
-    @property
-    def inherits(self) -> bool:
-        return not self.provider and not self.model
-
-    @property
-    def is_complete(self) -> bool:
-        """True when this target is usable: either fully inherited or fully named."""
-        return self.inherits or bool(self.provider and self.model)
-
-    @classmethod
-    def inherited(cls) -> "ModelTarget":
-        return cls()
-
-    @classmethod
-    def explicit(cls, provider: str, model: str) -> "ModelTarget":
-        return cls(provider=str(provider or "").strip(), model=str(model or "").strip())
+#: How a definition that names no model of its own reads in a list.
+CURRENT_MODEL_LABEL = "Aura's current model"
 
 
 @dataclass(frozen=True)
@@ -104,7 +81,9 @@ class AgentDefinition:
 
     ``instructions`` is the Markdown body — the full brief the agent runs
     with. ``description`` is the short line Aura reads when deciding whether
-    this agent is the right one to hand a piece of work to.
+    this agent is the right one to hand a piece of work to. ``model`` is a
+    model id resolved under Aura's own provider, or ``""`` for Aura's current
+    model.
     """
 
     agent_id: str
@@ -112,21 +91,19 @@ class AgentDefinition:
     name: str
     description: str
     instructions: str
-    target: ModelTarget = field(default_factory=ModelTarget)
+    model: str = ""
     thinking: AgentThinking = AgentThinking.INHERIT
 
     @property
-    def target_label(self) -> str:
-        """How the model target reads in a list or a detail line."""
-        if self.target.inherits:
-            return "Inherits Aura's provider and model"
-        return f"{self.target.provider} · {self.target.model}"
+    def model_label(self) -> str:
+        """How the model choice reads in a list or a detail line."""
+        return self.model.strip() or CURRENT_MODEL_LABEL
 
 
 __all__ = [
+    "CURRENT_MODEL_LABEL",
     "THINKING_ORDER",
     "AgentDefinition",
     "AgentScope",
     "AgentThinking",
-    "ModelTarget",
 ]

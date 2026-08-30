@@ -127,6 +127,12 @@ class ToolRegistry(
         self._turn_agent_roster: AgentTurnRoster = EMPTY_AGENT_ROSTER
         self._agent_delegation_runner: Any = None
         self._agent_worktree_manager: Any = None
+        # The frozen per-turn workflow plan and the runner that executes it.
+        # Absent by default, and that absence is the ordinary case: with no
+        # plan there is no ``run_agent_workflow`` in the catalog and not one
+        # word about workflows in the request.
+        self._turn_workflow_plan: Any = None
+        self._agent_workflow_runner: Any = None
         # Plan Review — required/approved state for the active turn, and the
         # GUI-thread proxy that pauses the tool loop for human review. The
         # state always exists (required defaults to False); the proxy is
@@ -279,6 +285,31 @@ class ToolRegistry(
         """Wire the root-only owner of writable Agent result operations."""
         self._agent_worktree_manager = manager
 
+    @property
+    def turn_workflow_plan(self) -> Any | None:
+        """The one workflow this turn may run — None unless one was frozen."""
+        return self._turn_workflow_plan
+
+    def set_turn_workflow_plan(self, plan: Any | None) -> None:
+        """Freeze this real user turn's runnable workflow, or clear it.
+
+        Called once per turn, before the first ``tool_defs()`` of that turn,
+        so ``run_agent_workflow`` joins the catalog only when the user had the
+        Agents switch on over a workflow that actually froze — and stays in
+        that state for every round. ``None`` is the ordinary case.
+        """
+        self._turn_workflow_plan = plan
+
+    def set_agent_workflow_runner(self, runner: Any | None) -> None:
+        """Wire (or clear) the runtime that actually runs a frozen workflow.
+
+        ``None`` (the default) means this registry cannot run one: the call
+        fails truthfully instead of pretending. A child agent's registry is
+        deliberately left this way, so nothing a workflow step runs can start
+        another workflow.
+        """
+        self._agent_workflow_runner = runner
+
     def tool_defs(self) -> list[dict[str, Any]]:
         dynamic_schemas = self._dynamic_tools.schemas() if not self._read_only else []
         # Read-only mode exposes only the MCP tools resolved as observations.
@@ -300,11 +331,20 @@ class ToolRegistry(
             plan_review=(not self._read_only) and self._plan_review.required,
             skills_active=skills_active,
             agents=self._turn_agent_roster.catalog_rows() or None,
+            workflow=(
+                self._turn_workflow_plan.catalog_row()
+                if self._turn_workflow_plan is not None
+                else None
+            ),
             agent_change_sets=bool(
                 self._agent_worktree_manager is not None
                 and (
                     getattr(self._agent_worktree_manager, "has_unresolved", False)
                     or any(entry.permission.allows_edit for entry in self._turn_agent_roster.entries)
+                    or bool(
+                        self._turn_workflow_plan is not None
+                        and self._turn_workflow_plan.writable
+                    )
                 )
             ),
         )
@@ -577,6 +617,7 @@ TOOL_HANDLERS["code_intel_audit"] = ToolRegistry._handle_code_intel_audit
 TOOL_HANDLERS["inspect_code"] = ToolRegistry._handle_inspect_code
 TOOL_HANDLERS["review_implementation_plan"] = ToolRegistry._handle_review_implementation_plan
 TOOL_HANDLERS["delegate_agent"] = ToolRegistry._handle_delegate_agent
+TOOL_HANDLERS["run_agent_workflow"] = ToolRegistry._handle_run_agent_workflow
 TOOL_HANDLERS["list_agent_change_sets"] = ToolRegistry._handle_list_agent_change_sets
 TOOL_HANDLERS["inspect_agent_change_set"] = ToolRegistry._handle_inspect_agent_change_set
 TOOL_HANDLERS["apply_agent_change_set"] = ToolRegistry._handle_apply_agent_change_set

@@ -1,12 +1,19 @@
 """Private per-user, per-workspace workflow state.
 
 A workflow file says what a workflow *is*. This file says what *this* user,
-in *this* workspace, has decided about it: whether Aura may eventually call
-the whole workflow, and which one they were last looking at. Neither is ever
+in *this* workspace, has decided about it: which one they have open, and
+whether Aura may invoke it during an ordinary conversation. Neither is ever
 written into the project, so a workflow committed to a repository arrives on
 every other machine switched off until that machine's user says otherwise —
 the same rule that keeps an agent definition from granting itself authority
 (:mod:`aura.agents.local_state`).
+
+There is exactly one enabled bit, and it belongs to the selected workflow.
+That is deliberate: an enabled flag per workflow *and* a master switch in the
+toolbar would be two answers to one question, and the day they disagreed the
+user would have no way to tell which one Aura believed. So the toolbar switch
+is a view of this bit, selecting another workflow moves the question rather
+than the answer, and there is nowhere else availability is recorded.
 
 State lives under the user's own Aura data directory, keyed by a digest of
 the workspace path::
@@ -16,10 +23,6 @@ the workspace path::
 It is a separate file from the agent roster on purpose: the two answer
 different questions, are written by different surfaces, and a corrupt one
 must never take the other down with it.
-
-Availability is recorded now and nothing reads it as permission yet. Aura
-does not call workflows in this phase; the switch exists so the decision is
-the user's from the first moment they can express it.
 """
 from __future__ import annotations
 
@@ -35,16 +38,18 @@ from aura.paths import data_dir
 
 logger = logging.getLogger(__name__)
 
-_STATE_VERSION = 1
+#: Bumped when the per-workflow availability list became one enabled bit.
+_STATE_VERSION = 2
 
-#: What the workflow-level switch is called wherever it is shown.
-AVAILABILITY_LABEL = "Available to Aura"
+#: What the master switch is called wherever it is shown.
+ENABLED_LABEL = "Agents"
 
 #: What that switch means, said once, here, rather than in a widget.
-AVAILABILITY_NOTE = (
-    "Your choice, on this computer, for this project — it is never written "
-    "into a workflow, so a workflow you share cannot switch itself on for "
-    "anyone else."
+ENABLED_NOTE = (
+    "Agents: when ON, Aura may run the selected workflow during an ordinary "
+    "conversation. Your choice, on this computer, for this project — it is "
+    "never written into a workflow, so a workflow you share cannot switch "
+    "itself on for anyone else. Run in the Agents window works either way."
 )
 
 
@@ -74,41 +79,20 @@ class WorkflowLocalState:
         """Where this workspace's private state is kept — never in the project."""
         return self._path
 
-    # ---- available to Aura -------------------------------------------------
-
-    def available_ids(self) -> tuple[str, ...]:
-        """The ordered workflow ids this user has switched on."""
-        return tuple(self._load()["available"])
-
-    def is_available(self, graph_id: str) -> bool:
-        self._require_graph_id(graph_id)
-        return graph_id in self._load()["available"]
-
-    def set_available(self, graph_id: str, available: bool) -> None:
-        """Switch one workflow on at the end of the list, or off.
-
-        Appending rather than inserting keeps the order the user built, the
-        same way the agent roster does.
-        """
-        self._require_graph_id(graph_id)
-        data = self._load(for_write=True)
-        available_ids: list[str] = data["available"]
-        if available and graph_id not in available_ids:
-            available_ids.append(graph_id)
-        elif not available and graph_id in available_ids:
-            available_ids.remove(graph_id)
-        else:
-            return
-        self._save(data)
-
     # ---- which one they were looking at ------------------------------------
 
     def selected_id(self) -> str:
-        """The workflow this user last had open here, or ``""``."""
+        """The workflow this user last had open here, or an empty id."""
         return str(self._load()["selected"])
 
     def set_selected(self, graph_id: str) -> None:
-        """Remember the open workflow. An empty id means none."""
+        """Remember the open workflow. An empty id means none.
+
+        Selecting a different workflow switches the master gate off. The bit
+        was the user's decision about the workflow they were looking at, and
+        carrying it silently onto the next one would grant an authority they
+        never gave.
+        """
         text = str(graph_id or "")
         if text:
             self._require_graph_id(text)
@@ -116,28 +100,45 @@ class WorkflowLocalState:
         if data["selected"] == text:
             return
         data["selected"] = text
+        data["enabled"] = False
+        self._save(data)
+
+    # ---- the master gate ---------------------------------------------------
+
+    def is_enabled(self) -> bool:
+        """Whether Aura may invoke the selected workflow during a conversation."""
+        data = self._load()
+        return bool(data["enabled"]) and bool(data["selected"])
+
+    def set_enabled(self, enabled: bool) -> None:
+        """Switch the selected workflow on or off for Aura, privately.
+
+        With nothing selected there is nothing to enable, so this records
+        ``False`` rather than an authority pointing at no workflow.
+        """
+        data = self._load(for_write=True)
+        wanted = bool(enabled) and bool(data["selected"])
+        if data["enabled"] == wanted:
+            return
+        data["enabled"] = wanted
         self._save(data)
 
     # ---- upkeep ------------------------------------------------------------
 
     def forget(self, graph_id: str) -> None:
-        """Drop every local decision about *graph_id* — used when it is deleted."""
+        """Drop every private decision about *graph_id* — used when it is deleted."""
         self._require_graph_id(graph_id)
         data = self._load(for_write=True)
-        changed = False
-        if graph_id in data["available"]:
-            data["available"].remove(graph_id)
-            changed = True
-        if data["selected"] == graph_id:
-            data["selected"] = ""
-            changed = True
-        if changed:
-            self._save(data)
+        if data["selected"] != graph_id:
+            return
+        data["selected"] = ""
+        data["enabled"] = False
+        self._save(data)
 
     # ---- persistence -------------------------------------------------------
 
     def _load(self, *, for_write: bool = False) -> dict:
-        blank: dict = {"available": [], "selected": ""}
+        blank: dict = {"selected": "", "enabled": False}
         try:
             mode = self._path.stat().st_mode
         except FileNotFoundError:
@@ -155,10 +156,16 @@ class WorkflowLocalState:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
             if not isinstance(raw, dict):
                 raise ValueError("the workflow-state document is not an object")
-            available = raw.get("available", [])
             selected = raw.get("selected", "")
-            if not isinstance(available, list) or not isinstance(selected, str):
+            version = raw.get("version", 1)
+            enabled = raw.get("enabled", False)
+            available = raw.get("available", [])
+            if not isinstance(selected, str) or not isinstance(version, int):
                 raise ValueError("the workflow state has an invalid shape")
+            if version >= 2 and not isinstance(enabled, bool):
+                raise ValueError("the workflow state has an invalid enabled value")
+            if version < 2 and not isinstance(available, list):
+                raise ValueError("the legacy workflow availability is invalid")
         except Exception as exc:
             logger.debug(
                 "agents: could not read workflow state %s", self._path, exc_info=True
@@ -167,21 +174,28 @@ class WorkflowLocalState:
                 raise self._corrupt() from exc
             return blank
 
-        clean_available = [
-            item for item in available if isinstance(item, str) and is_valid_graph_id(item)
-        ]
-        if for_write and len(clean_available) != len(available):
-            raise self._corrupt()
-        blank["available"] = clean_available
         blank["selected"] = selected if is_valid_graph_id(selected) else ""
+        if version < 2:
+            # The old graph-local checkbox was also a private user decision.
+            # Preserve that decision only for the workflow which was selected;
+            # the other per-workflow bits have no representation in one master
+            # gate. The next write persists only selected+enabled.
+            clean_available = {
+                item
+                for item in available
+                if isinstance(item, str) and is_valid_graph_id(item)
+            }
+            blank["enabled"] = blank["selected"] in clean_available
+        else:
+            blank["enabled"] = bool(enabled) and bool(blank["selected"])
         return blank
 
     def _save(self, data: dict) -> None:
         payload = {
             "version": _STATE_VERSION,
             "workspace": str(self._workspace_root),
-            "available": list(data["available"]),
             "selected": str(data["selected"]),
+            "enabled": bool(data["enabled"]),
         }
         try:
             atomic_write_bytes(
@@ -210,8 +224,8 @@ class WorkflowLocalState:
 
 
 __all__ = [
-    "AVAILABILITY_LABEL",
-    "AVAILABILITY_NOTE",
+    "ENABLED_LABEL",
+    "ENABLED_NOTE",
     "WorkflowLocalState",
     "WorkflowLocalStateError",
 ]

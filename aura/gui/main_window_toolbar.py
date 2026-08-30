@@ -11,8 +11,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aura.agents.graph_local_state import ENABLED_NOTE
 from aura.config import media_path
-from aura.gui.theme import LABEL_APPROVE, LABEL_PLAN, LABEL_READ_ONLY
+from aura.gui.theme import LABEL_AGENTS, LABEL_APPROVE, LABEL_PLAN, LABEL_READ_ONLY
 from aura.gui.widgets.glass_switch import GlassSwitch
 
 
@@ -30,6 +31,7 @@ class MainWindowToolbar(QToolBar):
     read_only_toggled = Signal(bool)
     plan_review_toggled = Signal(bool)
     auto_approve_toggled = Signal(bool)
+    agents_toggled = Signal(bool)
     update_requested = Signal()
     settings_requested = Signal()
     logs_requested = Signal()
@@ -89,6 +91,24 @@ class MainWindowToolbar(QToolBar):
         self._auto_approve_switch = GlassSwitch("Approve", self._settings.auto_approve, vertical=True, accent_color=LABEL_APPROVE)
         self._auto_approve_switch.toggled.connect(self.auto_approve_toggled.emit)
         self.addWidget(self._auto_approve_switch)
+
+        self.addWidget(_toolbar_separator())
+
+        # Group 3b: the Agents master gate. Unlike Plan and Approve it is not
+        # backed by application settings — the selected workflow and whether
+        # Aura may call it are private to this user and this workspace, so the
+        # Agents controller owns the value and this switch only shows it. It
+        # starts off and unavailable, which is exactly right before a
+        # workspace with a runnable workflow is open.
+        self._agents_switch = GlassSwitch(
+            "Agents",
+            False,
+            vertical=True,
+            accent_color=LABEL_AGENTS,
+        )
+        self._agents_switch.toggled.connect(self.agents_toggled.emit)
+        self._agents_switch.setEnabled(False)
+        self.addWidget(self._agents_switch)
 
         self.refresh_auto_toggle_tooltips()
 
@@ -183,6 +203,27 @@ class MainWindowToolbar(QToolBar):
         self._auto_approve_switch.setChecked(checked)
         self.refresh_auto_toggle_tooltips()
 
+    def set_agents_enabled(self, checked: bool) -> None:
+        """Show the master gate's current value without re-emitting it."""
+        self._agents_switch.blockSignals(True)
+        self._agents_switch.setChecked(bool(checked))
+        self._agents_switch.blockSignals(False)
+        self.refresh_auto_toggle_tooltips()
+
+    def set_agents_available(self, available: bool) -> None:
+        """Allow or forbid using the gate at all.
+
+        With no valid workflow selected there is nothing the switch could
+        turn on, so it is disabled rather than left inviting a click that
+        would do nothing. The caller switches it off first; this never
+        changes the value on its own.
+        """
+        self._agents_switch.setEnabled(bool(available))
+        self.refresh_auto_toggle_tooltips()
+
+    def agents_enabled(self) -> bool:
+        return self._agents_switch.isChecked()
+
     def refresh_auto_toggle_tooltips(self) -> None:
         self._plan_review_switch.setToolTip(
             "Plan review: when ON, Aura pauses before workspace changes so you "
@@ -190,6 +231,12 @@ class MainWindowToolbar(QToolBar):
         )
         self._auto_approve_switch.setToolTip(
             "Auto-approve: when ON, file diffs are applied without confirmation. When OFF, you review and approve each change."
+        )
+        self._agents_switch.setToolTip(
+            ENABLED_NOTE
+            if self._agents_switch.isEnabled()
+            else "Agents: open the Agents window and select a workflow that is "
+            "complete enough to run. Run there works without this switch."
         )
 
     def update_maximize_icon(self, maximized: bool) -> None:

@@ -16,7 +16,7 @@ from aura.agents.child_prompt import compose_child_task_message
 from aura.agents.delegation import DelegationFailure, DelegationResult
 from aura.agents.delegation_workflow import WritableDelegationWorkflow
 from aura.agents.local_state import AgentPermission
-from aura.agents.model_resolution import ResolvedTarget, resolve_model_target
+from aura.agents.model_resolution import ResolvedTarget, resolve_agent_model
 from aura.agents.roster import AgentRosterEntry
 from aura.agents.worktree import AgentWorktree, AgentWorktreeManager
 from aura.config import redact_secrets
@@ -88,19 +88,19 @@ class AgentDelegationRunner:
                 agent_name=definition.name,
             )
 
-        resolved, failure, message = resolve_model_target(
-            definition.target,
+        resolved, failure, message = resolve_agent_model(
+            definition.model,
             definition.thinking,
-            inherited_provider=self._inherited_provider,
-            inherited_model=self._inherited_model,
-            inherited_thinking=self._inherited_thinking,
+            provider=self._inherited_provider,
+            turn_model=self._inherited_model,
+            turn_thinking=self._inherited_thinking,
         )
         if resolved is None:
             return DelegationResult.failure(
                 agent_id, failure or DelegationFailure.INTERNAL_ERROR, message,
                 agent_name=definition.name,
-                provider=definition.target.provider,
-                model=definition.target.model,
+                provider=self._inherited_provider,
+                model=definition.model,
             )
         if not self._lock.acquire(blocking=False):
             return DelegationResult.failure(
@@ -185,4 +185,4 @@ def _default_backend_factory(provider: str) -> Any:
     return APIAgentBackend(provider=provider)
 
 
-__all__ = ["AgentDelegationRunner", "ResolvedTarget", "resolve_model_target"]
+__all__ = ["AgentDelegationRunner", "ResolvedTarget", "resolve_agent_model"]

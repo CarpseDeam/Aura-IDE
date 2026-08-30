@@ -10,7 +10,12 @@ from .agent_changes import (
     INSPECT_AGENT_CHANGE_SET_TOOL_DEF,
     LIST_AGENT_CHANGE_SETS_TOOL_DEF,
 )
-from .agents import MAX_DELEGATED_TASK_CHARS, build_delegate_agent_tool_def
+from .agents import (
+    MAX_DELEGATED_TASK_CHARS,
+    MAX_WORKFLOW_TASK_CHARS,
+    build_delegate_agent_tool_def,
+    build_run_workflow_tool_def,
+)
 from .checklist import TASK_CHECKLIST_TOOL_DEF
 from .code_intel import (
     CODE_INTEL_AUDIT_TOOL_DEF,
@@ -62,7 +67,9 @@ __all__ = [
     "MAX_DELEGATED_TASK_CHARS",
     "PROJECT_MEMORY_TOOL_DEFS", "READ_SKILL_RESOURCE_TOOL_DEF", "READ_TOOL_DEFS",
     "REVIEW_IMPLEMENTATION_PLAN_TOOL_DEF",
+    "MAX_WORKFLOW_TASK_CHARS",
     "build_delegate_agent_tool_def",
+    "build_run_workflow_tool_def",
     "SEARCH_TOOL_DEFS",
     "TERMINAL_TOOL_DEF",
     "TASK_CHECKLIST_TOOL_DEF", "WORKSPACE_SNAPSHOT_TOOL_DEF", "WRITE_TOOL_DEFS",

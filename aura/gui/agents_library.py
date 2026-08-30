@@ -56,7 +56,7 @@ class AgentRow:
     scope: str
     name: str
     description: str
-    target_label: str
+    model_label: str
     thinking_label: str
     available: bool
     permission: AgentPermission
@@ -335,7 +335,7 @@ def _row_text(row: AgentRow) -> str:
 def _row_tooltip(row: AgentRow) -> str:
     if not row.valid:
         return "\n".join(row.errors) or "This definition could not be loaded."
-    parts = [row.description, row.target_label, f"Thinking: {row.thinking_label}"]
+    parts = [row.description, row.model_label, f"Thinking: {row.thinking_label}"]
     return "\n".join(part for part in parts if part)
 
 

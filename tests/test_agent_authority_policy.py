@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 from aura.agents.delegation import DelegationResult, DelegationStatus  # noqa: E402
 from aura.agents.identity import AgentScope  # noqa: E402
 from aura.agents.local_state import AgentLocalState, AgentPermission  # noqa: E402
-from aura.agents.models import AgentDefinition, ModelTarget  # noqa: E402
+from aura.agents.models import AgentDefinition  # noqa: E402
 from aura.agents.roster import AgentRosterEntry, AgentTurnRoster  # noqa: E402
 from aura.agents.store import AgentStore  # noqa: E402
 from aura.context_gearbox.runtime import compose_system_prompt  # noqa: E402
@@ -87,7 +87,6 @@ def _definition(
             name=name,
             description="Reviews one focused change.",
             instructions="PRIVATE CHILD INSTRUCTIONS",
-            target=ModelTarget.inherited(),
         ),
         permission=permission,
     )
@@ -135,7 +134,7 @@ def test_queued_send_freezes_definition_and_effective_grant_at_submission(
     assert queued.agent_roster.entries[0].permission is AgentPermission.READ_ONLY
 
     store.update(replace(created, name="Changed later", instructions="CHANGED PRIVATE"))
-    state.set_permission(created.agent_id, AgentPermission.WORKTREE_EDIT)
+    state.set_permission(created.agent_id, AgentPermission.READ_WRITE)
     bridge.running = False
     handler.process_message_queue("ignored", "high")
 
@@ -151,7 +150,7 @@ def test_queued_send_freezes_definition_and_effective_grant_at_submission(
 
 def test_schema_is_the_only_model_facing_roster_projection(tmp_path: Path) -> None:
     roster = AgentTurnRoster(
-        entries=(_definition(permission=AgentPermission.WORKTREE_EDIT),)
+        entries=(_definition(permission=AgentPermission.READ_WRITE),)
     )
     registry = ToolRegistry(tmp_path)
     registry.set_turn_agent_roster(roster)
@@ -167,7 +166,7 @@ def test_schema_is_the_only_model_facing_roster_projection(tmp_path: Path) -> No
     assert "reviewer000" in schema
     assert "Original" in schema
     assert "Reviews one focused change." in schema
-    assert AgentPermission.WORKTREE_EDIT.label in schema
+    assert AgentPermission.READ_WRITE.label in schema
     assert "PRIVATE CHILD INSTRUCTIONS" not in schema
     assert "reviewer000" not in prompt
     assert "Reviews one focused change." not in prompt
@@ -222,7 +221,7 @@ def test_writable_delegation_is_refused_not_downgraded_when_root_forbids_mutatio
     runner = _Runner()
     registry = ToolRegistry(tmp_path, read_only=read_only)
     roster = AgentTurnRoster(
-        entries=(_definition(permission=AgentPermission.WORKTREE_EDIT),)
+        entries=(_definition(permission=AgentPermission.READ_WRITE),)
     )
     registry.set_turn_agent_roster(roster)
     registry.set_agent_delegation_runner(runner)

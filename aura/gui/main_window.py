@@ -131,7 +131,13 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
         self.setStatusBar(self._status_bar)
 
-        self._agents_controller = MainWindowAgentsController(self)
+        self._agents_controller = MainWindowAgentsController(
+            self,
+            # An Agent never chooses a provider: it runs on whichever one
+            # Aura is set to, with Aura's own model as its fallback.
+            model_context=self._current_model_context,
+            workflow_runner=lambda: self._bridge.workflow_runner,
+        )
         self._terminal_controller = MainWindowTerminalController(self)
 
         # ----- splitter ----
@@ -195,6 +201,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             # roster a message is frozen with is read from there and nowhere
             # else.
             agent_roster_provider=self._agents_controller.capture_agent_turn_roster,
+            workflow_plan_provider=self._agents_controller.capture_workflow_run_plan,
         )
         # Skills manager — the only GUI owner of SkillLibrary access. Both the
         # composer's Skills button and /skills reach this one controller.
@@ -315,7 +322,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._terminal_container = self._edge_rail.terminal_container
         self._corner_widget = self._edge_rail.corner_widget
         self._agents_controller.sync_agents_tab_checked()
-
         # Sync companion badge after rail exists (status may have fired before rail was created)
         self._companion_controller.sync_edge_rail_status()
 
@@ -333,6 +339,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # Signal wiring — extracted for clarity.
         self._signal_wiring = MainWindowSignalWiring(self)
         self._signal_wiring.wire()
+        # The Agents switch is a view of private per-workspace state, so it is
+        # read after its controller signal is wired rather than restored from
+        # settings (or emitted early and lost during construction).
+        self._agents_controller.refresh_workflow_gate()
 
         QTimer.singleShot(0, lambda: self._left_pane.refresh_projects(self._workspace_root))
 
@@ -463,6 +473,23 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             if model_id in cfg.models:
                 return cfg.models[model_id].label
         return model_id
+
+    def _current_model_context(self) -> tuple[str, str, str]:
+        """Aura's own provider, model, and thinking, for whoever inherits them."""
+        return (
+            str(self._settings.provider or ""),
+            str(self.current_model() or ""),
+            str(self.current_thinking() or "off"),
+        )
+
+    def _on_agents_toggled(self, checked: bool) -> None:
+        """The user answered the master gate; the controller records it."""
+        self._agents_controller.set_workflow_enabled(bool(checked))
+
+    def _on_workflow_gate_changed(self, enabled: bool, available: bool) -> None:
+        """Show the gate the controller just read back from private state."""
+        self._toolbar.set_agents_enabled(bool(enabled))
+        self._toolbar.set_agents_available(bool(available))
 
     # ----- model / thinking accessors ------------------------------------
 

@@ -36,6 +36,8 @@ from PySide6.QtCore import (
 
 from aura.agents.roster import EMPTY_AGENT_ROSTER, AgentTurnRoster
 from aura.agents.runtime import AgentDelegationRunner
+from aura.agents.workflow_plan import WorkflowRunPlan
+from aura.agents.workflow_runner import WorkflowRunner
 from aura.backends import (
     APIAgentBackend,
 )
@@ -313,6 +315,16 @@ class ConversationBridge(QObject):
         self._registry.set_agent_worktree_manager(
             self._agent_runner.worktree_manager
         )
+        # The workflow half of the same capability. It shares the delegation
+        # runner's worktree manager on purpose: there is one writable slot on
+        # this machine, and one journal of retained change sets, so a workflow
+        # and a single agent can never both believe they own it.
+        self._submitted_workflow_plan: WorkflowRunPlan | None = None
+        self._workflow_runner = WorkflowRunner(
+            workspace_root=self._registry.workspace_root,
+            worktree_manager=self._agent_runner.worktree_manager,
+        )
+        self._registry.set_agent_workflow_runner(self._workflow_runner)
         # The frozen Read Only collaborative-turn intent for the active turn,
         # set at the start of send(). A toolbar toggle during an active response
         # never mutates it; it applies to the next turn.
@@ -386,7 +398,10 @@ class ConversationBridge(QObject):
         self._turn_agent_roster = EMPTY_AGENT_ROSTER
         self._submitted_agent_roster = None
         self._registry.set_turn_agent_roster(None)
+        self._submitted_workflow_plan = None
+        self._registry.set_turn_workflow_plan(None)
         self._agent_runner.set_workspace_root(root)
+        self._workflow_runner.set_workspace_root(root)
         if root is None:
             self._manager.reset_conversation_runtime()
             self._tier1_context = ""
@@ -534,6 +549,8 @@ class ConversationBridge(QObject):
         self._manager.reset_conversation_runtime()
         self._turn_agent_roster = EMPTY_AGENT_ROSTER
         self._registry.set_turn_agent_roster(None)
+        self._submitted_workflow_plan = None
+        self._registry.set_turn_workflow_plan(None)
         self._history.messages.clear()
         self._index_to_id.clear()
         self._index_to_name.clear()
@@ -588,6 +605,20 @@ class ConversationBridge(QObject):
         self._freeze_turn_agent_roster(
             model=str(model), thinking=str(thinking), submitted=submitted_roster
         )
+        # The same rule for the workflow capability: what the Agents surface
+        # resolved when the turn was submitted is what this turn may run, so a
+        # queued turn cannot pick up a workflow, a step, or a grant that only
+        # exists now.
+        submitted_workflow = self._submitted_workflow_plan
+        self._submitted_workflow_plan = None
+        self._registry.set_turn_workflow_plan(submitted_workflow)
+        self._workflow_runner.set_workspace_root(self._registry.workspace_root)
+        if submitted_workflow is not None:
+            _log.info(
+                "turn_workflow %s steps=%s",
+                submitted_workflow.graph_id,
+                len(submitted_workflow.steps),
+            )
         # Freeze the requested toolbar mode before composing the prompt or
         # starting the worker. The registry remains at this value for the
         # entire model/tool loop, including every later round.
@@ -684,6 +715,25 @@ class ConversationBridge(QObject):
         definition never needs to enter canonical History.
         """
         self._submitted_agent_roster = roster
+
+    @property
+    def workflow_runner(self) -> WorkflowRunner:
+        """The one workflow runtime on this machine.
+
+        Manual Run in the Agents window uses this exact object, so a run
+        started by hand and a run Aura started share the single writable slot
+        and the single journal of retained change sets.
+        """
+        return self._workflow_runner
+
+    def set_submitted_workflow_plan(self, plan: WorkflowRunPlan | None) -> None:
+        """Deposit the turn's one frozen runnable workflow, or nothing.
+
+        ``send`` consumes this exactly once. ``None`` — the ordinary case, and
+        what an Agents switch that is off always produces — leaves the turn
+        with no workflow tool and no workflow prompt material at all.
+        """
+        self._submitted_workflow_plan = plan
 
     # ---- private slots ----------------------------------------------------
 
@@ -785,6 +835,8 @@ class ConversationBridge(QObject):
             self._turn_agent_roster = EMPTY_AGENT_ROSTER
             self._submitted_agent_roster = None
             self._registry.set_turn_agent_roster(None)
+            self._submitted_workflow_plan = None
+            self._registry.set_turn_workflow_plan(None)
             self._turn_active = False
             self.finished.emit()
 

@@ -36,6 +36,8 @@ class MainWindowSignalWiring:
         w._toolbar.read_only_toggled.connect(w._on_read_only_toggled)
         w._toolbar.plan_review_toggled.connect(w._settings_controller.on_plan_review_toggled)
         w._toolbar.auto_approve_toggled.connect(w._settings_controller.on_auto_approve_toggled)
+        w._toolbar.agents_toggled.connect(w._on_agents_toggled)
+        w._agents_controller.workflow_gate_changed.connect(w._on_workflow_gate_changed)
         w._toolbar.update_requested.connect(w._on_open_update)
         w._toolbar.settings_requested.connect(w._settings_controller.open_settings)
         w._toolbar.logs_requested.connect(w._open_logs_folder)
@@ -48,6 +50,9 @@ class MainWindowSignalWiring:
         w._left_pane.project_selected.connect(w._workspace_controller._on_project_selected)
         w._left_pane.new_project_requested.connect(w._workspace_controller.on_create_new_project)
         w._left_pane.production_model_changed.connect(lambda: w._refresh_status_bar())
+        w._left_pane.production_model_changed.connect(
+            w._agents_controller.refresh_model_choices
+        )
         w._left_pane.production_thinking_changed.connect(lambda: w._refresh_status_bar())
 
         # ---- group 4: launchpad ----

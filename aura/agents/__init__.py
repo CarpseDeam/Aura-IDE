@@ -17,6 +17,13 @@ This package owns two separate things and keeps them apart on purpose.
   a task: a roster and grant frozen for the length of a turn, one foreground
   child run, and the single structured result that comes back. Writable runs
   are isolated and retained by :mod:`aura.agents.worktree`.
+* A **workflow** (:mod:`aura.agents.graph_models`,
+  :mod:`aura.agents.workflow_plan`, :mod:`aura.agents.workflow_runner`) puts
+  several of them in an order the user drew, freezes that order the same way
+  a roster is frozen, and runs it serially into one structured result. As
+  with :mod:`aura.agents.runtime`, the runner is imported from its own module
+  rather than re-exported here: it reaches into the conversation package, and
+  this one must stay importable from inside it.
 
 Nothing here is Qt-aware.
 """
@@ -46,18 +53,18 @@ from aura.agents.graph_store import AgentGraphStore, AgentGraphStoreError, Workf
 from aura.agents.graph_validation import (
     GraphIssue,
     GraphValidation,
+    solid_execution_order,
     validate_graph,
 )
 from aura.agents.identity import SCOPE_ORDER, AgentScope, is_valid_agent_id, new_agent_id
 from aura.agents.local_state import (
     DEFAULT_PERMISSION,
     PERMISSION_ORDER,
-    TERMINAL_WARNING,
     AgentLocalState,
     AgentLocalStateError,
     AgentPermission,
 )
-from aura.agents.models import THINKING_ORDER, AgentDefinition, AgentThinking, ModelTarget
+from aura.agents.models import THINKING_ORDER, AgentDefinition, AgentThinking
 from aura.agents.roster import (
     EMPTY_AGENT_ROSTER,
     AgentRosterEntry,
@@ -65,6 +72,11 @@ from aura.agents.roster import (
     resolve_agent_turn_roster,
 )
 from aura.agents.store import AgentStore, AgentStoreError, AgentSummary
+from aura.agents.workflow_plan import (
+    WorkflowRunPlan,
+    WorkflowStepPlan,
+    freeze_workflow_plan,
+)
 from aura.agents.worktree import (
     AgentChangeSet,
     AgentWorktree,
@@ -77,7 +89,6 @@ __all__ = [
     "EMPTY_AGENT_ROSTER",
     "PERMISSION_ORDER",
     "SCOPE_ORDER",
-    "TERMINAL_WARNING",
     "THINKING_ORDER",
     "AgentDefinition",
     "AgentChangeSet",
@@ -104,7 +115,6 @@ __all__ = [
     "GraphHistory",
     "GraphIssue",
     "GraphValidation",
-    "ModelTarget",
     "Point",
     "WorkflowConnection",
     "WorkflowGraph",
@@ -112,6 +122,8 @@ __all__ = [
     "WorkflowLocalStateError",
     "WorkflowNode",
     "WorkflowNodeKind",
+    "WorkflowRunPlan",
+    "WorkflowStepPlan",
     "WorkflowSummary",
     "is_valid_agent_id",
     "is_valid_graph_id",
@@ -120,6 +132,8 @@ __all__ = [
     "new_graph_id",
     "parse_graph_document",
     "render_graph_document",
+    "freeze_workflow_plan",
     "resolve_agent_turn_roster",
+    "solid_execution_order",
     "validate_graph",
 ]

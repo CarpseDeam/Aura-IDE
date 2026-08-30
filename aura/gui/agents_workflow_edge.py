@@ -35,7 +35,7 @@ from PySide6.QtWidgets import QGraphicsItem, QGraphicsObject
 
 from aura.agents.graph_edits import SOURCE_END, TARGET_END
 from aura.agents.graph_models import ConnectionKind, Point
-from aura.gui.agents_workflow_node import WorkflowNodeItem
+from aura.gui.agents_workflow_node import RUN_STATE_COLORS, WorkflowNodeItem
 from aura.gui.theme import ACCENT, BG_RAISED, BORDER_STRONG, DANGER, FG_MUTED, WARN
 
 #: How far the curve bulges away from a straight line before any manual
@@ -76,6 +76,8 @@ class WorkflowConnectionItem(QGraphicsObject):
         self._bend = QPointF(bend.x, bend.y) if bend is not None else None
         self._invalid = bool(invalid)
         self._editable = True
+        self._run_state = ""
+        self._pulse = 1.0
         self._path = QPainterPath()
         self._loose_end = ""
         self._loose_pos = QPointF()
@@ -110,6 +112,22 @@ class WorkflowConnectionItem(QGraphicsObject):
 
     def set_invalid(self, invalid: bool) -> None:
         self._invalid = bool(invalid)
+        self.update()
+
+    @property
+    def run_state(self) -> str:
+        return self._run_state
+
+    def set_run_state(self, state: str) -> None:
+        """Show the work moving along this hand-off, or nothing at all."""
+        state = str(state or "")
+        if state == self._run_state:
+            return
+        self._run_state = state
+        self.update()
+
+    def set_pulse(self, value: float) -> None:
+        self._pulse = max(0.0, min(1.0, float(value)))
         self.update()
 
     def set_editable(self, editable: bool) -> None:
@@ -185,7 +203,9 @@ class WorkflowConnectionItem(QGraphicsObject):
         del option, widget
         painter.setRenderHint(painter.RenderHint.Antialiasing, True)
         color = QColor(self._color())
-        pen = QPen(color, 2.4 if self.isSelected() else 1.8)
+        if self._run_state == "running":
+            color.setAlphaF(self._pulse)
+        pen = QPen(color, 2.4 if (self.isSelected() or self._run_state) else 1.8)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         if self._kind is ConnectionKind.SUB_AGENT:
             pen.setStyle(Qt.PenStyle.DashLine)
@@ -212,6 +232,9 @@ class WorkflowConnectionItem(QGraphicsObject):
             painter.drawText(label, Qt.AlignmentFlag.AlignCenter, "Sub-agent")
 
     def _color(self) -> str:
+        run_color = RUN_STATE_COLORS.get(self._run_state)
+        if run_color is not None:
+            return run_color
         if self.isSelected():
             return ACCENT
         if self._invalid:

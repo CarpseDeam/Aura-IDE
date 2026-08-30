@@ -8,18 +8,22 @@ one reads as prose:
     id: 6f1c...            # minted once, never edited
     name: Reviewer
     description: Reviews a diff for correctness bugs.
-    provider: anthropic    # both lines omitted entirely to inherit
-    model: claude-sonnet-4-6
+    model: claude-sonnet-4-6   # omitted entirely for Aura's current model
     thinking: high
     ---
 
     Read the diff and report only defects you can demonstrate.
 
-Two rules keep the format honest. The declared ``id`` must equal the file
+Three rules keep the format honest. The declared ``id`` must equal the file
 name stem, so identity is visible in the directory listing and can never be
-ambiguous. And a definition may not declare permission of any kind: authority
-is private local state, so a definition committed to a repository cannot
-grant itself anything on a machine that merely opened the project.
+ambiguous. A definition may not declare permission of any kind: authority is
+private local state, so a definition committed to a repository cannot grant
+itself anything on a machine that merely opened the project. And a definition
+may not choose a provider — an agent runs on whichever provider Aura is set
+to. A ``provider:`` key left over from an older definition is read as the
+noise it now is: dropped on load, never honoured, and gone the next time the
+file is written. It is normalization in one direction only, so there is no
+second provider path to keep in step with the first.
 """
 from __future__ import annotations
 
@@ -29,7 +33,7 @@ from typing import Any
 import yaml
 
 from aura.agents.identity import AgentScope, is_valid_agent_id
-from aura.agents.models import AgentDefinition, AgentThinking, ModelTarget
+from aura.agents.models import AgentDefinition, AgentThinking
 from aura.agents.validation import agent_name_error, delegation_description_error
 
 _DELIMITER = "---"
@@ -122,8 +126,7 @@ def parse_agent_document(
     if description_error:
         errors.append(description_error)
 
-    target, target_errors = _read_target(loaded)
-    errors.extend(target_errors)
+    model = _string(loaded.get("model"))
 
     thinking = AgentThinking.parse(loaded.get("thinking", AgentThinking.INHERIT.value))
     if thinking is None:
@@ -144,7 +147,7 @@ def parse_agent_document(
             name=name,
             description=description,
             instructions=instructions,
-            target=target,
+            model=model,
             thinking=thinking,
         )
     )
@@ -157,9 +160,8 @@ def render_agent_document(definition: AgentDefinition) -> str:
         "name": definition.name,
         "description": definition.description,
     }
-    if not definition.target.inherits:
-        front["provider"] = definition.target.provider
-        front["model"] = definition.target.model
+    if definition.model.strip():
+        front["model"] = definition.model.strip()
     front["thinking"] = definition.thinking.value
 
     block = yaml.safe_dump(
@@ -171,19 +173,6 @@ def render_agent_document(definition: AgentDefinition) -> str:
 
 def _string(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
-
-
-def _read_target(loaded: dict[str, Any]) -> tuple[ModelTarget, list[str]]:
-    """Read the provider/model pair, refusing a half-declared target."""
-    provider = _string(loaded.get("provider"))
-    model = _string(loaded.get("model"))
-    if bool(provider) != bool(model):
-        missing = "model" if provider else "provider"
-        return ModelTarget.inherited(), [
-            f"'provider' and 'model' are one choice — '{missing}' is missing, so "
-            "declare both or neither"
-        ]
-    return ModelTarget(provider=provider, model=model), []
 
 
 __all__ = [

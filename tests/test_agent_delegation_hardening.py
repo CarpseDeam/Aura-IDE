@@ -11,7 +11,7 @@ import pytest
 from aura.agents.delegation import DelegationResult, DelegationStatus
 from aura.agents.identity import AgentScope
 from aura.agents.local_state import AgentPermission
-from aura.agents.models import AgentDefinition, ModelTarget
+from aura.agents.models import AgentDefinition
 from aura.agents.roster import AgentRosterEntry, AgentTurnRoster
 from aura.agents.runtime import AgentDelegationRunner
 from aura.bridge.execution_event_relay import ExecutionEventRelay
@@ -31,7 +31,6 @@ def _definition() -> AgentDefinition:
         name="Reviewer",
         description="Reviews one focused change.",
         instructions="Report only demonstrated findings.",
-        target=ModelTarget.inherited(),
     )
 
 
@@ -156,7 +155,7 @@ def test_cancelled_writable_result_and_change_set_remain_canonical(
     tmp_path: Path,
 ) -> None:
     history = History()
-    roster = AgentTurnRoster(entries=(_entry(AgentPermission.WORKTREE_EDIT),))
+    roster = AgentTurnRoster(entries=(_entry(AgentPermission.READ_WRITE),))
     history.append_user_text("delegate", available_agent_ids=roster.ids)
     registry = ToolRegistry(tmp_path)
     registry.set_turn_agent_roster(roster)
@@ -172,7 +171,7 @@ def test_cancelled_writable_result_and_change_set_remain_canonical(
                 agent_name=entry.name,
                 result="Stable partial report.",
                 failure_class="cancelled",
-                permission=AgentPermission.WORKTREE_EDIT.value,
+                permission=AgentPermission.READ_WRITE.value,
                 change_set_id="aw-cancelled-result",
                 base_sha="a" * 40,
                 result_sha="b" * 40,

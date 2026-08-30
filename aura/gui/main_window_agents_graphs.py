@@ -14,9 +14,18 @@ id: dropping one places an occurrence, and deleting that occurrence removes
 the box and nothing else. The definition it referred to is untouched, because
 the same agent is very likely standing in three other workflows.
 
-Nothing here runs anything. There is no runner, no play button, and no model
-call in this phase — availability is recorded so the decision belongs to the
-user from the start, and is read by nobody yet.
+Running is here, but only the button and the colours. Run freezes the open
+workflow into a plan, asks for a task, and hands both to the shared
+:class:`~aura.agents.workflow_runner.WorkflowRunner` on a worker thread; what
+comes back is a node id and a state, which this controller turns into what the
+canvas draws. It is deliberately independent of the Agents switch in the main
+toolbar: that switch decides whether *Aura* may reach for this workflow
+mid-conversation, and authoring one means running it long before that.
+
+The session this controller drives is owned by
+:class:`aura.gui.main_window_agents.MainWindowAgentsController`, because the
+selected workflow and whether Aura may call it must be answerable whether or
+not this window has ever been opened.
 """
 
 from __future__ import annotations
@@ -25,17 +34,18 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QTimer
+from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtWidgets import QInputDialog, QMessageBox, QWidget
 
 from aura.agents import graph_edits
-from aura.agents.graph_local_state import WorkflowLocalState, WorkflowLocalStateError
+from aura.agents.graph_local_state import WorkflowLocalStateError
 from aura.agents.graph_models import ConnectionKind, Point, WorkflowGraph
 from aura.agents.graph_session import WorkflowSession
-from aura.agents.graph_store import AgentGraphStore, AgentGraphStoreError
+from aura.agents.graph_store import AgentGraphStoreError
 from aura.agents.graph_validation import (
     GraphValidation,
     reference_scope_error,
+    solid_execution_order,
     validate_graph,
 )
 from aura.agents.identity import AgentScope
@@ -48,8 +58,10 @@ from aura.gui.agents_workflow_presenter import (
     connection_info,
     node_visuals,
     occurrence_info,
+    run_edge_states,
     workflow_info,
 )
+from aura.gui.main_window_agents_run import WorkflowRunController
 
 logger = logging.getLogger(__name__)
 
@@ -59,15 +71,19 @@ _EMPTY_CANVAS = "No workflow open yet. Use New to start one."
 class AgentsGraphController(QObject):
     """Drives the workflow surfaces from the one workflow that is open."""
 
+    #: The open workflow changed in a way the toolbar gate must be told about
+    #: — a different workflow, a newly complete one, a deleted one.
+    gate_changed = Signal()
+
     def __init__(
         self,
         page: AgentsPage,
         *,
-        workspace_root: Path | None,
+        session: WorkflowSession,
         agent_summaries: Callable[[], tuple[AgentSummary, ...]],
         mutations_allowed: Callable[[], bool],
-        store_factory: Callable[[Path], AgentGraphStore] | None = None,
-        state_factory: Callable[[Path], WorkflowLocalState] | None = None,
+        workflow_runner: Callable[[], object] | None = None,
+        run_plan: Callable[[], tuple[object, tuple[str, ...]]] | None = None,
         parent_widget: QWidget | None = None,
         parent: QObject | None = None,
     ) -> None:
@@ -75,11 +91,15 @@ class AgentsGraphController(QObject):
         self._page = page
         self._agent_summaries = agent_summaries
         self._mutations_allowed = mutations_allowed
+        self._workflow_runner = workflow_runner
+        self._run_plan = run_plan
         self._parent_widget = parent_widget
-        self._session = WorkflowSession(
-            workspace_root, store_factory=store_factory, state_factory=state_factory
-        )
+        self._session = session
         self._render_queued = False
+        self._runs = WorkflowRunController(self)
+        self._runs.runningChanged.connect(self._on_running_changed)
+        self._runs.statesChanged.connect(self._on_run_states_changed)
+        self._runs.finished.connect(self._on_run_finished)
         self._connect_page()
 
     def _connect_page(self) -> None:
@@ -88,7 +108,8 @@ class AgentsGraphController(QObject):
         bar.create_requested.connect(self._on_create_requested)
         bar.rename_requested.connect(self._on_rename_requested)
         bar.delete_requested.connect(self._on_delete_workflow_requested)
-        bar.availability_changed.connect(self._on_availability_changed)
+        bar.run_requested.connect(self._on_run_requested)
+        bar.stop_requested.connect(self._runs.stop)
 
         scene = self._page.scene
         scene.node_moved.connect(self._on_node_moved)
@@ -112,13 +133,16 @@ class AgentsGraphController(QObject):
     # ---- lifecycle ---------------------------------------------------------
 
     def set_workspace_root(self, root: Path | None) -> None:
-        """Rebind to a new workspace, discarding the previous one's workflows."""
-        self._session.rebind(root)
+        """Redraw for a new workspace. The session is rebound by its owner."""
+        del root
+        self._runs.clear_states()
         self._page.set_workflow_rows((), "")
         self._page.set_workflow_info(None)
         self._page.set_occurrence(None)
         self._page.set_connection(None)
         self._page.scene.render_graph(None, {})
+        self._page.set_workflow_runnable(False)
+        self.gate_changed.emit()
 
     @property
     def session(self) -> WorkflowSession:
@@ -149,7 +173,6 @@ class AgentsGraphController(QObject):
             ),
             self._session.graph_id,
         )
-        self._page.set_workflow_available(self._session.is_available())
         self.render()
 
     def render(self) -> None:
@@ -161,17 +184,25 @@ class AgentsGraphController(QObject):
             self._page.set_workflow_info(None)
             self._page.set_occurrence(None)
             self._page.set_connection(None)
+            self._page.set_workflow_runnable(False)
             self._page.scene.set_placeholder(
                 "\n".join(summary.errors)
                 if summary is not None and summary.errors
                 else _EMPTY_CANVAS
             )
+            self.gate_changed.emit()
             return
         agents = self._agent_index()
         verdict = self._validate(graph)
         self._page.scene.render_graph(graph, node_visuals(graph, agents, verdict), verdict)
         self._page.set_workflow_info(workflow_info(graph, verdict))
+        self._page.set_workflow_runnable(
+            verdict.runnable and bool(solid_execution_order(graph))
+        )
+        self._page.set_workflow_running(self._runs.running)
+        self._paint_run_states()
         self._sync_inspector(verdict)
+        self.gate_changed.emit()
 
     def _schedule_render(self) -> None:
         """Redraw after the current event finishes.
@@ -225,6 +256,9 @@ class AgentsGraphController(QObject):
     def _on_workflow_selected(self, graph_id: str) -> None:
         if graph_id == self._session.graph_id:
             return
+        # A different workflow's steps are different boxes, so last run's
+        # marks would be nonsense on this canvas.
+        self._runs.clear_states()
         self._session.open(str(graph_id))
         self.refresh()
 
@@ -264,14 +298,73 @@ class AgentsGraphController(QObject):
             "it used are not affected.",
         ):
             return
+        self._runs.clear_states()
         self._guarded(self._session.delete)
         self.refresh()
 
-    def _on_availability_changed(self, available: bool) -> None:
-        if not self._mutations_allowed():
+    # ---- running it by hand ------------------------------------------------
+
+    @property
+    def runs(self) -> WorkflowRunController:
+        """The run in flight, if any — exposed so the page's owner can see it."""
+        return self._runs
+
+    def _on_run_requested(self) -> None:
+        """Freeze the open workflow, ask for a task, and run it once."""
+        if self._runs.running or not self._mutations_allowed():
             return
-        self._guarded(lambda: self._session.set_available(bool(available)))
-        self._page.set_workflow_available(self._session.is_available())
+        runner = self._workflow_runner() if self._workflow_runner else None
+        if runner is None:
+            self._warn("This build cannot run workflows.")
+            return
+        plan, errors = (
+            self._run_plan() if self._run_plan is not None else (None, ("no plan",))
+        )
+        if plan is None:
+            self._warn(
+                "This workflow cannot be run yet:\n\n"
+                + "\n".join(f"• {line}" for line in errors)
+            )
+            return
+        # The smallest standard multiline prompt. The task is the run's, not
+        # the workflow's: it is never written into the workflow file.
+        task, accepted = QInputDialog.getMultiLineText(
+            self._parent_widget,
+            f"Run {plan.name}",
+            "What should this workflow do?",
+            "",
+        )
+        if not accepted or not str(task).strip():
+            return
+        if not self._runs.start(runner, plan, str(task).strip()):
+            self._warn("A workflow is already running.")
+            return
+        self._page.workflow_bar.set_status(f"Running {plan.name}…", ok=True)
+
+    def _on_running_changed(self, running: bool) -> None:
+        self._page.set_workflow_running(bool(running))
+
+    def _on_run_states_changed(self, _states: dict) -> None:
+        self._paint_run_states()
+
+    def _on_run_finished(self, result: object) -> None:
+        status = getattr(getattr(result, "status", None), "value", "")
+        if result is None:
+            self._page.workflow_bar.set_status("The run could not finish.", ok=False)
+            return
+        error = str(getattr(result, "error", "") or "")
+        self._page.workflow_bar.set_status(
+            f"Run {status or 'finished'}" + (f" — {error}" if error else ""),
+            ok=bool(getattr(result, "ok", False)),
+        )
+
+    def _paint_run_states(self) -> None:
+        """Push the current run marks onto whatever the canvas is drawing."""
+        graph = self._session.graph
+        nodes = self._runs.states
+        self._page.set_run_states(
+            nodes, run_edge_states(graph, nodes) if graph is not None else {}
+        )
 
     # ---- canvas intents ----------------------------------------------------
 

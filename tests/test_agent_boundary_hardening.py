@@ -18,13 +18,13 @@ from aura.agents.local_state import (  # noqa: E402
     AgentLocalStateError,
     AgentPermission,
 )
-from aura.agents.models import AgentDefinition, ModelTarget  # noqa: E402
+from aura.agents.models import AgentDefinition  # noqa: E402
 from aura.agents.store import AgentStore, AgentStoreError  # noqa: E402
 from aura.agents.validation import (  # noqa: E402
     MAX_AGENT_DESCRIPTION_CHARS,
     delegation_description_error,
 )
-from aura.gui.agents_editor import AgentEditor, ProviderChoices  # noqa: E402
+from aura.gui.agents_editor import AgentEditor, ModelChoices  # noqa: E402
 from aura.gui.main_window_agents import MainWindowAgentsController  # noqa: E402
 
 
@@ -40,7 +40,6 @@ def _definition(agent_id: str, *, description: str = "Reviews one change.") -> A
         name="Reviewer",
         description=description,
         instructions="Review carefully.",
-        target=ModelTarget.inherited(),
     )
 
 
@@ -137,7 +136,7 @@ def test_gui_rolls_back_roster_and_permission_when_persistence_fails(
         workspace_root=workspace,
         store_factory=lambda _root: store,
         state_factory=lambda _root: state,
-        choices=ProviderChoices(),
+        choices=ModelChoices(),
     )
     page = controller._ensure_page()
     controller.refresh()
@@ -147,7 +146,7 @@ def test_gui_rolls_back_roster_and_permission_when_persistence_fails(
     page._items[source_key].setCheckState(0, Qt.CheckState.Checked)
     assert page._items[source_key].checkState(0) == Qt.CheckState.Unchecked
 
-    index = page._permission.findData(AgentPermission.WORKTREE_EDIT.value)
+    index = page._permission.findData(AgentPermission.READ_WRITE.value)
     page._permission.setCurrentIndex(index)
     assert page._permission.currentData() == AgentPermission.READ_ONLY.value
     page.close()
@@ -159,7 +158,7 @@ def test_description_rule_is_shared_by_validation_and_editor(qapp) -> None:
     assert delegation_description_error("x" * (MAX_AGENT_DESCRIPTION_CHARS + 1))
     assert delegation_description_error("x" * MAX_AGENT_DESCRIPTION_CHARS) == ""
 
-    editor = AgentEditor(ProviderChoices())
+    editor = AgentEditor(ModelChoices())
     assert editor.description.maxLength() == MAX_AGENT_DESCRIPTION_CHARS
     editor.deleteLater()
 

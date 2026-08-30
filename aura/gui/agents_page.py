@@ -14,13 +14,19 @@ resolves an id, or decides a permission —
 :class:`aura.gui.main_window_agents.MainWindowAgentsController` owns agent
 storage and this user's grants, and
 :class:`aura.gui.main_window_agents_graphs.AgentsGraphController` owns
-workflows, their validation, and this user's private availability choices.
+workflows and their validation.
 
 Two kinds of change leave here by different routes, because they belong to
 different owners. Editing a definition is a document edit and lands on Save.
 Availability and permission are private local decisions and apply the moment
 they are made — they are never part of a definition and never written into
 the project.
+
+Whether Aura may reach for a workflow on its own is neither of those, and it
+is not asked here at all: it is one switch, in the main toolbar, over the
+workflow this window has open. Run, above the canvas, is a different question
+— it runs what is in front of you, once, now — and it works whatever that
+switch says.
 """
 
 from __future__ import annotations
@@ -41,13 +47,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aura.agents.local_state import TERMINAL_WARNING, AgentPermission
+from aura.agents.local_state import AgentPermission
 from aura.gui.agents_editor import (
-    INHERIT_TARGET_LABEL,
     AgentDetail,
     AgentDraft,
     AgentEditor,
-    ProviderChoices,
+    ModelChoices,
     catalog_choices,
 )
 from aura.gui.agents_library import (
@@ -64,7 +69,7 @@ from aura.gui.agents_workflow_inspector import (
     WorkflowInfo,
     WorkflowInspector,
 )
-from aura.gui.theme import BG, BORDER, FG, FG_DIM, FG_MUTED, WARN
+from aura.gui.theme import BG, BORDER, FG, FG_DIM, FG_MUTED
 
 _BUSY_NOTE = (
     "Aura is running a turn. You can read your agents; changes are available "
@@ -87,7 +92,7 @@ class AgentsPage(QDialog):
         self,
         parent: QWidget | None = None,
         *,
-        choices: ProviderChoices | None = None,
+        choices: ModelChoices | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("agentsPage")
@@ -121,14 +126,6 @@ class AgentsPage(QDialog):
         splitter.setStretchFactor(2, 3)
         splitter.setSizes([300, 660, 400])
         layout.addWidget(splitter, 1)
-
-        self._warning = QLabel(f"⚠  {TERMINAL_WARNING}")
-        self._warning.setObjectName("agentsTerminalWarning")
-        self._warning.setWordWrap(True)
-        self._warning.setStyleSheet(
-            f"color: {WARN}; font-size: 11px; background: transparent;"
-        )
-        layout.addWidget(self._warning)
         layout.addLayout(self._build_footer())
 
     # ---- construction ------------------------------------------------------
@@ -180,7 +177,6 @@ class AgentsPage(QDialog):
         self._name = self._editor.name
         self._description = self._editor.description
         self._instructions = self._editor.instructions
-        self._provider = self._editor.provider
         self._model = self._editor.model
         self._thinking = self._editor.thinking
         self._permission = self._editor.permission
@@ -293,8 +289,20 @@ class AgentsPage(QDialog):
     def set_workflow_rows(self, rows: tuple[WorkflowRow, ...], current_id: str) -> None:
         self.workflow_bar.set_rows(rows, current_id)
 
-    def set_workflow_available(self, available: bool) -> None:
-        self.workflow_bar.set_available(available)
+    def set_workflow_runnable(self, runnable: bool) -> None:
+        self.workflow_bar.set_runnable(runnable)
+
+    def set_workflow_running(self, running: bool) -> None:
+        self.workflow_bar.set_running(running)
+
+    def set_run_states(self, nodes: dict, connections: dict | None = None) -> None:
+        """Show which steps are running, finished, or never got to."""
+        self.scene.set_run_states(nodes, connections)
+
+    def set_model_choices(self, choices: ModelChoices) -> None:
+        """Re-list the editor's models after Aura's provider or model moved."""
+        self._choices = choices
+        self._editor.set_choices(choices)
 
     def set_workflow_info(self, info: WorkflowInfo | None) -> None:
         self.inspector.set_workflow(info)
@@ -330,7 +338,6 @@ class AgentsPage(QDialog):
 
 
 __all__ = [
-    "INHERIT_TARGET_LABEL",
     "SCOPE_LABELS",
     "SCOPE_ORDER",
     "AgentDetail",
@@ -338,8 +345,8 @@ __all__ = [
     "AgentRow",
     "AgentsPage",
     "ConnectionInfo",
+    "ModelChoices",
     "OccurrenceInfo",
-    "ProviderChoices",
     "WorkflowInfo",
     "WorkflowRow",
     "catalog_choices",

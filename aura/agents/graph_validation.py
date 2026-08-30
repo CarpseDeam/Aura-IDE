@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from aura.agents.graph_models import (
     ConnectionKind,
     WorkflowGraph,
+    WorkflowNode,
     WorkflowNodeKind,
 )
 from aura.agents.identity import AgentScope
@@ -269,20 +270,61 @@ def _branch_issues(graph: WorkflowGraph, steps: tuple) -> list[GraphIssue]:
 
 def _walk(start: str, steps: tuple) -> tuple[set[str], bool]:
     """Follow steps from *start*, reporting where it got and whether it looped."""
+    walked, looped = _walk_order(start, steps)
+    return set(walked), looped
+
+
+def _walk_order(start: str, steps: tuple) -> tuple[tuple[str, ...], bool]:
+    """The node ids the solid path visits from *start*, in order."""
     by_source: dict[str, list] = {}
     for edge in steps:
         by_source.setdefault(edge.source_id, []).append(edge)
 
+    order: list[str] = [start]
     seen: set[str] = {start}
     current = start
     while True:
         outgoing = by_source.get(current, [])
         if len(outgoing) != 1:
-            return seen, False
+            return tuple(order), False
         current = outgoing[0].target_id
         if current in seen:
-            return seen, True
+            return tuple(order), True
         seen.add(current)
+        order.append(current)
+
+
+def solid_execution_order(graph: WorkflowGraph) -> tuple[WorkflowNode, ...]:
+    """The agent occurrences the solid path runs, Task first, in order.
+
+    This is the one definition of "what runs, and when", so the canvas, the
+    inspector, and the runner can never disagree about it. It answers only
+    for the shape :func:`validate_graph` accepts: an unbranched, acyclic
+    Task → agents → Aura Result path. Anything else returns ``()`` — a
+    workflow that is not runnable has no execution order to describe, and
+    inventing one would be the first step towards running the wrong thing.
+    """
+    task = graph.task_node
+    result = graph.result_node
+    if task is None or result is None:
+        return ()
+    known = {node.node_id for node in graph.nodes}
+    steps = tuple(
+        edge
+        for edge in graph.connections_of_kind(ConnectionKind.STEP)
+        if edge.source_id in known
+        and edge.target_id in known
+        and edge.source_id != edge.target_id
+    )
+    order, looped = _walk_order(task.node_id, steps)
+    if looped or order[-1] != result.node_id:
+        return ()
+    by_id = {node.node_id: node for node in graph.nodes}
+    return tuple(
+        by_id[node_id]
+        for node_id in order
+        if node_id in by_id and by_id[node_id].is_agent
+    )
 
 
 # ---- the dashed helpers ----------------------------------------------------
@@ -348,5 +390,6 @@ __all__ = [
     "GraphIssue",
     "GraphValidation",
     "reference_scope_error",
+    "solid_execution_order",
     "validate_graph",
 ]

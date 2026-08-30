@@ -11,7 +11,7 @@ import pytest
 
 from aura.agents.identity import AgentScope
 from aura.agents.local_state import AgentPermission
-from aura.agents.models import AgentDefinition, ModelTarget
+from aura.agents.models import AgentDefinition
 from aura.agents.roster import AgentRosterEntry, AgentTurnRoster
 from aura.agents.runtime import AgentDelegationRunner, _reported_tests
 from aura.agents.worktree import AgentWorktreeError, AgentWorktreeManager
@@ -105,20 +105,23 @@ def test_each_invocation_gets_a_unique_short_owned_worktree(
     assert not second.path.exists()
 
 
-def test_permission_surface_never_infers_terminal_from_edit() -> None:
-    read = [tool["function"]["name"] for tool in child_agent_tool_defs()]
-    edit = [
+def test_read_only_gets_no_write_or_terminal_tool_at_all() -> None:
+    names = [tool["function"]["name"] for tool in child_agent_tool_defs()]
+
+    assert "apply_patch" not in names
+    assert "shell" not in names
+
+
+def test_read_write_is_one_grant_carrying_both_edit_and_terminal() -> None:
+    """Editing in an isolated worktree and running commands there are one
+    choice now, so the tool surface must not pretend they can be separated."""
+    names = [
         tool["function"]["name"]
-        for tool in child_agent_tool_defs(AgentPermission.WORKTREE_EDIT)
-    ]
-    terminal = [
-        tool["function"]["name"]
-        for tool in child_agent_tool_defs(AgentPermission.WORKTREE_EDIT_TERMINAL)
+        for tool in child_agent_tool_defs(AgentPermission.READ_WRITE)
     ]
 
-    assert "apply_patch" not in read and "shell" not in read
-    assert "apply_patch" in edit and "shell" not in edit
-    assert "apply_patch" in terminal and "shell" in terminal
+    assert "apply_patch" in names
+    assert "shell" in names
 
 
 def test_terminal_validation_results_are_reported_structurally() -> None:
@@ -603,7 +606,7 @@ def test_writable_runner_returns_the_complete_change_set_shape(
         worktree_manager=manager,
     )
 
-    result = runner.run(_entry(AgentPermission.WORKTREE_EDIT), "Create the file.")
+    result = runner.run(_entry(AgentPermission.READ_WRITE), "Create the file.")
     payload = result.payload()
 
     assert payload["status"] == "completed"
@@ -619,7 +622,7 @@ def test_writable_runner_returns_the_complete_change_set_shape(
     assert not (repo / "from-agent.txt").exists()
     first_names = [tool["function"]["name"] for tool in backend.requests[0]["tools"]]
     assert "apply_patch" in first_names
-    assert "shell" not in first_names
+    assert "shell" in first_names
     assert manager.inspect(payload["change_set_id"])["ok"] is True
 
 
@@ -641,7 +644,7 @@ def test_cancelled_runner_checkpoints_partial_edits_after_stopping(
     )
 
     result = runner.run(
-        _entry(AgentPermission.WORKTREE_EDIT),
+        _entry(AgentPermission.READ_WRITE),
         "Start the edit.",
         cancel_event=cancel,
     )
@@ -660,12 +663,12 @@ def test_root_change_set_operations_are_never_exposed_to_a_child(
     registry = ToolRegistry(repo)
     registry.set_agent_worktree_manager(manager)
     registry.set_turn_agent_roster(
-        AgentTurnRoster(entries=(_entry(AgentPermission.WORKTREE_EDIT),))
+        AgentTurnRoster(entries=(_entry(AgentPermission.READ_WRITE),))
     )
     root_names = [tool["function"]["name"] for tool in registry.tool_defs()]
     child_names = [
         tool["function"]["name"]
-        for tool in child_agent_tool_defs(AgentPermission.WORKTREE_EDIT_TERMINAL)
+        for tool in child_agent_tool_defs(AgentPermission.READ_WRITE)
     ]
 
     assert {
@@ -687,7 +690,7 @@ def test_read_only_root_can_inspect_but_not_apply_or_discard(
     registry = ToolRegistry(repo, read_only=True)
     registry.set_agent_worktree_manager(manager)
     registry.set_turn_agent_roster(
-        AgentTurnRoster(entries=(_entry(AgentPermission.WORKTREE_EDIT),))
+        AgentTurnRoster(entries=(_entry(AgentPermission.READ_WRITE),))
     )
 
     names = [tool["function"]["name"] for tool in registry.tool_defs()]
@@ -704,7 +707,6 @@ def _definition() -> AgentDefinition:
         name="Writer",
         description="Writes a focused change.",
         instructions="Implement the assigned change and report tests.",
-        target=ModelTarget.inherited(),
     )
 
 

@@ -18,7 +18,7 @@ import pytest
 
 from aura.agents.document import parse_agent_document, render_agent_document
 from aura.agents.identity import AgentScope, is_valid_agent_id, new_agent_id
-from aura.agents.models import AgentDefinition, AgentThinking, ModelTarget
+from aura.agents.models import AgentDefinition, AgentThinking
 from aura.agents.store import AgentStore, AgentStoreError
 
 
@@ -213,7 +213,7 @@ def test_the_file_is_readable_markdown_with_the_body_as_instructions(
         name="Scout",
         description="Finds the relevant code.",
         instructions="# Scout\n\nSearch broadly, report narrowly.",
-        target=ModelTarget.explicit("anthropic", "claude-sonnet-4-6"),
+        model="claude-sonnet-4-6",
         thinking=AgentThinking.MAX,
     )
 
@@ -222,7 +222,6 @@ def test_the_file_is_readable_markdown_with_the_body_as_instructions(
     assert text.startswith("---\n")
     assert f"id: {created.agent_id}" in text
     assert "name: Scout" in text
-    assert "provider: anthropic" in text
     assert "model: claude-sonnet-4-6" in text
     assert "thinking: max" in text
     assert text.rstrip().endswith("Search broadly, report narrowly.")
@@ -230,36 +229,60 @@ def test_the_file_is_readable_markdown_with_the_body_as_instructions(
     reloaded = store.get(created.agent_id)
     assert reloaded is not None
     assert reloaded.instructions == "# Scout\n\nSearch broadly, report narrowly."
-    assert reloaded.target == ModelTarget.explicit("anthropic", "claude-sonnet-4-6")
+    assert reloaded.model == "claude-sonnet-4-6"
     assert reloaded.thinking is AgentThinking.MAX
 
 
-def test_an_inherited_target_omits_both_lines(store: AgentStore) -> None:
+def test_a_definition_never_names_a_provider(store: AgentStore) -> None:
+    """An agent runs on Aura's provider, so a definition cannot pin one."""
     created = store.create(
-        AgentScope.PROJECT, name="Plain", description="Inherits.", instructions="Work."
+        AgentScope.PROJECT,
+        name="Named",
+        description="Names a model only.",
+        instructions="Work.",
+        model="claude-sonnet-4-6",
     )
 
     text = store.path_for(AgentScope.PROJECT, created.agent_id).read_text(encoding="utf-8")
 
-    assert "provider:" not in text
+    assert "provider" not in text.lower()
+    assert "model: claude-sonnet-4-6" in text
+
+
+def test_naming_no_model_omits_the_line_entirely(store: AgentStore) -> None:
+    created = store.create(
+        AgentScope.PROJECT, name="Plain", description="Uses Aura's.", instructions="Work."
+    )
+
+    text = store.path_for(AgentScope.PROJECT, created.agent_id).read_text(encoding="utf-8")
+
     assert "model:" not in text
-    assert created.target.inherits is True
+    assert created.model == ""
+    assert created.model_label == "Aura's current model"
 
 
-@pytest.mark.parametrize(
-    "front",
-    [
-        "id: halfagentid\nname: Half\ndescription: d.\nprovider: anthropic",
-        "id: halfagentid\nname: Half\ndescription: d.\nmodel: claude-sonnet-4-6",
-    ],
-)
-def test_half_a_model_target_is_an_error(store: AgentStore, front: str) -> None:
-    _write(store.project_dir, "halfagentid", f"---\n{front}\n---\n\nWork.\n")
+def test_a_legacy_provider_line_is_dropped_rather_than_honoured(
+    store: AgentStore,
+) -> None:
+    """One-way normalization: the file still loads, the provider does not."""
+    _write(
+        store.project_dir,
+        "legacyagentid",
+        "---\nid: legacyagentid\nname: Legacy\ndescription: d.\n"
+        "provider: anthropic\nmodel: claude-sonnet-4-6\n---\n\nWork.\n",
+    )
 
     (row,) = store.list_summaries()
 
-    assert row.valid is False
-    assert any("declare both or neither" in msg for msg in row.errors)
+    assert row.valid is True
+    assert row.definition is not None
+    assert row.definition.model == "claude-sonnet-4-6"
+    assert not hasattr(row.definition, "provider")
+
+    # Writing it back leaves no provider behind to be honoured later.
+    store.update(row.definition)
+    text = store.path_for(AgentScope.PROJECT, "legacyagentid").read_text(encoding="utf-8")
+    assert "provider" not in text.lower()
 
 
 def test_render_and_parse_round_trip() -> None:
@@ -269,7 +292,7 @@ def test_render_and_parse_round_trip() -> None:
         name="Round Trip",
         description="Goes out and comes back.",
         instructions="Stay the same.",
-        target=ModelTarget.explicit("openai", "gpt-5.5"),
+        model="gpt-5.5",
         thinking=AgentThinking.OFF,
     )
 
@@ -351,19 +374,6 @@ def test_create_read_update_delete(store: AgentStore) -> None:
 def test_an_incomplete_agent_is_never_written(store: AgentStore, kwargs: dict) -> None:
     with pytest.raises(AgentStoreError):
         store.create(AgentScope.PROJECT, **kwargs)
-
-    assert store.list_summaries() == ()
-
-
-def test_a_half_declared_target_is_never_written(store: AgentStore) -> None:
-    with pytest.raises(AgentStoreError):
-        store.create(
-            AgentScope.PROJECT,
-            name="Half",
-            description="d",
-            instructions="i",
-            target=ModelTarget(provider="anthropic"),
-        )
 
     assert store.list_summaries() == ()
 
