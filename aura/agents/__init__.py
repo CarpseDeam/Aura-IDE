@@ -28,6 +28,26 @@ from aura.agents.delegation import (
     DelegationStatus,
     DelegationUsage,
 )
+from aura.agents.graph_document import parse_graph_document, render_graph_document
+from aura.agents.graph_history import GraphHistory
+from aura.agents.graph_local_state import WorkflowLocalState, WorkflowLocalStateError
+from aura.agents.graph_models import (
+    ConnectionKind,
+    Point,
+    WorkflowConnection,
+    WorkflowGraph,
+    WorkflowNode,
+    WorkflowNodeKind,
+    is_valid_graph_id,
+    new_graph,
+    new_graph_id,
+)
+from aura.agents.graph_store import AgentGraphStore, AgentGraphStoreError, WorkflowSummary
+from aura.agents.graph_validation import (
+    GraphIssue,
+    GraphValidation,
+    validate_graph,
+)
 from aura.agents.identity import SCOPE_ORDER, AgentScope, is_valid_agent_id, new_agent_id
 from aura.agents.local_state import (
     DEFAULT_PERMISSION,
@@ -61,6 +81,8 @@ __all__ = [
     "THINKING_ORDER",
     "AgentDefinition",
     "AgentChangeSet",
+    "AgentGraphStore",
+    "AgentGraphStoreError",
     "AgentLocalState",
     "AgentLocalStateError",
     "AgentPermission",
@@ -74,12 +96,30 @@ __all__ = [
     "AgentWorktree",
     "AgentWorktreeError",
     "AgentWorktreeManager",
+    "ConnectionKind",
     "DelegationFailure",
     "DelegationResult",
     "DelegationStatus",
     "DelegationUsage",
+    "GraphHistory",
+    "GraphIssue",
+    "GraphValidation",
     "ModelTarget",
+    "Point",
+    "WorkflowConnection",
+    "WorkflowGraph",
+    "WorkflowLocalState",
+    "WorkflowLocalStateError",
+    "WorkflowNode",
+    "WorkflowNodeKind",
+    "WorkflowSummary",
     "is_valid_agent_id",
+    "is_valid_graph_id",
     "new_agent_id",
+    "new_graph",
+    "new_graph_id",
+    "parse_graph_document",
+    "render_graph_document",
     "resolve_agent_turn_roster",
+    "validate_graph",
 ]

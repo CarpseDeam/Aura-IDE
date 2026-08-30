@@ -17,6 +17,8 @@ pytest.importorskip("PySide6.QtWidgets")
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
+from aura.agents.graph_local_state import WorkflowLocalState  # noqa: E402
+from aura.agents.graph_store import AgentGraphStore  # noqa: E402
 from aura.agents.local_state import AgentLocalState, AgentPermission  # noqa: E402
 from aura.agents.models import AgentScope, AgentThinking  # noqa: E402
 from aura.agents.store import AgentStore  # noqa: E402
@@ -54,6 +56,7 @@ def wired(tmp_path: Path, qapp, monkeypatch) -> SimpleNamespace:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     personal = tmp_path / "personal"
+    workflows = tmp_path / "workflows"
     userdata = tmp_path / "userdata"
 
     tab = _Tab()
@@ -63,6 +66,10 @@ def wired(tmp_path: Path, qapp, monkeypatch) -> SimpleNamespace:
         workspace_root=workspace,
         store_factory=lambda root: AgentStore(root, personal_dir=personal),
         state_factory=lambda root: AgentLocalState(root, state_root=userdata),
+        graph_store_factory=lambda root: AgentGraphStore(root, personal_dir=workflows),
+        workflow_state_factory=lambda root: WorkflowLocalState(
+            root, state_root=userdata
+        ),
         choices=_CHOICES,
     )
     # Deleting is destructive, so the controller asks first; say yes.

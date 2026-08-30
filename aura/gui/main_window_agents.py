@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QObject
 from PySide6.QtWidgets import QMessageBox, QWidget
 
+from aura.agents.graph_local_state import WorkflowLocalState
+from aura.agents.graph_store import AgentGraphStore
 from aura.agents.identity import is_valid_agent_id
 from aura.agents.local_state import (
     DEFAULT_PERMISSION,
@@ -31,7 +33,7 @@ from aura.agents.local_state import (
     AgentLocalStateError,
     AgentPermission,
 )
-from aura.agents.models import AgentDefinition, AgentScope, AgentThinking, ModelTarget
+from aura.agents.models import AgentDefinition, AgentScope, ModelTarget
 from aura.agents.roster import EMPTY_AGENT_ROSTER, AgentTurnRoster, resolve_agent_turn_roster
 from aura.agents.store import AgentStore, AgentStoreError, AgentSummary
 from aura.gui.agents_page import (
@@ -41,6 +43,8 @@ from aura.gui.agents_page import (
     AgentsPage,
     ProviderChoices,
 )
+from aura.gui.agents_presenter import agent_detail, agent_row
+from aura.gui.main_window_agents_graphs import AgentsGraphController
 
 if TYPE_CHECKING:
     from aura.gui.main_window import MainWindow
@@ -65,6 +69,8 @@ class MainWindowAgentsController(QObject):
         workspace_root: Path | None = None,
         store_factory: Callable[[Path], AgentStore] | None = None,
         state_factory: Callable[[Path], AgentLocalState] | None = None,
+        graph_store_factory: Callable[[Path], AgentGraphStore] | None = None,
+        workflow_state_factory: Callable[[Path], WorkflowLocalState] | None = None,
         parent_widget: QWidget | None = None,
         choices: ProviderChoices | None = None,
     ) -> None:
@@ -77,8 +83,11 @@ class MainWindowAgentsController(QObject):
         self._workspace_root = Path(root) if root is not None else None
         self._store_factory = store_factory or AgentStore
         self._state_factory = state_factory or AgentLocalState
+        self._graph_store_factory = graph_store_factory or self._default_graph_store
+        self._workflow_state_factory = workflow_state_factory or WorkflowLocalState
         self._choices = choices
         self._agents_page: AgentsPage | None = None
+        self._graphs: AgentsGraphController | None = None
         self._summaries: dict[str, AgentSummary] = {}
         self._execution_active = False
 
@@ -104,6 +113,8 @@ class MainWindowAgentsController(QObject):
         """
         self._workspace_root = Path(root) if root is not None else None
         self._summaries = {}
+        if self._graphs is not None:
+            self._graphs.set_workspace_root(self._workspace_root)
         if self._agents_page is not None:
             self._agents_page.set_rows(())
             if self._agents_page.isVisible():
@@ -197,7 +208,22 @@ class MainWindowAgentsController(QObject):
             page.permission_changed.connect(self._on_permission_changed)
             page.set_mutations_enabled(not self._execution_active)
             self._agents_page = page
+            self._graphs = AgentsGraphController(
+                page,
+                workspace_root=self._workspace_root,
+                agent_summaries=self.agent_summaries,
+                mutations_allowed=self._mutations_allowed,
+                store_factory=self._graph_store_factory,
+                state_factory=self._workflow_state_factory,
+                parent_widget=self._parent_widget,
+                parent=self,
+            )
         return self._agents_page
+
+    @property
+    def graphs(self) -> AgentsGraphController | None:
+        """The workflow half of the page, once it has been built."""
+        return self._graphs
 
     # ---- storage access ----------------------------------------------------
 
@@ -219,6 +245,37 @@ class MainWindowAgentsController(QObject):
             logger.debug("agents: could not bind AgentLocalState", exc_info=True)
             return None
 
+    def agent_summaries(self) -> tuple[AgentSummary, ...]:
+        """Every discovered definition, for whoever needs to resolve an id.
+
+        Workflows reference agents but never own them, so the graph
+        controller reads the library through this and never binds its own
+        :class:`~aura.agents.store.AgentStore`.
+        """
+        store = self._store()
+        if store is None:
+            return ()
+        try:
+            return store.list_summaries()
+        except Exception:
+            logger.debug("agents: could not read the library", exc_info=True)
+            return ()
+
+    def _agent_scopes(self) -> dict[str, AgentScope]:
+        return {
+            summary.agent_id: summary.scope
+            for summary in self.agent_summaries()
+            if summary.valid
+        }
+
+    def _default_graph_store(self, root: Path) -> AgentGraphStore:
+        """The production workflow store, taught which agents exist and where.
+
+        Passing the scope index in is what lets the store refuse to write a
+        project workflow that points at a personal agent.
+        """
+        return AgentGraphStore(root, agent_scopes=self._agent_scopes)
+
     # ---- rendering ---------------------------------------------------------
 
     def refresh(self) -> None:
@@ -229,6 +286,8 @@ class MainWindowAgentsController(QObject):
         rows = self._build_rows()
         page.set_mutations_enabled(not self._execution_active)
         page.set_rows(rows)
+        if self._graphs is not None:
+            self._graphs.refresh()
         self._on_current_row_changed(page.current_source_key())
 
     def _build_rows(self) -> tuple[AgentRow, ...]:
@@ -249,62 +308,45 @@ class MainWindowAgentsController(QObject):
             for summary in summaries
         }
         available = set(state.available_ids())
-        rows: list[AgentRow] = []
-        for summary in summaries:
-            definition = summary.definition
-            addressable = is_valid_agent_id(summary.agent_id)
-            rows.append(
-                AgentRow(
-                    agent_id=summary.agent_id,
-                    scope=summary.scope.value,
-                    name=summary.name,
-                    description=summary.description,
-                    target_label=definition.target_label if definition else "",
-                    thinking_label=definition.thinking.label if definition else "",
-                    # A definition that did not load is never offered to Aura,
-                    # whatever the local roster still remembers about it.
-                    available=(
-                        summary.valid and addressable and summary.agent_id in available
-                    ),
-                    permission=(
-                        state.permission(summary.agent_id)
-                        if addressable
-                        else DEFAULT_PERMISSION
-                    ),
-                    valid=summary.valid,
-                    errors=summary.errors,
-                )
+        return tuple(
+            agent_row(
+                summary,
+                available=summary.agent_id in available,
+                permission=self._permission(state, summary.agent_id),
             )
-        return tuple(rows)
+            for summary in summaries
+        )
 
     def _on_current_row_changed(self, source_key: str) -> None:
         page = self._agents_page
         if page is None:
             return
-        page.set_detail(self._detail_for(source_key) if source_key else None)
+        detail = self._detail_for(source_key) if source_key else None
+        page.set_detail(detail)
+        if self._graphs is not None:
+            self._graphs.on_library_selection(detail.agent_id if detail else "")
 
     def _detail_for(self, source_key: str) -> AgentDetail | None:
         summary = self._summaries.get(source_key)
         state = self._state()
         if summary is None or state is None:
             return None
-        definition = summary.definition
-        agent_id = summary.agent_id
-        addressable = is_valid_agent_id(agent_id)
-        return AgentDetail(
-            agent_id=summary.agent_id,
-            scope=summary.scope.value,
-            name=summary.name,
-            description=summary.description,
-            instructions=definition.instructions if definition else "",
-            provider=definition.target.provider if definition else "",
-            model=definition.target.model if definition else "",
-            thinking=definition.thinking if definition else AgentThinking.INHERIT,
-            permission=state.permission(agent_id) if addressable else DEFAULT_PERMISSION,
-            available=state.is_available(agent_id) if addressable else False,
-            valid=summary.valid,
-            errors=summary.errors,
+        return agent_detail(
+            summary,
+            available=self._is_available(state, summary.agent_id),
+            permission=self._permission(state, summary.agent_id),
         )
+
+    @staticmethod
+    def _permission(state: AgentLocalState, agent_id: str) -> AgentPermission:
+        """What one agent may do here, defaulting for an unaddressable id."""
+        if not is_valid_agent_id(agent_id):
+            return DEFAULT_PERMISSION
+        return state.permission(agent_id)
+
+    @staticmethod
+    def _is_available(state: AgentLocalState, agent_id: str) -> bool:
+        return bool(is_valid_agent_id(agent_id) and state.is_available(agent_id))
 
     # ---- definition changes ------------------------------------------------
 
