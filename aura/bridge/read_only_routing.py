@@ -39,6 +39,7 @@ class ReadOnlySignalEmitter(Protocol):
     toolCallEnd: Any
     toolResultEmitted: Any
     usage: Any
+    delegationUsage: Any
     streamDone: Any
     apiError: Any
 
@@ -65,9 +66,15 @@ def emit_read_only_facts(emitter: ReadOnlySignalEmitter, ev: Any, model_id: str)
         )
         child_usage = delegation_usage_signal(ev.extras)
         if child_usage is not None:
-            model, prompt, completion, hit, miss = child_usage
-            emitter.usage.emit(
-                ev.tool_call_id, model, prompt, completion, hit, miss
+            provider, model, prompt, completion, hit, miss = child_usage
+            emitter.delegationUsage.emit(
+                ev.tool_call_id,
+                provider,
+                model,
+                prompt,
+                completion,
+                hit,
+                miss,
             )
     elif isinstance(ev, Usage):
         emitter.usage.emit(

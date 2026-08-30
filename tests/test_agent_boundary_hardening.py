@@ -58,7 +58,7 @@ def test_public_definition_paths_refuse_invalid_immutable_ids(
         elif operation == "update":
             store.update(_definition("../escape"))
         else:
-            store.delete("../escape")
+            store.delete(AgentScope.PROJECT, "../escape")
 
 
 def test_link_like_definition_ancestor_blocks_discovery_update_and_delete(
@@ -91,7 +91,7 @@ def test_link_like_definition_ancestor_blocks_discovery_update_and_delete(
     with pytest.raises(AgentStoreError, match="symlink, junction"):
         store.update(_definition(created.agent_id))
     with pytest.raises(AgentStoreError, match="symlink, junction"):
-        store.delete(created.agent_id)
+        store.delete(AgentScope.PROJECT, created.agent_id)
 
 
 def test_local_state_write_failures_propagate_without_changing_disk(
@@ -143,8 +143,9 @@ def test_gui_rolls_back_roster_and_permission_when_persistence_fails(
     controller.refresh()
     page.select_agent(created.agent_id)
 
-    page._items[created.agent_id].setCheckState(0, Qt.CheckState.Checked)
-    assert page._items[created.agent_id].checkState(0) == Qt.CheckState.Unchecked
+    source_key = f"project:{created.agent_id}"
+    page._items[source_key].setCheckState(0, Qt.CheckState.Checked)
+    assert page._items[source_key].checkState(0) == Qt.CheckState.Unchecked
 
     index = page._permission.findData(AgentPermission.WORKTREE_EDIT.value)
     page._permission.setCurrentIndex(index)

@@ -34,10 +34,8 @@ from PySide6.QtCore import (
     Slot,
 )
 
-from aura.agents.local_state import AgentLocalState
-from aura.agents.roster import EMPTY_AGENT_ROSTER, AgentTurnRoster, resolve_agent_turn_roster
+from aura.agents.roster import EMPTY_AGENT_ROSTER, AgentTurnRoster
 from aura.agents.runtime import AgentDelegationRunner
-from aura.agents.store import AgentStore
 from aura.backends import (
     APIAgentBackend,
 )
@@ -98,6 +96,7 @@ class _ConversationRunner(QObject):
     # here so conversation telemetry still receives them exactly once without
     # projecting any production worker activity.
     usage = Signal(str, str, int, int, int, int)  # tool_id, model, prompt, comp, hit, miss
+    delegationUsage = Signal(str, str, str, int, int, int, int)
     finished = Signal()
 
     def __init__(
@@ -229,6 +228,7 @@ class ConversationBridge(QObject):
     executionTerminalCommandStarted = Signal(str, str, str, str)
     executionApiError = Signal(str, int, str)
     executionUsage = Signal(str, str, int, int, int, int)
+    executionDelegationUsage = Signal(str, str, str, int, int, int, int)
     taskChecklistUpdated = Signal(str, list)  # Full Task Checklist snapshot
     executionTerminalOutput = Signal(str, str, str)  # parent_tool_id, execution_tool_id, text
     executionAgentProcessStarted = Signal(str, str, str, str)
@@ -298,10 +298,9 @@ class ConversationBridge(QObject):
         self._turn_target_files: tuple[str, ...] = ()
         self._turn_explicit_install_ids: tuple[str, ...] = ()
         # The frozen agent roster for the active turn, and the runtime that
-        # runs a delegated child. The roster is resolved once per turn from the
-        # ids History carries; the runner is created once and re-pointed at the
-        # turn's own provider and model, so an agent that inherits inherits
-        # what the user actually chose for this turn.
+        # runs a delegated child. The GUI's storage owner supplies the full
+        # immutable roster at submission; the runner is created once and
+        # re-pointed at the turn's own provider and model.
         self._turn_agent_roster: AgentTurnRoster = EMPTY_AGENT_ROSTER
         # The GUI send layer deposits the immutable submission snapshot here
         # immediately before ``send``. Keeping it out of History preserves
@@ -344,6 +343,7 @@ class ConversationBridge(QObject):
         session.executionTerminalCommandStarted.connect(self.executionTerminalCommandStarted)
         session.executionApiError.connect(self.executionApiError)
         session.executionUsage.connect(self.executionUsage)
+        session.executionDelegationUsage.connect(self.executionDelegationUsage)
         session.taskChecklistUpdated.connect(self.taskChecklistUpdated)
         session.executionTerminalOutput.connect(self.executionTerminalOutput)
         session.executionAgentProcessStarted.connect(self.executionAgentProcessStarted)
@@ -579,14 +579,10 @@ class ConversationBridge(QObject):
         self._turn_explicit_install_ids = (
             self._history.latest_real_user_explicit_installed_skill_ids()
         )
-        # Freeze this turn's agents the same way, and from the same authority:
-        # the ordered ids the send layer recorded on the user message when the
-        # turn was sent or queued, resolved once here into immutable
-        # definitions and this user's own permission grants. It happens before
-        # the prompt is composed and before the first request, so the roster,
-        # the schema projection and runtime authority cannot disagree at any
-        # point in the turn. Editing an agent or changing a grant while
-        # the turn runs takes effect on the next one.
+        # Consume the full immutable roster the Agents storage owner produced
+        # when the turn was submitted or queued. This happens before prompt
+        # composition and the first request, so schema and runtime authority
+        # cannot disagree during the turn.
         submitted_roster = self._submitted_agent_roster
         self._submitted_agent_roster = None
         self._freeze_turn_agent_roster(
@@ -663,6 +659,9 @@ class ConversationBridge(QObject):
         # the same Usage facts here so conversation telemetry counts them
         # exactly once without projecting production worker activity.
         self._conversation_runner.usage.connect(self.executionUsage)
+        self._conversation_runner.delegationUsage.connect(
+            self.executionDelegationUsage
+        )
         self._conversation_runner.finished.connect(self._on_finished)
 
         self._thread.started.connect(self._conversation_runner.run)
@@ -804,18 +803,7 @@ class ConversationBridge(QObject):
         has always had.
         """
         roster = submitted if submitted is not None else EMPTY_AGENT_ROSTER
-        agent_ids = self._history.latest_real_user_available_agent_ids()
         workspace_root = self._registry.workspace_root
-        if submitted is None and agent_ids and workspace_root is not None:
-            try:
-                roster = resolve_agent_turn_roster(
-                    agent_ids,
-                    definitions=AgentStore(workspace_root),
-                    permissions=AgentLocalState(workspace_root),
-                )
-            except Exception:
-                _log.exception("Failed to resolve this turn's agent roster")
-                roster = EMPTY_AGENT_ROSTER
         self._turn_agent_roster = roster
         self._registry.set_turn_agent_roster(roster)
         # An agent that inherits inherits *this* turn's provider and model —

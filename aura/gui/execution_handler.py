@@ -155,6 +155,7 @@ class ExecutionEventHandler(QObject):
         self._bridge.executionToolCallStart.connect(self._on_execution_tool_call_start)
         self._bridge.executionApiError.connect(self._on_execution_api_error)
         self._bridge.executionUsage.connect(self._on_execution_usage)
+        self._bridge.executionDelegationUsage.connect(self._on_delegation_usage)
         self._bridge.taskChecklistUpdated.connect(self._on_task_checklist_updated)
         self._connect_tool_router_signals()
 
@@ -336,6 +337,29 @@ class ExecutionEventHandler(QObject):
             hit=hit,
             miss=miss,
             context_window_tokens=context_window_for_model(model_id),
+        )
+        self.usage_updated.emit()
+
+    def _on_delegation_usage(
+        self,
+        _tool_call_id: str,
+        provider_id: str,
+        model_id: str,
+        prompt: int,
+        completion: int,
+        hit: int,
+        miss: int,
+    ) -> None:
+        """Accumulate child usage without replacing the root context snapshot."""
+        self._conversation_telemetry.record_usage(
+            model_id=model_id,
+            prompt=prompt,
+            completion=completion,
+            hit=hit,
+            miss=miss,
+            context_window_tokens=0,
+            provider_id=provider_id,
+            update_latest_context=False,
         )
         self.usage_updated.emit()
 

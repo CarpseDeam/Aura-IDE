@@ -118,7 +118,13 @@ class AgentWorktreeManager:
                 agent_id=agent_id,
             )
             self._records[change_set_id] = record
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                # No Git artifact exists yet. Do not let a failed journal
+                # write leave an in-memory record occupying future work.
+                self._records.pop(change_set_id, None)
+                raise
             hooks = scope / "hooks"
             try:
                 self._creator.materialize(record, hooks=hooks)
@@ -144,7 +150,29 @@ class AgentWorktreeManager:
 
             record.state = "active"
             self._active_id = change_set_id
-            self._save()
+            try:
+                self._save()
+            except Exception as exc:
+                from aura.config import redact_secrets
+
+                # The linked worktree now exists, so keep its exact recovery
+                # facts, but never strand the process-local writable slot.
+                record.state = "recovery"
+                record.failure_class = "worktree_record_save_failed"
+                record.error = redact_secrets(f"{type(exc).__name__}: {exc}")
+                try:
+                    self._save()
+                except Exception:
+                    pass
+                self._release_active()
+                raise AgentWorktreeError(
+                    "worktree_record_save_failed",
+                    "Aura created the isolated worktree but could not persist its "
+                    "active record. The worktree was preserved for recovery.",
+                    change_set_id=change_set_id,
+                    base_sha=record.base_sha,
+                    recovery_path=record.worktree_path,
+                ) from exc
             return AgentWorktree(
                 change_set_id=change_set_id,
                 agent_id=str(agent_id),
@@ -171,7 +199,6 @@ class AgentWorktreeManager:
                     self.cleanup(worktree, delete_branch=True)
                     self._records.pop(worktree.change_set_id, None)
                     self._save()
-                    self._release_active()
                     return snapshot
 
                 record.result_sha = outcome.result_sha
@@ -187,14 +214,12 @@ class AgentWorktreeManager:
                     record.error = cleanup_error
                     self._save()
                 snapshot = self._snapshot(record)
-                self._release_active()
                 return snapshot
             except AgentWorktreeError as exc:
                 record.state = "recovery"
                 record.failure_class = exc.failure_class
                 record.error = str(exc)
                 self._save()
-                self._release_active()
                 raise AgentWorktreeError(
                     exc.failure_class,
                     str(exc),
@@ -203,6 +228,11 @@ class AgentWorktreeManager:
                     result_sha=record.result_sha,
                     recovery_path=record.worktree_path,
                 ) from exc
+            finally:
+                # Persistence failures are not AgentWorktreeError instances,
+                # but they must release the same process-local slot too.
+                if self._active_id == worktree.change_set_id:
+                    self._release_active()
 
     def recover(self, worktree: AgentWorktree) -> AgentChangeSet:
         """Checkpoint stable partial edits after cancellation or child failure."""
@@ -336,6 +366,13 @@ class AgentWorktreeManager:
         """Explicitly delete one exact Aura-owned result and no other Git state."""
         with self._lock:
             record = self._require_record(change_set_id)
+            if record.state == "applied_cleanup_pending":
+                return self._finish_applied_cleanup(record)
+            if record.state == "discard_cleanup_pending":
+                return self._finish_discard(
+                    record,
+                    approval="previously_approved",
+                )
             # A stranded recovery checkout may contain the only copy of edits.
             # Stabilize it first so approval can describe the exact diff that
             # will be deleted, never a generic recovery path.
@@ -393,39 +430,136 @@ class AgentWorktreeManager:
                     "pending. It was preserved.",
                     change_set_id=change_set_id,
                 )
-            if record.worktree_path:
-                if not self._is_owned_worktree(record):
-                    raise AgentWorktreeError(
-                        "worktree_cleanup_refused",
-                        "The recorded recovery worktree is not an exact Aura-owned path.",
-                        change_set_id=change_set_id,
-                        recovery_path=record.worktree_path,
-                    )
-                cleanup_error = self._cleanup_clean_worktree(record)
-                if cleanup_error:
-                    raise AgentWorktreeError(
-                        "worktree_cleanup_failed",
-                        cleanup_error,
-                        change_set_id=change_set_id,
-                        base_sha=record.base_sha,
-                        result_sha=record.result_sha,
-                        recovery_path=record.worktree_path,
-                    )
-            expected = record.result_sha or record.base_sha
-            self._delete_exact_ref(record, expected=expected)
             snapshot = self._snapshot(record)
-            self._records.pop(change_set_id, None)
-            if self._active_id == change_set_id:
-                self._release_active()
+            # Persist the approved discard before deleting either the exact
+            # worktree registration or ref. A restart can therefore reconcile
+            # any interruption without claiming the result is still retained.
+            record.state = "discard_cleanup_pending"
+            record.failure_class = "change_set_cleanup_pending"
+            record.error = "Discard was approved; Aura still needs to clean retained Git state."
             self._save()
+            return self._finish_discard(
+                record,
+                approval=decision.action,
+                snapshot=snapshot,
+            )
+
+    def _finish_discard(
+        self,
+        record: _Record,
+        *,
+        approval: str,
+        snapshot: AgentChangeSet | None = None,
+    ) -> dict[str, Any]:
+        """Finish an already-journaled discard and report deleted facts honestly."""
+        change_set_id = record.change_set_id
+        if record.worktree_path:
+            if not self._is_owned_worktree(record):
+                raise AgentWorktreeError(
+                    "worktree_cleanup_refused",
+                    "The recorded recovery worktree is not an exact Aura-owned path.",
+                    change_set_id=change_set_id,
+                    recovery_path=record.worktree_path,
+                )
+            cleanup_error = self._cleanup_clean_worktree(record)
+            if cleanup_error:
+                raise AgentWorktreeError(
+                    "worktree_cleanup_failed",
+                    cleanup_error,
+                    change_set_id=change_set_id,
+                    base_sha=record.base_sha,
+                    result_sha=record.result_sha,
+                    recovery_path=record.worktree_path,
+                )
+        expected = record.result_sha or record.base_sha
+        self._delete_exact_ref(record, expected=expected)
+        visible = snapshot or self._snapshot(record)
+        self._records.pop(change_set_id, None)
+        if self._active_id == change_set_id:
+            self._release_active()
+        try:
+            self._save()
+        except Exception as exc:
+            from aura.config import redact_secrets
+
+            warning = redact_secrets(f"{type(exc).__name__}: {exc}")
+            record.state = "discard_cleanup_pending"
+            record.failure_class = "change_set_cleanup_pending"
+            record.error = warning
+            self._records[change_set_id] = record
+            try:
+                self._save()
+            except Exception:
+                pass
+            return {
+                **visible.payload(),
+                "ok": True,
+                "status": "discarded_cleanup_pending",
+                "discarded": True,
+                "cleanup_pending": True,
+                "warning": warning,
+                "tool": "discard_agent_change_set",
+                "approval": approval,
+            }
+        return {
+            **visible.payload(),
+            "ok": True,
+            "status": "discarded",
+            "discarded": True,
+            "tool": "discard_agent_change_set",
+            "approval": approval,
+        }
+
+    def _finish_applied_cleanup(self, record: _Record) -> dict[str, Any]:
+        """Reconcile retained Git state without relabeling an applied change."""
+        change_set_id = record.change_set_id
+        snapshot = self._snapshot(record)
+        try:
+            cleanup_error = self._cleanup_clean_worktree(record)
+            if cleanup_error:
+                raise AgentWorktreeError(
+                    "worktree_cleanup_failed",
+                    cleanup_error,
+                    change_set_id=change_set_id,
+                    base_sha=record.base_sha,
+                    result_sha=record.result_sha,
+                    recovery_path=record.worktree_path,
+                )
+            self._delete_exact_ref(record, expected=record.result_sha)
+            self._records.pop(change_set_id, None)
+            self._save()
+        except Exception as exc:
+            from aura.config import redact_secrets
+
+            warning = redact_secrets(f"{type(exc).__name__}: {exc}")
+            record.state = "applied_cleanup_pending"
+            record.failure_class = "change_set_cleanup_pending"
+            record.error = warning
+            self._records[change_set_id] = record
+            try:
+                self._save()
+            except Exception:
+                pass
             return {
                 **snapshot.payload(),
                 "ok": True,
-                "status": "discarded",
-                "discarded": True,
+                "status": "applied_cleanup_pending",
+                "applied": True,
+                "discarded": False,
+                "cleanup_pending": True,
+                "warning": warning,
                 "tool": "discard_agent_change_set",
-                "approval": decision.action,
+                "approval": "not_required_already_applied",
             }
+        return {
+            **snapshot.payload(),
+            "ok": True,
+            "status": "applied",
+            "applied": True,
+            "discarded": False,
+            "tool": "discard_agent_change_set",
+            "approval": "not_required_already_applied",
+        }
 
     def cleanup(self, worktree: AgentWorktree, *, delete_branch: bool = False) -> None:
         """Remove one exact clean Aura-owned linked worktree."""

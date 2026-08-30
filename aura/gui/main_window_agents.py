@@ -32,6 +32,7 @@ from aura.agents.local_state import (
     AgentPermission,
 )
 from aura.agents.models import AgentDefinition, AgentScope, AgentThinking, ModelTarget
+from aura.agents.roster import EMPTY_AGENT_ROSTER, AgentTurnRoster, resolve_agent_turn_roster
 from aura.agents.store import AgentStore, AgentStoreError, AgentSummary
 from aura.gui.agents_page import (
     AgentDetail,
@@ -138,6 +139,22 @@ class MainWindowAgentsController(QObject):
             return ()
         return tuple(agent_id for agent_id in available if agent_id in valid)
 
+    def capture_agent_turn_roster(self) -> AgentTurnRoster:
+        """Produce the full immutable roster for one submitted turn."""
+        state = self._state()
+        store = self._store()
+        if state is None or store is None:
+            return EMPTY_AGENT_ROSTER
+        try:
+            return resolve_agent_turn_roster(
+                state.available_ids(),
+                definitions=store,
+                permissions=state,
+            )
+        except Exception:
+            logger.debug("agents: could not freeze the submitted roster", exc_info=True)
+            return EMPTY_AGENT_ROSTER
+
     def set_execution_active(self, active: bool) -> None:
         """Keep the page browsable during a turn, but freeze every change."""
         self._execution_active = bool(active)
@@ -212,7 +229,7 @@ class MainWindowAgentsController(QObject):
         rows = self._build_rows()
         page.set_mutations_enabled(not self._execution_active)
         page.set_rows(rows)
-        self._on_current_row_changed(page.current_agent_id())
+        self._on_current_row_changed(page.current_source_key())
 
     def _build_rows(self) -> tuple[AgentRow, ...]:
         store = self._store()
@@ -227,7 +244,10 @@ class MainWindowAgentsController(QObject):
             self._summaries = {}
             return ()
 
-        self._summaries = {summary.agent_id: summary for summary in summaries}
+        self._summaries = {
+            _source_key(summary.scope.value, summary.agent_id): summary
+            for summary in summaries
+        }
         available = set(state.available_ids())
         rows: list[AgentRow] = []
         for summary in summaries:
@@ -257,18 +277,19 @@ class MainWindowAgentsController(QObject):
             )
         return tuple(rows)
 
-    def _on_current_row_changed(self, agent_id: str) -> None:
+    def _on_current_row_changed(self, source_key: str) -> None:
         page = self._agents_page
         if page is None:
             return
-        page.set_detail(self._detail_for(agent_id) if agent_id else None)
+        page.set_detail(self._detail_for(source_key) if source_key else None)
 
-    def _detail_for(self, agent_id: str) -> AgentDetail | None:
-        summary = self._summaries.get(agent_id)
+    def _detail_for(self, source_key: str) -> AgentDetail | None:
+        summary = self._summaries.get(source_key)
         state = self._state()
         if summary is None or state is None:
             return None
         definition = summary.definition
+        agent_id = summary.agent_id
         addressable = is_valid_agent_id(agent_id)
         return AgentDetail(
             agent_id=summary.agent_id,
@@ -307,13 +328,13 @@ class MainWindowAgentsController(QObject):
             return
         self.refresh()
         if self._agents_page is not None:
-            self._agents_page.select_agent(definition.agent_id)
+            self._agents_page.select_agent(definition.agent_id, definition.scope.value)
 
     def _on_save_requested(self, draft: object) -> None:
         if not isinstance(draft, AgentDraft) or not self._mutations_allowed():
             return
         store = self._store()
-        summary = self._summaries.get(draft.agent_id)
+        summary = self._summaries.get(_source_key(draft.scope, draft.agent_id))
         if store is None or summary is None:
             return
         try:
@@ -335,28 +356,29 @@ class MainWindowAgentsController(QObject):
             return
         self.refresh()
 
-    def _on_delete_requested(self, agent_id: str) -> None:
+    def _on_delete_requested(self, scope_key: str, agent_id: str) -> None:
         store = self._store()
         state = self._state()
-        summary = self._summaries.get(agent_id)
+        summary = self._summaries.get(_source_key(scope_key, agent_id))
         if store is None or state is None or summary is None or not self._mutations_allowed():
             return
         if not self._confirm_delete(summary.name):
             return
         try:
-            store.delete(agent_id)
+            store.delete(summary.scope, agent_id)
         except AgentStoreError as exc:
             self._show_error("Agents", str(exc))
             return
         # A deleted agent keeps no authority: the local decisions about it go
         # with it, so an id that is later reused starts read-only and inactive.
-        try:
-            state.forget(agent_id)
-        except AgentLocalStateError as exc:
-            # The definition is already gone, so the stale id cannot become
-            # available. Surface the persistence failure instead of pretending
-            # every part of the operation succeeded.
-            self._show_error("Agents", str(exc))
+        if not any(row.agent_id == agent_id for row in store.list_summaries()):
+            try:
+                state.forget(agent_id)
+            except AgentLocalStateError as exc:
+                # The definition is already gone, so the stale id cannot become
+                # available. Surface the persistence failure instead of pretending
+                # every part of the operation succeeded.
+                self._show_error("Agents", str(exc))
         self.refresh()
 
     # ---- local decisions ---------------------------------------------------
@@ -365,8 +387,12 @@ class MainWindowAgentsController(QObject):
         state = self._state()
         if state is None or not self._mutations_allowed():
             return
-        summary = self._summaries.get(agent_id)
-        if summary is None or not summary.valid:
+        summaries = [
+            summary
+            for summary in self._summaries.values()
+            if summary.agent_id == agent_id and summary.valid
+        ]
+        if len(summaries) != 1:
             return
         try:
             state.set_available(agent_id, bool(available))
@@ -380,6 +406,13 @@ class MainWindowAgentsController(QObject):
         state = self._state()
         permission = AgentPermission.parse(permission_value)
         if state is None or permission is None or not self._mutations_allowed():
+            return
+        summaries = [
+            summary
+            for summary in self._summaries.values()
+            if summary.agent_id == agent_id and summary.valid
+        ]
+        if len(summaries) != 1:
             return
         try:
             state.set_permission(agent_id, permission)
@@ -435,3 +468,7 @@ class MainWindowAgentsController(QObject):
             logger.warning("%s: %s", title, message)
             return
         QMessageBox.warning(parent, title, message)
+
+
+def _source_key(scope: str, agent_id: str) -> str:
+    return f"{scope}:{agent_id}"

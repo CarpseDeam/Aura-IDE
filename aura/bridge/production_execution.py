@@ -90,6 +90,7 @@ class ProductionExecutionSession(QObject):
     executionStreamDone = Signal(str, str, dict)
     executionApiError = Signal(str, int, str)
     executionUsage = Signal(str, str, int, int, int, int)
+    executionDelegationUsage = Signal(str, str, str, int, int, int, int)
     executionTerminalOutput = Signal(str, str, str)
     executionAgentProcessStarted = Signal(str, str, str, str)
     executionAgentProcessOutput = Signal(str, str, str)

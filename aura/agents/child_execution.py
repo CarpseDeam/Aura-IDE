@@ -160,6 +160,7 @@ class ChildExecutor:
             resolved.model,
             resolved.thinking,
         )
+        stop = LoopStop.API_ERROR
         try:
             backend = self._backend_factory(resolved.provider)
             loop = AgentLoop(
@@ -181,6 +182,18 @@ class ChildExecutor:
                 tool_defs=tool_defs,
                 temperature=0.7,
             )
+            stop = outcome.stop
+        except Exception as exc:
+            # A backend can fail after yielding Usage. Wrap the transcript
+            # here, where its cumulative counters and elapsed time still
+            # exist, rather than letting an outer generic failure discard them.
+            detail = redact_secrets(f"{type(exc).__name__}: {exc}")
+            transcript.api_errors.append(detail)
+            logger.warning(
+                "agents: child backend raised agent_id=%s error=%s",
+                definition.agent_id,
+                detail,
+            )
         finally:
             try:
                 tool_runner.close()
@@ -190,8 +203,8 @@ class ChildExecutor:
         duration_ms = int((time.monotonic() - started) * 1000)
         result = _wrap_result(
             entry,
-            outcome.stop,
-            transcript.answer(outcome.stop),
+            stop,
+            transcript.answer(stop),
             transcript,
             resolved,
             duration_ms,

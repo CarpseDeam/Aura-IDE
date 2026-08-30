@@ -47,6 +47,7 @@ class ExecutionEventRelay(QObject):
     toolCallArgs = Signal(str, str, str)      # tool_call_id, execution_tool_id, args_chunk
     toolCallEnd = Signal(str, str)            # tool_call_id, execution_tool_id
     usage = Signal(str, str, int, int, int, int)  # tool_id, model, prompt, comp, hit, miss
+    delegationUsage = Signal(str, str, str, int, int, int, int)
     streamDone = Signal(str, str, dict)       # tool_call_id, finish_reason, full_message
     apiError = Signal(str, int, str)          # tool_call_id, status_code, message
     toolResult = Signal(str, str, str, bool, str, dict)  # tool_id, execution_tc_id, name, ok, result, extras
@@ -203,9 +204,15 @@ class ExecutionEventRelay(QObject):
         elif isinstance(ev, ToolResult):
             child_usage = delegation_usage_signal(ev.extras)
             if child_usage is not None:
-                model, prompt, completion, hit, miss = child_usage
-                self.usage.emit(
-                    ev.tool_call_id, model, prompt, completion, hit, miss
+                provider, model, prompt, completion, hit, miss = child_usage
+                self.delegationUsage.emit(
+                    ev.tool_call_id,
+                    provider,
+                    model,
+                    prompt,
+                    completion,
+                    hit,
+                    miss,
                 )
             approval = (ev.extras or {}).get("approval")
             if approval:

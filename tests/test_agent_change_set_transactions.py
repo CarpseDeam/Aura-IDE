@@ -1,6 +1,7 @@
 """Transactional truth and bounded discovery for retained Agent work."""
 from __future__ import annotations
 
+import shutil
 import subprocess
 import threading
 from pathlib import Path
@@ -135,6 +136,36 @@ def test_apply_releases_lock_for_approval_and_reports_cleanup_pending_truthfully
     assert pending["cleanup_pending"] is True
 
 
+def test_applied_cleanup_pending_can_never_be_relabelled_discarded(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager = _manager(repo, tmp_path)
+    result = _checkpoint(manager)
+    delete_exact_ref = manager._delete_exact_ref
+    attempts = 0
+
+    def fail_once(record, *, expected: str) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise AgentWorktreeError("change_set_cleanup_failed", "ref is locked")
+        delete_exact_ref(record, expected=expected)
+
+    monkeypatch.setattr(manager, "_delete_exact_ref", fail_once)
+    applied = manager.apply(result.change_set_id, approval_cb=_approve)
+
+    assert applied["status"] == "applied_cleanup_pending"
+    reconciled = manager.discard(
+        result.change_set_id,
+        approval_cb=lambda _request: pytest.fail("applied cleanup needs no discard approval"),
+    )
+
+    assert reconciled["status"] == "applied"
+    assert reconciled["applied"] is True
+    assert reconciled["discarded"] is False
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == result.result_sha
+
+
 def test_apply_removes_exact_clean_retained_worktree_before_approval(
     repo: Path, tmp_path: Path
 ) -> None:
@@ -160,6 +191,37 @@ def test_apply_removes_exact_clean_retained_worktree_before_approval(
 
     applied = manager.apply(result.change_set_id, approval_cb=approve)
     assert applied["applied"] is True
+
+
+def test_apply_removes_exact_git_registration_when_retained_directory_is_missing(
+    repo: Path, tmp_path: Path
+) -> None:
+    manager = _manager(repo, tmp_path)
+    result = _checkpoint(manager)
+    record = manager._records[result.change_set_id]
+    retained = manager._scope_dir(repo) / result.change_set_id
+    _git(
+        repo,
+        "worktree",
+        "add",
+        str(retained),
+        record.branch_ref.removeprefix("refs/heads/"),
+    )
+    record.worktree_path = str(retained)
+    manager._save()
+    shutil.rmtree(retained)
+
+    def approve(_request) -> ApprovalDecision:
+        assert manager._git.checked_out_worktree(
+            repo, record.branch_ref, change_set_id=result.change_set_id
+        ) == ""
+        assert _git(repo, "rev-parse", "HEAD").stdout.strip() == result.base_sha
+        return ApprovalDecision(action="approve")
+
+    applied = manager.apply(result.change_set_id, approval_cb=approve)
+
+    assert applied["applied"] is True
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == result.result_sha
 
 
 def test_apply_refuses_dirty_retained_worktree_before_touching_primary(
@@ -257,6 +319,92 @@ def test_discard_checkpoints_stranded_edits_before_lock_free_approval(
     assert discarded["discarded"] is True
     assert approvals[0].file_changes[0].rel_path == "stranded.txt"
     assert approvals[0].file_changes[0].new_content == "valuable edits\n"
+
+
+def test_discard_is_journaled_before_cleanup_and_final_save_failure_is_truthful(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = tmp_path / "runtime"
+    manager = AgentWorktreeManager(repo, runtime_root=runtime)
+    result = _checkpoint(manager)
+    record = manager._records[result.change_set_id]
+    save = manager._record_store.save
+    saves = 0
+
+    def fail_final_save() -> None:
+        nonlocal saves
+        saves += 1
+        if saves == 2:
+            raise OSError("state file locked after cleanup")
+        save()
+
+    monkeypatch.setattr(manager._record_store, "save", fail_final_save)
+    response = manager.discard(result.change_set_id, approval_cb=_approve)
+
+    assert response["status"] == "discarded_cleanup_pending"
+    assert response["discarded"] is True
+    assert response["cleanup_pending"] is True
+    assert _git(repo, "show-ref", "--verify", record.branch_ref, check=False).returncode != 0
+
+    reloaded = AgentWorktreeManager(repo, runtime_root=runtime)
+    assert reloaded.list_change_sets()["change_sets"][0]["status"] == "discard_cleanup_pending"
+    reconciled = reloaded.discard(
+        result.change_set_id,
+        approval_cb=lambda _request: pytest.fail("journal already records approval"),
+    )
+    assert reconciled["discarded"] is True
+    assert reloaded.list_change_sets()["count"] == 0
+
+
+def test_create_record_save_failure_releases_the_writable_slot(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager = _manager(repo, tmp_path)
+    save = manager._record_store.save
+    saves = 0
+
+    def fail_active_save_once() -> None:
+        nonlocal saves
+        saves += 1
+        if saves == 2:
+            raise OSError("state file locked")
+        save()
+
+    monkeypatch.setattr(manager._record_store, "save", fail_active_save_once)
+
+    with pytest.raises(AgentWorktreeError) as caught:
+        manager.create("agent0001")
+
+    assert caught.value.failure_class == "worktree_record_save_failed"
+    assert manager._active_id == ""
+    next_worktree = manager.create("agent0002")
+    assert next_worktree.path.is_dir()
+
+
+def test_checkpoint_record_save_failure_releases_the_writable_slot(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager = _manager(repo, tmp_path)
+    worktree = manager.create("agent0001")
+    (worktree.path / "change.txt").write_text("changed\n", encoding="utf-8")
+    save = manager._record_store.save
+    failed = False
+
+    def fail_once() -> None:
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise OSError("state file locked")
+        save()
+
+    monkeypatch.setattr(manager._record_store, "save", fail_once)
+
+    with pytest.raises(OSError, match="state file locked"):
+        manager.checkpoint(worktree)
+
+    assert manager._active_id == ""
+    next_worktree = manager.create("agent0002")
+    assert next_worktree.path.is_dir()
 
 
 def test_first_discard_handles_recovery_record_with_empty_worktree_path(

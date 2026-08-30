@@ -225,7 +225,7 @@ def test_child_usage_is_emitted_once_from_the_paired_result() -> None:
 
     relay = ExecutionEventRelay(ApprovalProxy(), EventBus())
     observed: list[tuple] = []
-    relay.usage.connect(lambda *args: observed.append(args))
+    relay.delegationUsage.connect(lambda *args: observed.append(args))
     relay.relay(
         "root-run",
         ToolResult(
@@ -234,6 +234,7 @@ def test_child_usage_is_emitted_once_from_the_paired_result() -> None:
             ok=True,
             result="{}",
             extras={
+                "delegation_provider": "openrouter",
                 "delegation_model": "child-model",
                 "delegation_usage": {
                     "prompt_tokens": 30,
@@ -245,4 +246,6 @@ def test_child_usage_is_emitted_once_from_the_paired_result() -> None:
         ),
     )
 
-    assert observed == [("delegate-1", "child-model", 30, 7, 7, 23)]
+    assert observed == [
+        ("delegate-1", "openrouter", "child-model", 30, 7, 7, 23)
+    ]

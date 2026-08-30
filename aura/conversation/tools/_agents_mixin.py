@@ -80,6 +80,7 @@ class AgentDelegationHandlersMixin:
         }
         if result.usage is not None and not result.usage.is_empty:
             extras["delegation_usage"] = result.usage.as_dict()
+            extras["delegation_provider"] = result.provider
             extras["delegation_model"] = result.model
         return ToolExecResult(
             ok=result.ok,

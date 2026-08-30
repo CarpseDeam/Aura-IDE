@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 
 from aura.agents.local_state import PERMISSION_ORDER, AgentPermission
 from aura.agents.models import THINKING_ORDER, AgentThinking
-from aura.agents.validation import MAX_AGENT_DESCRIPTION_CHARS
+from aura.agents.validation import MAX_AGENT_DESCRIPTION_CHARS, MAX_AGENT_NAME_CHARS
 from aura.gui.theme import BG, DANGER, FG, FG_DIM
 
 INHERIT_TARGET_LABEL = "Inherit Aura's provider and model"
@@ -45,6 +45,7 @@ class AgentDraft:
     """Definition fields only; local grants are emitted separately."""
 
     agent_id: str
+    scope: str
     name: str
     description: str
     instructions: str
@@ -81,7 +82,7 @@ class AgentEditor(QWidget):
     """Owns the definition form and emits form-level user intent."""
 
     save_requested = Signal(object)
-    delete_requested = Signal(str)
+    delete_requested = Signal(str, str)
     permission_changed = Signal(str, str)
 
     def __init__(self, choices: ProviderChoices, parent: QWidget | None = None) -> None:
@@ -110,6 +111,7 @@ class AgentEditor(QWidget):
         layout.addWidget(self.errors_label)
 
         self.name = QLineEdit()
+        self.name.setMaxLength(MAX_AGENT_NAME_CHARS)
         self.name.setPlaceholderText("Display name, e.g. Reviewer")
         layout.addLayout(_labelled("Name", self.name))
 
@@ -204,6 +206,7 @@ class AgentEditor(QWidget):
         provider = str(self.provider.currentData() or "")
         return AgentDraft(
             agent_id=self._detail.agent_id,
+            scope=self._detail.scope,
             name=self.name.text().strip(),
             description=self.description.text().strip(),
             instructions=self.instructions.toPlainText().strip(),
@@ -287,7 +290,7 @@ class AgentEditor(QWidget):
 
     def _delete(self) -> None:
         if self._detail is not None and self._mutations_enabled:
-            self.delete_requested.emit(self._detail.agent_id)
+            self.delete_requested.emit(self._detail.scope, self._detail.agent_id)
 
     def _emit_permission_change(self) -> None:
         if self._loading or not self._mutations_enabled or self._detail is None:

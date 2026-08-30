@@ -48,6 +48,7 @@ from aura.gui.agents_editor import (
 from aura.gui.theme import BG, BG_ALT, BORDER, FG, FG_DIM, FG_MUTED, WARN
 
 _ID_ROLE = Qt.ItemDataRole.UserRole
+_AGENT_ID_ROLE = Qt.ItemDataRole.UserRole + 1
 
 #: Group keys, in the order the page lists them.
 SCOPE_ORDER: tuple[str, ...] = ("project", "personal")
@@ -84,6 +85,10 @@ class AgentRow:
     def scope_label(self) -> str:
         return SCOPE_LABELS.get(self.scope, self.scope.title())
 
+    @property
+    def source_key(self) -> str:
+        return _source_key(self.scope, self.agent_id)
+
 
 class AgentsPage(QDialog):
     """Modeless Agents window: two lists, one editor, and the local grants."""
@@ -92,7 +97,7 @@ class AgentsPage(QDialog):
     current_row_changed = Signal(str)
     create_requested = Signal(str)  # scope key
     save_requested = Signal(object)  # AgentDraft
-    delete_requested = Signal(str)
+    delete_requested = Signal(str, str)  # scope key, agent id
     availability_changed = Signal(str, bool)
     permission_changed = Signal(str, str)  # agent id, AgentPermission value
 
@@ -116,6 +121,7 @@ class AgentsPage(QDialog):
         self._rows: tuple[AgentRow, ...] = ()
         self._items: dict[str, QTreeWidgetItem] = {}
         self._groups: dict[str, QTreeWidgetItem] = {}
+        self._current_source_key: str = ""
         self._current_id: str = ""
         self._detail: AgentDetail | None = None
         self._mutations_enabled = True
@@ -250,18 +256,23 @@ class AgentsPage(QDialog):
         repopulate the very combo that is mid-emit, so this updates in place
         instead.
         """
-        row = self._row(agent_id)
-        if row is None:
+        matching = [row for row in self._rows if row.agent_id == agent_id]
+        if not matching:
             return
-        updated = replace(row, available=available, permission=permission)
+        updated_by_key = {
+            row.source_key: replace(row, available=available, permission=permission)
+            for row in matching
+        }
         self._rows = tuple(
-            updated if candidate.agent_id == agent_id else candidate for candidate in self._rows
+            updated_by_key.get(candidate.source_key, candidate) for candidate in self._rows
         )
 
         self._loading = True
         try:
-            item = self._items.get(agent_id)
-            if item is not None:
+            for source_key, updated in updated_by_key.items():
+                item = self._items.get(source_key)
+                if item is None:
+                    continue
                 item.setText(0, _row_text(updated))
                 item.setToolTip(0, _row_tooltip(updated))
                 item.setCheckState(
@@ -299,8 +310,18 @@ class AgentsPage(QDialog):
     def current_agent_id(self) -> str:
         return self._current_id
 
-    def select_agent(self, agent_id: str) -> bool:
-        item = self._items.get(agent_id)
+    def current_source_key(self) -> str:
+        return self._current_source_key
+
+    def select_agent(self, agent_id: str, scope: str = "") -> bool:
+        matches = [
+            row
+            for row in self._rows
+            if row.agent_id == agent_id and (not scope or row.scope == scope)
+        ]
+        if len(matches) != 1:
+            return False
+        item = self._items.get(matches[0].source_key)
         if item is None:
             return False
         self._tree.setCurrentItem(item)
@@ -315,7 +336,8 @@ class AgentsPage(QDialog):
                 visible[scope] = ()
                 continue
             visible[scope] = tuple(
-                str(group.child(index).data(0, _ID_ROLE)) for index in range(group.childCount())
+                str(group.child(index).data(0, _AGENT_ID_ROLE))
+                for index in range(group.childCount())
             )
         return visible
 
@@ -325,11 +347,11 @@ class AgentsPage(QDialog):
 
     # ---- rendering ---------------------------------------------------------
 
-    def _row(self, agent_id: str) -> AgentRow | None:
-        return next((row for row in self._rows if row.agent_id == agent_id), None)
+    def _row(self, source_key: str) -> AgentRow | None:
+        return next((row for row in self._rows if row.source_key == source_key), None)
 
     def _rebuild(self) -> None:
-        previous = self._current_id
+        previous = self._current_source_key
         self._loading = True
         self._tree.blockSignals(True)
         self._tree.clear()
@@ -345,7 +367,8 @@ class AgentsPage(QDialog):
                 if row.scope != scope:
                     continue
                 item = QTreeWidgetItem(group)
-                item.setData(0, _ID_ROLE, row.agent_id)
+                item.setData(0, _ID_ROLE, row.source_key)
+                item.setData(0, _AGENT_ID_ROLE, row.agent_id)
                 item.setText(0, _row_text(row))
                 item.setToolTip(0, _row_tooltip(row))
                 item.setFlags(_item_flags(row, self._mutations_enabled))
@@ -353,7 +376,7 @@ class AgentsPage(QDialog):
                     0,
                     Qt.CheckState.Checked if row.available else Qt.CheckState.Unchecked,
                 )
-                self._items[row.agent_id] = item
+                self._items[row.source_key] = item
                 count += 1
             group.setText(0, f"{SCOPE_LABELS[scope]}  ({count})")
             group.setExpanded(True)
@@ -374,8 +397,10 @@ class AgentsPage(QDialog):
         item = self._tree.currentItem()
         raw = item.data(0, _ID_ROLE) if item is not None else None
         current = str(raw) if raw else ""
-        changed = current != self._current_id
-        self._current_id = current
+        row = self._row(current)
+        changed = current != self._current_source_key
+        self._current_source_key = current
+        self._current_id = row.agent_id if row is not None else ""
         self._update_actions()
         if changed or not current:
             self.current_row_changed.emit(current)
@@ -397,10 +422,13 @@ class AgentsPage(QDialog):
         raw = item.data(0, _ID_ROLE)
         if not raw:
             return
-        agent_id = str(raw)
+        source_key = str(raw)
+        row = self._row(source_key)
+        if row is None:
+            return
+        agent_id = row.agent_id
         available = item.checkState(0) == Qt.CheckState.Checked
-        row = self._row(agent_id)
-        if row is not None and row.available == available:
+        if row.available == available:
             return
         self.availability_changed.emit(agent_id, available)
 
@@ -441,6 +469,10 @@ def _row_tooltip(row: AgentRow) -> str:
         return "\n".join(row.errors) or "This definition could not be loaded."
     parts = [row.description, row.target_label, f"Thinking: {row.thinking_label}"]
     return "\n".join(part for part in parts if part)
+
+
+def _source_key(scope: str, agent_id: str) -> str:
+    return f"{scope}:{agent_id}"
 
 
 __all__ = [

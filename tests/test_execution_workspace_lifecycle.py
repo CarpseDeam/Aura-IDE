@@ -48,6 +48,7 @@ class _FakeBridge(QObject):
     executionWorkspaceReconcileRequested = Signal(str, str)
     executionApiError = Signal(str, int, str)
     executionUsage = Signal(str, str, int, int, int, int)
+    executionDelegationUsage = Signal(str, str, str, int, int, int, int)
     taskChecklistUpdated = Signal(str, list)
     executionTerminalCommandStarted = Signal(str, str, str, str)
     executionTerminalOutput = Signal(str, str, str)

@@ -74,7 +74,10 @@ class ChangeSetInspector:
             "changed_paths": list(visible_paths),
             "changed_paths_truncated": len(record.changed_paths) > len(visible_paths),
             "diffstat": record.diffstat,
-            "cleanup_pending": record.state == "applied_cleanup_pending",
+            "cleanup_pending": record.state in {
+                "applied_cleanup_pending",
+                "discard_cleanup_pending",
+            },
             "warning": record.error,
         }
 

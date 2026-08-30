@@ -30,7 +30,7 @@ import yaml
 
 from aura.agents.identity import AgentScope, is_valid_agent_id
 from aura.agents.models import AgentDefinition, AgentThinking, ModelTarget
-from aura.agents.validation import delegation_description_error
+from aura.agents.validation import agent_name_error, delegation_description_error
 
 _DELIMITER = "---"
 
@@ -113,8 +113,9 @@ def parse_agent_document(
         errors.append(f"declared id '{agent_id}' does not match the file name '{expected_id}.md'")
 
     name = _string(loaded.get("name"))
-    if not name:
-        errors.append("'name' is required")
+    name_error = agent_name_error(name)
+    if name_error:
+        errors.append(name_error)
 
     description = _string(loaded.get("description"))
     description_error = delegation_description_error(description)

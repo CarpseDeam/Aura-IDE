@@ -194,7 +194,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             # The Agents controller is the one owner of agent storage, so the
             # roster a message is frozen with is read from there and nowhere
             # else.
-            available_agents=self._agents_controller.available_agent_ids,
+            agent_roster_provider=self._agents_controller.capture_agent_turn_roster,
         )
         # Skills manager — the only GUI owner of SkillLibrary access. Both the
         # composer's Skills button and /skills reach this one controller.

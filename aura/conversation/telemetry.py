@@ -201,9 +201,11 @@ class ConversationTelemetry:
         hit: int,
         miss: int,
         context_window_tokens: int,
+        provider_id: str | None = None,
+        update_latest_context: bool = True,
         now: datetime | None = None,
     ) -> None:
-        """Accumulate usage, replace the context snapshot, and price this event.
+        """Accumulate and price usage, optionally replacing latest context.
 
         Pricing is calculated once, at the moment the usage is observed, from
         whichever pricing snapshot/tier is in force right now. It is never
@@ -220,16 +222,17 @@ class ConversationTelemetry:
         bucket["hit"] += hit
         bucket["miss"] += miss
         bucket["out"] += completion
-        self.latest_context = LatestContext(
-            model_id=model_id,
-            input_tokens=prompt,
-            context_window_tokens=_token_count(context_window_tokens),
-        )
+        if update_latest_context:
+            self.latest_context = LatestContext(
+                model_id=model_id,
+                input_tokens=prompt,
+                context_window_tokens=_token_count(context_window_tokens),
+            )
 
         moment = now or datetime.now(timezone.utc)
-        provider_id = provider_id_for_model(model_id)
+        event_provider_id = str(provider_id or provider_id_for_model(model_id))
         tier, source_url, retrieved_at, stale, exact, cost = _price_event(
-            provider_id=provider_id,
+            provider_id=event_provider_id,
             model_id=model_id,
             hit=hit,
             miss=miss,
@@ -238,7 +241,7 @@ class ConversationTelemetry:
         )
         self.events.append(
             UsageEvent(
-                provider_id=provider_id,
+                provider_id=event_provider_id,
                 model_id=model_id,
                 timestamp=moment.isoformat(),
                 cache_hit_tokens=hit,

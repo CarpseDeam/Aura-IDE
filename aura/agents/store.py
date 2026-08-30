@@ -26,7 +26,7 @@ from pathlib import Path
 from aura.agents.document import parse_agent_document, render_agent_document
 from aura.agents.identity import AgentScope, is_valid_agent_id, new_agent_id
 from aura.agents.models import AgentDefinition, AgentThinking, ModelTarget
-from aura.agents.validation import delegation_description_error
+from aura.agents.validation import agent_name_error, delegation_description_error
 from aura.conversation.tools.fs_write import atomic_write_bytes
 from aura.paths import data_dir, first_link_like_component, is_link_like
 
@@ -131,6 +131,20 @@ class AgentStore:
         self._require_agent_id(agent_id)
         return next((row for row in self.list_summaries() if row.agent_id == agent_id), None)
 
+    def summary_in_scope(
+        self, scope: AgentScope, agent_id: str
+    ) -> AgentSummary | None:
+        """The exact row at ``scope/id``, never an ambiguous cross-scope match."""
+        self._require_agent_id(agent_id)
+        return next(
+            (
+                row
+                for row in self.list_summaries()
+                if row.scope is scope and row.agent_id == agent_id
+            ),
+            None,
+        )
+
     def _read_scope(self, scope: AgentScope) -> list[AgentSummary]:
         directory = self.directory(scope)
         try:
@@ -231,15 +245,17 @@ class AgentStore:
         self._write(path, definition)
         return definition
 
-    def delete(self, agent_id: str) -> bool:
-        """Remove the definition file for *agent_id*. False when there was none."""
+    def delete(self, scope: AgentScope, agent_id: str) -> bool:
+        """Remove exactly the definition at ``scope/id``."""
         self._require_agent_id(agent_id)
         # Discovery intentionally hides redirected storage. Deletion must be
         # stricter: returning "not found" through a linked scope would make a
         # refused delete look successful to its caller.
-        for scope in (AgentScope.PROJECT, AgentScope.PERSONAL):
-            self._require_safe_storage_path(self.directory(scope), action="delete")
-        row = self.summary(agent_id)
+        for candidate_scope in (AgentScope.PROJECT, AgentScope.PERSONAL):
+            self._require_safe_storage_path(
+                self.directory(candidate_scope), action="delete"
+            )
+        row = self.summary_in_scope(scope, agent_id)
         if row is None or row.source is None:
             return False
         self._require_safe_storage_path(row.source, action="delete")
@@ -265,8 +281,9 @@ class AgentStore:
 
     def _validate(self, definition: AgentDefinition) -> None:
         self._require_agent_id(definition.agent_id)
-        if not definition.name:
-            raise AgentStoreError("An agent needs a name.")
+        name_error = agent_name_error(definition.name)
+        if name_error:
+            raise AgentStoreError(name_error)
         description_error = delegation_description_error(definition.description)
         if description_error:
             raise AgentStoreError(description_error)
@@ -276,8 +293,11 @@ class AgentStore:
             raise AgentStoreError(
                 "Choose either to inherit Aura's provider and model, or to name both."
             )
-        collision = self.summary(definition.agent_id)
-        if collision is not None and collision.scope is not definition.scope:
+        collision = any(
+            row.agent_id == definition.agent_id and row.scope is not definition.scope
+            for row in self.list_summaries()
+        )
+        if collision:
             raise AgentStoreError(
                 f"Another agent already uses the id {definition.agent_id}."
             )

@@ -119,7 +119,14 @@ def test_queued_send_freezes_definition_and_effective_grant_at_submission(
         input_panel=_Input(),
         settings=type("Settings", (), {"provider": "deepseek"})(),
         workspace_root=workspace,
-        available_agents=lambda: (created.agent_id,),
+        agent_roster_provider=lambda: AgentTurnRoster(
+            entries=(
+                AgentRosterEntry(
+                    store.get(created.agent_id),
+                    permission=state.permission(created.agent_id),
+                ),
+            )
+        ),
     )
 
     handler.handle_send(SendPayload("Review this.", []), "model-a", "off")

@@ -159,7 +159,7 @@ def test_a_broken_definition_stays_visible_and_cannot_be_activated(wired) -> Non
 
     wired.controller.on_agents_requested()
     page = wired.controller.agents_page
-    item = page._items["brokenagentid"]
+    item = page._items["project:brokenagentid"]
 
     assert page.visible_agent_ids()["project"] == ("brokenagentid",)
     assert not (item.flags() & Qt.ItemFlag.ItemIsUserCheckable)
@@ -278,7 +278,7 @@ def test_a_newly_discovered_project_agent_starts_inactive_and_read_only(wired) -
     wired.controller.on_agents_requested()
     page = wired.controller.agents_page
 
-    assert page._items[agent_id].checkState(0) == Qt.CheckState.Unchecked
+    assert page._items[f"project:{agent_id}"].checkState(0) == Qt.CheckState.Unchecked
     assert wired.state.is_available(agent_id) is False
     assert wired.state.permission(agent_id) is AgentPermission.READ_ONLY
     assert page._permission.currentData() == AgentPermission.READ_ONLY.value
@@ -290,17 +290,17 @@ def test_ticking_an_agent_makes_it_available_in_order(wired) -> None:
     wired.controller.on_agents_requested()
     page = wired.controller.agents_page
 
-    before = page._items[first]
-    page._items[second].setCheckState(0, Qt.CheckState.Checked)
-    page._items[first].setCheckState(0, Qt.CheckState.Checked)
+    before = page._items[f"project:{first}"]
+    page._items[f"project:{second}"].setCheckState(0, Qt.CheckState.Checked)
+    page._items[f"project:{first}"].setCheckState(0, Qt.CheckState.Checked)
 
     assert wired.state.available_ids() == (second, first)
-    assert page._items[first].checkState(0) == Qt.CheckState.Checked
+    assert page._items[f"project:{first}"].checkState(0) == Qt.CheckState.Checked
     # The row is updated in place: rebuilding the tree from inside a check
     # box's own signal would destroy the item Qt is still emitting for.
-    assert page._items[first] is before
+    assert page._items[f"project:{first}"] is before
 
-    page._items[second].setCheckState(0, Qt.CheckState.Unchecked)
+    page._items[f"project:{second}"].setCheckState(0, Qt.CheckState.Unchecked)
     assert wired.state.available_ids() == (first,)
 
 
@@ -351,14 +351,20 @@ def test_a_turn_freezes_every_change_but_keeps_the_page_readable(wired) -> None:
     assert page._save_btn.isEnabled() is False
     assert page._delete_btn.isEnabled() is False
     assert page._permission.isEnabled() is False
-    assert not (page._items[agent_id].flags() & Qt.ItemFlag.ItemIsUserCheckable)
+    assert not (
+        page._items[f"project:{agent_id}"].flags()
+        & Qt.ItemFlag.ItemIsUserCheckable
+    )
     assert page._instructions.isReadOnly() is True
 
     wired.controller.set_execution_active(False)
 
     assert page.mutations_enabled() is True
     assert page._save_btn.isEnabled() is True
-    assert page._items[agent_id].flags() & Qt.ItemFlag.ItemIsUserCheckable
+    assert (
+        page._items[f"project:{agent_id}"].flags()
+        & Qt.ItemFlag.ItemIsUserCheckable
+    )
 
 
 def test_mutations_arriving_during_a_turn_are_refused(wired) -> None:
@@ -370,7 +376,7 @@ def test_mutations_arriving_during_a_turn_are_refused(wired) -> None:
     page.create_requested.emit("project")
     page.availability_changed.emit(agent_id, True)
     page.permission_changed.emit(agent_id, AgentPermission.WORKTREE_EDIT.value)
-    page.delete_requested.emit(agent_id)
+    page.delete_requested.emit("project", agent_id)
 
     assert [row.agent_id for row in wired.store.list_summaries()] == [agent_id]
     assert wired.state.available_ids() == ()

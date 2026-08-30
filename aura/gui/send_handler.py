@@ -17,9 +17,7 @@ _log = logging.getLogger(__name__)
 
 from dataclasses import dataclass
 
-from aura.agents.local_state import AgentLocalState
-from aura.agents.roster import EMPTY_AGENT_ROSTER, AgentTurnRoster, resolve_agent_turn_roster
-from aura.agents.store import AgentStore
+from aura.agents.roster import EMPTY_AGENT_ROSTER, AgentTurnRoster
 from aura.config import PROVIDERS, AppSettings, ModelInfo, ThinkingMode, has_usable_provider_configuration
 from aura.conversation.external_paths import extract_external_read_paths
 from aura.conversation.target_files import extract_target_files
@@ -53,11 +51,6 @@ class QueuedItem:
     model: str
     thinking: ThinkingMode
     selected_skills: tuple[ComposerSkill, ...] = ()
-    #: The ordered agents that were available to Aura when this was queued.
-    #: Captured here, at queue time, for the same reason the model and the
-    #: skills are: making an agent available after queueing must not reach
-    #: back and change a request the user already submitted.
-    available_agent_ids: tuple[str, ...] = ()
     #: Full definition + effective grant, immutable and deliberately only in
     #: memory. Child instructions never enter canonical/provider History.
     agent_roster: AgentTurnRoster = EMPTY_AGENT_ROSTER
@@ -82,7 +75,7 @@ class SendHandler(QObject):
         settings: AppSettings,
         workspace_root: Path | None,
         parent=None,
-        available_agents=None,
+        agent_roster_provider=None,
     ) -> None:
         super().__init__(parent)
         self._bridge = bridge
@@ -90,11 +83,9 @@ class SendHandler(QObject):
         self._input = input_panel
         self._settings = settings
         self._workspace_root = workspace_root
-        # Returns the ordered ids the user has made available to Aura, or
-        # nothing at all. It is read once per submitted message and never
-        # again, so the roster a turn runs with is the roster that was on
-        # screen when the user pressed send.
-        self._available_agents = available_agents
+        # The Agents controller owns storage and returns one full immutable
+        # submission-time roster. SendHandler never constructs storage owners.
+        self._agent_roster_provider = agent_roster_provider
 
         # Queued messages sent while the bridge is running.
         self._message_queue: list[QueuedItem] = []
@@ -135,44 +126,18 @@ class SendHandler(QObject):
 
     # ---- public API --------------------------------------------------------
 
-    def set_available_agents(self, provider) -> None:
-        """Wire the callable that reports this workspace's ordered roster."""
-        self._available_agents = provider
+    def set_agent_roster_provider(self, provider) -> None:
+        """Wire the Agent controller's submission-time roster producer."""
+        self._agent_roster_provider = provider
 
-    def _capture_available_agent_ids(self) -> tuple[str, ...]:
-        """Read the ordered available-to-Aura ids for the message being sent.
-
-        Read once, at submission, and then carried on the user message itself
-        — never re-read per round, and never inferred from message text. With
-        no provider wired, or a workspace whose roster is empty, this is empty
-        and the turn behaves exactly like ordinary single-agent Aura.
-        """
-        provider = self._available_agents
+    def _capture_agent_roster(self) -> AgentTurnRoster:
+        """Read one immutable roster from the injected storage owner."""
+        provider = self._agent_roster_provider
         if provider is None:
-            return ()
-        try:
-            return tuple(str(agent_id) for agent_id in provider() if str(agent_id))
-        except Exception:
-            _log.debug("Could not read the available agent roster", exc_info=True)
-            return ()
-
-    def _capture_agent_roster(
-        self, available_agent_ids: tuple[str, ...] | None = None
-    ) -> AgentTurnRoster:
-        """Resolve definitions and grants now, at submission time."""
-        ids = (
-            self._capture_available_agent_ids()
-            if available_agent_ids is None
-            else tuple(available_agent_ids)
-        )
-        if not ids or self._workspace_root is None:
             return EMPTY_AGENT_ROSTER
         try:
-            return resolve_agent_turn_roster(
-                ids,
-                definitions=AgentStore(self._workspace_root),
-                permissions=AgentLocalState(self._workspace_root),
-            )
+            roster = provider()
+            return roster if isinstance(roster, AgentTurnRoster) else EMPTY_AGENT_ROSTER
         except Exception:
             _log.debug("Could not freeze the submitted Agent roster", exc_info=True)
             return EMPTY_AGENT_ROSTER
@@ -182,7 +147,6 @@ class SendHandler(QObject):
         payload: SendPayload,
         model: str,
         thinking: ThinkingMode,
-        available_agent_ids: tuple[str, ...] | None = None,
         agent_roster: AgentTurnRoster | None = None,
     ) -> bool:
         """Process a send payload: run Aura's own commands, queue if busy, or send.
@@ -238,11 +202,10 @@ class SendHandler(QObject):
         # was queued with, and a dequeued one replays that captured roster
         # rather than reading the live one again.
         frozen_roster = (
-            self._capture_agent_roster(available_agent_ids)
+            self._capture_agent_roster()
             if agent_roster is None
             else agent_roster
         )
-        agent_ids = frozen_roster.ids
 
         if self._bridge.is_running() or self._queue_paused:
             item = QueuedItem(
@@ -251,7 +214,6 @@ class SendHandler(QObject):
                 model=model,
                 thinking=thinking,
                 selected_skills=tuple(payload.selected_skills),
-                available_agent_ids=agent_ids,
                 agent_roster=frozen_roster,
             )
             self._message_queue.append(item)
@@ -333,6 +295,9 @@ class SendHandler(QObject):
         if replay_cb is not None:
             replay_cb()
         self._chat.begin_assistant()
+        set_roster = getattr(self._bridge, "set_submitted_agent_roster", None)
+        if callable(set_roster):
+            set_roster(self._capture_agent_roster())
         self._bridge.send(model=model, thinking=thinking)
         return True
 
@@ -619,6 +584,5 @@ class SendHandler(QObject):
             payload,
             item.model,
             item.thinking,
-            available_agent_ids=item.available_agent_ids,
             agent_roster=item.agent_roster,
         )

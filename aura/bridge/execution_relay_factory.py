@@ -43,6 +43,7 @@ def create_execution_relay(
     relay.toolCallEnd.connect(projection_target.executionToolCallEnd)
     # Usage / completion
     relay.usage.connect(projection_target.executionUsage)
+    relay.delegationUsage.connect(projection_target.executionDelegationUsage)
     relay.streamDone.connect(projection_target.executionStreamDone)
     relay.apiError.connect(projection_target.executionApiError)
     # Tool results

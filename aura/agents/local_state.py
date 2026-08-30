@@ -22,6 +22,7 @@ import hashlib
 import json
 import logging
 import os
+import stat
 from enum import Enum
 from pathlib import Path
 
@@ -146,7 +147,7 @@ class AgentLocalState:
         newly activated agent joins the list where they just put it.
         """
         self._require_agent_id(agent_id)
-        data = self._load()
+        data = self._load(for_write=True)
         roster: list[str] = data["available"]
         if available and agent_id not in roster:
             roster.append(agent_id)
@@ -158,7 +159,7 @@ class AgentLocalState:
 
     def set_available_ids(self, agent_ids: tuple[str, ...] | list[str]) -> None:
         """Replace the roster outright, preserving the given order."""
-        data = self._load()
+        data = self._load(for_write=True)
         seen: list[str] = []
         for agent_id in agent_ids:
             text = str(agent_id)
@@ -178,7 +179,7 @@ class AgentLocalState:
 
     def set_permission(self, agent_id: str, permission: AgentPermission) -> None:
         self._require_agent_id(agent_id)
-        data = self._load()
+        data = self._load(for_write=True)
         data["permissions"][agent_id] = AgentPermission(permission).value
         self._save(data)
 
@@ -187,7 +188,7 @@ class AgentLocalState:
     def forget(self, agent_id: str) -> None:
         """Drop every local decision about *agent_id* — used when it is deleted."""
         self._require_agent_id(agent_id)
-        data = self._load()
+        data = self._load(for_write=True)
         changed = False
         if agent_id in data["available"]:
             data["available"].remove(agent_id)
@@ -200,35 +201,63 @@ class AgentLocalState:
 
     # ---- persistence -------------------------------------------------------
 
-    def _load(self) -> dict:
+    def _load(self, *, for_write: bool = False) -> dict:
         blank: dict = {"available": [], "permissions": {}}
-        if not self._path.is_file():
+        try:
+            mode = self._path.stat().st_mode
+        except FileNotFoundError:
+            return blank
+        except OSError as exc:
+            logger.debug("agents: could not inspect local state %s", self._path, exc_info=True)
+            if for_write:
+                raise AgentLocalStateError(
+                    "Could not update Agent roster and permissions because the existing "
+                    "local-state file is unreadable or corrupt."
+                ) from exc
             return blank
         try:
+            if not stat.S_ISREG(mode):
+                raise OSError("the local-state path is not a regular file")
             raw = json.loads(self._path.read_text(encoding="utf-8"))
-        except Exception:
+            if not isinstance(raw, dict):
+                raise ValueError("the local-state document is not an object")
+            available = raw.get("available", [])
+            permissions = raw.get("permissions", {})
+            if not isinstance(available, list) or not isinstance(permissions, dict):
+                raise ValueError("the local-state roster or permissions have an invalid shape")
+        except Exception as exc:
             logger.debug("agents: could not read local state %s", self._path, exc_info=True)
-            return blank
-        if not isinstance(raw, dict):
+            if for_write:
+                raise AgentLocalStateError(
+                    "Could not update Agent roster and permissions because the existing "
+                    "local-state file is unreadable or corrupt."
+                ) from exc
             return blank
 
-        available = raw.get("available")
-        if isinstance(available, list):
-            blank["available"] = [
-                item for item in available
-                if isinstance(item, str) and is_valid_agent_id(item)
-            ]
-        permissions = raw.get("permissions")
-        if isinstance(permissions, dict):
-            blank["permissions"] = {
-                str(key): str(value)
-                for key, value in permissions.items()
-                if (
-                    isinstance(key, str)
-                    and is_valid_agent_id(key)
-                    and AgentPermission.parse(value) is not None
-                )
-            }
+        clean_available = [
+            item
+            for item in available
+            if isinstance(item, str) and is_valid_agent_id(item)
+        ]
+        clean_permissions = {
+            str(key): str(value)
+            for key, value in permissions.items()
+            if (
+                isinstance(key, str)
+                and is_valid_agent_id(key)
+                and AgentPermission.parse(value) is not None
+            )
+        }
+        if for_write and (
+            len(clean_available) != len(available)
+            or len(clean_permissions) != len(permissions)
+        ):
+            raise AgentLocalStateError(
+                "Could not update Agent roster and permissions because the existing "
+                "local-state file is unreadable or corrupt."
+            )
+        blank["available"] = clean_available
+        blank["permissions"] = clean_permissions
         return blank
 
     def _save(self, data: dict) -> None:

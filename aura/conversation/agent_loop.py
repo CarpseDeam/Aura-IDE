@@ -229,6 +229,7 @@ class AgentLoop:
                 return AgentLoopOutcome(LoopStop.CANCELLED)
 
             full_message: dict[str, Any] | None = None
+            terminal_done_before_cancel = False
 
             # The one request shape: the same stable catalog, the user's model,
             # and the user's thinking mode, on every round of the turn.
@@ -262,6 +263,11 @@ class AgentLoop:
 
                 if isinstance(ev, Done):
                     full_message = ev.full_message
+                    terminal_done_before_cancel = bool(
+                        full_message is not None
+                        and not (full_message.get("tool_calls") or [])
+                        and not cancel_event.is_set()
+                    )
                 elif isinstance(ev, ApiError):
                     _log.info("%s_api_error model=%s", self._label, model)
                     # A provider failure stops the turn. Nothing already
@@ -269,6 +275,18 @@ class AgentLoop:
                     return AgentLoopOutcome(LoopStop.API_ERROR)
 
             _log.info("%s_done model=%s", self._label, model)
+
+            if (
+                cancel_event.is_set()
+                and terminal_done_before_cancel
+                and full_message is not None
+            ):
+                # A terminal assistant Done is authoritative once fully
+                # received. A cancellation observed only after that event
+                # cannot retroactively turn the completed answer into a
+                # cancelled partial result.
+                self._history.append_assistant(full_message)
+                return AgentLoopOutcome(LoopStop.COMPLETED)
 
             if cancel_event.is_set():
                 # Cancellation is not a verdict: whatever the stream already

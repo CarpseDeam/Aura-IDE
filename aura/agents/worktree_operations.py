@@ -141,33 +141,59 @@ class WorktreeGitOperations:
         is_owned: Callable[[WorktreeRecord], bool],
     ) -> str:
         """Remove only the exact clean retained checkout; return a refusal reason."""
-        if not record.worktree_path:
-            return ""
-        path = Path(record.worktree_path)
-        if not path.exists():
-            record.worktree_path = ""
-            return ""
-        if not is_owned(record):
-            return "Refusing to remove a path that is not the exact Aura-owned worktree."
+        root = Path(record.workspace_root)
         try:
             checked_out = self.git.checked_out_worktree(
-                Path(record.workspace_root),
-                record.branch_ref,
-                change_set_id=record.change_set_id,
+                root, record.branch_ref, change_set_id=record.change_set_id
             )
-            if not checked_out or Path(checked_out).resolve() != path.resolve():
+            if not record.worktree_path:
+                if not checked_out:
+                    return ""
+                # Recover a stale empty record only from Git's exact branch
+                # registration, then subject that path to Aura ownership
+                # checks before removing anything.
+                record.worktree_path = checked_out
+                if not is_owned(record):
+                    record.worktree_path = ""
+                    return (
+                        "The Aura-owned branch is registered to a worktree outside "
+                        "its exact Aura-owned path; it was preserved."
+                    )
+            path = Path(record.worktree_path)
+            if not is_owned(record):
+                return "Refusing to remove a path that is not the exact Aura-owned worktree."
+            if checked_out and Path(checked_out).resolve() != path.resolve():
                 return (
                     "The retained path is not the linked worktree checking out "
                     "this exact Aura-owned branch; it was preserved."
                 )
-            if self.git.status_bytes(path, change_set_id=record.change_set_id):
-                return "The recovery worktree is dirty and was preserved."
-            self.git.run(
-                Path(record.workspace_root),
-                ["worktree", "remove", str(path)],
-                change_set_id=record.change_set_id,
-                failure_class="worktree_cleanup_failed",
-            )
+            if checked_out:
+                if path.exists():
+                    if self.git.status_bytes(path, change_set_id=record.change_set_id):
+                        return "The recovery worktree is dirty and was preserved."
+                    remove_args = ["worktree", "remove", str(path)]
+                else:
+                    # A missing directory is not proof that Git forgot the
+                    # linked worktree. Remove only this exact, verified
+                    # registration; never use blanket ``worktree prune``.
+                    remove_args = ["worktree", "remove", "--force", str(path)]
+                self.git.run(
+                    root,
+                    remove_args,
+                    change_set_id=record.change_set_id,
+                    failure_class="worktree_cleanup_failed",
+                )
+                if self.git.checked_out_worktree(
+                    root,
+                    record.branch_ref,
+                    change_set_id=record.change_set_id,
+                ):
+                    return "Git still registers the exact retained worktree; it was preserved."
+            elif path.exists():
+                return (
+                    "The retained path is not registered as the linked worktree "
+                    "for this exact Aura-owned branch; it was preserved."
+                )
         except AgentWorktreeError as exc:
             return str(exc)
         record.worktree_path = ""

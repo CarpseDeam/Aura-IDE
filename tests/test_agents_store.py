@@ -334,10 +334,10 @@ def test_create_read_update_delete(store: AgentStore) -> None:
     assert updated.instructions == "Read it twice."
     assert updated.thinking is AgentThinking.HIGH
 
-    assert store.delete(created.agent_id) is True
+    assert store.delete(AgentScope.PROJECT, created.agent_id) is True
     assert store.get(created.agent_id) is None
     assert store.list_summaries() == ()
-    assert store.delete(created.agent_id) is False
+    assert store.delete(AgentScope.PROJECT, created.agent_id) is False
 
 
 @pytest.mark.parametrize(
@@ -372,7 +372,7 @@ def test_updating_an_agent_that_is_gone_is_refused(store: AgentStore) -> None:
     created = store.create(
         AgentScope.PROJECT, name="Gone", description="d", instructions="i"
     )
-    store.delete(created.agent_id)
+    store.delete(AgentScope.PROJECT, created.agent_id)
 
     with pytest.raises(AgentStoreError):
         store.update(created)
