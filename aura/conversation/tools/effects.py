@@ -98,11 +98,13 @@ BUILTIN_TOOL_EFFECTS: dict[str, ToolEffect] = {
     "git_stash_list": ToolEffect.OBSERVATION,
     "git_stash_show": ToolEffect.OBSERVATION,
     "get_workspace_snapshot": ToolEffect.OBSERVATION,
+    "inspect_agent_change_set": ToolEffect.OBSERVATION,
     "search_project_memory": ToolEffect.OBSERVATION,
     "load_skills": ToolEffect.OBSERVATION,
     "read_skill_resource": ToolEffect.OBSERVATION,
     # --- mutation: changes workspace files or the open scene ---
     "apply_patch": ToolEffect.MUTATION,
+    "apply_agent_change_set": ToolEffect.MUTATION,
     "edit_godot_scene": ToolEffect.MUTATION,
     "edit_godot_editor": ToolEffect.MUTATION,
     "edit_godot_asset_preview": ToolEffect.MUTATION,
@@ -110,10 +112,17 @@ BUILTIN_TOOL_EFFECTS: dict[str, ToolEffect] = {
     # --- command/validation: runs an external command or validation ---
     "shell": ToolEffect.COMMAND,
     "run_diagnostic_command": ToolEffect.COMMAND,
+    # Delegation runs a whole other model to completion on the other side of a
+    # boundary this runtime does not step inside. It is classified
+    # consequential so the tool round drains and serializes it: parallel
+    # observation calls can never start a delegation beside another one, and
+    # two children never share the foreground.
+    "delegate_agent": ToolEffect.COMMAND,
     # --- bookkeeping/control: tracks or controls conversation/tool state ---
     "update_task_checklist": ToolEffect.BOOKKEEPING,
     "save_to_project_memory": ToolEffect.BOOKKEEPING,
     "review_implementation_plan": ToolEffect.BOOKKEEPING,
+    "discard_agent_change_set": ToolEffect.BOOKKEEPING,
 }
 
 _EFFECT_BY_VALUE: dict[str, ToolEffect] = {effect.value: effect for effect in ToolEffect}

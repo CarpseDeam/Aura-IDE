@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 __all__ = [
+    "AVAILABLE_AGENT_IDS_KEY",
     "EXPLICIT_INSTALLED_SKILL_IDS_KEY",
     "LITERAL_COMPOSER_TEXT_KEY",
     "History",
@@ -45,6 +46,13 @@ LITERAL_COMPOSER_TEXT_KEY = "aura_literal_composer_text"
 # explicitly selected for this turn. Persistence keeps this canonical metadata
 # verbatim; ``for_api()`` strips it before any provider projection.
 EXPLICIT_INSTALLED_SKILL_IDS_KEY = "aura_explicit_installed_skill_ids"
+
+# Aura-local bookkeeping key: the ordered ids of the agents the user had made
+# available to Aura when this turn was sent or queued. It is the exact analogue
+# of the explicit-skill key above — durable in persistence, carried through
+# queued and follow-up turns, and stripped by ``for_api()`` so no agent
+# metadata ever reaches a provider.
+AVAILABLE_AGENT_IDS_KEY = "aura_available_agent_ids"
 
 
 def is_real_user_message(msg: dict[str, Any]) -> bool:
@@ -91,6 +99,14 @@ def _attach_explicit_installed_skill_ids(
         message[EXPLICIT_INSTALLED_SKILL_IDS_KEY] = list(
             explicit_installed_skill_ids
         )
+
+
+def _attach_available_agent_ids(
+    message: dict[str, Any], available_agent_ids: tuple[str, ...]
+) -> None:
+    """Record the ordered roster ids, omitting the key when there were none."""
+    if available_agent_ids:
+        message[AVAILABLE_AGENT_IDS_KEY] = list(available_agent_ids)
 
 
 def repair_tool_call_blocks(messages: list[dict[str, Any]]) -> int:
@@ -169,6 +185,7 @@ class History:
         *,
         literal_composer_text: str | None = None,
         explicit_installed_skill_ids: tuple[str, ...] = (),
+        available_agent_ids: tuple[str, ...] = (),
     ) -> None:
         """Append a real user turn.
 
@@ -181,6 +198,7 @@ class History:
         _attach_explicit_installed_skill_ids(
             message, explicit_installed_skill_ids
         )
+        _attach_available_agent_ids(message, available_agent_ids)
         self.messages.append(message)
 
     def append_internal_user_text(self, text: str) -> None:
@@ -192,6 +210,7 @@ class History:
         *,
         literal_composer_text: str | None = None,
         explicit_installed_skill_ids: tuple[str, ...] = (),
+        available_agent_ids: tuple[str, ...] = (),
     ) -> None:
         """For image+text turns: parts is a list like
         [{"type":"text","text":"..."}, {"type":"image_url","image_url":{"url":"data:..."}}].
@@ -204,6 +223,7 @@ class History:
         _attach_explicit_installed_skill_ids(
             message, explicit_installed_skill_ids
         )
+        _attach_available_agent_ids(message, available_agent_ids)
         self.messages.append(message)
 
     def append_assistant(self, full_message: dict[str, Any]) -> None:
@@ -284,6 +304,23 @@ class History:
             return ()
         return tuple(item for item in value if isinstance(item, str))
 
+    def latest_real_user_available_agent_ids(self) -> tuple[str, ...]:
+        """Ordered agent ids the user had available when the latest turn was sent.
+
+        The same durable, local-only metadata contract the explicit skill ids
+        follow: a message written before this field existed, or one carrying
+        malformed metadata, resolves to an empty tuple — and an empty tuple is
+        the ordinary single-agent case, never an invitation to go looking for a
+        roster somewhere else.
+        """
+        index = self.latest_real_user_index()
+        if index is None:
+            return ()
+        value = self.messages[index].get(AVAILABLE_AGENT_IDS_KEY)
+        if not isinstance(value, (list, tuple)):
+            return ()
+        return tuple(item for item in value if isinstance(item, str))
+
     def rewind_to_last_user_turn(self) -> bool:
         """Keep history through the last user message and drop its response.
 
@@ -318,6 +355,7 @@ class History:
             msg.pop("aura_internal", None)
             msg.pop(LITERAL_COMPOSER_TEXT_KEY, None)
             msg.pop(EXPLICIT_INSTALLED_SKILL_IDS_KEY, None)
+            msg.pop(AVAILABLE_AGENT_IDS_KEY, None)
             out.append(msg)
         return out
 

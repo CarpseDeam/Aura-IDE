@@ -252,6 +252,7 @@ class MainWindowWorkspaceController(QObject):
         window._input.set_workspace_root(storage_root)
         window._send_handler.set_workspace_root(storage_root)
         window._skills_controller.set_workspace_root(storage_root)
+        window._agents_controller.set_workspace_root(storage_root)
         window._playground.set_workspace_root(storage_root)
         cc = window._companion_controller
         cc.set_workspace_root(str(window._workspace_root))
@@ -314,6 +315,7 @@ class MainWindowWorkspaceController(QObject):
         window._input.set_workspace_root(path)
         window._send_handler.set_workspace_root(path)
         window._skills_controller.set_workspace_root(path)
+        window._agents_controller.set_workspace_root(path)
         window._playground.set_workspace_root(path)
         cc = window._companion_controller
         cc.set_workspace_root(str(window._workspace_root))

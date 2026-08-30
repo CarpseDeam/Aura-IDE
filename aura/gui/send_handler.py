@@ -50,6 +50,11 @@ class QueuedItem:
     model: str
     thinking: ThinkingMode
     selected_skills: tuple[ComposerSkill, ...] = ()
+    #: The ordered agents that were available to Aura when this was queued.
+    #: Captured here, at queue time, for the same reason the model and the
+    #: skills are: making an agent available after queueing must not reach
+    #: back and change a request the user already submitted.
+    available_agent_ids: tuple[str, ...] = ()
 
 
 class SendHandler(QObject):
@@ -71,6 +76,7 @@ class SendHandler(QObject):
         settings: AppSettings,
         workspace_root: Path | None,
         parent=None,
+        available_agents=None,
     ) -> None:
         super().__init__(parent)
         self._bridge = bridge
@@ -78,6 +84,11 @@ class SendHandler(QObject):
         self._input = input_panel
         self._settings = settings
         self._workspace_root = workspace_root
+        # Returns the ordered ids the user has made available to Aura, or
+        # nothing at all. It is read once per submitted message and never
+        # again, so the roster a turn runs with is the roster that was on
+        # screen when the user pressed send.
+        self._available_agents = available_agents
 
         # Queued messages sent while the bridge is running.
         self._message_queue: list[QueuedItem] = []
@@ -118,11 +129,33 @@ class SendHandler(QObject):
 
     # ---- public API --------------------------------------------------------
 
+    def set_available_agents(self, provider) -> None:
+        """Wire the callable that reports this workspace's ordered roster."""
+        self._available_agents = provider
+
+    def _capture_available_agent_ids(self) -> tuple[str, ...]:
+        """Read the ordered available-to-Aura ids for the message being sent.
+
+        Read once, at submission, and then carried on the user message itself
+        — never re-read per round, and never inferred from message text. With
+        no provider wired, or a workspace whose roster is empty, this is empty
+        and the turn behaves exactly like ordinary single-agent Aura.
+        """
+        provider = self._available_agents
+        if provider is None:
+            return ()
+        try:
+            return tuple(str(agent_id) for agent_id in provider() if str(agent_id))
+        except Exception:
+            _log.debug("Could not read the available agent roster", exc_info=True)
+            return ()
+
     def handle_send(
         self,
         payload: SendPayload,
         model: str,
         thinking: ThinkingMode,
+        available_agent_ids: tuple[str, ...] | None = None,
     ) -> bool:
         """Process a send payload: run Aura's own commands, queue if busy, or send.
 
@@ -148,6 +181,15 @@ class SendHandler(QObject):
             self.skills_manager_requested.emit()
             return False
 
+        # Same for the Agents page: it is a local view over definitions and
+        # this user's own grants. It opens (or closes) the page the rail
+        # button opens, before any provider is configured, and leaves the
+        # conversation untouched — no bubble, no History entry, no request.
+        if built_in == "agents_enter_mode":
+            self._restore_local_command_selection(payload)
+            self.agents_requested.emit()
+            return False
+
         # Guard: no provider configured
         if not has_usable_provider_configuration(self._settings.provider):
             self._chat.add_error(
@@ -164,6 +206,15 @@ class SendHandler(QObject):
             self._handle_built_in_action(built_in, payload.text)
             return False
 
+        # Frozen once for this submission: a queued item keeps the roster it
+        # was queued with, and a dequeued one replays that captured roster
+        # rather than reading the live one again.
+        agent_ids = (
+            self._capture_available_agent_ids()
+            if available_agent_ids is None
+            else tuple(available_agent_ids)
+        )
+
         if self._bridge.is_running() or self._queue_paused:
             item = QueuedItem(
                 text=payload.text,
@@ -171,6 +222,7 @@ class SendHandler(QObject):
                 model=model,
                 thinking=thinking,
                 selected_skills=tuple(payload.selected_skills),
+                available_agent_ids=agent_ids,
             )
             self._message_queue.append(item)
             self._input.set_queued_messages(len(self._message_queue))
@@ -186,7 +238,7 @@ class SendHandler(QObject):
             )
             return False
 
-        self._finalize_send(payload, model, thinking)
+        self._finalize_send(payload, model, thinking, agent_ids)
         return True
 
     def _restore_local_command_selection(self, payload: SendPayload) -> None:
@@ -310,9 +362,6 @@ class SendHandler(QObject):
             return
         if action == "git_log":
             self._handle_git_log()
-            return
-        if action == "agents_enter_mode":
-            self.agents_requested.emit()
             return
         self._chat.add_error("Built-in action", f"Unsupported action: {action}")
 
@@ -447,6 +496,7 @@ class SendHandler(QObject):
         payload: SendPayload,
         model: str,
         thinking: ThinkingMode,
+        available_agent_ids: tuple[str, ...] = (),
     ) -> None:
         """Build the message parts, append to history, and send via the bridge."""
         # Authorization is derived from the literal user text before history
@@ -476,6 +526,7 @@ class SendHandler(QObject):
                 explicit_installed_skill_ids=tuple(
                     skill.install_id for skill in payload.selected_skills
                 ),
+                available_agent_ids=available_agent_ids,
             )
         else:
             self._bridge.history.append_user_text(
@@ -484,6 +535,7 @@ class SendHandler(QObject):
                 explicit_installed_skill_ids=tuple(
                     skill.install_id for skill in payload.selected_skills
                 ),
+                available_agent_ids=available_agent_ids,
             )
 
         self._chat.add_user(text, [a.b64 for a in image_atts] or None)
@@ -530,4 +582,9 @@ class SendHandler(QObject):
             attachments=list(item.attachments),
             selected_skills=tuple(item.selected_skills),
         )
-        self.handle_send(payload, item.model, item.thinking)
+        self.handle_send(
+            payload,
+            item.model,
+            item.thinking,
+            available_agent_ids=item.available_agent_ids,
+        )

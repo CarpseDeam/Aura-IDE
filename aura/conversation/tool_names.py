@@ -10,6 +10,7 @@ from __future__ import annotations
 
 WRITE_TOOLS = {
     "apply_patch",
+    "apply_agent_change_set",
     "edit_godot_scene",
     "edit_godot_editor",
     "edit_godot_asset_preview",

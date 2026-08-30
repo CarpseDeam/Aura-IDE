@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from aura.agents.local_state import AgentPermission
 from aura.conversation.tools.capability_groups import GODOT, tool_names_for
 from aura.conversation.tools.effects import BUILTIN_TOOL_EFFECTS, ToolEffect
 from aura.conversation.tools.schemas import (
+    AGENT_CHANGE_SET_TOOL_DEFS,
     APPLY_PATCH_TOOL_DEF,
     GIT_TOOL_DEFS,
     LOAD_SKILLS_TOOL_DEF,
@@ -15,6 +17,7 @@ from aura.conversation.tools.schemas import (
     REVIEW_IMPLEMENTATION_PLAN_TOOL_DEF,
     TASK_CHECKLIST_TOOL_DEF,
     TERMINAL_TOOL_DEF,
+    build_delegate_agent_tool_def,
 )
 
 # Godot remains implemented and registered, but is not part of the ordinary
@@ -52,6 +55,42 @@ def _tool_name(tool_def: dict[str, Any]) -> str:
     return str(fn.get("name", "")) if isinstance(fn, dict) else ""
 
 
+#: The fixed surface a delegated child agent runs with: the production read
+#: and search tools, ``glob``, and read-only Git. It is a constant, not a
+#: negotiation — a child never gains a tool because something happened to be
+#: connected, and never loses one because something was not.
+CHILD_AGENT_TOOL_NAMES: frozenset[str] = (
+    PRODUCTION_READ_TOOL_NAMES | PRODUCTION_SEARCH_TOOL_NAMES | READ_ONLY_EXTRA_TOOL_NAMES
+)
+
+
+def child_agent_tool_defs(
+    permission: AgentPermission = AgentPermission.READ_ONLY,
+) -> list[dict[str, Any]]:
+    """The frozen tool catalog handed to one delegated child invocation.
+
+    Every child gets read, search, and read-only Git. The exact frozen grant
+    may add ``apply_patch`` and then ``shell``. There are never Skills,
+    checklist or memory tools, MCP/dynamic tools, lifecycle operations, or
+    ``delegate_agent``: delegation stays exactly one level deep.
+
+    Extensible surface is absent by construction rather than by filtering —
+    this function is handed no schemas to include, so nothing a server or a
+    workspace script registers can reach a child.  The returned list is what
+    the request offers, and the tool round refuses any call whose name is not
+    in it.
+    """
+    permission = AgentPermission(permission)
+    tools = [
+        tool for tool in READ_TOOL_DEFS if _tool_name(tool) in CHILD_AGENT_TOOL_NAMES
+    ] + list(GIT_TOOL_DEFS)
+    if permission.allows_edit:
+        tools.append(dict(APPLY_PATCH_TOOL_DEF))
+    if permission.allows_terminal:
+        tools.append(dict(TERMINAL_TOOL_DEF))
+    return tools
+
+
 class ToolCatalog:
     """Builds the available tool schemas for current capability facts."""
 
@@ -63,6 +102,8 @@ class ToolCatalog:
         mcp_schemas: list[dict[str, Any]] | None = None,
         plan_review: bool = False,
         skills_active: bool = False,
+        agents: tuple[dict[str, str], ...] | None = None,
+        agent_change_sets: bool = False,
     ) -> list[dict[str, Any]]:
         """Build tool definitions for the production catalog.
 
@@ -79,6 +120,13 @@ class ToolCatalog:
         is nothing for a plan to gate). ``skills_active`` adds ``load_skills``
         and ``read_skill_resource`` only when this turn's frozen skill index
         actually has candidates.
+
+        ``agents`` adds ``delegate_agent``, and only when this turn's frozen
+        roster actually holds an agent. With no roster — the ordinary case —
+        the tool is absent from both catalogs and the surface is exactly what
+        single-agent Aura has always offered. The rows carry each eligible
+        agent's id, display name, and short description; an agent's full
+        instructions are the child's brief and never enter this catalog.
 
         Reading an explicitly authorized external location is not a separate
         capability and never changes this catalog: ``read_file`` and
@@ -121,6 +169,19 @@ class ToolCatalog:
         if skills_active:
             tools.append(dict(LOAD_SKILLS_TOOL_DEF))
             tools.append(dict(READ_SKILL_RESOURCE_TOOL_DEF))
+
+        if agents:
+            tools.append(build_delegate_agent_tool_def(agents))
+
+        if agent_change_sets:
+            if read_only:
+                tools.extend(
+                    tool
+                    for tool in AGENT_CHANGE_SET_TOOL_DEFS
+                    if _tool_name(tool) == "inspect_agent_change_set"
+                )
+            else:
+                tools.extend(dict(tool) for tool in AGENT_CHANGE_SET_TOOL_DEFS)
 
         if not read_only and dynamic_schemas:
             tools.extend(dynamic_schemas)

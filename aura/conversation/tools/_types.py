@@ -17,6 +17,9 @@ class ApprovalFileChange:
     old_content: str
     new_content: str
     is_new_file: bool = False
+    #: Optional authoritative action for mutation owners whose public tool
+    #: arguments do not themselves say create/modify/delete (Agent apply).
+    action: str = ""
 
 
 @dataclass

@@ -34,10 +34,16 @@ def _append_read_only_instruction(system_prompt: str) -> str:
     return f"{system_prompt.rstrip()}\n\n{READ_ONLY_COLLABORATION_INSTRUCTION}"
 
 
-def _canonical_blocks(context_text: str) -> list[str]:
-    """The blocks canonical production composition owns, in prompt order."""
+def _canonical_blocks(context_text: str, agents_block: str = "") -> list[str]:
+    """The blocks canonical production composition owns, in prompt order.
+
+    ``agents_block`` sits between the workspace context and the production
+    prompt, and is simply absent when this turn has no agents — an empty block
+    is dropped by the join, so a roster nobody built costs nothing.
+    """
     return [
         context_text,
+        agents_block,
         _production_prompt_text(),
     ]
 
@@ -287,6 +293,7 @@ def compose_system_prompt(
     active_capabilities: frozenset[str] | None = None,
     explicit_install_ids: tuple[str, ...] = (),
     read_only: bool = False,
+    agents_block: str = "",
 ) -> ComposedContext:
     """Compose the one canonical production system prompt.
 
@@ -299,6 +306,12 @@ def compose_system_prompt(
     ``read_only`` marks a frozen Read Only collaborative turn and appends the
     compact collaboration instruction to the effective system prompt. It is an
     interaction hint only — the model keeps its ordinary loop and catalog.
+
+    ``agents_block`` is this turn's compact agent roster (see
+    :func:`aura.agents.prompt.format_agent_roster_block`). It is empty for
+    every turn whose roster is empty — which is the ordinary case — and the
+    composed prompt is then byte-for-byte what single-agent Aura has always
+    sent.
     """
     context = build_context_text(
         workspace_root,
@@ -310,7 +323,7 @@ def compose_system_prompt(
         active_capabilities=active_capabilities,
         explicit_install_ids=explicit_install_ids,
     )
-    blocks = _canonical_blocks(context.context_text)
+    blocks = _canonical_blocks(context.context_text, agents_block=agents_block)
     system_prompt = "\n\n".join(
         block.strip() for block in blocks if block and block.strip()
     )

@@ -203,6 +203,52 @@ def _is_scratch_python_name(name: str) -> bool:
 _APPLY_PATCH_OPERATIONS = frozenset({"create", "replace", "patch", "delete"})
 
 
+def _isolated_agent_paths(args: dict) -> tuple[str, ...]:
+    files = args.get("files")
+    if isinstance(files, list):
+        return tuple(
+            str(item.get("path") or "") for item in files if isinstance(item, dict)
+        )
+    path = args.get("path")
+    return (str(path or ""),) if path is not None else ()
+
+
+def _isolated_agent_path_failure(instance: Any, args: dict) -> dict | None:
+    if not getattr(instance, "_isolated_agent", False):
+        return None
+    for raw_path in _isolated_agent_paths(args):
+        normalized = _normalize_execution_path(raw_path).lstrip("/").casefold()
+        first = normalized.split("/", 1)[0]
+        if first in {".git", ".aura"}:
+            return _mark_not_applied({
+                "ok": False,
+                "path": raw_path,
+                "error": "Writable Agents cannot edit protected Aura or Git internals.",
+                "failure_class": "agent_protected_path",
+            })
+        # Resolve once during preflight as well as in the normal write owner.
+        # This preserves the workspace jail for absolute/traversal paths and
+        # for symlink or junction hops that resolve outside the worktree.
+        try:
+            target = instance._resolve_in_root(raw_path)
+        except ValueError as exc:
+            return _mark_not_applied({
+                "ok": False,
+                "path": raw_path,
+                "error": str(exc),
+                "failure_class": "agent_workspace_escape",
+            })
+        canonical = safe_relative_to(target, instance._root).as_posix().casefold()
+        if canonical.split("/", 1)[0] in {".git", ".aura"}:
+            return _mark_not_applied({
+                "ok": False,
+                "path": raw_path,
+                "error": "Writable Agents cannot edit protected Aura or Git internals.",
+                "failure_class": "agent_protected_path",
+            })
+    return None
+
+
 def _validate_apply_patch_shape(args: dict) -> dict | None:
     """Reject a field/operation mismatch before it reaches any write owner.
 
@@ -266,6 +312,9 @@ class WriteHandlersMixin:
         shape_error = _validate_apply_patch_shape(args)
         if shape_error is not None:
             return ToolExecResult(ok=False, payload=shape_error)
+        isolated_failure = _isolated_agent_path_failure(self, args)
+        if isolated_failure is not None:
+            return ToolExecResult(ok=False, payload=isolated_failure)
         operation = args.get("operation")
         if operation in ("create", "replace"):
             return self._handle_write_file(args, approval_cb, reject_all)

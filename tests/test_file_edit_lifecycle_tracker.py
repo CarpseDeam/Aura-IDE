@@ -40,7 +40,10 @@ def _write_req(rel_path: str = "a.py", is_new_file: bool = False) -> ApprovalReq
 
 
 def test_write_tools_are_the_only_tracked_lifecycle_tools() -> None:
-    assert FILE_EDIT_LIFECYCLE_TOOLS == {"apply_patch"}
+    assert FILE_EDIT_LIFECYCLE_TOOLS == {
+        "apply_patch",
+        "apply_agent_change_set",
+    }
 
 
 def test_approved_write_emits_proposed_then_awaiting_then_applied_in_order() -> None:

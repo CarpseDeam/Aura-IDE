@@ -6,11 +6,13 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from aura.agents.roster import EMPTY_AGENT_ROSTER, AgentTurnRoster
 from aura.code_intel.index import CodeIntelIndex
 from aura.code_intel.inspection import CodeInspector
 from aura.codebase_index.indexer import CodebaseIndex  # noqa: F401
 from aura.codebase_index.tool import search_codebase as _search_codebase  # noqa: F401
 from aura.conversation.plan_review import PlanReviewState, blocked_tool_payload
+from aura.conversation.tools._agents_mixin import AgentDelegationHandlersMixin
 from aura.conversation.tools._code_intel_mixin import CodeIntelHandlersMixin
 from aura.conversation.tools._diagnostic_mixin import DiagnosticHandlersMixin
 from aura.conversation.tools._git_mixin import GitHandlersMixin
@@ -52,6 +54,7 @@ TOOL_HANDLERS: dict[str, Any] = {}
 
 
 class ToolRegistry(
+    AgentDelegationHandlersMixin,
     CodeIntelHandlersMixin,
     TaskContextHandlersMixin,
     ReadHandlersMixin,
@@ -74,9 +77,15 @@ class ToolRegistry(
         self,
         workspace_root: Path,
         read_only: bool = False,
+        *,
+        isolated_agent: bool = False,
     ) -> None:
         self._root = workspace_root.resolve()
         self._read_only = read_only
+        # Writable delegated children use the ordinary write engine and its
+        # canonicalization/stale-target checks, with one additional boundary:
+        # their file tool cannot touch Aura or Git internals.
+        self._isolated_agent = bool(isolated_agent)
         self._codebase_index: CodebaseIndex | None = None
         # The turn-scoped external read allowlist. No model-facing tool can
         # add to or change it; see ExternalReadAccess. It is created before
@@ -110,6 +119,14 @@ class ToolRegistry(
         # decide whether ``load_skills`` belongs in the catalog this turn.
         # Set once per real user turn via ``set_turn_skill_state``.
         self._turn_skill_state: Any = None
+        # The frozen per-turn agent roster and the injected delegation runner.
+        # Both are absent by default, and that absence is the ordinary case:
+        # with no roster there is no ``delegate_agent`` in the catalog, and a
+        # child agent's own registry is built this way on purpose, so nothing
+        # it runs can delegate again.
+        self._turn_agent_roster: AgentTurnRoster = EMPTY_AGENT_ROSTER
+        self._agent_delegation_runner: Any = None
+        self._agent_worktree_manager: Any = None
         # Plan Review — required/approved state for the active turn, and the
         # GUI-thread proxy that pauses the tool loop for human review. The
         # state always exists (required defaults to False); the proxy is
@@ -234,6 +251,34 @@ class ToolRegistry(
         """
         self._turn_skill_state = state
 
+    @property
+    def turn_agent_roster(self) -> AgentTurnRoster:
+        """The agents this turn may delegate to — empty unless one was frozen."""
+        return self._turn_agent_roster
+
+    def set_turn_agent_roster(self, roster: AgentTurnRoster | None) -> None:
+        """Freeze this real user turn's roster of eligible agents.
+
+        Called once per turn, before the first ``tool_defs()`` of that turn,
+        so ``delegate_agent`` joins the catalog only when the user actually
+        made an agent available — and stays in that state for every round.
+        ``None`` clears it back to the ordinary single-agent surface.
+        """
+        self._turn_agent_roster = roster if roster is not None else EMPTY_AGENT_ROSTER
+
+    def set_agent_delegation_runner(self, runner: Any | None) -> None:
+        """Wire (or clear) the runtime that actually runs a delegated agent.
+
+        ``None`` (the default) means this registry cannot delegate at all: a
+        ``delegate_agent`` call then fails truthfully instead of pretending.
+        A child agent's registry is deliberately left this way.
+        """
+        self._agent_delegation_runner = runner
+
+    def set_agent_worktree_manager(self, manager: Any | None) -> None:
+        """Wire the root-only owner of writable Agent result operations."""
+        self._agent_worktree_manager = manager
+
     def tool_defs(self) -> list[dict[str, Any]]:
         dynamic_schemas = self._dynamic_tools.schemas() if not self._read_only else []
         # Read-only mode exposes only the MCP tools resolved as observations.
@@ -254,6 +299,14 @@ class ToolRegistry(
             mcp_schemas=mcp_schemas or None,
             plan_review=(not self._read_only) and self._plan_review.required,
             skills_active=skills_active,
+            agents=self._turn_agent_roster.catalog_rows() or None,
+            agent_change_sets=bool(
+                self._agent_worktree_manager is not None
+                and (
+                    getattr(self._agent_worktree_manager, "has_unresolved", False)
+                    or any(entry.permission.allows_edit for entry in self._turn_agent_roster.entries)
+                )
+            ),
         )
 
     def tool_effect(self, name: str) -> ToolEffect:
@@ -523,3 +576,7 @@ TOOL_HANDLERS["code_intel_dependents"] = ToolRegistry._handle_code_intel_depende
 TOOL_HANDLERS["code_intel_audit"] = ToolRegistry._handle_code_intel_audit
 TOOL_HANDLERS["inspect_code"] = ToolRegistry._handle_inspect_code
 TOOL_HANDLERS["review_implementation_plan"] = ToolRegistry._handle_review_implementation_plan
+TOOL_HANDLERS["delegate_agent"] = ToolRegistry._handle_delegate_agent
+TOOL_HANDLERS["inspect_agent_change_set"] = ToolRegistry._handle_inspect_agent_change_set
+TOOL_HANDLERS["apply_agent_change_set"] = ToolRegistry._handle_apply_agent_change_set
+TOOL_HANDLERS["discard_agent_change_set"] = ToolRegistry._handle_discard_agent_change_set

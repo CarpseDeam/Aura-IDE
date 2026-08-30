@@ -34,6 +34,11 @@ from PySide6.QtCore import (
     Slot,
 )
 
+from aura.agents.local_state import AgentLocalState
+from aura.agents.prompt import format_agent_roster_block
+from aura.agents.roster import EMPTY_AGENT_ROSTER, AgentTurnRoster, resolve_agent_turn_roster
+from aura.agents.runtime import AgentDelegationRunner
+from aura.agents.store import AgentStore
 from aura.backends import (
     APIAgentBackend,
 )
@@ -293,6 +298,19 @@ class ConversationBridge(QObject):
         self._turn_content: str = ""
         self._turn_target_files: tuple[str, ...] = ()
         self._turn_explicit_install_ids: tuple[str, ...] = ()
+        # The frozen agent roster for the active turn, and the runtime that
+        # runs a delegated child. The roster is resolved once per turn from the
+        # ids History carries; the runner is created once and re-pointed at the
+        # turn's own provider and model, so an agent that inherits inherits
+        # what the user actually chose for this turn.
+        self._turn_agent_roster: AgentTurnRoster = EMPTY_AGENT_ROSTER
+        self._agent_runner = AgentDelegationRunner(
+            workspace_root=self._registry.workspace_root
+        )
+        self._registry.set_agent_delegation_runner(self._agent_runner)
+        self._registry.set_agent_worktree_manager(
+            self._agent_runner.worktree_manager
+        )
         # The frozen Read Only collaborative-turn intent for the active turn,
         # set at the start of send(). A toolbar toggle during an active response
         # never mutates it; it applies to the next turn.
@@ -359,6 +377,12 @@ class ConversationBridge(QObject):
     def set_workspace_root(self, root) -> None:
         self._cancel.set()
         self._turn_explicit_install_ids = ()
+        # Agents belong to the workspace they were made available in. Nothing
+        # from the previous one survives the switch: not the frozen roster, not
+        # the root the child would have been rooted to.
+        self._turn_agent_roster = EMPTY_AGENT_ROSTER
+        self._registry.set_turn_agent_roster(None)
+        self._agent_runner.set_workspace_root(root)
         if root is None:
             self._manager.reset_conversation_runtime()
             self._tier1_context = ""
@@ -467,6 +491,9 @@ class ConversationBridge(QObject):
             explicit_install_ids=self._turn_explicit_install_ids,
             active_capabilities=self._registry.active_capabilities(),
             read_only=self._turn_read_only,
+            agents_block=format_agent_roster_block(
+                self._turn_agent_roster.catalog_rows()
+            ),
         )
         self._context_gearbox_metadata = context_gearbox_metadata(
             composed.ledger, workspace_root=self._registry.workspace_root,
@@ -504,6 +531,8 @@ class ConversationBridge(QObject):
     def reset_history(self) -> None:
         self._cancel.set()
         self._manager.reset_conversation_runtime()
+        self._turn_agent_roster = EMPTY_AGENT_ROSTER
+        self._registry.set_turn_agent_roster(None)
         self._history.messages.clear()
         self._index_to_id.clear()
         self._index_to_name.clear()
@@ -549,6 +578,15 @@ class ConversationBridge(QObject):
         self._turn_explicit_install_ids = (
             self._history.latest_real_user_explicit_installed_skill_ids()
         )
+        # Freeze this turn's agents the same way, and from the same authority:
+        # the ordered ids the send layer recorded on the user message when the
+        # turn was sent or queued, resolved once here into immutable
+        # definitions and this user's own permission grants. It happens before
+        # the prompt is composed and before the first request, so the roster,
+        # the agent block, and the tool catalog cannot disagree with each other
+        # at any point in the turn. Editing an agent or changing a grant while
+        # the turn runs takes effect on the next one.
+        self._freeze_turn_agent_roster(model=str(model), thinking=str(thinking))
         # Freeze the requested toolbar mode before composing the prompt or
         # starting the worker. The registry remains at this value for the
         # entire model/tool loop, including every later round.
@@ -729,8 +767,46 @@ class ConversationBridge(QObject):
             # next send without changing any remaining round of this one.
             self.clear_external_read_authorization()
             self._registry.set_read_only(self._requested_read_only)
+            # The roster is a turn capability too: the next turn freezes its
+            # own from its own user message, so nothing carries over.
+            self._turn_agent_roster = EMPTY_AGENT_ROSTER
+            self._registry.set_turn_agent_roster(None)
             self._turn_active = False
             self.finished.emit()
+
+    def _freeze_turn_agent_roster(self, *, model: str, thinking: str) -> None:
+        """Resolve this turn's roster and point the delegation runtime at it.
+
+        With no workspace, no ids, or nothing that still resolves, the roster
+        is empty — and an empty roster is the ordinary case: no
+        ``delegate_agent`` in the catalog, no agent block in the prompt, and
+        the single-agent behaviour Aura has always had.
+        """
+        roster = EMPTY_AGENT_ROSTER
+        agent_ids = self._history.latest_real_user_available_agent_ids()
+        workspace_root = self._registry.workspace_root
+        if agent_ids and workspace_root is not None:
+            try:
+                roster = resolve_agent_turn_roster(
+                    agent_ids,
+                    definitions=AgentStore(workspace_root),
+                    permissions=AgentLocalState(workspace_root),
+                )
+            except Exception:
+                _log.exception("Failed to resolve this turn's agent roster")
+                roster = EMPTY_AGENT_ROSTER
+        self._turn_agent_roster = roster
+        self._registry.set_turn_agent_roster(roster)
+        # An agent that inherits inherits *this* turn's provider and model —
+        # the ones the user actually selected — never a stored default.
+        self._agent_runner.set_workspace_root(workspace_root)
+        self._agent_runner.set_inherited_target(
+            provider=self._provider, model=model, thinking=thinking
+        )
+        if not roster.is_empty:
+            _log.info(
+                "turn_agents %s", ", ".join(roster.ids)
+            )
 
     def _prepare_turn_context(self) -> None:
         """Recompose the system prompt against this turn's live terrain.

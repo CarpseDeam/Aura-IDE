@@ -27,21 +27,28 @@ from aura.conversation.tools._types import (
     ToolExecResult,
 )
 
-FILE_EDIT_LIFECYCLE_TOOLS = frozenset({"apply_patch"})
+FILE_EDIT_LIFECYCLE_TOOLS = frozenset({"apply_patch", "apply_agent_change_set"})
 
 LifecycleEventCallback = Callable[[FileEditLifecycle], None]
 
 _REJECTED_ACTIONS = frozenset({"reject", "reject_all"})
 
 
-def _action_for(operation: str, is_new_file: bool) -> str:
+def _action_for(
+    operation: str,
+    is_new_file: bool,
+    old_content: str = "",
+    new_content: str = "",
+) -> str:
     """Resolve the per-file action from the call's ``operation``, not its name.
 
     Every write-tool task is dispatched through the single public
     ``apply_patch`` tool now, so the action a proposed change represents comes
     from the operation the model chose, not from checking the tool name.
     """
-    if operation == "delete":
+    if operation == "delete" or (
+        not operation and bool(old_content) and not new_content
+    ):
         return "delete"
     if operation == "create":
         return "create"
@@ -83,7 +90,12 @@ class FileEditLifecycleTracker:
                 FileEditChange(
                     change_id=f"{self._tool_call_id}:{index}",
                     path=normalize_execution_path(change.rel_path),
-                    action=_action_for(self._operation, change.is_new_file),
+                    action=change.action or _action_for(
+                        self._operation,
+                        change.is_new_file,
+                        change.old_content,
+                        change.new_content,
+                    ),
                     old_content=change.old_content,
                     new_content=change.new_content,
                 )

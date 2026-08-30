@@ -191,6 +191,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             settings=self._settings,
             workspace_root=self._workspace_root,
             parent=self,
+            # The Agents controller is the one owner of agent storage, so the
+            # roster a message is frozen with is read from there and nowhere
+            # else.
+            available_agents=self._agents_controller.available_agent_ids,
         )
         # Skills manager — the only GUI owner of SkillLibrary access. Both the
         # composer's Skills button and /skills reach this one controller.
@@ -608,6 +612,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._final_stream_message = {}
         self._input.set_execution_active(True)
         self._skills_controller.set_execution_active(True)
+        # Agents stay browsable during a turn; every mutation is frozen.
+        self._agents_controller.set_execution_active(True)
         # Handoff follows the main conversation lifecycle, including
         # conversation-first Read Only turns that have no production session.
         self._status_bar.set_execution_active(True)
@@ -620,6 +626,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     def _on_finished(self) -> None:
         self._input.set_execution_active(False)
         self._skills_controller.set_execution_active(False)
+        self._agents_controller.set_execution_active(False)
         self._status_bar.set_execution_active(False)
         # Closes the assistant card and records its transcript. By this point
         # ConversationManager has committed the final assistant message to
