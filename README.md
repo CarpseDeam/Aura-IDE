@@ -9,7 +9,7 @@
 
 Aura is an open-source desktop coding harness. Aura turns AI coding into a visible loop: inspect the work, review the diff, run validation, keep the receipt.
 
-**Chat is where the model talks. Aura is where the model works.** One production agent receives your original request and owns the job end to end while Aura keeps tools, diffs, validation, and the final receipt visible.
+**Chat is where the model talks. Aura is where the model works.** Aura owns the root conversation and final response. It can complete work directly or use your reusable Agents and workflows while keeping tools, diffs, validation, and the final receipt visible.
 
 [Website](https://carpsedeam.github.io/Aura-IDE/) · [Download](https://github.com/CarpseDeam/Aura-IDE/releases/latest) · [Start Here](https://aura-ide.hashnode.dev/start-here) · [Documentation](docs/README.md) · [Discord](https://discord.gg/aGSthBX2Bg) · [Blog](https://aura-ide.hashnode.dev/)
 
@@ -26,13 +26,33 @@ Ask → Inspect → Execute → Review → Validate → Done
 ```
 
 - **Ask** — Describe the change in plain language.
-- **Inspect** — The production agent reads the workspace and builds task context.
-- **Execute** — The same agent owns TODO progress, tools, edits, and repair.
+- **Inspect** — Aura reads the workspace and builds task context, directly or through a bounded Agent step.
+- **Execute** — Aura owns TODO progress and can work directly or coordinate a reusable workflow.
 - **Review** — Proposed writes appear as readable diffs.
 - **Validate** — Aura runs checks suited to the project and changed files. Failures remain visible and clearly reported.
 - **Done** — Completed work leaves an inspectable receipt.
 
-Execution has one stable owner per turn; reviewable diffs preserve your control before writes reach the workspace.
+Aura remains the stable root owner for every turn. Agent work stays inside Aura's permissions, isolated worktrees, review, validation, and retained-change lifecycle.
+
+## Agents and visual workflows
+
+Agents are a major harness capability, not a separate product. Each Agent is a reusable identity with its own instructions, model, thinking level, and private Read only or Read / Write permissions. Place an Agent in a workflow to give that occurrence a concise assignment while keeping the reusable identity intact.
+
+<p align="center">
+  <img src="media/aura-agents-workflow.png" alt="Aura Agents window showing the reusable Agent library, the Aura Documentation Refresh workflow, its solid Task-to-Result sequence, a dashed Review Helper sub-agent connection, and the Website Writer inspector" width="1000">
+</p>
+
+- **Solid lines** set the automatic workflow order from Task through Agent steps to Aura Result.
+- **Dashed Sub-agent lines** make an optional helper available to a Step without inserting it into the automatic path.
+- **Run** explicitly executes the open workflow; **Stop** remains available while it runs.
+- The **Agents toolbar toggle** lets Aura use the selected Agents and workflow during an ordinary conversation.
+- **Read / Write work is isolated** and is never applied automatically. Aura returns structured results and retains proposed changes for explicit review and application.
+
+<p align="center">
+  <img src="media/aura-agents-running.png" alt="Aura Agents workflow actively running with Product Analyst complete, README Writer running, colored node and connection states, and the Stop control visible" width="1000">
+</p>
+
+Aura still owns the conversation and final answer: it can do the work itself or delegate bounded steps, then receive the workflow's structured result inside the same visible harness loop.
 
 ## Product proof
 
@@ -103,7 +123,7 @@ These figures are supporting evidence for sustained harness-driven development�
 
 ## Why Aura is different
 
-- **One production owner** — one configured model receives the real conversation and owns inspection, edits, repair, validation, and the final receipt.
+- **One root conversation owner** — Aura receives the real request, coordinates direct or delegated work, and owns the final response and receipt.
 - **Repo-aware context** — language-aware code intelligence, local BM25 search, dependency context, project metadata, and targeted file reads give the agent more than the latest chat message.
 - **WorkArtifact projection** — active work remains inspectable through the existing TODO, activity, tool, validation, and receipt surfaces.
 - **Reviewable diffs** — proposed file writes can be inspected and approved before they reach disk.
@@ -157,6 +177,7 @@ See [Providers](docs/providers.md) for supported backends and configuration deta
 - **Run-and-watch verification** — start a process, observe its output over a bounded window, and retain the result.
 - **Git integration** — status, diff, commit, snapshots, restore support, `/undo`, and automatic `.aura/` ignore setup.
 - **Provider-native web search** — the selected production provider and model own hosted search in the same request when their current transport supports it; unsupported combinations omit search without switching providers.
+- **Reusable Agents and workflows** — compose permissioned specialists into explicit solid sequences with optional dashed helpers, then invoke the selected workflow from an ordinary Aura conversation.
 - **MCP integration** — connect stdio Model Context Protocol servers and expose their tools through Aura's tool registry.
 - **Update support** — packaged Windows builds support in-app updates, while source checkouts can inspect upstream update state.
 

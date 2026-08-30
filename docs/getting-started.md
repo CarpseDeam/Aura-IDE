@@ -43,7 +43,7 @@ You can also set keys through Settings → API Keys, which encrypts them to `~/.
 
 Run `aura` or `python -m aura`. The onboarding wizard walks you through 5 steps:
 
-1. **Welcome** — What Aura's single production agent does.
+1. **Welcome** — How Aura owns a coding turn and keeps the work visible.
 2. **Workspace** — Select a project folder. Aura indexes it for search and repo mapping.
 3. **Safety** — Diff approval is on by default. Auto-Approve is off.
 4. **Provider** — Choose a supported BYOK provider and configure its API key.
@@ -53,7 +53,7 @@ Run `aura` or `python -m aura`. The onboarding wizard walks you through 5 steps:
 
 1. Open a project folder (File → Open Workspace or drag a folder onto the window).
 2. Type a request in the input panel: "Add error handling to the database module" or "Explain how the authentication flow works."
-3. The production agent reads the workspace and owns the task end to end.
+3. Aura reads the workspace and owns the root conversation. It can complete the task directly or use the selected reusable Agents and workflow.
 4. Each file change shows a **diff** — approve, reject, approve all, or reject all.
 5. Tool activity, TODO progress, terminal output, and validation stay visible during the run.
 6. When done, Aura reports a factual receipt. Changes are auto-committed with an AI-generated message.

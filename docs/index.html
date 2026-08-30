@@ -28,6 +28,7 @@
       </a>
       <nav class="nav-links" aria-label="Primary navigation">
         <a href="#workflow">Workflow</a>
+        <a href="#agents">Agents</a>
         <a href="#proof">Product</a>
         <a href="#access">Models</a>
         <a href="#companion">Companion</a>
@@ -88,7 +89,7 @@
         <div class="section-heading">
           <p class="eyebrow">The visible loop</p>
           <h2 id="workflow-title">Six steps. You stay in control.</h2>
-          <p>One production agent owns each turn end to end while every write can be reviewed and every finish can be proven.</p>
+          <p>Aura owns each root conversation and final response while every write can be reviewed and every finish can be proven.</p>
         </div>
         <ol class="workflow-list">
           <li class="workflow-step">
@@ -99,12 +100,12 @@
           <li class="workflow-step">
             <span class="step-number">02</span>
             <h3>Inspect</h3>
-            <p>The production agent reads the workspace and builds task context.</p>
+            <p>Aura reads the workspace directly or through a bounded Agent step.</p>
           </li>
           <li class="workflow-step">
             <span class="step-number">03</span>
             <h3>Execute</h3>
-            <p>The same agent owns TODO progress, tools, edits, and repair.</p>
+            <p>Aura works directly or coordinates a selected reusable workflow.</p>
           </li>
           <li class="workflow-step">
             <span class="step-number">04</span>
@@ -122,6 +123,65 @@
             <p>Completion leaves a receipt of work, checks, and cost.</p>
           </li>
         </ol>
+      </div>
+    </section>
+
+    <section class="section agents-section" id="agents" aria-labelledby="agents-title">
+      <div class="wrap">
+        <div class="section-heading section-heading-wide">
+          <p class="eyebrow">Agents and visual workflows</p>
+          <h2 id="agents-title">Reusable specialists, inside the coding harness.</h2>
+          <p>Aura remains the root conversation owner and receives the workflow's structured result. It can complete work directly or coordinate your reusable Agents without moving work outside Aura's permissions, review, validation, or retained-change lifecycle.</p>
+        </div>
+
+        <div class="agents-proof-stack">
+          <figure class="screenshot-card agents-shot">
+            <div class="window-bar"><span>Reusable workflow</span><span>Library · canvas · inspector</span></div>
+            <div class="image-stage">
+              <img src="assets/aura-agents-workflow.png" alt="Aura Agents window showing the reusable Agent library, the Aura Documentation Refresh workflow, its solid Task-to-Result sequence, a dashed Review Helper sub-agent connection, and the Website Writer inspector.">
+            </div>
+            <figcaption>
+              <strong>Arrange bounded expertise in an explicit path</strong>
+              <span>Task flows through Product Analyst, README Writer, and Website Writer to Aura Result; Review Helper remains an optional sub-agent.</span>
+              <a class="screenshot-open" href="assets/aura-agents-workflow.png">Open full-size screenshot <span aria-hidden="true">↗</span></a>
+            </figcaption>
+          </figure>
+
+          <figure class="screenshot-card agents-shot agents-shot-running">
+            <div class="window-bar"><span><i aria-hidden="true"></i> Workflow running</span><span>Real node and connection states</span></div>
+            <div class="image-stage">
+              <img src="assets/aura-agents-running.png" alt="Aura Agents workflow actively running with Product Analyst complete, README Writer running, colored node and connection states, and the Stop control visible.">
+            </div>
+            <figcaption>
+              <strong>Run the open workflow and watch work advance</strong>
+              <span>Completed and active steps stay visible, and Stop remains available throughout execution.</span>
+              <a class="screenshot-open" href="assets/aura-agents-running.png">Open full-size screenshot <span aria-hidden="true">↗</span></a>
+            </figcaption>
+          </figure>
+        </div>
+
+        <div class="agents-language-grid" aria-label="Aura Agents visual language">
+          <article>
+            <h3>Reusable Agents</h3>
+            <p>Each identity carries instructions, model, thinking level, and private Read only or Read / Write permissions.</p>
+          </article>
+          <article>
+            <h3>Solid lines</h3>
+            <p>Solid connections define the automatic workflow order from Task to Aura Result.</p>
+          </article>
+          <article>
+            <h3>Dashed Sub-agent lines</h3>
+            <p>Dashed connections make optional helpers available to a Step without putting them on the automatic path.</p>
+          </article>
+          <article>
+            <h3>Run or use in chat</h3>
+            <p>Run explicitly executes the open workflow. The Agents toolbar toggle lets Aura use the selected workflow in an ordinary conversation.</p>
+          </article>
+          <article>
+            <h3>Isolated writes</h3>
+            <p>Read / Write work stays in isolated worktrees and is never applied automatically. Retained changes require explicit review and application.</p>
+          </article>
+        </div>
       </div>
     </section>
 
@@ -213,10 +273,10 @@
           </article>
           <article class="access-card access-card-mix">
             <div class="mix-diagram" aria-hidden="true">
-              <span>One turn</span><b>→</b><span>One owner</span>
+              <span>Aura conversation</span><b>→</b><span>Direct or Agents</span><b>→</b><span>Aura Result</span>
             </div>
-            <h3>Direct production execution</h3>
-            <p>Choose one production provider and model. It owns inspection, edits, validation, and the receipt for the whole turn.</p>
+            <h3>Root-owned execution</h3>
+            <p>Aura owns the root conversation and final response. It can work directly or use the selected reusable Agents and workflow.</p>
           </article>
         </div>
       </div>
