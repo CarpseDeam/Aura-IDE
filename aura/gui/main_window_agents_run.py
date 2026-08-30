@@ -4,7 +4,7 @@ Everything about *what* a run does lives in
 :class:`aura.agents.workflow_runner.WorkflowRunner`, which is not Qt-aware and
 is the same runner Aura uses when it invokes a workflow itself. This module is
 only the adapter between that and a window: a worker on its own thread, the
-step reports relayed back to the GUI thread as signals, and a cancel event the
+node reports relayed back to the GUI thread as signals, and a cancel event the
 Stop button can set without waiting for anything.
 
 The plan is frozen before the thread starts and never re-read, so the canvas
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 class _WorkflowRunWorker(QObject):
     """Runs one frozen plan on a worker thread and reports as it goes."""
 
-    stepChanged = Signal(str, str)  # node id, state value
+    stepChanged = Signal(str, str)  # solid Step or invoked helper node, state
     completed = Signal(object)  # WorkflowRunResult
 
     def __init__(
@@ -92,7 +92,7 @@ class WorkflowRunController(QObject):
 
     @property
     def states(self) -> dict[str, str]:
-        """What each step is doing, as the canvas is currently drawing it."""
+        """What each run node is doing, as the canvas currently draws it."""
         return dict(self._states)
 
     def start(self, runner: WorkflowRunner, plan: WorkflowRunPlan, task: str) -> bool:

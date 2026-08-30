@@ -1,10 +1,11 @@
 """Run a frozen Task → Agent steps → Aura Result plan serially.
 
-Each step uses :class:`ChildExecutor` with private history and receives the
-task, its assignment, and the previous structured result. Writable plans use
-one shared isolated worktree and checkpoint it once on every exit path. This
-module creates no conversation manager, alternate Agent runtime, history, or
-worktree implementation.
+Each solid step uses :class:`ChildExecutor` with private history and receives
+the task, its assignment, and the previous structured result. A step may call
+only its frozen dashed helpers; those calls synchronously reuse ChildExecutor
+and return into that step's history. Writable plans use one shared isolated
+worktree and checkpoint it once on every exit path. This module creates no
+conversation manager, alternate Agent runtime, history, or worktree system.
 """
 from __future__ import annotations
 
@@ -17,9 +18,16 @@ from pathlib import Path
 from typing import Any, Callable
 
 from aura.agents.child_execution import ChildExecutor
-from aura.agents.child_prompt import compose_workflow_step_message
+from aura.agents.child_prompt import (
+    compose_workflow_helper_message,
+    compose_workflow_step_message,
+)
 from aura.agents.delegation import DelegationFailure, DelegationResult, DelegationStatus
-from aura.agents.workflow_plan import WorkflowRunPlan, WorkflowStepPlan
+from aura.agents.workflow_plan import (
+    WorkflowHelperPlan,
+    WorkflowRunPlan,
+    WorkflowStepPlan,
+)
 from aura.agents.worktree import AgentWorktree, AgentWorktreeError, AgentWorktreeManager
 from aura.config import redact_secrets
 
@@ -50,6 +58,36 @@ StepObserver = Callable[[str, WorkflowStepState], None]
 
 
 @dataclass(frozen=True)
+class WorkflowHelperInvocation:
+    """One actual helper call, without any of the helper's private history."""
+
+    invocation: int
+    owning_step_node_id: str
+    helper_node_id: str
+    connection_id: str
+    agent_id: str
+    agent_name: str
+    permission: str
+    state: WorkflowStepState
+    result: DelegationResult
+
+    def payload(self) -> dict[str, Any]:
+        body = self.result.payload()
+        body.pop("tool", None)
+        return {
+            **body,
+            "invocation": self.invocation,
+            "owning_step_node_id": self.owning_step_node_id,
+            "helper_node_id": self.helper_node_id,
+            "connection_id": self.connection_id,
+            "agent_id": self.agent_id,
+            "agent_name": self.agent_name,
+            "permission": self.permission,
+            "state": self.state.value,
+        }
+
+
+@dataclass(frozen=True)
 class WorkflowStepOutcome:
     """One step's own structured result, paired to its place on the canvas."""
 
@@ -72,6 +110,7 @@ class WorkflowRunResult:
     workflow_name: str = ""
     result: str = ""
     steps: tuple[WorkflowStepOutcome, ...] = ()
+    helper_invocations: tuple[WorkflowHelperInvocation, ...] = ()
     failure_class: str = ""
     error: str = ""
     change_set_id: str = ""
@@ -101,6 +140,10 @@ class WorkflowRunResult:
             body["failure_class"] = self.failure_class
         if self.error:
             body["error"] = self.error
+        if self.helper_invocations:
+            body["helper_invocations"] = [
+                invocation.payload() for invocation in self.helper_invocations
+            ]
         if self.change_set_id:
             body.update(
                 {
@@ -133,6 +176,155 @@ class WorkflowRunResult:
             failure_class=failure.value,
             error=error,
         )
+
+
+class _WorkflowStepHelperRunner:
+    """Executes only the frozen helpers owned by one currently running Step."""
+
+    def __init__(
+        self,
+        *,
+        child: ChildExecutor,
+        step: WorkflowStepPlan,
+        workflow_task: str,
+        workspace_root: Path,
+        worktree: AgentWorktree | None,
+        cancel_event: threading.Event,
+        invocations: list[WorkflowHelperInvocation],
+        notify: Callable[[str, WorkflowStepState], None],
+    ) -> None:
+        self._child = child
+        self._step = step
+        self._workflow_task = workflow_task
+        self._workspace_root = workspace_root
+        self._worktree = worktree
+        self._cancel = cancel_event
+        self._invocations = invocations
+        self._notify = notify
+
+    def run(
+        self,
+        helper: WorkflowHelperPlan,
+        task: str,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> DelegationResult:
+        """Run one attached occurrence synchronously and retain its outcome."""
+        # The registry relays this same object. Deliberately keep the workflow's
+        # event authoritative even if a caller supplies None or another event.
+        del cancel_event
+        self._notify(helper.node_id, WorkflowStepState.RUNNING)
+        brief = str(task or "").strip()
+
+        if self._cancel.is_set():
+            result = DelegationResult(
+                status=DelegationStatus.CANCELLED,
+                agent_id=helper.agent_id,
+                agent_name=helper.agent_name,
+                failure_class="cancelled",
+                error="The workflow was stopped before this helper started.",
+                provider=helper.resolved.provider,
+                model=helper.resolved.model,
+            )
+        elif not brief:
+            result = DelegationResult.failure(
+                helper.agent_id,
+                DelegationFailure.TASK_MISSING,
+                "No bounded task was given to the workflow helper.",
+                agent_name=helper.agent_name,
+                provider=helper.resolved.provider,
+                model=helper.resolved.model,
+            )
+        elif helper.writable and self._worktree is None:
+            result = DelegationResult.failure(
+                helper.agent_id,
+                DelegationFailure.WORKTREE_CREATION_FAILED,
+                "The writable workflow helper has no shared workflow worktree.",
+                agent_name=helper.agent_name,
+                provider=helper.resolved.provider,
+                model=helper.resolved.model,
+            )
+        else:
+            message = compose_workflow_helper_message(
+                self._workflow_task,
+                helper.assignment,
+                brief,
+                self._step.agent_name,
+            )
+            try:
+                result, _tests = self._child.run(
+                    helper.entry,
+                    message,
+                    helper.resolved,
+                    self._cancel,
+                    workspace_root=self._workspace_root,
+                    permission=helper.permission,
+                    worktree=self._worktree if helper.writable else None,
+                    workflow_helper=True,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "agents: workflow helper failed step_node=%s helper_node=%s",
+                    self._step.node_id,
+                    helper.node_id,
+                )
+                if self._cancel.is_set():
+                    result = DelegationResult(
+                        status=DelegationStatus.CANCELLED,
+                        agent_id=helper.agent_id,
+                        agent_name=helper.agent_name,
+                        failure_class="cancelled",
+                        error="The workflow was stopped while this helper was running.",
+                        provider=helper.resolved.provider,
+                        model=helper.resolved.model,
+                    )
+                else:
+                    result = DelegationResult.failure(
+                        helper.agent_id,
+                        DelegationFailure.INTERNAL_ERROR,
+                        redact_secrets(f"{type(exc).__name__}: {exc}"),
+                        agent_name=helper.agent_name,
+                        provider=helper.resolved.provider,
+                        model=helper.resolved.model,
+                    )
+
+        result = replace(
+            result,
+            agent_id=helper.agent_id,
+            agent_name=helper.agent_name,
+            provider=helper.resolved.provider,
+            model=helper.resolved.model,
+            extras={
+                **result.extras,
+                "workflow_helper": True,
+                "owning_step_node_id": self._step.node_id,
+                "helper_node_id": helper.node_id,
+                "connection_id": helper.connection_id,
+                "permission": helper.permission.value,
+            },
+        )
+        state = (
+            WorkflowStepState.SUCCEEDED
+            if result.status is DelegationStatus.COMPLETED
+            else WorkflowStepState.CANCELLED
+            if result.status is DelegationStatus.CANCELLED
+            else WorkflowStepState.FAILED
+        )
+        self._invocations.append(
+            WorkflowHelperInvocation(
+                invocation=len(self._invocations) + 1,
+                owning_step_node_id=self._step.node_id,
+                helper_node_id=helper.node_id,
+                connection_id=helper.connection_id,
+                agent_id=helper.agent_id,
+                agent_name=helper.agent_name,
+                permission=helper.permission.value,
+                state=state,
+                result=result,
+            )
+        )
+        self._notify(helper.node_id, state)
+        return result
 
 
 class WorkflowRunner:
@@ -238,6 +430,7 @@ class WorkflowRunner:
     ) -> WorkflowRunResult:
         cancel = cancel_event if cancel_event is not None else threading.Event()
         worktree: AgentWorktree | None = None
+        helper_invocations: list[WorkflowHelperInvocation] = []
         if plan.writable:
             # One worktree makes every step see the edits before it.
             try:
@@ -266,7 +459,12 @@ class WorkflowRunner:
         )
         try:
             outcomes, status, failure_class, error = self._run_steps(
-                plan, task, cancel, on_step, worktree
+                plan,
+                task,
+                cancel,
+                on_step,
+                worktree,
+                helper_invocations,
             )
             answer = next(
                 (
@@ -283,6 +481,7 @@ class WorkflowRunner:
                 workflow_name=plan.name,
                 result=answer,
                 steps=tuple(outcomes),
+                helper_invocations=tuple(helper_invocations),
                 failure_class=failure_class,
                 error=error,
             )
@@ -296,6 +495,7 @@ class WorkflowRunner:
                 redact_secrets(f"{type(exc).__name__}: {exc}"),
                 workflow_name=plan.name,
             )
+            run = replace(run, helper_invocations=tuple(helper_invocations))
         if worktree is None:
             return run
         return self._checkpoint(run, worktree)
@@ -307,6 +507,7 @@ class WorkflowRunner:
         cancel: threading.Event,
         on_step: StepObserver | None,
         worktree: AgentWorktree | None,
+        helper_invocations: list[WorkflowHelperInvocation],
     ) -> tuple[list[WorkflowStepOutcome], WorkflowRunStatus, str, str]:
         """Run the steps until one stops the workflow, and say why it stopped."""
         root = worktree.path if worktree is not None else self._workspace_root
@@ -340,7 +541,17 @@ class WorkflowRunner:
                 break
 
             self._notify(on_step, step.node_id, WorkflowStepState.RUNNING)
-            result = self._run_step(step, plan, task, previous, cancel, root, worktree)
+            result = self._run_step(
+                step,
+                plan,
+                task,
+                previous,
+                cancel,
+                root,
+                worktree,
+                on_step,
+                helper_invocations,
+            )
 
             if result.status is DelegationStatus.COMPLETED:
                 outcomes.append(
@@ -388,6 +599,8 @@ class WorkflowRunner:
         cancel: threading.Event,
         root: Path,
         worktree: AgentWorktree | None,
+        on_step: StepObserver | None,
+        helper_invocations: list[WorkflowHelperInvocation],
     ) -> DelegationResult:
         """One step: one ordinary child run, with this step's own authority."""
         message = compose_workflow_step_message(
@@ -397,6 +610,24 @@ class WorkflowRunner:
             previous.agent_name if previous is not None else "",
         )
         try:
+            helper_kwargs: dict[str, Any] = {}
+            if step.helpers:
+                helper_runner = _WorkflowStepHelperRunner(
+                    child=self._child,
+                    step=step,
+                    workflow_task=task,
+                    workspace_root=root,
+                    worktree=worktree,
+                    cancel_event=cancel,
+                    invocations=helper_invocations,
+                    notify=lambda node_id, state: self._notify(
+                        on_step, node_id, state
+                    ),
+                )
+                helper_kwargs = {
+                    "workflow_helpers": step.helpers,
+                    "workflow_helper_runner": helper_runner,
+                }
             result, _tests = self._child.run(
                 step.entry,
                 message,
@@ -407,6 +638,7 @@ class WorkflowRunner:
                 # Read-only still reads the shared tree, without its write grant.
                 worktree=worktree if step.writable else None,
                 workflow_step=True,
+                **helper_kwargs,
             )
             return result
         except Exception as exc:
@@ -503,6 +735,7 @@ class WorkflowRunner:
 
 __all__ = [
     "StepObserver",
+    "WorkflowHelperInvocation",
     "WorkflowRunResult",
     "WorkflowRunStatus",
     "WorkflowRunner",

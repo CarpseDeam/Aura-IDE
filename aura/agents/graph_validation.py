@@ -341,6 +341,23 @@ def _sub_agent_issues(graph: WorkflowGraph) -> list[GraphIssue]:
     helpers = graph.connections_of_kind(ConnectionKind.SUB_AGENT)
     helper_targets = {edge.target_id for edge in helpers}
     issues: list[GraphIssue] = []
+
+    incoming: dict[str, list] = {}
+    for edge in helpers:
+        incoming.setdefault(edge.target_id, []).append(edge)
+    for edges in incoming.values():
+        if len(edges) < 2:
+            continue
+        owners = {edge.source_id for edge in edges}
+        message = (
+            "the same sub-agent occurrence cannot be attached to multiple steps"
+            if len(owners) > 1
+            else "a sub-agent occurrence must have exactly one dashed connection"
+        )
+        issues.extend(
+            GraphIssue(message, connection_id=edge.connection_id) for edge in edges
+        )
+
     for edge in helpers:
         source = by_id.get(edge.source_id)
         target = by_id.get(edge.target_id)

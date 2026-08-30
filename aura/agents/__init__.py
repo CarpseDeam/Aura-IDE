@@ -19,8 +19,8 @@ This package owns two separate things and keeps them apart on purpose.
   are isolated and retained by :mod:`aura.agents.worktree`.
 * A **workflow** (:mod:`aura.agents.graph_models`,
   :mod:`aura.agents.workflow_plan`, :mod:`aura.agents.workflow_runner`) puts
-  several of them in an order the user drew, freezes that order the same way
-  a roster is frozen, and runs it serially into one structured result. As
+  several of them in an order the user drew, freezes that order plus each
+  Step's optional helpers, and runs it serially into one structured result. As
   with :mod:`aura.agents.runtime`, the runner is imported from its own module
   rather than re-exported here: it reaches into the conversation package, and
   this one must stay importable from inside it.
@@ -73,6 +73,7 @@ from aura.agents.roster import (
 )
 from aura.agents.store import AgentStore, AgentStoreError, AgentSummary
 from aura.agents.workflow_plan import (
+    WorkflowHelperPlan,
     WorkflowRunPlan,
     WorkflowStepPlan,
     freeze_workflow_plan,
@@ -118,6 +119,7 @@ __all__ = [
     "Point",
     "WorkflowConnection",
     "WorkflowGraph",
+    "WorkflowHelperPlan",
     "WorkflowLocalState",
     "WorkflowLocalStateError",
     "WorkflowNode",

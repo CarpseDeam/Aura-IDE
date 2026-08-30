@@ -129,6 +129,9 @@ class ChildExecutor:
         permission: AgentPermission,
         worktree: AgentWorktree | None = None,
         workflow_step: bool = False,
+        workflow_helpers: tuple[Any, ...] = (),
+        workflow_helper_runner: Any | None = None,
+        workflow_helper: bool = False,
     ) -> tuple[DelegationResult, tuple[dict[str, Any], ...]]:
         definition = entry.definition
         started = time.monotonic()
@@ -141,11 +144,18 @@ class ChildExecutor:
                 change_set_id=worktree.change_set_id if worktree else "",
                 base_sha=worktree.base_sha if worktree else "",
                 workflow_step=workflow_step,
+                workflow_step_helpers=bool(workflow_helpers),
+                workflow_helper=workflow_helper,
             )
         )
         history.append_user_text(task)
 
         registry = self._registry(workspace_root, permission)
+        # Clear as well as set: a custom factory that reuses a registry must
+        # never leak one Step's helpers into another child invocation.
+        registry.set_workflow_helper_context(
+            workflow_helpers, workflow_helper_runner
+        )
         tool_runner = ToolRunner(history=history, workspace_root=registry.workspace_root)
         tool_round = ToolRoundRunner(
             history=history, tools=registry, tool_runner=tool_runner
@@ -153,7 +163,12 @@ class ChildExecutor:
         tool_round.begin_turn()
         transcript = ChildTranscript()
         cancel = cancel_event if cancel_event is not None else threading.Event()
-        tool_defs = child_agent_tool_defs(permission)
+        tool_defs = child_agent_tool_defs(
+            permission,
+            workflow_helpers=tuple(
+                helper.catalog_row() for helper in workflow_helpers
+            ),
+        )
 
         logger.info(
             "agent_delegation_start agent_id=%s provider=%s model=%s thinking=%s",

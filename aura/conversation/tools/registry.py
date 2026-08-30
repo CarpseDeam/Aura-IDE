@@ -126,6 +126,11 @@ class ToolRegistry(
         # it runs can delegate again.
         self._turn_agent_roster: AgentTurnRoster = EMPTY_AGENT_ROSTER
         self._agent_delegation_runner: Any = None
+        # A solid workflow Step may receive one narrower delegation surface:
+        # only its frozen dashed helper occurrences, resolved by node id. This
+        # is empty on every ordinary child and on helpers themselves.
+        self._workflow_helpers: tuple[Any, ...] = ()
+        self._workflow_helper_runner: Any = None
         self._agent_worktree_manager: Any = None
         # The frozen per-turn workflow plan and the runner that executes it.
         # Absent by default, and that absence is the ordinary case: with no
@@ -281,6 +286,13 @@ class ToolRegistry(
         """
         self._agent_delegation_runner = runner
 
+    def set_workflow_helper_context(
+        self, helpers: Iterable[Any] | None, runner: Any | None
+    ) -> None:
+        """Expose only one Step's frozen helpers in this private registry."""
+        self._workflow_helpers = tuple(helpers or ())
+        self._workflow_helper_runner = runner if self._workflow_helpers else None
+
     def set_agent_worktree_manager(self, manager: Any | None) -> None:
         """Wire the root-only owner of writable Agent result operations."""
         self._agent_worktree_manager = manager
@@ -331,6 +343,10 @@ class ToolRegistry(
             plan_review=(not self._read_only) and self._plan_review.required,
             skills_active=skills_active,
             agents=self._turn_agent_roster.catalog_rows() or None,
+            workflow_helpers=(
+                tuple(helper.catalog_row() for helper in self._workflow_helpers)
+                or None
+            ),
             workflow=(
                 self._turn_workflow_plan.catalog_row()
                 if self._turn_workflow_plan is not None

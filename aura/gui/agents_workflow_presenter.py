@@ -111,13 +111,13 @@ def connection_info(
 def run_edge_states(
     graph: WorkflowGraph, node_states: Mapping[str, str]
 ) -> dict[str, str]:
-    """What each solid connection shows, derived from the steps it joins.
+    """What each connection shows, derived from the node that actually ran.
 
     A line carries work *into* the box at its end, so it wears that box's
     state — except the last line, which arrives at the Aura Result and has no
     step of its own to speak for, so it wears the state of the step it left.
-    Dashed sub-agent lines are authoring metadata in this phase and never
-    show a run state, because nothing runs along them.
+    A dashed line likewise wears its helper target's state. An optional helper
+    that was never called has no node state, so its node and line stay unmarked.
     """
     states: dict[str, str] = {}
     for edge in graph.connections_of_kind(ConnectionKind.STEP):
@@ -128,6 +128,10 @@ def run_edge_states(
             state = str(node_states.get(target.node_id, ""))
         elif source is not None and source.is_agent:
             state = str(node_states.get(source.node_id, ""))
+        if state:
+            states[edge.connection_id] = state
+    for edge in graph.connections_of_kind(ConnectionKind.SUB_AGENT):
+        state = str(node_states.get(edge.target_id, ""))
         if state:
             states[edge.connection_id] = state
     return states

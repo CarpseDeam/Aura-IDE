@@ -266,6 +266,27 @@ def test_an_agent_is_either_a_step_or_a_helper_but_not_both() -> None:
     )
 
 
+def test_one_helper_occurrence_cannot_belong_to_multiple_steps() -> None:
+    graph = _straight(_agent(), _agent("scout0000000"))
+    first, second = graph.nodes_of_kind(WorkflowNodeKind.AGENT)
+    helper = _agent("reviewer0000")
+    first_edge = _edge(ConnectionKind.SUB_AGENT, first.node_id, helper.node_id, 5)
+    second_edge = _edge(ConnectionKind.SUB_AGENT, second.node_id, helper.node_id, 6)
+    graph = (
+        graph.with_node(helper)
+        .with_connection(first_edge)
+        .with_connection(second_edge)
+    )
+
+    verdict = validate_graph(graph, agents=AGENTS)
+
+    assert verdict.runnable is False
+    assert all(
+        any("multiple steps" in issue.message for issue in verdict.for_connection(edge_id))
+        for edge_id in (first_edge.connection_id, second_edge.connection_id)
+    )
+
+
 def test_the_fixed_ends_cannot_take_part_in_a_sub_agent_line() -> None:
     graph = _straight(_agent())
     task = graph.task_node

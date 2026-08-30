@@ -1,9 +1,10 @@
 """The root-only Agent delegation and workflow tool schemas.
 
-``delegate_agent`` is the one tool through which Aura hands a bounded piece of
-work to one of the user's own agents.  It exists in a request only when that
-turn's frozen roster is non-empty, and it is never present in a child agent's
-catalog — that is what makes delegation one level deep.
+``delegate_agent`` is the one tool through which a parent hands a bounded piece
+of work to one of the user's own agents. Aura's root variant exists only with a
+frozen turn roster. A solid workflow Step may instead receive a helper-specific
+variant containing only its frozen dashed occurrences. Helpers and ordinary
+children receive neither variant, which keeps delegation exactly one level deep.
 
 The schema is built per turn from the frozen roster so the model is told
 exactly which agents it may address.  What it is told about each is the whole
@@ -94,6 +95,95 @@ def build_delegate_agent_tool_def(
         },
     }
 
+
+def _workflow_helper_lines(rows: Iterable[Mapping[str, Any]]) -> str:
+    lines: list[str] = []
+    for row in rows:
+        node_id = str(row.get("helper_node_id") or "").strip()
+        if not node_id:
+            continue
+        name = str(row.get("name") or row.get("agent_name") or "").strip()
+        name = name or node_id
+        permission = str(row.get("permission_label") or "Read only").strip()
+        description = " ".join(str(row.get("description") or "").split())
+        assignment = " ".join(str(row.get("assignment") or "").split())
+        details = "; ".join(
+            part
+            for part in (
+                f"role here: {assignment}" if assignment else "",
+                description,
+            )
+            if part
+        )
+        head = f"- {node_id} — {name} [{permission}]"
+        lines.append(f"{head}: {details}" if details else head)
+    return "\n".join(lines)
+
+
+def build_workflow_helper_tool_def(
+    rows: Iterable[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Build the Step-only ``delegate_agent`` variant for frozen helpers.
+
+    Helper occurrences are addressed by node id, never reusable Agent id, so
+    two dashed occurrences of the same Agent remain distinct. Unlike root
+    delegation, this schema promises no new worktree or checkpoint: helpers
+    use the workflow's already-selected effective workspace synchronously.
+    """
+    frozen = tuple(rows)
+    node_ids = [
+        str(row.get("helper_node_id") or "").strip()
+        for row in frozen
+        if str(row.get("helper_node_id") or "").strip()
+    ]
+    helpers = _workflow_helper_lines(frozen)
+    return {
+        "type": "function",
+        "function": {
+            "name": "delegate_agent",
+            "description": (
+                "Ask one optional helper attached to this workflow Step to do one "
+                "bounded piece of work, wait for it, and receive one structured "
+                "result in this Step's private history. The helper reads the same "
+                "effective workspace as the workflow. A Read / Write helper uses "
+                "its own frozen grant in the workflow's existing shared worktree; "
+                "it does not create or checkpoint another worktree, and its grant "
+                "does not widen your tools. A helper failure is a result for you to "
+                "handle. Helpers cannot delegate or run workflows. You may call an "
+                "attached helper more than once when useful, but helpers never run "
+                "automatically. Aura, not the helper, owns the final response.\n\n"
+                "Helpers attached to this Step:\n" + (helpers or "- (none)")
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "helper_node_id": {
+                        "type": "string",
+                        "enum": node_ids,
+                        "description": (
+                            "The helper occurrence node id exactly as listed above. "
+                            "Use the node id even when multiple occurrences reuse "
+                            "the same Agent."
+                        ),
+                    },
+                    "task": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": MAX_DELEGATED_TASK_CHARS,
+                        "description": (
+                            "The bounded task this helper should perform for your "
+                            "Step. It also receives the original workflow task and "
+                            "its frozen occurrence assignment."
+                        ),
+                    },
+                },
+                "required": ["helper_node_id", "task"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
 #: Upper bound on the task handed to a workflow. A workflow's own steps carry
 #: their assignments, so what Aura writes here is the work itself, not a brief
 #: for each agent in turn.
@@ -109,6 +199,26 @@ def _workflow_step_lines(steps: Iterable[Mapping[str, Any]]) -> str:
         assignment = " ".join(str(step.get("assignment") or "").split())
         head = f"{position}. {name} [{permission}]"
         lines.append(f"{head}: {assignment}" if assignment else head)
+        for helper in step.get("helpers") or ():
+            helper_node_id = str(helper.get("helper_node_id") or "").strip()
+            helper_name = str(
+                helper.get("agent_name") or helper.get("name") or "a helper"
+            ).strip()
+            helper_permission = str(
+                helper.get("permission_label") or "Read only"
+            ).strip()
+            helper_assignment = " ".join(
+                str(helper.get("assignment") or "").split()
+            )
+            helper_head = (
+                f"   Optional helper {helper_node_id} — {helper_name} "
+                f"[{helper_permission}]"
+            )
+            lines.append(
+                f"{helper_head}: {helper_assignment}"
+                if helper_assignment
+                else helper_head
+            )
     return "\n".join(lines)
 
 
@@ -122,16 +232,34 @@ def build_run_workflow_tool_def(workflow: Mapping[str, Any]) -> dict[str, Any]:
     """
     name = str(workflow.get("name") or "").strip() or "the selected workflow"
     description = str(workflow.get("description") or "").strip()
-    steps = _workflow_step_lines(workflow.get("steps") or ())
-    writable = bool(workflow.get("writable"))
-    authority = (
-        "At least one step may edit files. Every step of this run shares one "
-        "isolated Git worktree, and the whole run is checkpointed into a "
-        "single change set. Nothing is written to the user's workspace unless "
-        "they later approve applying it."
-        if writable
-        else "Every step of this workflow is read-only."
+    step_rows = tuple(workflow.get("steps") or ())
+    steps = _workflow_step_lines(step_rows)
+    has_helpers = any(step.get("helpers") for step in step_rows)
+    helper_copy = (
+        "A solid Step may optionally call only the helpers shown beneath it; "
+        "helpers never run automatically and return only to that Step. "
+        if has_helpers
+        else ""
     )
+    writable = bool(workflow.get("writable"))
+    if writable and has_helpers:
+        authority = (
+            "At least one solid Step or attached helper may edit files. Every child "
+            "in this run reads one shared isolated Git worktree, and the whole run "
+            "is checkpointed into a single change set. Nothing is written to the "
+            "user's workspace unless they later approve applying it."
+        )
+    elif writable:
+        authority = (
+            "At least one step may edit files. Every step of this run shares one "
+            "isolated Git worktree, and the whole run is checkpointed into a "
+            "single change set. Nothing is written to the user's workspace unless "
+            "they later approve applying it."
+        )
+    elif has_helpers:
+        authority = "Every solid Step and attached helper is read-only."
+    else:
+        authority = "Every step of this workflow is read-only."
     return {
         "type": "function",
         "function": {
@@ -141,7 +269,7 @@ def build_run_workflow_tool_def(workflow: Mapping[str, Any]) -> dict[str, Any]:
                 "result. The agents below run one after another, in this order; "
                 "each is given your task, its own assignment, and the previous "
                 "agent's structured result, and none of them can see this conversation. "
-                f"{authority} You receive one structured result and write the "
+                f"{helper_copy}{authority} You receive one structured result and write the "
                 "final answer to the user yourself.\n\n"
                 + (f"{description}\n\n" if description else "")
                 + "Steps:\n"
@@ -175,4 +303,5 @@ __all__ = [
     "MAX_WORKFLOW_TASK_CHARS",
     "build_delegate_agent_tool_def",
     "build_run_workflow_tool_def",
+    "build_workflow_helper_tool_def",
 ]

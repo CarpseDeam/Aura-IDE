@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from aura.agents.local_state import AgentPermission
@@ -19,6 +20,7 @@ from aura.conversation.tools.schemas import (
     TERMINAL_TOOL_DEF,
     build_delegate_agent_tool_def,
     build_run_workflow_tool_def,
+    build_workflow_helper_tool_def,
 )
 
 # Godot remains implemented and registered, but is not part of the ordinary
@@ -56,10 +58,10 @@ def _tool_name(tool_def: dict[str, Any]) -> str:
     return str(fn.get("name", "")) if isinstance(fn, dict) else ""
 
 
-#: The fixed surface a delegated child agent runs with: the production read
-#: and search tools, ``glob``, and read-only Git. It is a constant, not a
-#: negotiation — a child never gains a tool because something happened to be
-#: connected, and never loses one because something was not.
+#: The fixed base surface a delegated child agent runs with: the production
+#: read and search tools, ``glob``, and read-only Git. A solid workflow Step
+#: may add its explicitly frozen helper schema after this base; no other child
+#: gains a tool because of live graph or registry state.
 CHILD_AGENT_TOOL_NAMES: frozenset[str] = (
     PRODUCTION_READ_TOOL_NAMES | PRODUCTION_SEARCH_TOOL_NAMES | READ_ONLY_EXTRA_TOOL_NAMES
 )
@@ -67,13 +69,19 @@ CHILD_AGENT_TOOL_NAMES: frozenset[str] = (
 
 def child_agent_tool_defs(
     permission: AgentPermission = AgentPermission.READ_ONLY,
+    *,
+    workflow_helpers: Iterable[Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """The frozen tool catalog handed to one delegated child invocation.
 
     Every child gets read, search, and read-only Git. The exact frozen grant
     may add ``apply_patch`` and then ``shell``. There are never Skills,
     checklist or memory tools, MCP/dynamic tools, lifecycle operations, or
-    ``delegate_agent``: delegation stays exactly one level deep.
+    ``delegate_agent``. A solid workflow Step is the one narrow exception: when
+    its caller supplies frozen dashed helper rows, this invocation alone gets a
+    helper-specific ``delegate_agent`` schema containing only those occurrence
+    node ids. Ordinary children and helpers supply no rows, so delegation stays
+    exactly one level deep.
 
     Extensible surface is absent by construction rather than by filtering —
     this function is handed no schemas to include, so nothing a server or a
@@ -89,6 +97,9 @@ def child_agent_tool_defs(
         tools.append(dict(APPLY_PATCH_TOOL_DEF))
     if permission.allows_terminal:
         tools.append(dict(TERMINAL_TOOL_DEF))
+    helper_rows = tuple(workflow_helpers or ())
+    if helper_rows:
+        tools.append(build_workflow_helper_tool_def(helper_rows))
     return tools
 
 
@@ -104,6 +115,7 @@ class ToolCatalog:
         plan_review: bool = False,
         skills_active: bool = False,
         agents: tuple[dict[str, str], ...] | None = None,
+        workflow_helpers: tuple[dict[str, str], ...] | None = None,
         workflow: dict[str, Any] | None = None,
         agent_change_sets: bool = False,
     ) -> list[dict[str, Any]]:
@@ -181,7 +193,9 @@ class ToolCatalog:
             tools.append(dict(LOAD_SKILLS_TOOL_DEF))
             tools.append(dict(READ_SKILL_RESOURCE_TOOL_DEF))
 
-        if agents:
+        if workflow_helpers:
+            tools.append(build_workflow_helper_tool_def(workflow_helpers))
+        elif agents:
             tools.append(build_delegate_agent_tool_def(agents))
 
         if workflow:

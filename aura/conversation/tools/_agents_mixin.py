@@ -1,4 +1,4 @@
-"""The root's ``delegate_agent`` and ``run_agent_workflow`` handlers.
+"""Root orchestration handlers plus the Step-scoped helper delegation seam.
 
 This is a thin, deliberate seam.  It resolves the requested id against the
 turn's frozen roster, refuses anything that is not on it, and hands the run to
@@ -7,10 +7,11 @@ or tool surface — :mod:`aura.agents.runtime` owns all of that — and it never
 lets a child's failure escape as an exception: a delegation that could not
 happen is a structured tool result like any other.
 
-A child agent's own registry has no roster and no runner, so this handler
-answers every call there with the same truthful refusal.  That is what makes
-delegation one level deep at the point of execution, in addition to the
-child's catalog simply not containing this tool.
+An ordinary child or helper registry has no roster, helper context, or runner,
+so this handler answers every call there with the same truthful refusal. A
+solid workflow Step is configured only with its own frozen helper occurrences.
+That is what keeps delegation one level deep at execution as well as catalog
+composition.
 """
 from __future__ import annotations
 
@@ -20,12 +21,15 @@ from aura.conversation.tools._types import ApprovalCallback, ToolExecResult
 
 
 class AgentDelegationHandlersMixin:
-    """Handlers for the root-only Agent delegation and workflow tools."""
+    """Handlers for root orchestration and frozen workflow helper calls."""
 
     def _handle_delegate_agent(
         self, args: dict[str, Any], approval_cb: ApprovalCallback, reject_all: bool
     ) -> ToolExecResult:
         from aura.agents.delegation import DelegationFailure, DelegationResult
+
+        if self._workflow_helpers:
+            return self._handle_workflow_helper(args)
 
         agent_id = str(args.get("agent_id") or "").strip()
         task = str(args.get("task") or "")
@@ -88,6 +92,66 @@ class AgentDelegationHandlersMixin:
             extras=extras,
         )
 
+    def _handle_workflow_helper(self, args: dict[str, Any]) -> ToolExecResult:
+        """Run one helper already frozen for this solid workflow Step."""
+        from aura.agents.delegation import DelegationFailure, DelegationResult
+
+        helper_node_id = str(args.get("helper_node_id") or "").strip()
+        helper = next(
+            (
+                item
+                for item in self._workflow_helpers
+                if item.node_id == helper_node_id
+            ),
+            None,
+        )
+        if helper is None:
+            available = ", ".join(item.node_id for item in self._workflow_helpers)
+            result = DelegationResult.failure(
+                helper_node_id,
+                DelegationFailure.AGENT_NOT_AVAILABLE,
+                (
+                    f"No helper occurrence with node id '{helper_node_id}' is "
+                    "attached to this workflow Step."
+                    + (f" Available: {available}." if available else "")
+                ),
+            )
+            return ToolExecResult(ok=False, payload=result.payload())
+
+        runner = self._workflow_helper_runner
+        if runner is None:
+            result = DelegationResult.failure(
+                helper.agent_id,
+                DelegationFailure.DELEGATION_UNAVAILABLE,
+                "Workflow helper execution is not available in this runtime.",
+                agent_name=helper.agent_name,
+                provider=helper.resolved.provider,
+                model=helper.resolved.model,
+            )
+            return ToolExecResult(ok=False, payload=result.payload())
+
+        result = runner.run(
+            helper,
+            str(args.get("task") or ""),
+            cancel_event=self.active_cancel_event,
+        )
+        extras: dict[str, Any] = {
+            "agent_id": result.agent_id,
+            "helper_node_id": helper.node_id,
+            "owning_step_node_id": helper.owning_step_node_id,
+            "connection_id": helper.connection_id,
+            "delegation_status": result.status.value,
+        }
+        if result.usage is not None and not result.usage.is_empty:
+            extras["delegation_usage"] = result.usage.as_dict()
+            extras["delegation_provider"] = result.provider
+            extras["delegation_model"] = result.model
+        return ToolExecResult(
+            ok=result.ok,
+            payload=result.payload(),
+            extras=extras,
+        )
+
     def _handle_run_agent_workflow(
         self, args: dict[str, Any], approval_cb: ApprovalCallback, reject_all: bool
     ) -> ToolExecResult:
@@ -127,9 +191,10 @@ class AgentDelegationHandlersMixin:
                 result = WorkflowRunResult.failure(
                     plan.graph_id,
                     DelegationFailure.ROOT_MUTATION_FORBIDDEN,
-                    "This workflow has a step with a Read / Write grant, but the "
-                    "frozen root turn forbids mutation. Aura did not downgrade "
-                    "the grant or start the workflow.",
+                    "This workflow has a solid Step or attached helper with a "
+                    "Read / Write grant, but the frozen root turn forbids "
+                    "mutation. Aura did not downgrade the grant or start the "
+                    "workflow.",
                     workflow_name=plan.name,
                 )
                 return ToolExecResult(ok=False, payload=result.payload())

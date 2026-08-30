@@ -550,7 +550,7 @@ def test_manual_run_uses_the_injected_runner_even_when_the_gate_is_off(
     ).read_text(encoding="utf-8")
 
 
-def test_run_states_are_visible_on_steps_and_solid_handoffs_only(wired) -> None:
+def test_run_states_are_visible_on_steps_helpers_and_their_handoffs(wired) -> None:
     from aura.gui.agents_workflow_presenter import run_edge_states
 
     reviewer = _agent(wired.agents, AgentScope.PROJECT, "Reviewer")
@@ -576,8 +576,9 @@ def test_run_states_are_visible_on_steps_and_solid_handoffs_only(wired) -> None:
     assert {page.scene.edge_items[edge.connection_id].run_state for edge in solid} == {
         "running"
     }
-    assert page.scene.edge_items[dashed[0].connection_id].run_state == ""
+    assert page.scene.edge_items[dashed[0].connection_id].run_state == "cancelled"
 
     succeeded = {step.node_id: "succeeded"}
     page.set_run_states(succeeded, run_edge_states(graph, succeeded))
     assert page.scene.node_items[step.node_id].run_state == "succeeded"
+    assert page.scene.edge_items[dashed[0].connection_id].run_state == ""

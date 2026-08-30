@@ -3,8 +3,8 @@
 A child agent starts from nothing. Its system prompt is built here from:
 
 1. a small **host layer** stating the invariants the runtime actually
-   enforces — the frozen grant, no delegation, a private transcript, and one
-   final written answer;
+   enforces — the frozen grant, the exact delegation depth, a private
+   transcript, and one final written answer;
 2. the selected definition's **full instructions**, verbatim; and
 3. **minimal workspace facts** — where its effective workspace is; and
 4. for writable runs, the change-set id and exact frozen Git base.
@@ -81,6 +81,40 @@ WORKFLOW_STEP_LAYER = """\
   its result field and the only account of your work. Write it for whoever
   comes after you."""
 
+#: Present only when this solid Step actually owns frozen dashed helpers. The
+#: tool schema carries their identities; this small layer explains when and
+#: how that optional capability fits into the Step's responsibility.
+WORKFLOW_STEP_HELPERS_LAYER = """\
+- This Step has optional helpers listed in your delegate_agent tool. They do
+  not run automatically. Call one only when its focused contribution would
+  help your Step, wait for its structured result, then continue your own work.
+- A helper failure is information for you to handle; you still own this Step's
+  result. A helper's grant never widens your own tools."""
+
+_NO_DELEGATION_LINE = (
+    "- You cannot delegate. There are no other agents available to you."
+)
+_WORKFLOW_STEP_DELEGATION_LINE = """\
+- You may delegate only to optional helpers explicitly listed in your
+  delegate_agent tool. No other agents or workflows are available to you."""
+
+#: The role wording for a helper itself. It is not another solid Step and never
+#: addresses the user; its sole durable output returns to the calling Step.
+WORKFLOW_HELPER_LAYER = """\
+- You are assisting one specific Step in a workflow the user drew. That Step
+  called you for a bounded task and waits synchronously for your result.
+- You read the same effective workspace as that Step and the rest of this
+  workflow, under only your own frozen grant.
+- Your final message returns only to the calling Step in its private history.
+  The Step continues afterward, and Aura—not you—owns the final response.
+- You cannot call helpers, delegate to agents, or run workflows. This helper
+  relationship is exactly one level deep."""
+
+WORKFLOW_HELPER_SHARED_WORKTREE_LAYER = """\
+- This linked worktree already belongs to the whole workflow and is shared by
+  its Steps and writable helpers. Aura did not create a separate worktree for
+  you and will checkpoint the whole workflow exactly once after it ends."""
+
 
 def child_workspace_facts(workspace_root: Path | str | None) -> str:
     """The minimal facts a child needs to address its effective workspace.
@@ -108,6 +142,8 @@ def compose_child_system_prompt(
     change_set_id: str = "",
     base_sha: str = "",
     workflow_step: bool = False,
+    workflow_step_helpers: bool = False,
+    workflow_helper: bool = False,
 ) -> str:
     """Build the child's whole system prompt: host layer, brief, facts."""
     permission = AgentPermission(permission)
@@ -115,6 +151,8 @@ def compose_child_system_prompt(
         host = _WRITABLE_HOST_LAYER
         if permission.allows_terminal:
             host += "\n" + _TERMINAL_HOST_LAYER
+        if workflow_helper:
+            host += "\n" + WORKFLOW_HELPER_SHARED_WORKTREE_LAYER
         lifecycle = (
             "Change set\n"
             f"- ID: {change_set_id}\n"
@@ -124,7 +162,15 @@ def compose_child_system_prompt(
         host = CHILD_HOST_LAYER
         lifecycle = ""
     if workflow_step:
+        if workflow_step_helpers:
+            host = host.replace(
+                _NO_DELEGATION_LINE, _WORKFLOW_STEP_DELEGATION_LINE
+            )
         host += "\n" + WORKFLOW_STEP_LAYER
+        if workflow_step_helpers:
+            host += "\n" + WORKFLOW_STEP_HELPERS_LAYER
+    if workflow_helper:
+        host += "\n" + WORKFLOW_HELPER_LAYER
     blocks = [
         host,
         (definition.instructions or "").strip(),
@@ -170,11 +216,32 @@ def compose_workflow_step_message(
     return "\n\n".join(blocks)
 
 
+def compose_workflow_helper_message(
+    task: str,
+    assignment: str,
+    bounded_task: str,
+    owning_step: str = "",
+) -> str:
+    """The original workflow ask plus this occurrence and Step-authored task."""
+    blocks = [f"Workflow task\n{str(task or '').strip()}"]
+    occurrence = str(assignment or "").strip()
+    if occurrence:
+        blocks.append(f"Your helper role in this workflow\n{occurrence}")
+    owner = str(owning_step or "").strip() or "the calling workflow Step"
+    blocks.append(
+        f"Bounded task from {owner}\n{str(bounded_task or '').strip()}"
+    )
+    return "\n\n".join(blocks)
+
+
 __all__ = [
     "CHILD_HOST_LAYER",
+    "WORKFLOW_HELPER_LAYER",
     "WORKFLOW_STEP_LAYER",
+    "WORKFLOW_STEP_HELPERS_LAYER",
     "child_workspace_facts",
     "compose_child_system_prompt",
     "compose_child_task_message",
+    "compose_workflow_helper_message",
     "compose_workflow_step_message",
 ]

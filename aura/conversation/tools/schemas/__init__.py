@@ -15,6 +15,7 @@ from .agents import (
     MAX_WORKFLOW_TASK_CHARS,
     build_delegate_agent_tool_def,
     build_run_workflow_tool_def,
+    build_workflow_helper_tool_def,
 )
 from .checklist import TASK_CHECKLIST_TOOL_DEF
 from .code_intel import (
@@ -70,6 +71,7 @@ __all__ = [
     "MAX_WORKFLOW_TASK_CHARS",
     "build_delegate_agent_tool_def",
     "build_run_workflow_tool_def",
+    "build_workflow_helper_tool_def",
     "SEARCH_TOOL_DEFS",
     "TERMINAL_TOOL_DEF",
     "TASK_CHECKLIST_TOOL_DEF", "WORKSPACE_SNAPSHOT_TOOL_DEF", "WRITE_TOOL_DEFS",
