@@ -577,6 +577,7 @@ TOOL_HANDLERS["code_intel_audit"] = ToolRegistry._handle_code_intel_audit
 TOOL_HANDLERS["inspect_code"] = ToolRegistry._handle_inspect_code
 TOOL_HANDLERS["review_implementation_plan"] = ToolRegistry._handle_review_implementation_plan
 TOOL_HANDLERS["delegate_agent"] = ToolRegistry._handle_delegate_agent
+TOOL_HANDLERS["list_agent_change_sets"] = ToolRegistry._handle_list_agent_change_sets
 TOOL_HANDLERS["inspect_agent_change_set"] = ToolRegistry._handle_inspect_agent_change_set
 TOOL_HANDLERS["apply_agent_change_set"] = ToolRegistry._handle_apply_agent_change_set
 TOOL_HANDLERS["discard_agent_change_set"] = ToolRegistry._handle_discard_agent_change_set

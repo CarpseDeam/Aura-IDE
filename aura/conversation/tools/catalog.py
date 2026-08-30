@@ -178,7 +178,9 @@ class ToolCatalog:
                 tools.extend(
                     tool
                     for tool in AGENT_CHANGE_SET_TOOL_DEFS
-                    if _tool_name(tool) == "inspect_agent_change_set"
+                    if _tool_name(tool) in {
+                        "list_agent_change_sets", "inspect_agent_change_set"
+                    }
                 )
             else:
                 tools.extend(dict(tool) for tool in AGENT_CHANGE_SET_TOOL_DEFS)

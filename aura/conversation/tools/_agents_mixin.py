@@ -54,17 +54,49 @@ class AgentDelegationHandlersMixin:
             )
             return ToolExecResult(ok=False, payload=result.payload())
 
+        if entry.permission.allows_edit:
+            from aura.conversation.tools.effects import ToolEffect
+
+            mutation_forbidden = self._read_only or self._plan_review.blocks(
+                ToolEffect.MUTATION
+            )
+            if mutation_forbidden:
+                result = DelegationResult.failure(
+                    agent_id,
+                    DelegationFailure.ROOT_MUTATION_FORBIDDEN,
+                    "This Agent has a writable grant, but the frozen root turn "
+                    "forbids mutation. Aura did not downgrade the grant or start "
+                    "the Agent; use a read-only Agent or a mutation-enabled turn.",
+                    agent_name=entry.name,
+                )
+                return ToolExecResult(ok=False, payload=result.payload())
+
         # The turn's own cancel event, relayed by the tool round — never a
         # second cancellation authority created here.
         result = runner.run(entry, task, cancel_event=self.active_cancel_event)
+        extras: dict[str, Any] = {
+            "agent_id": result.agent_id,
+            "delegation_status": result.status.value,
+        }
+        if result.usage is not None and not result.usage.is_empty:
+            extras["delegation_usage"] = result.usage.as_dict()
+            extras["delegation_model"] = result.model
         return ToolExecResult(
             ok=result.ok,
             payload=result.payload(),
-            extras={
-                "agent_id": result.agent_id,
-                "delegation_status": result.status.value,
-            },
+            extras=extras,
         )
+
+    def _handle_list_agent_change_sets(
+        self, args: dict[str, Any], approval_cb: ApprovalCallback, reject_all: bool
+    ) -> ToolExecResult:
+        manager = self._agent_worktree_manager
+        if manager is None:
+            return _change_set_unavailable("list_agent_change_sets")
+        try:
+            return ToolExecResult(ok=True, payload=manager.list_change_sets())
+        except Exception as exc:
+            return _change_set_failure("list_agent_change_sets", exc)
 
     def _handle_inspect_agent_change_set(
         self, args: dict[str, Any], approval_cb: ApprovalCallback, reject_all: bool
@@ -73,7 +105,11 @@ class AgentDelegationHandlersMixin:
         if manager is None:
             return _change_set_unavailable("inspect_agent_change_set")
         try:
-            payload = manager.inspect(str(args.get("change_set_id") or ""))
+            raw_paths = args.get("paths") or []
+            payload = manager.inspect(
+                str(args.get("change_set_id") or ""),
+                paths=tuple(str(path) for path in raw_paths),
+            )
         except Exception as exc:
             return _change_set_failure("inspect_agent_change_set", exc)
         return ToolExecResult(ok=True, payload=payload)

@@ -337,7 +337,7 @@ def test_inspection_is_observational_and_identifies_binary_changes(
     result = manager.checkpoint(worktree)
     before = _git(repo, "rev-parse", "HEAD").stdout.strip()
 
-    inspected = manager.inspect(result.change_set_id)
+    inspected = manager.inspect(result.change_set_id, paths=("keep.txt", "blob.bin"))
 
     assert inspected["ok"] is True
     assert inspected["base_sha"] == before
@@ -614,7 +614,8 @@ def test_writable_runner_returns_the_complete_change_set_shape(
     assert payload["changed_paths"] == ["from-agent.txt"]
     assert payload["diffstat"]
     assert payload["tests_reported"] == []
-    assert payload["final_report"] == "Created from-agent.txt. Tests: not run."
+    assert payload["result"] == "Created from-agent.txt. Tests: not run."
+    assert "final_report" not in payload
     assert not (repo / "from-agent.txt").exists()
     first_names = [tool["function"]["name"] for tool in backend.requests[0]["tools"]]
     assert "apply_patch" in first_names

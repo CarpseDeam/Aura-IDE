@@ -446,10 +446,6 @@ class ToolRoundRunner:
         # full preflighted list (executable tasks and isolated schema
         # failures alike) so original call order survives either path.
         for task in preflighted:
-            if cancel_event.is_set():
-                cleanup_cancelled(on_event)
-                return ToolRoundOutcome(cancelled=True)
-
             res = results_by_id.get(task["id"])
             if not res:
                 continue
@@ -460,6 +456,14 @@ class ToolRoundRunner:
             if "result_payload" in res:
                 self._history.append_tool_result(task["id"], res["result_payload"])
                 on_event(res["event"])
+
+        # Cancellation may have arrived while a serialized call was running.
+        # Every handler result that actually returned is authoritative and is
+        # appended above first; repair synthesizes cancellation only for calls
+        # that never returned.
+        if cancel_event.is_set():
+            cleanup_cancelled(on_event)
+            return ToolRoundOutcome(cancelled=True)
 
         return ToolRoundOutcome()
 

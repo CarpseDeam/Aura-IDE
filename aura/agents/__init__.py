@@ -34,6 +34,7 @@ from aura.agents.local_state import (
     PERMISSION_ORDER,
     TERMINAL_WARNING,
     AgentLocalState,
+    AgentLocalStateError,
     AgentPermission,
 )
 from aura.agents.models import THINKING_ORDER, AgentDefinition, AgentThinking, ModelTarget
@@ -61,6 +62,7 @@ __all__ = [
     "AgentDefinition",
     "AgentChangeSet",
     "AgentLocalState",
+    "AgentLocalStateError",
     "AgentPermission",
     "AgentRosterEntry",
     "AgentScope",

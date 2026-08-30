@@ -17,113 +17,29 @@ through for every call it makes.
 """
 from __future__ import annotations
 
-import json
 import threading
 import uuid
-from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from aura.agents.worktree_checkpoint import WorktreeCheckpointer
+from aura.agents.worktree_creation import WorktreeCreator
 from aura.agents.worktree_git import AgentWorktreeError, GitRunner
+from aura.agents.worktree_inspection import ChangeSetInspector
+from aura.agents.worktree_material import ChangeSetMaterializer
+from aura.agents.worktree_models import AgentChangeSet, AgentWorktree
+from aura.agents.worktree_operations import WorktreeGitOperations
+from aura.agents.worktree_records import WorktreeRecord, WorktreeRecordStore
 from aura.conversation.tools._types import (
     ApprovalCallback,
-    ApprovalFileChange,
     ApprovalRequest,
 )
-from aura.conversation.tools.fs_write import atomic_write_bytes
 from aura.paths import data_dir, safe_is_relative_to
 
 _BRANCH_PREFIX = "refs/heads/aura/agent/"
-_GIT_IDENTITY = (
-    "-c", "user.name=Aura Agent",
-    "-c", "user.email=agent@aura.local",
-    "-c", "commit.gpgSign=false",
-)
 
 
-@dataclass(frozen=True)
-class AgentWorktree:
-    """One active writable child checkout."""
-
-    change_set_id: str
-    agent_id: str
-    base_sha: str
-    branch_ref: str
-    path: Path
-
-
-@dataclass(frozen=True)
-class AgentChangeSet:
-    """The minimal durable facts about a checkpointed child result."""
-
-    status: str
-    change_set_id: str
-    agent_id: str
-    base_sha: str
-    result_sha: str = ""
-    changed_paths: tuple[str, ...] = ()
-    diffstat: str = ""
-    worktree_path: str = ""
-    failure_class: str = ""
-    error: str = ""
-
-    @property
-    def retained(self) -> bool:
-        return self.status != "empty" and bool(self.result_sha or self.worktree_path)
-
-    def payload(self) -> dict[str, Any]:
-        return {
-            "status": self.status,
-            "change_set_id": self.change_set_id,
-            "agent_id": self.agent_id,
-            "base_sha": self.base_sha,
-            "result_sha": self.result_sha,
-            "changed_paths": list(self.changed_paths),
-            "diffstat": self.diffstat,
-            "worktree_path": self.worktree_path,
-            "failure_class": self.failure_class,
-            "error": self.error,
-        }
-
-
-@dataclass
-class _Record:
-    change_set_id: str
-    agent_id: str
-    workspace_root: str
-    base_sha: str
-    primary_ref: str
-    branch_ref: str
-    worktree_path: str
-    result_sha: str = ""
-    state: str = "creating"
-    changed_paths: list[str] = field(default_factory=list)
-    diffstat: str = ""
-    failure_class: str = ""
-    error: str = ""
-
-    @classmethod
-    def from_json(cls, raw: object) -> "_Record | None":
-        if not isinstance(raw, dict):
-            return None
-        try:
-            return cls(
-                change_set_id=str(raw["change_set_id"]),
-                agent_id=str(raw["agent_id"]),
-                workspace_root=str(raw["workspace_root"]),
-                base_sha=str(raw["base_sha"]),
-                primary_ref=str(raw.get("primary_ref") or ""),
-                branch_ref=str(raw["branch_ref"]),
-                worktree_path=str(raw["worktree_path"]),
-                result_sha=str(raw.get("result_sha") or ""),
-                state=str(raw.get("state") or "recovery"),
-                changed_paths=[str(p) for p in raw.get("changed_paths", [])],
-                diffstat=str(raw.get("diffstat") or ""),
-                failure_class=str(raw.get("failure_class") or ""),
-                error=str(raw.get("error") or ""),
-            )
-        except (KeyError, TypeError, ValueError):
-            return None
+_Record = WorktreeRecord
 
 
 class AgentWorktreeManager:
@@ -139,10 +55,20 @@ class AgentWorktreeManager:
             Path(workspace_root).resolve() if workspace_root is not None else None
         )
         self._runtime_base = Path(runtime_root) if runtime_root is not None else data_dir() / "aw"
+        self._record_store = WorktreeRecordStore(
+            self._runtime_base, self._workspace_root
+        )
         # Every Git call this manager makes goes through here. It owns running
         # the process and naming a failure; this class owns the rules about
         # when a call is allowed to happen at all.
         self._git = GitRunner()
+        self._ops = WorktreeGitOperations(self._git, branch_prefix=_BRANCH_PREFIX)
+        self._creator = WorktreeCreator(
+            self._git, self._ops, branch_prefix=_BRANCH_PREFIX
+        )
+        self._material = ChangeSetMaterializer(self._git)
+        self._inspector = ChangeSetInspector(self._git, self._material)
+        self._checkpointer = WorktreeCheckpointer(self._git, self._material)
         self._lock = threading.RLock()
         self._active_id = ""
         self._pending_workspace_root: Path | None = None
@@ -184,60 +110,18 @@ class AgentWorktreeManager:
                     change_set_id=change_set_id,
                 )
             root = self._require_repository(change_set_id)
-            base_sha = self._git.rev_parse(root, "HEAD", change_set_id=change_set_id)
-            primary_ref = self._git.symbolic_head(root, change_set_id=change_set_id)
-            dirty = self._git.status_bytes(root, change_set_id=change_set_id)
-            if dirty:
-                raise AgentWorktreeError(
-                    "primary_worktree_dirty",
-                    "Writable delegation requires a completely clean primary worktree; "
-                    "staged, unstaged, or untracked changes are present.",
-                    change_set_id=change_set_id,
-                    base_sha=base_sha,
-                )
-
             scope = self._scope_dir(root)
-            worktree_path = scope / change_set_id
-            branch_ref = f"{_BRANCH_PREFIX}{self._workspace_token(root)}/{change_set_id}"
-            branch_name = branch_ref.removeprefix("refs/heads/")
-            if worktree_path.exists() or self._git.ref_sha(root, branch_ref):
-                raise AgentWorktreeError(
-                    "worktree_name_collision",
-                    "Aura generated a worktree identity that is already in use.",
-                    change_set_id=change_set_id,
-                    base_sha=base_sha,
-                )
-
-            record = _Record(
+            record = self._creator.prepare(
+                workspace_root=root,
+                scope=scope,
                 change_set_id=change_set_id,
-                agent_id=str(agent_id),
-                workspace_root=str(root),
-                base_sha=base_sha,
-                primary_ref=primary_ref,
-                branch_ref=branch_ref,
-                worktree_path=str(worktree_path),
+                agent_id=agent_id,
             )
             self._records[change_set_id] = record
             self._save()
-            worktree_path.parent.mkdir(parents=True, exist_ok=True)
             hooks = scope / "hooks"
-            hooks.mkdir(parents=True, exist_ok=True)
             try:
-                self._git.run(
-                    root,
-                    [
-                        "-c",
-                        f"core.hooksPath={hooks}",
-                        "worktree",
-                        "add",
-                        "-b",
-                        branch_name,
-                        str(worktree_path),
-                        base_sha,
-                    ],
-                    change_set_id=change_set_id,
-                    failure_class="worktree_creation_failed",
-                )
+                self._creator.materialize(record, hooks=hooks)
             except AgentWorktreeError as exc:
                 # Remove only artifacts whose exact generated identity exists and is
                 # clean.  Any uncertain or dirty artifact remains recorded for recovery.
@@ -245,12 +129,16 @@ class AgentWorktreeManager:
                 record.failure_class = exc.failure_class
                 record.error = str(exc)
                 self._save()
-                self._cleanup_failed_creation(record)
+                if self._creator.cleanup_failed(
+                    record, is_owned=self._is_owned_worktree
+                ):
+                    self._records.pop(change_set_id, None)
+                    self._save()
                 raise AgentWorktreeError(
                     exc.failure_class,
                     str(exc),
                     change_set_id=change_set_id,
-                    base_sha=base_sha,
+                    base_sha=record.base_sha,
                     recovery_path=record.worktree_path if change_set_id in self._records else "",
                 ) from exc
 
@@ -260,9 +148,9 @@ class AgentWorktreeManager:
             return AgentWorktree(
                 change_set_id=change_set_id,
                 agent_id=str(agent_id),
-                base_sha=base_sha,
-                branch_ref=branch_ref,
-                path=worktree_path.resolve(),
+                base_sha=record.base_sha,
+                branch_ref=record.branch_ref,
+                path=Path(record.worktree_path).resolve(),
             )
 
     # ---- checkpoint and recovery ------------------------------------
@@ -272,57 +160,12 @@ class AgentWorktreeManager:
         with self._lock:
             record = self._matching_active_record(worktree)
             try:
-                symbolic = self._git.text(
+                outcome = self._checkpointer.create_checkpoint(
+                    record,
                     worktree.path,
-                    ["symbolic-ref", "-q", "HEAD"],
-                    change_set_id=worktree.change_set_id,
-                    failure_class="checkpoint_failed",
-                ).strip()
-                if symbolic != worktree.branch_ref:
-                    raise AgentWorktreeError(
-                        "checkpoint_ref_changed",
-                        "The child left its Aura-owned branch. Its worktree was preserved "
-                        "for recovery and no foreign ref was changed.",
-                        change_set_id=worktree.change_set_id,
-                        base_sha=worktree.base_sha,
-                        recovery_path=str(worktree.path),
-                    )
-
-                # A terminal-enabled child may have made intermediate commits.  Soft
-                # reset only the exact Aura-owned checked-out ref, then stage the final
-                # filesystem state so the retained result is still one runtime commit.
-                current = self._git.rev_parse(
-                    worktree.path, "HEAD", change_set_id=worktree.change_set_id
+                    self._scope_dir(Path(record.workspace_root)) / "hooks",
                 )
-                if current != worktree.base_sha:
-                    self._git.run(
-                        worktree.path,
-                        ["reset", "--soft", worktree.base_sha],
-                        change_set_id=worktree.change_set_id,
-                        failure_class="checkpoint_failed",
-                    )
-                self._git.run(
-                    worktree.path,
-                    ["add", "-A", "--", "."],
-                    change_set_id=worktree.change_set_id,
-                    failure_class="checkpoint_failed",
-                )
-                staged = self._git.run(
-                    worktree.path,
-                    ["diff", "--cached", "--quiet", "--exit-code"],
-                    check=False,
-                    change_set_id=worktree.change_set_id,
-                    failure_class="checkpoint_failed",
-                )
-                if staged.returncode not in (0, 1):
-                    self._git.raise_failure(
-                        staged,
-                        "checkpoint_failed",
-                        worktree.change_set_id,
-                        worktree.base_sha,
-                        str(worktree.path),
-                    )
-                if staged.returncode == 0:
+                if outcome.empty:
                     record.state = "empty"
                     snapshot = self._snapshot(record, result_sha=worktree.base_sha)
                     self.cleanup(worktree, delete_branch=True)
@@ -331,44 +174,10 @@ class AgentWorktreeManager:
                     self._release_active()
                     return snapshot
 
-                hooks = self._scope_dir(Path(record.workspace_root)) / "hooks"
-                hooks.mkdir(parents=True, exist_ok=True)
-                message = f"Aura agent change set {worktree.change_set_id}"
-                self._git.run(
-                    worktree.path,
-                    [*_GIT_IDENTITY, "-c", f"core.hooksPath={hooks}", "commit", "--no-verify", "-m", message],
-                    change_set_id=worktree.change_set_id,
-                    failure_class="checkpoint_failed",
-                )
-                result_sha = self._git.rev_parse(
-                    worktree.path, "HEAD", change_set_id=worktree.change_set_id
-                )
-                parents = self._git.text(
-                    worktree.path,
-                    ["rev-list", "--parents", "-n", "1", result_sha],
-                    change_set_id=worktree.change_set_id,
-                    failure_class="checkpoint_failed",
-                ).strip().split()
-                if len(parents) != 2 or parents[1] != worktree.base_sha:
-                    raise AgentWorktreeError(
-                        "checkpoint_shape_invalid",
-                        "The Agent result was not one commit directly above its frozen base.",
-                        change_set_id=worktree.change_set_id,
-                        base_sha=worktree.base_sha,
-                        result_sha=result_sha,
-                        recovery_path=str(worktree.path),
-                    )
-
-                changed_paths = self._changed_paths(
-                    worktree.path, worktree.base_sha, result_sha, worktree.change_set_id
-                )
-                diffstat = self._diffstat(
-                    worktree.path, worktree.base_sha, result_sha, worktree.change_set_id
-                )
-                record.result_sha = result_sha
+                record.result_sha = outcome.result_sha
                 record.state = "ready"
-                record.changed_paths = list(changed_paths)
-                record.diffstat = diffstat
+                record.changed_paths = list(outcome.changed_paths)
+                record.diffstat = outcome.diffstat
                 record.failure_class = ""
                 record.error = ""
                 self._save()
@@ -401,33 +210,23 @@ class AgentWorktreeManager:
 
     # ---- observation and root decisions ------------------------------
 
-    def inspect(self, change_set_id: str) -> dict[str, Any]:
-        """Return an observational diff for one retained result."""
+    def list_change_sets(self) -> dict[str, Any]:
+        """Return compact discoverable metadata for every unresolved record."""
+        with self._lock:
+            return self._inspector.list_change_sets(self._records.values())
+
+    def inspect(
+        self, change_set_id: str, *, paths: tuple[str, ...] = ()
+    ) -> dict[str, Any]:
+        """Return compact metadata, plus a bounded diff only for exact paths."""
         with self._lock:
             record = self._require_record(change_set_id)
-            payload = self._snapshot(record).payload()
-            if record.result_sha:
-                self._verify_result_ref(record)
-                payload["diff"] = self._git.text(
-                    Path(record.workspace_root),
-                    ["diff", "--find-renames", "--no-ext-diff", record.base_sha, record.result_sha, "--"],
-                    change_set_id=change_set_id,
-                    failure_class="change_set_inspection_failed",
-                )
-            else:
-                recovery = Path(record.worktree_path)
-                payload["diff"] = ""
-                if recovery.is_dir() and self._is_owned_worktree(record):
-                    payload["worktree_status"] = self._git.text(
-                        recovery,
-                        ["status", "--short", "--untracked-files=all"],
-                        check=False,
-                        change_set_id=change_set_id,
-                        failure_class="change_set_inspection_failed",
-                    )
-            payload["ok"] = True
-            payload["tool"] = "inspect_agent_change_set"
-            return payload
+            return self._inspector.inspect(
+                record,
+                paths=paths,
+                verify_result_ref=self._verify_result_ref,
+                is_owned_worktree=self._is_owned_worktree,
+            )
 
     def apply(
         self,
@@ -440,20 +239,48 @@ class AgentWorktreeManager:
         with self._lock:
             record = self._require_ready_record(change_set_id)
             root = self._require_repository(change_set_id)
+            # A retained linked worktree keeps its branch checked out. Remove
+            # that exact clean checkout before approval; if it cannot be
+            # removed, refuse before the primary checkout is touched.
+            cleanup_error = self._cleanup_clean_worktree(record)
+            if cleanup_error:
+                raise AgentWorktreeError(
+                    "worktree_cleanup_failed",
+                    cleanup_error,
+                    change_set_id=change_set_id,
+                    base_sha=record.base_sha,
+                    result_sha=record.result_sha,
+                    recovery_path=record.worktree_path,
+                )
             self._verify_primary_unchanged(record, root)
             self._verify_result_ref(record)
             request = self._approval_request(record)
-            decision = approval_cb(request)
-            if decision.action in ("reject", "reject_all"):
-                return {
-                    **self._snapshot(record).payload(),
-                    "ok": False,
-                    "applied": False,
-                    "failure_class": "approval_rejected",
-                    "error": "The Agent change set was not applied because approval was rejected.",
-                    "approval": decision.action,
-                }
+            token = record.token()
+            before_approval = self._snapshot(record).payload()
 
+        # Approval can wait on the GUI thread. No lifecycle lock is held while
+        # a person decides.
+        decision = approval_cb(request)
+        if decision.action in ("reject", "reject_all"):
+            return {
+                **before_approval,
+                "ok": False,
+                "applied": False,
+                "failure_class": "approval_rejected",
+                "error": "The Agent change set was not applied because approval was rejected.",
+                "approval": decision.action,
+            }
+
+        with self._lock:
+            record = self._require_ready_record(change_set_id)
+            if record.token() != token:
+                raise AgentWorktreeError(
+                    "change_set_changed_during_approval",
+                    "The retained Agent result changed while approval was pending. "
+                    "Nothing was applied.",
+                    change_set_id=change_set_id,
+                )
+            root = self._require_repository(change_set_id)
             # The approval covered these exact base/result facts.  Recheck both
             # immediately before mutation so a moved branch or new dirt cannot
             # be overwritten by a stale decision.
@@ -462,33 +289,9 @@ class AgentWorktreeManager:
             if capture_before_write is not None:
                 for path in record.changed_paths:
                     capture_before_write(path)
-            self._git.run(
-                root,
-                [
-                    "-c",
-                    f"core.hooksPath={self._scope_dir(root) / 'hooks'}",
-                    "merge",
-                    "--ff-only",
-                    "--no-edit",
-                    record.result_sha,
-                ],
-                change_set_id=change_set_id,
-                failure_class="change_set_apply_failed",
-            )
-            landed = self._git.rev_parse(root, "HEAD", change_set_id=change_set_id)
-            if landed != record.result_sha:
-                raise AgentWorktreeError(
-                    "change_set_apply_failed",
-                    "Git did not leave the primary worktree at the approved result commit.",
-                    change_set_id=change_set_id,
-                    base_sha=record.base_sha,
-                    result_sha=record.result_sha,
-                )
-            self._delete_exact_ref(record, expected=record.result_sha)
+            self._ops.fast_forward(record, root, self._scope_dir(root) / "hooks")
             snapshot = self._snapshot(record)
-            self._records.pop(change_set_id, None)
-            self._save()
-            return {
+            response = {
                 **snapshot.payload(),
                 "ok": True,
                 "status": "applied",
@@ -496,6 +299,33 @@ class AgentWorktreeManager:
                 "tool": "apply_agent_change_set",
                 "approval": decision.action,
             }
+            # The primary checkout is now authoritatively at result_sha. Make
+            # that durable before best-effort ref/state cleanup so a crash or
+            # cleanup error can never make the record claim nothing changed.
+            record.state = "applied_cleanup_pending"
+            record.failure_class = "change_set_cleanup_pending"
+            record.error = "The change was applied; Aura still needs to clean retained Git state."
+            try:
+                self._save()
+                self._delete_exact_ref(record, expected=record.result_sha)
+                self._records.pop(change_set_id, None)
+                self._save()
+            except Exception as exc:
+                from aura.config import redact_secrets
+
+                warning = redact_secrets(f"{type(exc).__name__}: {exc}")
+                record.state = "applied_cleanup_pending"
+                record.failure_class = "change_set_cleanup_pending"
+                record.error = warning
+                self._records[change_set_id] = record
+                try:
+                    self._save()
+                except Exception:
+                    pass
+                response["status"] = "applied_cleanup_pending"
+                response["cleanup_pending"] = True
+                response["warning"] = warning
+            return response
 
     def discard(
         self,
@@ -506,19 +336,64 @@ class AgentWorktreeManager:
         """Explicitly delete one exact Aura-owned result and no other Git state."""
         with self._lock:
             record = self._require_record(change_set_id)
+            # A stranded recovery checkout may contain the only copy of edits.
+            # Stabilize it first so approval can describe the exact diff that
+            # will be deleted, never a generic recovery path.
+            if record.state != "ready" and record.worktree_path:
+                if self._active_id not in ("", change_set_id):
+                    raise AgentWorktreeError(
+                        "writable_delegation_busy",
+                        "Another writable Agent lifecycle operation is active. "
+                        "The change set was preserved.",
+                        change_set_id=record.change_set_id,
+                        base_sha=record.base_sha,
+                        result_sha=record.result_sha,
+                        recovery_path=record.worktree_path,
+                    )
+                active = AgentWorktree(
+                    record.change_set_id,
+                    record.agent_id,
+                    record.base_sha,
+                    record.branch_ref,
+                    Path(record.worktree_path),
+                )
+                self._active_id = record.change_set_id
+                empty_or_ready = self.checkpoint(active)
+                if change_set_id not in self._records:
+                    return {
+                        **empty_or_ready.payload(),
+                        "ok": True,
+                        "status": "discarded",
+                        "discarded": True,
+                        "tool": "discard_agent_change_set",
+                        "approval": "not_required_empty",
+                    }
+                record = self._require_record(change_set_id)
             request = self._approval_request(record, discard=True)
-            decision = approval_cb(request)
-            if decision.action in ("reject", "reject_all"):
-                return {
-                    **self._snapshot(record).payload(),
-                    "ok": False,
-                    "discarded": False,
-                    "failure_class": "approval_rejected",
-                    "error": "The Agent change set was preserved because discard was rejected.",
-                    "approval": decision.action,
-                }
+            token = record.token()
+            before_approval = self._snapshot(record).payload()
 
-            if record.worktree_path and Path(record.worktree_path).exists():
+        decision = approval_cb(request)
+        if decision.action in ("reject", "reject_all"):
+            return {
+                **before_approval,
+                "ok": False,
+                "discarded": False,
+                "failure_class": "approval_rejected",
+                "error": "The Agent change set was preserved because discard was rejected.",
+                "approval": decision.action,
+            }
+
+        with self._lock:
+            record = self._require_record(change_set_id)
+            if record.token() != token:
+                raise AgentWorktreeError(
+                    "change_set_changed_during_approval",
+                    "The retained Agent result changed while discard approval was "
+                    "pending. It was preserved.",
+                    change_set_id=change_set_id,
+                )
+            if record.worktree_path:
                 if not self._is_owned_worktree(record):
                     raise AgentWorktreeError(
                         "worktree_cleanup_refused",
@@ -526,44 +401,6 @@ class AgentWorktreeManager:
                         change_set_id=change_set_id,
                         recovery_path=record.worktree_path,
                     )
-                # Never force-remove recoverable dirt.  Make one last stable
-                # checkpoint first; if that fails the worktree remains intact.
-                if record.state != "ready":
-                    # Claiming the lifecycle slot is how ``checkpoint`` proves
-                    # nothing else owns this repository's writable state.  A
-                    # different change set already holding it is refused rather
-                    # than displaced: taking the slot here would clear *its*
-                    # marker on release and leave a second writable creation
-                    # looking permissible.
-                    if self._active_id not in ("", change_set_id):
-                        raise AgentWorktreeError(
-                            "writable_delegation_busy",
-                            "Another writable Agent lifecycle operation is active. "
-                            "The change set was preserved.",
-                            change_set_id=record.change_set_id,
-                            base_sha=record.base_sha,
-                            result_sha=record.result_sha,
-                            recovery_path=record.worktree_path,
-                        )
-                    active = AgentWorktree(
-                        record.change_set_id,
-                        record.agent_id,
-                        record.base_sha,
-                        record.branch_ref,
-                        Path(record.worktree_path),
-                    )
-                    self._active_id = record.change_set_id
-                    empty_or_ready = self.checkpoint(active)
-                    if change_set_id not in self._records:
-                        return {
-                            **empty_or_ready.payload(),
-                            "ok": True,
-                            "status": "discarded",
-                            "discarded": True,
-                            "tool": "discard_agent_change_set",
-                            "approval": decision.action,
-                        }
-                    record = self._require_record(change_set_id)
                 cleanup_error = self._cleanup_clean_worktree(record)
                 if cleanup_error:
                     raise AgentWorktreeError(
@@ -616,252 +453,30 @@ class AgentWorktreeManager:
     # ---- approval material -------------------------------------------
 
     def _approval_request(self, record: _Record, *, discard: bool = False) -> ApprovalRequest:
-        changes = self._approval_changes(record)
-        if changes:
-            first = changes[0]
-        else:
-            first = ApprovalFileChange(
-                rel_path=f"Agent change set {record.change_set_id}",
-                old_content="",
-                new_content=record.diffstat,
-                is_new_file=False,
-            )
-            changes = (first,)
-        return ApprovalRequest(
-            tool_name=("discard_agent_change_set" if discard else "apply_agent_change_set"),
-            rel_path=first.rel_path,
-            old_content=first.old_content,
-            new_content=first.new_content,
-            is_new_file=first.is_new_file,
-            changes=changes,
-        )
-
-    def _approval_changes(self, record: _Record) -> tuple[ApprovalFileChange, ...]:
-        if not record.result_sha:
-            return ()
-        rows = self._name_status(record)
-        changes: list[ApprovalFileChange] = []
-        for status, old_path, new_path in rows:
-            if status == "A":
-                old = ""
-                new = self._commit_content(record, record.result_sha, new_path)
-                rel_path = new_path
-                is_new = True
-            elif status == "D":
-                old = self._commit_content(record, record.base_sha, old_path)
-                new = ""
-                rel_path = old_path
-                is_new = False
-            elif status == "R":
-                old = self._commit_content(record, record.base_sha, old_path)
-                new = self._commit_content(record, record.result_sha, new_path)
-                changes.append(ApprovalFileChange(old_path, old, "", False, "delete"))
-                changes.append(ApprovalFileChange(new_path, "", new, True, "create"))
-                continue
-            elif status == "C":
-                new = self._commit_content(record, record.result_sha, new_path)
-                changes.append(ApprovalFileChange(new_path, "", new, True, "create"))
-                continue
-            else:
-                old = self._commit_content(record, record.base_sha, old_path)
-                new = self._commit_content(record, record.result_sha, new_path)
-                rel_path = (
-                    f"{old_path} -> {new_path}" if old_path != new_path else new_path
-                )
-                is_new = False
-            action = "create" if status == "A" else "delete" if status == "D" else "modify"
-            changes.append(ApprovalFileChange(rel_path, old, new, is_new, action))
-        return tuple(changes)
-
-    def _commit_content(self, record: _Record, sha: str, path: str) -> str:
-        proc = self._git.run(
-            Path(record.workspace_root),
-            ["show", f"{sha}:{path}"],
-            text=False,
-            check=False,
-            change_set_id=record.change_set_id,
-            failure_class="change_set_inspection_failed",
-        )
-        if proc.returncode != 0:
-            return ""
-        data = bytes(proc.stdout or b"")
-        try:
-            if b"\x00" in data:
-                raise UnicodeDecodeError("utf-8", data, 0, 1, "binary")
-            return data.decode("utf-8")
-        except UnicodeDecodeError:
-            return f"[binary content: {len(data)} bytes]"
+        return self._material.approval_request(record, discard=discard)
 
     # ---- invariants and Git helpers ----------------------------------
 
     def _require_repository(self, change_set_id: str) -> Path:
-        root = self._workspace_root
-        if root is None or not root.is_dir():
-            raise AgentWorktreeError(
-                "git_repository_required",
-                "Writable delegation requires an open Git repository.",
-                change_set_id=change_set_id,
-            )
-        proc = self._git.run(
-            root,
-            ["rev-parse", "--show-toplevel"],
-            check=False,
-            change_set_id=change_set_id,
-            failure_class="git_repository_required",
-        )
-        if proc.returncode != 0:
-            raise AgentWorktreeError(
-                "git_repository_required",
-                "Writable delegation requires a Git repository.",
-                change_set_id=change_set_id,
-            )
-        top = Path(str(proc.stdout).strip()).resolve()
-        if top != root.resolve():
-            raise AgentWorktreeError(
-                "git_repository_root_required",
-                "Writable delegation requires the open workspace to be the Git repository root.",
-                change_set_id=change_set_id,
-            )
-        bare = self._git.text(
-            root,
-            ["rev-parse", "--is-bare-repository"],
-            change_set_id=change_set_id,
-            failure_class="git_repository_required",
-        ).strip()
-        if bare != "false":
-            raise AgentWorktreeError(
-                "git_repository_required",
-                "Writable delegation requires a non-bare Git working repository.",
-                change_set_id=change_set_id,
-            )
-        return root
+        return self._ops.require_repository(self._workspace_root, change_set_id)
 
     def _verify_primary_unchanged(self, record: _Record, root: Path) -> None:
-        current_ref = self._git.symbolic_head(root, change_set_id=record.change_set_id)
-        if current_ref != record.primary_ref:
-            raise AgentWorktreeError(
-                "primary_branch_moved",
-                "The primary checkout changed branches after this Agent started. Nothing "
-                "was applied; the Agent result was preserved.",
-                change_set_id=record.change_set_id,
-                base_sha=record.base_sha,
-                result_sha=record.result_sha,
-            )
-        head = self._git.rev_parse(root, "HEAD", change_set_id=record.change_set_id)
-        if head != record.base_sha:
-            raise AgentWorktreeError(
-                "primary_branch_moved",
-                "The primary branch moved after this Agent started. Nothing was applied; "
-                "the Agent result was preserved.",
-                change_set_id=record.change_set_id,
-                base_sha=record.base_sha,
-                result_sha=record.result_sha,
-            )
-        if self._git.status_bytes(root, change_set_id=record.change_set_id):
-            raise AgentWorktreeError(
-                "primary_worktree_dirty",
-                "The primary worktree is no longer clean. Nothing was applied; the Agent "
-                "result was preserved.",
-                change_set_id=record.change_set_id,
-                base_sha=record.base_sha,
-                result_sha=record.result_sha,
-            )
+        self._ops.verify_primary_unchanged(record, root)
 
     def _verify_result_ref(self, record: _Record) -> None:
-        if not record.branch_ref.startswith(_BRANCH_PREFIX):
-            raise AgentWorktreeError(
-                "change_set_ref_invalid",
-                "The recorded result ref is not Aura-owned.",
-                change_set_id=record.change_set_id,
-            )
-        current = self._git.ref_sha(Path(record.workspace_root), record.branch_ref)
-        if not current or current != record.result_sha:
-            raise AgentWorktreeError(
-                "change_set_ref_changed",
-                "The Aura-owned result ref moved or disappeared. Nothing was changed.",
-                change_set_id=record.change_set_id,
-                base_sha=record.base_sha,
-                result_sha=record.result_sha,
-            )
+        self._ops.verify_result_ref(record)
 
     def _delete_exact_ref(self, record: _Record, *, expected: str) -> None:
-        if not record.branch_ref.startswith(_BRANCH_PREFIX):
-            raise AgentWorktreeError(
-                "change_set_ref_invalid",
-                "Refusing to delete a ref that is not Aura-owned.",
-                change_set_id=record.change_set_id,
-            )
-        current = self._git.ref_sha(Path(record.workspace_root), record.branch_ref)
-        if not current:
-            return
-        if current != expected:
-            raise AgentWorktreeError(
-                "change_set_ref_changed",
-                "The Aura-owned ref no longer names the expected commit and was preserved.",
-                change_set_id=record.change_set_id,
-                base_sha=record.base_sha,
-                result_sha=record.result_sha,
-            )
-        self._git.run(
-            Path(record.workspace_root),
-            ["update-ref", "-d", record.branch_ref, expected],
-            change_set_id=record.change_set_id,
-            failure_class="change_set_cleanup_failed",
-        )
+        self._ops.delete_exact_ref(record, expected=expected)
 
     def _cleanup_clean_worktree(self, record: _Record) -> str:
-        path = Path(record.worktree_path)
-        if not path.exists():
-            record.worktree_path = ""
+        before = record.worktree_path
+        error = self._ops.cleanup_clean_worktree(
+            record, is_owned=self._is_owned_worktree
+        )
+        if record.worktree_path != before:
             self._save()
-            return ""
-        if not self._is_owned_worktree(record):
-            return "Refusing to remove a path that is not the exact Aura-owned worktree."
-        try:
-            if self._git.status_bytes(path, change_set_id=record.change_set_id):
-                return "The recovery worktree is dirty and was preserved."
-            self._git.run(
-                Path(record.workspace_root),
-                ["worktree", "remove", str(path)],
-                change_set_id=record.change_set_id,
-                failure_class="worktree_cleanup_failed",
-            )
-        except AgentWorktreeError as exc:
-            return str(exc)
-        record.worktree_path = ""
-        self._save()
-        return ""
-
-    def _cleanup_failed_creation(self, record: _Record) -> None:
-        path = Path(record.worktree_path)
-        if path.exists() and self._is_owned_worktree(record):
-            try:
-                path.rmdir()
-            except OSError:
-                pass
-        if path.exists() and self._is_owned_worktree(record):
-            try:
-                if not self._git.status_bytes(path, change_set_id=record.change_set_id):
-                    self._git.run(
-                        Path(record.workspace_root),
-                        ["worktree", "remove", str(path)],
-                        check=False,
-                        change_set_id=record.change_set_id,
-                        failure_class="worktree_cleanup_failed",
-                    )
-            except AgentWorktreeError:
-                return
-        if path.exists():
-            return
-        current = self._git.ref_sha(Path(record.workspace_root), record.branch_ref)
-        if current == record.base_sha:
-            try:
-                self._delete_exact_ref(record, expected=record.base_sha)
-            except AgentWorktreeError:
-                return
-        if not self._git.ref_sha(Path(record.workspace_root), record.branch_ref):
-            self._records.pop(record.change_set_id, None)
-            self._save()
+        return error
 
     def _matching_active_record(self, worktree: AgentWorktree) -> _Record:
         record = self._records.get(worktree.change_set_id)
@@ -954,110 +569,23 @@ class AgentWorktreeManager:
             error=record.error,
         )
 
-    def _name_status(self, record: _Record) -> list[tuple[str, str, str]]:
-        proc = self._git.run(
-            Path(record.workspace_root),
-            ["diff", "--name-status", "-z", "-M", record.base_sha, record.result_sha, "--"],
-            text=False,
-            change_set_id=record.change_set_id,
-            failure_class="change_set_inspection_failed",
-        )
-        tokens = [
-            item.decode("utf-8", "surrogateescape")
-            for item in bytes(proc.stdout or b"").split(b"\0")
-            if item
-        ]
-        rows: list[tuple[str, str, str]] = []
-        index = 0
-        while index < len(tokens):
-            status_token = tokens[index]
-            index += 1
-            kind = status_token[:1]
-            if kind in ("R", "C") and index + 1 < len(tokens):
-                old_path, new_path = tokens[index], tokens[index + 1]
-                index += 2
-            elif index < len(tokens):
-                old_path = new_path = tokens[index]
-                index += 1
-            else:
-                break
-            rows.append((kind, old_path, new_path))
-        return rows
-
-    def _changed_paths(self, root: Path, base: str, result: str, change_set_id: str) -> tuple[str, ...]:
-        record = _Record(
-            change_set_id,
-            "",
-            str(root),
-            base,
-            "",
-            "",
-            "",
-            result_sha=result,
-        )
-        paths: list[str] = []
-        for _status, old_path, new_path in self._name_status(record):
-            for path in (old_path, new_path):
-                if path and path not in paths:
-                    paths.append(path)
-        return tuple(paths)
-
-    def _diffstat(self, root: Path, base: str, result: str, change_set_id: str) -> str:
-        return self._git.text(
-            root,
-            ["diff", "--stat", "--summary", "--find-renames", base, result, "--"],
-            change_set_id=change_set_id,
-            failure_class="checkpoint_failed",
-        ).strip()
-
     # ---- minimal persistence ----------------------------------------
 
-    def _workspace_token(self, root: Path) -> str:
-        from aura.agents.local_state import workspace_key
-
-        return workspace_key(root)[:12]
-
     def _scope_dir(self, root: Path) -> Path:
-        return self._runtime_base / self._workspace_token(root)
-
-    def _state_path(self) -> Path | None:
-        root = self._workspace_root
-        return (self._scope_dir(root) / "state.json") if root is not None else None
+        return self._record_store.scope_dir(root)
 
     def _reload(self) -> None:
-        path = self._state_path()
-        if path is None or not path.is_file():
-            return
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, TypeError):
-            return
-        records = raw.get("change_sets") if isinstance(raw, dict) else None
-        if not isinstance(records, list):
-            return
-        expected_root = str(self._workspace_root)
-        for item in records:
-            record = _Record.from_json(item)
-            if (
-                record is not None
-                and record.workspace_root == expected_root
-                and record.branch_ref.startswith(_BRANCH_PREFIX)
-            ):
-                self._records[record.change_set_id] = record
+        self._record_store.bind(self._workspace_root)
+        self._records = {
+            change_set_id: record
+            for change_set_id, record in self._record_store.records.items()
+            if record.branch_ref.startswith(_BRANCH_PREFIX)
+        }
+        self._record_store.records = self._records
 
     def _save(self) -> None:
-        path = self._state_path()
-        if path is None:
-            return
-        payload = {
-            "version": 1,
-            "workspace": str(self._workspace_root),
-            "change_sets": [asdict(record) for record in self._records.values()],
-        }
-        atomic_write_bytes(
-            path,
-            json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8"),
-        )
+        self._record_store.records = self._records
+        self._record_store.save()
 
 
 __all__ = [

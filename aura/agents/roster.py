@@ -61,8 +61,8 @@ class AgentTurnRoster:
     """The ordered, resolved agents one turn may delegate to.
 
     An empty roster is the ordinary case and means exactly one thing: this
-    turn behaves like single-agent Aura always has — no delegation tool, no
-    agent block in the prompt, nothing.
+    turn behaves like single-agent Aura always has — no delegation or retained
+    change-set tool weight and no prompt block.
     """
 
     entries: tuple[AgentRosterEntry, ...] = ()

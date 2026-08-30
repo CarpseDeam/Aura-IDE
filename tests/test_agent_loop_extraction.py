@@ -295,8 +295,8 @@ def test_cancelling_before_the_first_round_reports_and_runs_nothing(root) -> Non
     assert [e.message for e in events if isinstance(e, ApiError)] == ["Cancelled."]
 
 
-def test_cancelling_mid_batch_pairs_every_orphaned_call(root) -> None:
-    """The turn is repaired, not rewound: real results stay, gaps get paired."""
+def test_cancelling_mid_batch_keeps_every_result_that_already_returned(root) -> None:
+    """Cancellation cannot replace authoritative results returned by the batch."""
     cancelled = threading.Event()
     batch = [
         _call("read-a", "read_file", {"path": "note.txt"}),
@@ -311,8 +311,8 @@ def test_cancelling_mid_batch_pairs_every_orphaned_call(root) -> None:
 
     def on_event(event: Event) -> None:
         events.append(event)
-        # Stop the run the moment the first authoritative result lands, so the
-        # batch is interrupted with one call answered and one still open.
+        # Stop the run while results are being published. Both parallel reads
+        # have already returned by this point and must remain authoritative.
         if isinstance(event, ToolResult):
             cancelled.set()
 
@@ -334,12 +334,7 @@ def test_cancelling_mid_batch_pairs_every_orphaned_call(root) -> None:
     assert [m["tool_call_id"] for m in tools] == ["read-a", "read-b"]
     # The completed call keeps its real result verbatim.
     assert json.loads(tools[0]["content"])["ok"] is True
-    # The interrupted one is paired fail-closed, claiming nothing.
-    orphan = json.loads(tools[1]["content"])
-    assert orphan["ok"] is False
-    assert orphan["cancelled"] is True
-    assert "applied" not in orphan
-    assert orphan["execution_status"] == "interrupted_before_authoritative_result"
+    assert json.loads(tools[1]["content"])["ok"] is True
     assert [e.message for e in events if isinstance(e, ApiError)] == ["Cancelled."]
 
 

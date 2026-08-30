@@ -35,7 +35,6 @@ from PySide6.QtCore import (
 )
 
 from aura.agents.local_state import AgentLocalState
-from aura.agents.prompt import format_agent_roster_block
 from aura.agents.roster import EMPTY_AGENT_ROSTER, AgentTurnRoster, resolve_agent_turn_roster
 from aura.agents.runtime import AgentDelegationRunner
 from aura.agents.store import AgentStore
@@ -304,6 +303,10 @@ class ConversationBridge(QObject):
         # turn's own provider and model, so an agent that inherits inherits
         # what the user actually chose for this turn.
         self._turn_agent_roster: AgentTurnRoster = EMPTY_AGENT_ROSTER
+        # The GUI send layer deposits the immutable submission snapshot here
+        # immediately before ``send``. Keeping it out of History preserves
+        # the canonical transcript while still freezing queued authority.
+        self._submitted_agent_roster: AgentTurnRoster | None = None
         self._agent_runner = AgentDelegationRunner(
             workspace_root=self._registry.workspace_root
         )
@@ -381,6 +384,7 @@ class ConversationBridge(QObject):
         # from the previous one survives the switch: not the frozen roster, not
         # the root the child would have been rooted to.
         self._turn_agent_roster = EMPTY_AGENT_ROSTER
+        self._submitted_agent_roster = None
         self._registry.set_turn_agent_roster(None)
         self._agent_runner.set_workspace_root(root)
         if root is None:
@@ -491,9 +495,6 @@ class ConversationBridge(QObject):
             explicit_install_ids=self._turn_explicit_install_ids,
             active_capabilities=self._registry.active_capabilities(),
             read_only=self._turn_read_only,
-            agents_block=format_agent_roster_block(
-                self._turn_agent_roster.catalog_rows()
-            ),
         )
         self._context_gearbox_metadata = context_gearbox_metadata(
             composed.ledger, workspace_root=self._registry.workspace_root,
@@ -583,10 +584,14 @@ class ConversationBridge(QObject):
         # turn was sent or queued, resolved once here into immutable
         # definitions and this user's own permission grants. It happens before
         # the prompt is composed and before the first request, so the roster,
-        # the agent block, and the tool catalog cannot disagree with each other
-        # at any point in the turn. Editing an agent or changing a grant while
+        # the schema projection and runtime authority cannot disagree at any
+        # point in the turn. Editing an agent or changing a grant while
         # the turn runs takes effect on the next one.
-        self._freeze_turn_agent_roster(model=str(model), thinking=str(thinking))
+        submitted_roster = self._submitted_agent_roster
+        self._submitted_agent_roster = None
+        self._freeze_turn_agent_roster(
+            model=str(model), thinking=str(thinking), submitted=submitted_roster
+        )
         # Freeze the requested toolbar mode before composing the prompt or
         # starting the worker. The registry remains at this value for the
         # entire model/tool loop, including every later round.
@@ -671,6 +676,15 @@ class ConversationBridge(QObject):
         self._production_session.note_cancelled()
         self._approval_proxy.cancel_active_dialog()
         self._plan_review_proxy.cancel_active()
+
+    def set_submitted_agent_roster(self, roster: AgentTurnRoster) -> None:
+        """Deposit an ephemeral submission-time authority snapshot.
+
+        ``send`` consumes this exactly once. Definitions and grants can then
+        change without altering an already queued request, and the full
+        definition never needs to enter canonical History.
+        """
+        self._submitted_agent_roster = roster
 
     # ---- private slots ----------------------------------------------------
 
@@ -770,22 +784,29 @@ class ConversationBridge(QObject):
             # The roster is a turn capability too: the next turn freezes its
             # own from its own user message, so nothing carries over.
             self._turn_agent_roster = EMPTY_AGENT_ROSTER
+            self._submitted_agent_roster = None
             self._registry.set_turn_agent_roster(None)
             self._turn_active = False
             self.finished.emit()
 
-    def _freeze_turn_agent_roster(self, *, model: str, thinking: str) -> None:
+    def _freeze_turn_agent_roster(
+        self,
+        *,
+        model: str,
+        thinking: str,
+        submitted: AgentTurnRoster | None = None,
+    ) -> None:
         """Resolve this turn's roster and point the delegation runtime at it.
 
         With no workspace, no ids, or nothing that still resolves, the roster
         is empty — and an empty roster is the ordinary case: no
-        ``delegate_agent`` in the catalog, no agent block in the prompt, and
-        the single-agent behaviour Aura has always had.
+        ``delegate_agent`` in the catalog and the single-agent behaviour Aura
+        has always had.
         """
-        roster = EMPTY_AGENT_ROSTER
+        roster = submitted if submitted is not None else EMPTY_AGENT_ROSTER
         agent_ids = self._history.latest_real_user_available_agent_ids()
         workspace_root = self._registry.workspace_root
-        if agent_ids and workspace_root is not None:
+        if submitted is None and agent_ids and workspace_root is not None:
             try:
                 roster = resolve_agent_turn_roster(
                     agent_ids,

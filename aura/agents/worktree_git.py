@@ -13,7 +13,9 @@ never live in the same place.
 """
 from __future__ import annotations
 
+import hashlib
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -146,16 +148,93 @@ class GitRunner:
             self.raise_failure(proc, "git_revision_failed", change_set_id)
         return str(proc.stdout or "").strip() if proc.returncode == 0 else ""
 
-    def ref_sha(self, root: Path, ref: str) -> str:
-        """The commit *ref* names, or ``""`` when it does not exist."""
+    def ref_sha(
+        self, root: Path, ref: str, *, change_set_id: str = ""
+    ) -> str | None:
+        """The commit *ref* names, or ``None`` only when it is missing.
+
+        A permission, repository, or process failure is not a missing ref and
+        is raised honestly instead of being collapsed into the same empty value.
+        """
         proc = self.run(
             root,
             ["rev-parse", "--verify", "--quiet", ref],
             check=False,
-            change_set_id="",
+            change_set_id=change_set_id,
             failure_class="git_revision_failed",
         )
-        return str(proc.stdout).strip() if proc.returncode == 0 else ""
+        if proc.returncode == 0:
+            return str(proc.stdout).strip()
+        if proc.returncode == 1:
+            return None
+        self.raise_failure(proc, "git_revision_failed", change_set_id)
+        raise AssertionError("unreachable")
+
+    def bounded_bytes(
+        self,
+        root: Path,
+        args: list[str],
+        *,
+        max_bytes: int,
+        change_set_id: str,
+        failure_class: str,
+    ) -> tuple[bytes, int, bool, str]:
+        """Run Git without ever loading more than ``max_bytes + 1`` stdout bytes."""
+        try:
+            with tempfile.TemporaryFile() as output:
+                proc = subprocess.run(
+                    ["git", "-C", str(root), *args],
+                    stdout=output,
+                    stderr=subprocess.PIPE,
+                    text=False,
+                    check=False,
+                    shell=False,
+                    **get_subprocess_kwargs(),
+                )
+                if proc.returncode != 0:
+                    self.raise_failure(proc, failure_class, change_set_id)
+                total = output.tell()
+                output.seek(0)
+                data = output.read(max_bytes + 1)
+                output.seek(0)
+                digest = hashlib.sha256()
+                while True:
+                    chunk = output.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+        except AgentWorktreeError:
+            raise
+        except OSError as exc:
+            raise AgentWorktreeError(
+                failure_class,
+                f"Git could not be started: {exc}",
+                change_set_id=change_set_id,
+            ) from exc
+        truncated = total > max_bytes
+        return data[:max_bytes], total, truncated, digest.hexdigest()
+
+    def checked_out_worktree(
+        self, root: Path, branch_ref: str, *, change_set_id: str
+    ) -> str:
+        """Return the path checking out *branch_ref*, or ``""`` when none does."""
+        text = self.text(
+            root,
+            ["worktree", "list", "--porcelain"],
+            change_set_id=change_set_id,
+            failure_class="worktree_list_failed",
+        )
+        path = ""
+        for line in text.splitlines():
+            if line.startswith("worktree "):
+                path = line.removeprefix("worktree ").strip()
+            elif line.startswith("branch "):
+                ref = line.removeprefix("branch ").strip()
+                if ref == branch_ref:
+                    return path
+            elif not line.strip():
+                path = ""
+        return ""
 
     @staticmethod
     def raise_failure(

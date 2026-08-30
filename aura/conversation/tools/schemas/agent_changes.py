@@ -9,18 +9,43 @@ _ID_PROPERTY = {
     "description": "The exact change_set_id returned by delegate_agent.",
 }
 
+LIST_AGENT_CHANGE_SETS_TOOL_DEF: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "list_agent_change_sets",
+        "description": (
+            "List compact metadata for unresolved writable Agent results. Use this "
+            "to discover change_set_id values in a fresh conversation. Read-only."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    },
+}
+
 INSPECT_AGENT_CHANGE_SET_TOOL_DEF: dict[str, Any] = {
     "type": "function",
     "function": {
         "name": "inspect_agent_change_set",
         "description": (
             "Inspect a retained writable Agent result without changing the canonical "
-            "workspace. Returns its frozen base/result SHAs, changed paths, diffstat, "
-            "and textual diff (with binary files identified, not decoded)."
+            "workspace. By default returns compact metadata only. Pass exact changed "
+            "paths for a bounded textual diff with explicit binary, size, hash, and "
+            "truncation metadata."
         ),
         "parameters": {
             "type": "object",
-            "properties": {"change_set_id": _ID_PROPERTY},
+            "properties": {
+                "change_set_id": _ID_PROPERTY,
+                "paths": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                    "maxItems": 20,
+                    "description": "Optional exact changed paths to diff; omit for metadata only.",
+                },
+            },
             "required": ["change_set_id"],
             "additionalProperties": False,
         },
@@ -65,6 +90,7 @@ DISCARD_AGENT_CHANGE_SET_TOOL_DEF: dict[str, Any] = {
 }
 
 AGENT_CHANGE_SET_TOOL_DEFS = [
+    LIST_AGENT_CHANGE_SETS_TOOL_DEF,
     INSPECT_AGENT_CHANGE_SET_TOOL_DEF,
     APPLY_AGENT_CHANGE_SET_TOOL_DEF,
     DISCARD_AGENT_CHANGE_SET_TOOL_DEF,
@@ -75,4 +101,5 @@ __all__ = [
     "APPLY_AGENT_CHANGE_SET_TOOL_DEF",
     "DISCARD_AGENT_CHANGE_SET_TOOL_DEF",
     "INSPECT_AGENT_CHANGE_SET_TOOL_DEF",
+    "LIST_AGENT_CHANGE_SETS_TOOL_DEF",
 ]

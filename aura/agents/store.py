@@ -24,10 +24,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from aura.agents.document import parse_agent_document, render_agent_document
-from aura.agents.identity import AgentScope, new_agent_id
+from aura.agents.identity import AgentScope, is_valid_agent_id, new_agent_id
 from aura.agents.models import AgentDefinition, AgentThinking, ModelTarget
+from aura.agents.validation import delegation_description_error
 from aura.conversation.tools.fs_write import atomic_write_bytes
-from aura.paths import data_dir, is_link_like
+from aura.paths import data_dir, first_link_like_component, is_link_like
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +92,10 @@ class AgentStore:
         return self.project_dir if scope is AgentScope.PROJECT else self._personal_dir
 
     def path_for(self, scope: AgentScope, agent_id: str) -> Path:
-        return self.directory(scope) / f"{agent_id}{_DEFINITION_SUFFIX}"
+        safe_id = self._require_agent_id(agent_id)
+        path = self.directory(scope) / f"{safe_id}{_DEFINITION_SUFFIX}"
+        self._require_safe_storage_path(path, action="address")
+        return path
 
     # ---- discovery ---------------------------------------------------------
 
@@ -119,14 +123,21 @@ class AgentStore:
 
     def get(self, agent_id: str) -> AgentDefinition | None:
         """The one valid definition with *agent_id*, or None."""
+        self._require_agent_id(agent_id)
         row = self.summary(agent_id)
         return row.definition if row is not None else None
 
     def summary(self, agent_id: str) -> AgentSummary | None:
+        self._require_agent_id(agent_id)
         return next((row for row in self.list_summaries() if row.agent_id == agent_id), None)
 
     def _read_scope(self, scope: AgentScope) -> list[AgentSummary]:
         directory = self.directory(scope)
+        try:
+            self._require_safe_storage_path(directory, action="discover")
+        except AgentStoreError:
+            logger.warning("agents: refusing linked definition storage at %s", directory)
+            return []
         try:
             entries = sorted(directory.glob(f"*{_DEFINITION_SUFFIX}"))
         except OSError:
@@ -135,6 +146,10 @@ class AgentStore:
 
         rows: list[AgentSummary] = []
         for path in entries:
+            try:
+                self._require_safe_storage_path(path, action="discover")
+            except AgentStoreError:
+                continue
             if not path.is_file() or is_link_like(path):
                 continue
             rows.append(self._read_file(path, scope))
@@ -208,6 +223,7 @@ class AgentStore:
 
     def update(self, definition: AgentDefinition) -> AgentDefinition:
         """Overwrite an existing definition in place, keeping its id and scope."""
+        self._require_agent_id(definition.agent_id)
         self._validate(definition)
         path = self.path_for(definition.scope, definition.agent_id)
         if not path.is_file():
@@ -217,9 +233,16 @@ class AgentStore:
 
     def delete(self, agent_id: str) -> bool:
         """Remove the definition file for *agent_id*. False when there was none."""
+        self._require_agent_id(agent_id)
+        # Discovery intentionally hides redirected storage. Deletion must be
+        # stricter: returning "not found" through a linked scope would make a
+        # refused delete look successful to its caller.
+        for scope in (AgentScope.PROJECT, AgentScope.PERSONAL):
+            self._require_safe_storage_path(self.directory(scope), action="delete")
         row = self.summary(agent_id)
         if row is None or row.source is None:
             return False
+        self._require_safe_storage_path(row.source, action="delete")
         try:
             row.source.unlink()
         except OSError as exc:
@@ -228,19 +251,25 @@ class AgentStore:
 
     def _write(self, path: Path, definition: AgentDefinition) -> None:
         try:
+            self._require_agent_id(definition.agent_id)
+            self._require_safe_storage_path(path, action="write")
             path.parent.mkdir(parents=True, exist_ok=True)
+            # mkdir may have raced with a link/junction insertion. Recheck the
+            # complete chain immediately before the atomic replacement.
+            self._require_safe_storage_path(path, action="write")
             atomic_write_bytes(path, render_agent_document(definition).encode("utf-8"))
+        except AgentStoreError:
+            raise
         except OSError as exc:
             raise AgentStoreError(f"Could not save that agent: {exc}") from exc
 
     def _validate(self, definition: AgentDefinition) -> None:
+        self._require_agent_id(definition.agent_id)
         if not definition.name:
             raise AgentStoreError("An agent needs a name.")
-        if not definition.description:
-            raise AgentStoreError(
-                "An agent needs a short description — it is what Aura reads to "
-                "decide when to delegate to it."
-            )
+        description_error = delegation_description_error(definition.description)
+        if description_error:
+            raise AgentStoreError(description_error)
         if not definition.instructions:
             raise AgentStoreError("An agent needs instructions.")
         if not definition.target.is_complete:
@@ -251,6 +280,25 @@ class AgentStore:
         if collision is not None and collision.scope is not definition.scope:
             raise AgentStoreError(
                 f"Another agent already uses the id {definition.agent_id}."
+            )
+
+    @staticmethod
+    def _require_agent_id(agent_id: object) -> str:
+        if not is_valid_agent_id(agent_id):
+            raise AgentStoreError(f"'{agent_id}' is not a valid immutable agent id.")
+        return str(agent_id)
+
+    @staticmethod
+    def _require_safe_storage_path(path: Path, *, action: str) -> None:
+        """Refuse every redirecting component from the volume root downward."""
+        absolute = Path(path).absolute()
+        anchor = Path(absolute.anchor)
+        relative_parts = absolute.parts[1:] if absolute.anchor else absolute.parts
+        linked = first_link_like_component(anchor, tuple(relative_parts))
+        if linked is not None:
+            raise AgentStoreError(
+                f"Could not {action} Agent definitions through a symlink, junction, "
+                f"or redirecting reparse point ({linked})."
             )
 
 

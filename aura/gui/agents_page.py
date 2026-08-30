@@ -20,17 +20,14 @@ the project.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QCloseEvent, QFont
 from PySide6.QtWidgets import (
-    QComboBox,
     QDialog,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
-    QPlainTextEdit,
     QPushButton,
     QSplitter,
     QTreeWidget,
@@ -39,9 +36,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aura.agents.local_state import PERMISSION_ORDER, TERMINAL_WARNING, AgentPermission
-from aura.agents.models import THINKING_ORDER, AgentThinking
-from aura.gui.theme import BG, BG_ALT, BORDER, DANGER, FG, FG_DIM, FG_MUTED, WARN
+from aura.agents.local_state import TERMINAL_WARNING, AgentPermission
+from aura.gui.agents_editor import (
+    INHERIT_TARGET_LABEL,
+    AgentDetail,
+    AgentDraft,
+    AgentEditor,
+    ProviderChoices,
+    catalog_choices,
+)
+from aura.gui.theme import BG, BG_ALT, BORDER, FG, FG_DIM, FG_MUTED, WARN
 
 _ID_ROLE = Qt.ItemDataRole.UserRole
 
@@ -49,9 +53,6 @@ _ID_ROLE = Qt.ItemDataRole.UserRole
 SCOPE_ORDER: tuple[str, ...] = ("project", "personal")
 
 SCOPE_LABELS: dict[str, str] = {"project": "Project", "personal": "Personal"}
-
-#: What the provider control offers instead of a provider id.
-INHERIT_TARGET_LABEL = "Inherit Aura's provider and model"
 
 _BUSY_NOTE = (
     "Aura is running a turn. You can read your agents; changes are available "
@@ -82,66 +83,6 @@ class AgentRow:
     @property
     def scope_label(self) -> str:
         return SCOPE_LABELS.get(self.scope, self.scope.title())
-
-
-@dataclass(frozen=True)
-class AgentDetail:
-    """Everything the editor pane shows for the current row."""
-
-    agent_id: str
-    scope: str
-    name: str
-    description: str
-    instructions: str
-    provider: str
-    model: str
-    thinking: AgentThinking
-    permission: AgentPermission
-    available: bool
-    valid: bool = True
-    errors: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class AgentDraft:
-    """The definition fields the user has edited, on their way to Save.
-
-    Carries no permission and no availability: those are local decisions
-    that were already applied when the user made them.
-    """
-
-    agent_id: str
-    name: str
-    description: str
-    instructions: str
-    provider: str = ""
-    model: str = ""
-    thinking: AgentThinking = AgentThinking.INHERIT
-
-
-@dataclass(frozen=True)
-class ProviderChoices:
-    """The provider and model options the page offers, injected for testability."""
-
-    providers: tuple[tuple[str, str], ...] = ()
-    models: dict[str, tuple[str, ...]] = field(default_factory=dict)
-
-
-def catalog_choices() -> ProviderChoices:
-    """Provider and model options taken from Aura's own provider catalog."""
-    try:
-        from aura.providers.registry import ProviderRegistry
-
-        specs = ProviderRegistry().all()
-    except Exception:
-        return ProviderChoices()
-    providers = tuple(
-        (pid, getattr(spec, "label", pid)) for pid, spec in sorted(specs.items())
-    )
-    models = {
-        pid: tuple(sorted(getattr(spec, "models", {}) or {})) for pid, spec in specs.items()
-    }
-    return ProviderChoices(providers=providers, models=models)
 
 
 class AgentsPage(QDialog):
@@ -205,8 +146,6 @@ class AgentsPage(QDialog):
 
         layout.addLayout(self._build_footer())
 
-        self._render_detail()
-
     # ---- construction ------------------------------------------------------
 
     def _build_header(self) -> QHBoxLayout:
@@ -256,95 +195,22 @@ class AgentsPage(QDialog):
         return self._tree
 
     def _build_editor(self) -> QWidget:
-        panel = QWidget()
-        panel.setStyleSheet(f"background: {BG}; color: {FG};")
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(8)
-
-        self._heading = QLabel()
-        self._heading.setWordWrap(True)
-        self._heading.setStyleSheet(
-            f"color: {FG}; font-size: 14px; font-weight: 600; background: transparent;"
-        )
-        layout.addWidget(self._heading)
-
-        self._errors_label = QLabel()
-        self._errors_label.setWordWrap(True)
-        self._errors_label.setStyleSheet(
-            f"color: {DANGER}; font-size: 11px; background: transparent;"
-        )
-        layout.addWidget(self._errors_label)
-
-        self._name = QLineEdit()
-        self._name.setPlaceholderText("Display name, e.g. Reviewer")
-        layout.addLayout(_labelled("Name", self._name))
-
-        self._description = QLineEdit()
-        self._description.setPlaceholderText(
-            "One line: what this agent is for. Aura reads it when choosing whom to ask."
-        )
-        layout.addLayout(_labelled("Delegation description", self._description))
-
-        self._instructions = QPlainTextEdit()
-        self._instructions.setPlaceholderText(
-            "The full brief this agent works from. Markdown."
-        )
-        self._instructions.setMinimumHeight(140)
-        layout.addLayout(_labelled("Instructions", self._instructions), 1)
-
-        self._provider = QComboBox()
-        self._provider.addItem(INHERIT_TARGET_LABEL, "")
-        for provider_id, label in self._choices.providers:
-            self._provider.addItem(label, provider_id)
-        self._provider.currentIndexChanged.connect(lambda _index: self._sync_model_choices())
-
-        self._model = QComboBox()
-        self._model.setEditable(True)
-        self._model.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-
-        target_row = QHBoxLayout()
-        target_row.setSpacing(8)
-        target_row.addLayout(_labelled("Provider", self._provider), 1)
-        target_row.addLayout(_labelled("Model", self._model), 1)
-        layout.addLayout(target_row)
-
-        self._thinking = QComboBox()
-        for mode in THINKING_ORDER:
-            self._thinking.addItem(mode.label, mode.value)
-
-        self._permission = QComboBox()
-        for permission in PERMISSION_ORDER:
-            self._permission.addItem(permission.label, permission.value)
-        self._permission.setToolTip(
-            "What this agent may do in this project, on this computer. Your "
-            "choice only — it is never written into the project."
-        )
-        self._permission.currentIndexChanged.connect(
-            lambda _index: self._emit_permission_change()
-        )
-
-        controls_row = QHBoxLayout()
-        controls_row.setSpacing(8)
-        controls_row.addLayout(_labelled("Thinking", self._thinking), 1)
-        controls_row.addLayout(_labelled("Permission", self._permission), 2)
-        layout.addLayout(controls_row)
-
-        actions = QHBoxLayout()
-        actions.setSpacing(8)
-        self._save_btn = QPushButton("Save")
-        self._save_btn.setObjectName("primary")
-        self._save_btn.clicked.connect(self._on_save_clicked)
-        actions.addWidget(self._save_btn)
-
-        self._delete_btn = QPushButton("Delete")
-        self._delete_btn.setObjectName("danger")
-        self._delete_btn.clicked.connect(self._on_delete_clicked)
-        actions.addWidget(self._delete_btn)
-        actions.addStretch(1)
-        layout.addLayout(actions)
-
-        return panel
+        self._editor = AgentEditor(self._choices)
+        self._editor.save_requested.connect(self.save_requested)
+        self._editor.delete_requested.connect(self.delete_requested)
+        self._editor.permission_changed.connect(self.permission_changed)
+        # Compatibility aliases for the page's established test/controller
+        # surface. Ownership remains inside AgentEditor.
+        self._name = self._editor.name
+        self._description = self._editor.description
+        self._instructions = self._editor.instructions
+        self._provider = self._editor.provider
+        self._model = self._editor.model
+        self._thinking = self._editor.thinking
+        self._permission = self._editor.permission
+        self._save_btn = self._editor.save_button
+        self._delete_btn = self._editor.delete_button
+        return self._editor
 
     def _build_footer(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -371,7 +237,7 @@ class AgentsPage(QDialog):
     def set_detail(self, detail: AgentDetail | None) -> None:
         """Load the editor with the current agent, or clear it."""
         self._detail = detail
-        self._render_detail()
+        self._editor.set_detail(detail)
 
     def apply_local_state(
         self, agent_id: str, *, available: bool, permission: AgentPermission
@@ -406,7 +272,9 @@ class AgentsPage(QDialog):
                 self._detail = replace(
                     self._detail, available=available, permission=permission
                 )
-                self._select_data(self._permission, permission.value)
+                self._editor.apply_local_state(
+                    available=available, permission=permission
+                )
         finally:
             self._loading = False
 
@@ -419,6 +287,7 @@ class AgentsPage(QDialog):
         """
         self._mutations_enabled = bool(enabled)
         self._status.setText("" if self._mutations_enabled else _BUSY_NOTE)
+        self._editor.set_mutations_enabled(self._mutations_enabled)
         self._rebuild()
 
     def mutations_enabled(self) -> bool:
@@ -452,20 +321,7 @@ class AgentsPage(QDialog):
 
     def draft(self) -> AgentDraft | None:
         """What Save would send right now, or None with nothing loaded."""
-        if self._detail is None:
-            return None
-        provider = str(self._provider.currentData() or "")
-        model = self._model.currentText().strip() if provider else ""
-        thinking = AgentThinking.parse(self._thinking.currentData()) or AgentThinking.INHERIT
-        return AgentDraft(
-            agent_id=self._detail.agent_id,
-            name=self._name.text().strip(),
-            description=self._description.text().strip(),
-            instructions=self._instructions.toPlainText().strip(),
-            provider=provider,
-            model=model,
-            thinking=thinking,
-        )
+        return self._editor.draft()
 
     # ---- rendering ---------------------------------------------------------
 
@@ -524,94 +380,16 @@ class AgentsPage(QDialog):
         if changed or not current:
             self.current_row_changed.emit(current)
 
-    def _render_detail(self) -> None:
-        detail = self._detail
-        self._loading = True
-        try:
-            if detail is None:
-                self._heading.setText("No agent selected")
-                self._errors_label.setText("")
-                self._errors_label.setVisible(False)
-                self._name.clear()
-                self._description.clear()
-                self._instructions.setPlainText("")
-                self._provider.setCurrentIndex(0)
-                self._model.setCurrentText("")
-                self._thinking.setCurrentIndex(0)
-                self._permission.setCurrentIndex(0)
-                self._update_actions()
-                return
-
-            scope_label = SCOPE_LABELS.get(detail.scope, detail.scope.title())
-            self._heading.setText(f"{detail.name or 'Untitled agent'}  ·  {scope_label}")
-            self._errors_label.setText(
-                "\n".join(f"• {line}" for line in detail.errors) if detail.errors else ""
-            )
-            self._errors_label.setVisible(bool(detail.errors))
-            self._name.setText(detail.name)
-            self._description.setText(detail.description)
-            self._instructions.setPlainText(detail.instructions)
-            self._select_data(self._provider, detail.provider)
-            self._sync_model_choices()
-            self._model.setCurrentText(detail.model)
-            self._select_data(self._thinking, detail.thinking.value)
-            self._select_data(self._permission, detail.permission.value)
-        finally:
-            self._loading = False
-        self._update_actions()
-
-    def _sync_model_choices(self) -> None:
-        """Offer the chosen provider's models; inherit means no model at all."""
-        provider = str(self._provider.currentData() or "")
-        current = self._model.currentText()
-        self._model.blockSignals(True)
-        self._model.clear()
-        if provider:
-            self._model.addItems(list(self._choices.models.get(provider, ())))
-            self._model.setCurrentText(current)
-        else:
-            self._model.setCurrentText("")
-        self._model.blockSignals(False)
-        self._model.setEnabled(bool(provider) and self._editable())
-
-    @staticmethod
-    def _select_data(combo: QComboBox, value: str) -> None:
-        index = combo.findData(value)
-        combo.setCurrentIndex(index if index >= 0 else 0)
-
-    def _editable(self) -> bool:
-        return self._mutations_enabled and self._detail is not None
-
     def _update_actions(self) -> None:
-        editable = self._editable()
         self._new_project_btn.setEnabled(self._mutations_enabled)
         self._new_personal_btn.setEnabled(self._mutations_enabled)
-        for widget in (self._name, self._description):
-            widget.setReadOnly(not editable)
-            widget.setEnabled(self._detail is not None)
-        self._instructions.setReadOnly(not editable)
-        self._instructions.setEnabled(self._detail is not None)
-        self._provider.setEnabled(editable)
-        self._model.setEnabled(editable and bool(self._provider.currentData()))
-        self._thinking.setEnabled(editable)
-        self._permission.setEnabled(editable)
-        self._save_btn.setEnabled(editable)
-        self._delete_btn.setEnabled(editable)
+        self._editor.set_mutations_enabled(self._mutations_enabled)
 
     # ---- user intent -------------------------------------------------------
 
     def _request_create(self, scope: str) -> None:
         if self._mutations_enabled:
             self.create_requested.emit(scope)
-
-    def _on_save_clicked(self) -> None:
-        draft = self.draft()
-        if draft is not None and self._mutations_enabled:
-            self.save_requested.emit(draft)
-
-    def _on_delete_clicked(self) -> None:
-        if self._current_id and self._mutations_enabled:
-            self.delete_requested.emit(self._current_id)
 
     def _on_item_changed(self, item: QTreeWidgetItem, _column: int) -> None:
         if self._loading or not self._mutations_enabled:
@@ -626,14 +404,6 @@ class AgentsPage(QDialog):
             return
         self.availability_changed.emit(agent_id, available)
 
-    def _emit_permission_change(self) -> None:
-        if self._loading or not self._mutations_enabled or self._detail is None:
-            return
-        value = str(self._permission.currentData() or AgentPermission.READ_ONLY.value)
-        if value == self._detail.permission.value:
-            return
-        self.permission_changed.emit(self._detail.agent_id, value)
-
     # ---- Qt lifecycle ------------------------------------------------------
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt naming
@@ -647,16 +417,6 @@ class AgentsPage(QDialog):
     def hideEvent(self, event) -> None:  # noqa: N802 - Qt naming
         super().hideEvent(event)
         self.visibility_changed.emit(False)
-
-
-def _labelled(text: str, widget: QWidget) -> QVBoxLayout:
-    layout = QVBoxLayout()
-    layout.setSpacing(3)
-    label = QLabel(text)
-    label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px; background: transparent;")
-    layout.addWidget(label)
-    layout.addWidget(widget)
-    return layout
 
 
 def _item_flags(row: AgentRow, mutations_enabled: bool) -> Qt.ItemFlag:

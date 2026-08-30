@@ -25,12 +25,17 @@ import os
 from enum import Enum
 from pathlib import Path
 
+from aura.agents.identity import is_valid_agent_id
 from aura.conversation.tools.fs_write import atomic_write_bytes
 from aura.paths import data_dir
 
 logger = logging.getLogger(__name__)
 
 _STATE_VERSION = 1
+
+
+class AgentLocalStateError(RuntimeError):
+    """A private roster or permission decision could not be persisted."""
 
 
 class AgentPermission(str, Enum):
@@ -131,6 +136,7 @@ class AgentLocalState:
         return tuple(self._load()["available"])
 
     def is_available(self, agent_id: str) -> bool:
+        self._require_agent_id(agent_id)
         return agent_id in self._load()["available"]
 
     def set_available(self, agent_id: str, available: bool) -> None:
@@ -139,6 +145,7 @@ class AgentLocalState:
         Appending rather than inserting keeps the order the user built: a
         newly activated agent joins the list where they just put it.
         """
+        self._require_agent_id(agent_id)
         data = self._load()
         roster: list[str] = data["available"]
         if available and agent_id not in roster:
@@ -155,6 +162,7 @@ class AgentLocalState:
         seen: list[str] = []
         for agent_id in agent_ids:
             text = str(agent_id)
+            self._require_agent_id(text)
             if text and text not in seen:
                 seen.append(text)
         data["available"] = seen
@@ -164,10 +172,12 @@ class AgentLocalState:
 
     def permission(self, agent_id: str) -> AgentPermission:
         """What *agent_id* may do here. Unknown agents are read-only."""
+        self._require_agent_id(agent_id)
         raw = self._load()["permissions"].get(agent_id)
         return AgentPermission.parse(raw) or DEFAULT_PERMISSION
 
     def set_permission(self, agent_id: str, permission: AgentPermission) -> None:
+        self._require_agent_id(agent_id)
         data = self._load()
         data["permissions"][agent_id] = AgentPermission(permission).value
         self._save(data)
@@ -176,6 +186,7 @@ class AgentLocalState:
 
     def forget(self, agent_id: str) -> None:
         """Drop every local decision about *agent_id* — used when it is deleted."""
+        self._require_agent_id(agent_id)
         data = self._load()
         changed = False
         if agent_id in data["available"]:
@@ -203,13 +214,20 @@ class AgentLocalState:
 
         available = raw.get("available")
         if isinstance(available, list):
-            blank["available"] = [str(item) for item in available if isinstance(item, str)]
+            blank["available"] = [
+                item for item in available
+                if isinstance(item, str) and is_valid_agent_id(item)
+            ]
         permissions = raw.get("permissions")
         if isinstance(permissions, dict):
             blank["permissions"] = {
                 str(key): str(value)
                 for key, value in permissions.items()
-                if isinstance(key, str) and AgentPermission.parse(value) is not None
+                if (
+                    isinstance(key, str)
+                    and is_valid_agent_id(key)
+                    and AgentPermission.parse(value) is not None
+                )
             }
         return blank
 
@@ -225,8 +243,18 @@ class AgentLocalState:
                 self._path,
                 json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8"),
             )
-        except OSError:
-            logger.debug("agents: could not write local state %s", self._path, exc_info=True)
+        except Exception as exc:
+            raise AgentLocalStateError(
+                f"Could not save Agent roster and permissions: {exc}"
+            ) from exc
+
+    @staticmethod
+    def _require_agent_id(agent_id: object) -> str:
+        if not is_valid_agent_id(agent_id):
+            raise AgentLocalStateError(
+                f"'{agent_id}' is not a valid immutable agent id."
+            )
+        return str(agent_id)
 
 
 __all__ = [
@@ -234,6 +262,7 @@ __all__ = [
     "PERMISSION_ORDER",
     "TERMINAL_WARNING",
     "AgentLocalState",
+    "AgentLocalStateError",
     "AgentPermission",
     "workspace_key",
 ]

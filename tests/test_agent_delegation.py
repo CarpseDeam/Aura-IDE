@@ -2,7 +2,7 @@
 
 What this file holds Aura to:
 
-* an empty roster changes nothing — no tool, no prompt block, no metadata on
+* an empty roster changes nothing — no tool, no metadata on
   the wire, and the same catalog single-agent Aura has always sent;
 * the root is told an agent's id, name, and one-line description, and never
   its instructions;
@@ -30,7 +30,6 @@ from aura.agents.delegation import DelegationFailure, DelegationResult, Delegati
 from aura.agents.identity import AgentScope
 from aura.agents.local_state import AgentLocalState, AgentPermission
 from aura.agents.models import AgentDefinition, AgentThinking, ModelTarget
-from aura.agents.prompt import format_agent_roster_block
 from aura.agents.roster import (
     AgentRosterEntry,
     AgentTurnRoster,
@@ -161,11 +160,6 @@ def test_no_agents_means_no_delegation_tool(workspace: Path) -> None:
     assert names == ["read_file", "grep_search", "update_task_checklist", "apply_patch", "shell"]
 
 
-def test_no_agents_means_no_agent_block_in_the_prompt() -> None:
-    assert format_agent_roster_block(()) == ""
-    assert format_agent_roster_block(({"agent_id": "", "name": "x"},)) == ""
-
-
 def test_an_empty_roster_leaves_the_catalog_byte_for_byte_unchanged() -> None:
     catalog = ToolCatalog()
 
@@ -204,21 +198,7 @@ def test_the_root_sees_only_id_name_and_description(workspace: Path) -> None:
     assert "SECRET-CHILD-BRIEF" not in rendered
 
 
-def test_the_prompt_block_carries_the_roster_but_not_the_briefs() -> None:
-    block = format_agent_roster_block(_roster().catalog_rows())
-
-    assert "reviewer000" in block
-    assert "Reviewer" in block
-    assert "SECRET-CHILD-BRIEF" not in block
-
-
-def test_the_prompt_block_states_the_grant_it_actually_froze() -> None:
-    """The block may not make a blanket claim the frozen grant contradicts.
-
-    A writable agent's row and Aura's guidance are read together by the root
-    model; guidance that says every agent "cannot edit anything" would tell it
-    the opposite of what `delegate_agent` and the change-set tools offer.
-    """
+def test_the_single_schema_projection_states_the_frozen_grant() -> None:
     writable = AgentTurnRoster(
         entries=(
             AgentRosterEntry(
@@ -228,13 +208,19 @@ def test_the_prompt_block_states_the_grant_it_actually_froze() -> None:
         )
     )
 
-    block = format_agent_roster_block(writable.catalog_rows())
+    registry = ToolRegistry(workspace_root=Path.cwd())
+    registry.set_turn_agent_roster(writable)
+    block = json.dumps(
+        next(
+            tool
+            for tool in registry.tool_defs()
+            if tool["function"]["name"] == "delegate_agent"
+        )
+    )
 
     assert AgentPermission.WORKTREE_EDIT.label in block
     assert "cannot edit anything" not in block
-    # Read-only remains stated as a per-agent grant, never as a global fact.
-    read_only_block = format_agent_roster_block(_roster().catalog_rows())
-    assert AgentPermission.READ_ONLY.label in read_only_block
+    assert INSTRUCTIONS not in block
 
 
 def test_the_roster_keeps_the_users_own_order(workspace: Path) -> None:
@@ -500,7 +486,7 @@ def test_no_workspace_refuses_instead_of_rooting_a_child_at_home() -> None:
 
 
 def test_delegation_is_serialized_never_run_in_parallel() -> None:
-    assert BUILTIN_TOOL_EFFECTS["delegate_agent"] is ToolEffect.COMMAND
+    assert BUILTIN_TOOL_EFFECTS["delegate_agent"] is ToolEffect.BOOKKEEPING
     assert BUILTIN_TOOL_EFFECTS["delegate_agent"] is not ToolEffect.OBSERVATION
 
 

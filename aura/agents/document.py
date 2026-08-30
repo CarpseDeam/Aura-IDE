@@ -30,6 +30,7 @@ import yaml
 
 from aura.agents.identity import AgentScope, is_valid_agent_id
 from aura.agents.models import AgentDefinition, AgentThinking, ModelTarget
+from aura.agents.validation import delegation_description_error
 
 _DELIMITER = "---"
 
@@ -116,8 +117,9 @@ def parse_agent_document(
         errors.append("'name' is required")
 
     description = _string(loaded.get("description"))
-    if not description:
-        errors.append("'description' is required — Aura reads it to choose an agent")
+    description_error = delegation_description_error(description)
+    if description_error:
+        errors.append(description_error)
 
     target, target_errors = _read_target(loaded)
     errors.extend(target_errors)

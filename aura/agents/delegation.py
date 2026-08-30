@@ -76,6 +76,8 @@ class DelegationFailure(str, Enum):
     WORKTREE_CREATION_FAILED = "worktree_creation_failed"
     #: Stable child edits could not be committed for later inspection/application.
     CHECKPOINT_FAILED = "checkpoint_failed"
+    #: The frozen root turn permits observation but forbids workspace mutation.
+    ROOT_MUTATION_FORBIDDEN = "root_mutation_forbidden"
 
 
 @dataclass(frozen=True)
@@ -130,7 +132,6 @@ class DelegationResult:
     changed_paths: tuple[str, ...] = ()
     diffstat: str = ""
     tests_reported: tuple[dict[str, Any], ...] = ()
-    final_report: str = ""
     extras: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -166,16 +167,18 @@ class DelegationResult:
         if self.duration_ms is not None:
             body["duration_ms"] = self.duration_ms
         if self.permission and self.permission != "read_only":
+            visible_paths = self.changed_paths[:50]
             body.update(
                 {
                     "permission": self.permission,
                     "change_set_id": self.change_set_id,
                     "base_sha": self.base_sha,
                     "result_sha": self.result_sha,
-                    "changed_paths": list(self.changed_paths),
+                    "changed_paths": list(visible_paths),
+                    "changed_path_count": len(self.changed_paths),
+                    "changed_paths_truncated": len(self.changed_paths) > len(visible_paths),
                     "diffstat": self.diffstat,
                     "tests_reported": list(self.tests_reported),
-                    "final_report": self.final_report,
                 }
             )
         for key, value in self.extras.items():

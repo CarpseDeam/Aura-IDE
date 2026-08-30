@@ -24,7 +24,13 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QObject
 from PySide6.QtWidgets import QMessageBox, QWidget
 
-from aura.agents.local_state import AgentLocalState, AgentPermission
+from aura.agents.identity import is_valid_agent_id
+from aura.agents.local_state import (
+    DEFAULT_PERMISSION,
+    AgentLocalState,
+    AgentLocalStateError,
+    AgentPermission,
+)
 from aura.agents.models import AgentDefinition, AgentScope, AgentThinking, ModelTarget
 from aura.agents.store import AgentStore, AgentStoreError, AgentSummary
 from aura.gui.agents_page import (
@@ -226,6 +232,7 @@ class MainWindowAgentsController(QObject):
         rows: list[AgentRow] = []
         for summary in summaries:
             definition = summary.definition
+            addressable = is_valid_agent_id(summary.agent_id)
             rows.append(
                 AgentRow(
                     agent_id=summary.agent_id,
@@ -236,8 +243,14 @@ class MainWindowAgentsController(QObject):
                     thinking_label=definition.thinking.label if definition else "",
                     # A definition that did not load is never offered to Aura,
                     # whatever the local roster still remembers about it.
-                    available=summary.valid and summary.agent_id in available,
-                    permission=state.permission(summary.agent_id),
+                    available=(
+                        summary.valid and addressable and summary.agent_id in available
+                    ),
+                    permission=(
+                        state.permission(summary.agent_id)
+                        if addressable
+                        else DEFAULT_PERMISSION
+                    ),
                     valid=summary.valid,
                     errors=summary.errors,
                 )
@@ -256,6 +269,7 @@ class MainWindowAgentsController(QObject):
         if summary is None or state is None:
             return None
         definition = summary.definition
+        addressable = is_valid_agent_id(agent_id)
         return AgentDetail(
             agent_id=summary.agent_id,
             scope=summary.scope.value,
@@ -265,8 +279,8 @@ class MainWindowAgentsController(QObject):
             provider=definition.target.provider if definition else "",
             model=definition.target.model if definition else "",
             thinking=definition.thinking if definition else AgentThinking.INHERIT,
-            permission=state.permission(agent_id),
-            available=state.is_available(agent_id),
+            permission=state.permission(agent_id) if addressable else DEFAULT_PERMISSION,
+            available=state.is_available(agent_id) if addressable else False,
             valid=summary.valid,
             errors=summary.errors,
         )
@@ -336,7 +350,13 @@ class MainWindowAgentsController(QObject):
             return
         # A deleted agent keeps no authority: the local decisions about it go
         # with it, so an id that is later reused starts read-only and inactive.
-        state.forget(agent_id)
+        try:
+            state.forget(agent_id)
+        except AgentLocalStateError as exc:
+            # The definition is already gone, so the stale id cannot become
+            # available. Surface the persistence failure instead of pretending
+            # every part of the operation succeeded.
+            self._show_error("Agents", str(exc))
         self.refresh()
 
     # ---- local decisions ---------------------------------------------------
@@ -348,7 +368,12 @@ class MainWindowAgentsController(QObject):
         summary = self._summaries.get(agent_id)
         if summary is None or not summary.valid:
             return
-        state.set_available(agent_id, bool(available))
+        try:
+            state.set_available(agent_id, bool(available))
+        except AgentLocalStateError as exc:
+            self._show_error("Agents", str(exc))
+            self._apply_local_state(agent_id, state)
+            return
         self._apply_local_state(agent_id, state)
 
     def _on_permission_changed(self, agent_id: str, permission_value: str) -> None:
@@ -356,7 +381,12 @@ class MainWindowAgentsController(QObject):
         permission = AgentPermission.parse(permission_value)
         if state is None or permission is None or not self._mutations_allowed():
             return
-        state.set_permission(agent_id, permission)
+        try:
+            state.set_permission(agent_id, permission)
+        except AgentLocalStateError as exc:
+            self._show_error("Agents", str(exc))
+            self._apply_local_state(agent_id, state)
+            return
         self._apply_local_state(agent_id, state)
 
     def _apply_local_state(self, agent_id: str, state: AgentLocalState) -> None:

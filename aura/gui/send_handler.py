@@ -17,6 +17,9 @@ _log = logging.getLogger(__name__)
 
 from dataclasses import dataclass
 
+from aura.agents.local_state import AgentLocalState
+from aura.agents.roster import EMPTY_AGENT_ROSTER, AgentTurnRoster, resolve_agent_turn_roster
+from aura.agents.store import AgentStore
 from aura.config import PROVIDERS, AppSettings, ModelInfo, ThinkingMode, has_usable_provider_configuration
 from aura.conversation.external_paths import extract_external_read_paths
 from aura.conversation.target_files import extract_target_files
@@ -55,6 +58,9 @@ class QueuedItem:
     #: skills are: making an agent available after queueing must not reach
     #: back and change a request the user already submitted.
     available_agent_ids: tuple[str, ...] = ()
+    #: Full definition + effective grant, immutable and deliberately only in
+    #: memory. Child instructions never enter canonical/provider History.
+    agent_roster: AgentTurnRoster = EMPTY_AGENT_ROSTER
 
 
 class SendHandler(QObject):
@@ -150,12 +156,34 @@ class SendHandler(QObject):
             _log.debug("Could not read the available agent roster", exc_info=True)
             return ()
 
+    def _capture_agent_roster(
+        self, available_agent_ids: tuple[str, ...] | None = None
+    ) -> AgentTurnRoster:
+        """Resolve definitions and grants now, at submission time."""
+        ids = (
+            self._capture_available_agent_ids()
+            if available_agent_ids is None
+            else tuple(available_agent_ids)
+        )
+        if not ids or self._workspace_root is None:
+            return EMPTY_AGENT_ROSTER
+        try:
+            return resolve_agent_turn_roster(
+                ids,
+                definitions=AgentStore(self._workspace_root),
+                permissions=AgentLocalState(self._workspace_root),
+            )
+        except Exception:
+            _log.debug("Could not freeze the submitted Agent roster", exc_info=True)
+            return EMPTY_AGENT_ROSTER
+
     def handle_send(
         self,
         payload: SendPayload,
         model: str,
         thinking: ThinkingMode,
         available_agent_ids: tuple[str, ...] | None = None,
+        agent_roster: AgentTurnRoster | None = None,
     ) -> bool:
         """Process a send payload: run Aura's own commands, queue if busy, or send.
 
@@ -209,11 +237,12 @@ class SendHandler(QObject):
         # Frozen once for this submission: a queued item keeps the roster it
         # was queued with, and a dequeued one replays that captured roster
         # rather than reading the live one again.
-        agent_ids = (
-            self._capture_available_agent_ids()
-            if available_agent_ids is None
-            else tuple(available_agent_ids)
+        frozen_roster = (
+            self._capture_agent_roster(available_agent_ids)
+            if agent_roster is None
+            else agent_roster
         )
+        agent_ids = frozen_roster.ids
 
         if self._bridge.is_running() or self._queue_paused:
             item = QueuedItem(
@@ -223,6 +252,7 @@ class SendHandler(QObject):
                 thinking=thinking,
                 selected_skills=tuple(payload.selected_skills),
                 available_agent_ids=agent_ids,
+                agent_roster=frozen_roster,
             )
             self._message_queue.append(item)
             self._input.set_queued_messages(len(self._message_queue))
@@ -238,7 +268,7 @@ class SendHandler(QObject):
             )
             return False
 
-        self._finalize_send(payload, model, thinking, agent_ids)
+        self._finalize_send(payload, model, thinking, frozen_roster)
         return True
 
     def _restore_local_command_selection(self, payload: SendPayload) -> None:
@@ -496,7 +526,7 @@ class SendHandler(QObject):
         payload: SendPayload,
         model: str,
         thinking: ThinkingMode,
-        available_agent_ids: tuple[str, ...] = (),
+        agent_roster: AgentTurnRoster = EMPTY_AGENT_ROSTER,
     ) -> None:
         """Build the message parts, append to history, and send via the bridge."""
         # Authorization is derived from the literal user text before history
@@ -526,7 +556,7 @@ class SendHandler(QObject):
                 explicit_installed_skill_ids=tuple(
                     skill.install_id for skill in payload.selected_skills
                 ),
-                available_agent_ids=available_agent_ids,
+                available_agent_ids=agent_roster.ids,
             )
         else:
             self._bridge.history.append_user_text(
@@ -535,7 +565,7 @@ class SendHandler(QObject):
                 explicit_installed_skill_ids=tuple(
                     skill.install_id for skill in payload.selected_skills
                 ),
-                available_agent_ids=available_agent_ids,
+                available_agent_ids=agent_roster.ids,
             )
 
         self._chat.add_user(text, [a.b64 for a in image_atts] or None)
@@ -548,6 +578,9 @@ class SendHandler(QObject):
             "send_start model=%s thinking=%s workspace_root=%s",
             model, thinking, self._workspace_root,
         )
+        set_roster = getattr(self._bridge, "set_submitted_agent_roster", None)
+        if callable(set_roster):
+            set_roster(agent_roster)
         self._bridge.send(model=model, thinking=thinking)
 
     # ---- model info lookup -------------------------------------------------
@@ -587,4 +620,5 @@ class SendHandler(QObject):
             item.model,
             item.thinking,
             available_agent_ids=item.available_agent_ids,
+            agent_roster=item.agent_roster,
         )
