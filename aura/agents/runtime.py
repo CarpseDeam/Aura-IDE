@@ -269,6 +269,21 @@ class AgentDelegationRunner:
                 agent_name=definition.name,
             )
 
+        # A child's read surface is the open workspace and nothing wider. With
+        # no workspace there is no root to give it, and inventing one — the
+        # user's home directory, say — would hand a child a surface the user
+        # never opened and contradict the workspace facts its own prompt
+        # states. The root turn already resolves an empty roster in this case;
+        # this is the second, unconditional refusal.
+        workspace_root = self._workspace_root
+        if workspace_root is None:
+            return DelegationResult.failure(
+                agent_id,
+                DelegationFailure.WORKSPACE_REQUIRED,
+                "No workspace is open, so there is nothing an agent could read.",
+                agent_name=definition.name,
+            )
+
         resolved, failure, message = resolve_model_target(
             definition.target,
             definition.thinking,
@@ -305,7 +320,7 @@ class AgentDelegationRunner:
                 brief,
                 resolved,
                 cancel_event,
-                workspace_root=self._child_root(),
+                workspace_root=workspace_root,
                 permission=permission,
             )
             return result
@@ -536,9 +551,6 @@ class AgentDelegationRunner:
         )
         return result, _reported_tests(history)
 
-    def _child_root(self) -> Path:
-        return self._workspace_root if self._workspace_root is not None else Path.home()
-
     def _child_registry(
         self, workspace_root: Path, permission: AgentPermission
     ) -> ToolRegistry:
@@ -692,16 +704,6 @@ def _default_backend_factory(provider: str) -> Any:
     from aura.backends import APIAgentBackend
 
     return APIAgentBackend(provider=provider)
-
-
-def _default_child_registry(workspace_root: Path) -> ToolRegistry:
-    """A dedicated child registry: rooted to the workspace, read-only, alone.
-
-    Nothing is connected to it — no MCP server, no dynamic tool directory
-    scan, no Skills turn state, no roster — and ``read_only`` shuts off every
-    mutation handler underneath the catalog as well.
-    """
-    return ToolRegistry(workspace_root=Path(workspace_root), read_only=True)
 
 
 __all__ = [

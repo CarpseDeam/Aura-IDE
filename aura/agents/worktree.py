@@ -9,17 +9,22 @@ The linked worktree is isolation for Git changes, not an operating-system
 sandbox.  In particular, a terminal-enabled child still runs with the user's
 authority and can reach absolute paths, the network, credentials, and Git's
 shared metadata.
+
+Only the rules live here.  Running Git and turning a Git failure into a
+reportable :class:`~aura.agents.worktree_git.AgentWorktreeError` belongs to
+:class:`~aura.agents.worktree_git.GitRunner`, which this manager reaches
+through for every call it makes.
 """
 from __future__ import annotations
 
 import json
-import subprocess
 import threading
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from aura.agents.worktree_git import AgentWorktreeError, GitRunner
 from aura.conversation.tools._types import (
     ApprovalCallback,
     ApprovalFileChange,
@@ -34,37 +39,6 @@ _GIT_IDENTITY = (
     "-c", "user.email=agent@aura.local",
     "-c", "commit.gpgSign=false",
 )
-
-
-class AgentWorktreeError(RuntimeError):
-    """A focused lifecycle failure that is safe to report to the root."""
-
-    def __init__(
-        self,
-        failure_class: str,
-        message: str,
-        *,
-        change_set_id: str = "",
-        base_sha: str = "",
-        result_sha: str = "",
-        recovery_path: str = "",
-    ) -> None:
-        super().__init__(message)
-        self.failure_class = failure_class
-        self.change_set_id = change_set_id
-        self.base_sha = base_sha
-        self.result_sha = result_sha
-        self.recovery_path = recovery_path
-
-    def payload(self) -> dict[str, Any]:
-        return {
-            "failure_class": self.failure_class,
-            "error": str(self),
-            "change_set_id": self.change_set_id,
-            "base_sha": self.base_sha,
-            "result_sha": self.result_sha,
-            "recovery_path": self.recovery_path,
-        }
 
 
 @dataclass(frozen=True)
@@ -165,6 +139,10 @@ class AgentWorktreeManager:
             Path(workspace_root).resolve() if workspace_root is not None else None
         )
         self._runtime_base = Path(runtime_root) if runtime_root is not None else data_dir() / "aw"
+        # Every Git call this manager makes goes through here. It owns running
+        # the process and naming a failure; this class owns the rules about
+        # when a call is allowed to happen at all.
+        self._git = GitRunner()
         self._lock = threading.RLock()
         self._active_id = ""
         self._pending_workspace_root: Path | None = None
@@ -206,9 +184,9 @@ class AgentWorktreeManager:
                     change_set_id=change_set_id,
                 )
             root = self._require_repository(change_set_id)
-            base_sha = self._rev_parse(root, "HEAD", change_set_id=change_set_id)
-            primary_ref = self._symbolic_head(root, change_set_id=change_set_id)
-            dirty = self._status_bytes(root, change_set_id=change_set_id)
+            base_sha = self._git.rev_parse(root, "HEAD", change_set_id=change_set_id)
+            primary_ref = self._git.symbolic_head(root, change_set_id=change_set_id)
+            dirty = self._git.status_bytes(root, change_set_id=change_set_id)
             if dirty:
                 raise AgentWorktreeError(
                     "primary_worktree_dirty",
@@ -222,7 +200,7 @@ class AgentWorktreeManager:
             worktree_path = scope / change_set_id
             branch_ref = f"{_BRANCH_PREFIX}{self._workspace_token(root)}/{change_set_id}"
             branch_name = branch_ref.removeprefix("refs/heads/")
-            if worktree_path.exists() or self._ref_sha(root, branch_ref):
+            if worktree_path.exists() or self._git.ref_sha(root, branch_ref):
                 raise AgentWorktreeError(
                     "worktree_name_collision",
                     "Aura generated a worktree identity that is already in use.",
@@ -245,7 +223,7 @@ class AgentWorktreeManager:
             hooks = scope / "hooks"
             hooks.mkdir(parents=True, exist_ok=True)
             try:
-                self._git(
+                self._git.run(
                     root,
                     [
                         "-c",
@@ -294,7 +272,7 @@ class AgentWorktreeManager:
         with self._lock:
             record = self._matching_active_record(worktree)
             try:
-                symbolic = self._git_text(
+                symbolic = self._git.text(
                     worktree.path,
                     ["symbolic-ref", "-q", "HEAD"],
                     change_set_id=worktree.change_set_id,
@@ -313,23 +291,23 @@ class AgentWorktreeManager:
                 # A terminal-enabled child may have made intermediate commits.  Soft
                 # reset only the exact Aura-owned checked-out ref, then stage the final
                 # filesystem state so the retained result is still one runtime commit.
-                current = self._rev_parse(
+                current = self._git.rev_parse(
                     worktree.path, "HEAD", change_set_id=worktree.change_set_id
                 )
                 if current != worktree.base_sha:
-                    self._git(
+                    self._git.run(
                         worktree.path,
                         ["reset", "--soft", worktree.base_sha],
                         change_set_id=worktree.change_set_id,
                         failure_class="checkpoint_failed",
                     )
-                self._git(
+                self._git.run(
                     worktree.path,
                     ["add", "-A", "--", "."],
                     change_set_id=worktree.change_set_id,
                     failure_class="checkpoint_failed",
                 )
-                staged = self._git(
+                staged = self._git.run(
                     worktree.path,
                     ["diff", "--cached", "--quiet", "--exit-code"],
                     check=False,
@@ -337,7 +315,7 @@ class AgentWorktreeManager:
                     failure_class="checkpoint_failed",
                 )
                 if staged.returncode not in (0, 1):
-                    self._raise_git_failure(
+                    self._git.raise_failure(
                         staged,
                         "checkpoint_failed",
                         worktree.change_set_id,
@@ -356,16 +334,16 @@ class AgentWorktreeManager:
                 hooks = self._scope_dir(Path(record.workspace_root)) / "hooks"
                 hooks.mkdir(parents=True, exist_ok=True)
                 message = f"Aura agent change set {worktree.change_set_id}"
-                self._git(
+                self._git.run(
                     worktree.path,
                     [*_GIT_IDENTITY, "-c", f"core.hooksPath={hooks}", "commit", "--no-verify", "-m", message],
                     change_set_id=worktree.change_set_id,
                     failure_class="checkpoint_failed",
                 )
-                result_sha = self._rev_parse(
+                result_sha = self._git.rev_parse(
                     worktree.path, "HEAD", change_set_id=worktree.change_set_id
                 )
-                parents = self._git_text(
+                parents = self._git.text(
                     worktree.path,
                     ["rev-list", "--parents", "-n", "1", result_sha],
                     change_set_id=worktree.change_set_id,
@@ -430,7 +408,7 @@ class AgentWorktreeManager:
             payload = self._snapshot(record).payload()
             if record.result_sha:
                 self._verify_result_ref(record)
-                payload["diff"] = self._git_text(
+                payload["diff"] = self._git.text(
                     Path(record.workspace_root),
                     ["diff", "--find-renames", "--no-ext-diff", record.base_sha, record.result_sha, "--"],
                     change_set_id=change_set_id,
@@ -440,7 +418,7 @@ class AgentWorktreeManager:
                 recovery = Path(record.worktree_path)
                 payload["diff"] = ""
                 if recovery.is_dir() and self._is_owned_worktree(record):
-                    payload["worktree_status"] = self._git_text(
+                    payload["worktree_status"] = self._git.text(
                         recovery,
                         ["status", "--short", "--untracked-files=all"],
                         check=False,
@@ -484,7 +462,7 @@ class AgentWorktreeManager:
             if capture_before_write is not None:
                 for path in record.changed_paths:
                     capture_before_write(path)
-            self._git(
+            self._git.run(
                 root,
                 [
                     "-c",
@@ -497,7 +475,7 @@ class AgentWorktreeManager:
                 change_set_id=change_set_id,
                 failure_class="change_set_apply_failed",
             )
-            landed = self._rev_parse(root, "HEAD", change_set_id=change_set_id)
+            landed = self._git.rev_parse(root, "HEAD", change_set_id=change_set_id)
             if landed != record.result_sha:
                 raise AgentWorktreeError(
                     "change_set_apply_failed",
@@ -551,6 +529,22 @@ class AgentWorktreeManager:
                 # Never force-remove recoverable dirt.  Make one last stable
                 # checkpoint first; if that fails the worktree remains intact.
                 if record.state != "ready":
+                    # Claiming the lifecycle slot is how ``checkpoint`` proves
+                    # nothing else owns this repository's writable state.  A
+                    # different change set already holding it is refused rather
+                    # than displaced: taking the slot here would clear *its*
+                    # marker on release and leave a second writable creation
+                    # looking permissible.
+                    if self._active_id not in ("", change_set_id):
+                        raise AgentWorktreeError(
+                            "writable_delegation_busy",
+                            "Another writable Agent lifecycle operation is active. "
+                            "The change set was preserved.",
+                            change_set_id=record.change_set_id,
+                            base_sha=record.base_sha,
+                            result_sha=record.result_sha,
+                            recovery_path=record.worktree_path,
+                        )
                     active = AgentWorktree(
                         record.change_set_id,
                         record.agent_id,
@@ -680,7 +674,7 @@ class AgentWorktreeManager:
         return tuple(changes)
 
     def _commit_content(self, record: _Record, sha: str, path: str) -> str:
-        proc = self._git(
+        proc = self._git.run(
             Path(record.workspace_root),
             ["show", f"{sha}:{path}"],
             text=False,
@@ -708,7 +702,7 @@ class AgentWorktreeManager:
                 "Writable delegation requires an open Git repository.",
                 change_set_id=change_set_id,
             )
-        proc = self._git(
+        proc = self._git.run(
             root,
             ["rev-parse", "--show-toplevel"],
             check=False,
@@ -728,7 +722,7 @@ class AgentWorktreeManager:
                 "Writable delegation requires the open workspace to be the Git repository root.",
                 change_set_id=change_set_id,
             )
-        bare = self._git_text(
+        bare = self._git.text(
             root,
             ["rev-parse", "--is-bare-repository"],
             change_set_id=change_set_id,
@@ -743,7 +737,7 @@ class AgentWorktreeManager:
         return root
 
     def _verify_primary_unchanged(self, record: _Record, root: Path) -> None:
-        current_ref = self._symbolic_head(root, change_set_id=record.change_set_id)
+        current_ref = self._git.symbolic_head(root, change_set_id=record.change_set_id)
         if current_ref != record.primary_ref:
             raise AgentWorktreeError(
                 "primary_branch_moved",
@@ -753,7 +747,7 @@ class AgentWorktreeManager:
                 base_sha=record.base_sha,
                 result_sha=record.result_sha,
             )
-        head = self._rev_parse(root, "HEAD", change_set_id=record.change_set_id)
+        head = self._git.rev_parse(root, "HEAD", change_set_id=record.change_set_id)
         if head != record.base_sha:
             raise AgentWorktreeError(
                 "primary_branch_moved",
@@ -763,7 +757,7 @@ class AgentWorktreeManager:
                 base_sha=record.base_sha,
                 result_sha=record.result_sha,
             )
-        if self._status_bytes(root, change_set_id=record.change_set_id):
+        if self._git.status_bytes(root, change_set_id=record.change_set_id):
             raise AgentWorktreeError(
                 "primary_worktree_dirty",
                 "The primary worktree is no longer clean. Nothing was applied; the Agent "
@@ -780,7 +774,7 @@ class AgentWorktreeManager:
                 "The recorded result ref is not Aura-owned.",
                 change_set_id=record.change_set_id,
             )
-        current = self._ref_sha(Path(record.workspace_root), record.branch_ref)
+        current = self._git.ref_sha(Path(record.workspace_root), record.branch_ref)
         if not current or current != record.result_sha:
             raise AgentWorktreeError(
                 "change_set_ref_changed",
@@ -797,7 +791,7 @@ class AgentWorktreeManager:
                 "Refusing to delete a ref that is not Aura-owned.",
                 change_set_id=record.change_set_id,
             )
-        current = self._ref_sha(Path(record.workspace_root), record.branch_ref)
+        current = self._git.ref_sha(Path(record.workspace_root), record.branch_ref)
         if not current:
             return
         if current != expected:
@@ -808,7 +802,7 @@ class AgentWorktreeManager:
                 base_sha=record.base_sha,
                 result_sha=record.result_sha,
             )
-        self._git(
+        self._git.run(
             Path(record.workspace_root),
             ["update-ref", "-d", record.branch_ref, expected],
             change_set_id=record.change_set_id,
@@ -824,9 +818,9 @@ class AgentWorktreeManager:
         if not self._is_owned_worktree(record):
             return "Refusing to remove a path that is not the exact Aura-owned worktree."
         try:
-            if self._status_bytes(path, change_set_id=record.change_set_id):
+            if self._git.status_bytes(path, change_set_id=record.change_set_id):
                 return "The recovery worktree is dirty and was preserved."
-            self._git(
+            self._git.run(
                 Path(record.workspace_root),
                 ["worktree", "remove", str(path)],
                 change_set_id=record.change_set_id,
@@ -847,8 +841,8 @@ class AgentWorktreeManager:
                 pass
         if path.exists() and self._is_owned_worktree(record):
             try:
-                if not self._status_bytes(path, change_set_id=record.change_set_id):
-                    self._git(
+                if not self._git.status_bytes(path, change_set_id=record.change_set_id):
+                    self._git.run(
                         Path(record.workspace_root),
                         ["worktree", "remove", str(path)],
                         check=False,
@@ -859,13 +853,13 @@ class AgentWorktreeManager:
                 return
         if path.exists():
             return
-        current = self._ref_sha(Path(record.workspace_root), record.branch_ref)
+        current = self._git.ref_sha(Path(record.workspace_root), record.branch_ref)
         if current == record.base_sha:
             try:
                 self._delete_exact_ref(record, expected=record.base_sha)
             except AgentWorktreeError:
                 return
-        if not self._ref_sha(Path(record.workspace_root), record.branch_ref):
+        if not self._git.ref_sha(Path(record.workspace_root), record.branch_ref):
             self._records.pop(record.change_set_id, None)
             self._save()
 
@@ -961,7 +955,7 @@ class AgentWorktreeManager:
         )
 
     def _name_status(self, record: _Record) -> list[tuple[str, str, str]]:
-        proc = self._git(
+        proc = self._git.run(
             Path(record.workspace_root),
             ["diff", "--name-status", "-z", "-M", record.base_sha, record.result_sha, "--"],
             text=False,
@@ -1009,121 +1003,12 @@ class AgentWorktreeManager:
         return tuple(paths)
 
     def _diffstat(self, root: Path, base: str, result: str, change_set_id: str) -> str:
-        return self._git_text(
+        return self._git.text(
             root,
             ["diff", "--stat", "--summary", "--find-renames", base, result, "--"],
             change_set_id=change_set_id,
             failure_class="checkpoint_failed",
         ).strip()
-
-    def _status_bytes(self, root: Path, *, change_set_id: str) -> bytes:
-        proc = self._git(
-            root,
-            ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-            text=False,
-            change_set_id=change_set_id,
-            failure_class="git_status_failed",
-        )
-        return bytes(proc.stdout or b"")
-
-    def _rev_parse(self, root: Path, rev: str, *, change_set_id: str) -> str:
-        return self._git_text(
-            root,
-            ["rev-parse", "--verify", rev],
-            change_set_id=change_set_id,
-            failure_class="git_revision_failed",
-        ).strip()
-
-    def _symbolic_head(self, root: Path, *, change_set_id: str) -> str:
-        proc = self._git(
-            root,
-            ["symbolic-ref", "-q", "HEAD"],
-            check=False,
-            change_set_id=change_set_id,
-            failure_class="git_revision_failed",
-        )
-        if proc.returncode not in (0, 1):
-            self._raise_git_failure(proc, "git_revision_failed", change_set_id)
-        return str(proc.stdout or "").strip() if proc.returncode == 0 else ""
-
-    def _ref_sha(self, root: Path, ref: str) -> str:
-        proc = self._git(
-            root,
-            ["rev-parse", "--verify", "--quiet", ref],
-            check=False,
-            change_set_id="",
-            failure_class="git_revision_failed",
-        )
-        return str(proc.stdout).strip() if proc.returncode == 0 else ""
-
-    def _git_text(
-        self,
-        root: Path,
-        args: list[str],
-        *,
-        check: bool = True,
-        change_set_id: str,
-        failure_class: str,
-    ) -> str:
-        proc = self._git(
-            root,
-            args,
-            text=True,
-            check=check,
-            change_set_id=change_set_id,
-            failure_class=failure_class,
-        )
-        return str(proc.stdout or "")
-
-    def _git(
-        self,
-        root: Path,
-        args: list[str],
-        *,
-        text: bool = True,
-        check: bool = True,
-        change_set_id: str,
-        failure_class: str,
-    ) -> subprocess.CompletedProcess[Any]:
-        try:
-            proc = subprocess.run(
-                ["git", "-C", str(root), *args],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=text,
-                encoding="utf-8" if text else None,
-                errors="replace" if text else None,
-                check=False,
-                shell=False,
-            )
-        except OSError as exc:
-            raise AgentWorktreeError(
-                failure_class,
-                f"Git could not be started: {exc}",
-                change_set_id=change_set_id,
-            ) from exc
-        if check and proc.returncode != 0:
-            self._raise_git_failure(proc, failure_class, change_set_id)
-        return proc
-
-    @staticmethod
-    def _raise_git_failure(
-        proc: subprocess.CompletedProcess[Any],
-        failure_class: str,
-        change_set_id: str,
-        base_sha: str = "",
-        recovery_path: str = "",
-    ) -> None:
-        stderr = proc.stderr.decode("utf-8", "replace") if isinstance(proc.stderr, bytes) else str(proc.stderr or "")
-        stdout = proc.stdout.decode("utf-8", "replace") if isinstance(proc.stdout, bytes) else str(proc.stdout or "")
-        detail = (stderr or stdout or f"Git exited with code {proc.returncode}").strip()
-        raise AgentWorktreeError(
-            failure_class,
-            detail,
-            change_set_id=change_set_id,
-            base_sha=base_sha,
-            recovery_path=recovery_path,
-        )
 
     # ---- minimal persistence ----------------------------------------
 

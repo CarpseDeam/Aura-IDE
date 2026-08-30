@@ -468,6 +468,37 @@ def test_discard_removes_only_the_exact_owned_result(repo: Path, tmp_path: Path)
         manager.inspect(result.change_set_id)
 
 
+def test_discard_refuses_to_displace_another_active_lifecycle(
+    repo: Path, tmp_path: Path
+) -> None:
+    """Discarding a stranded result may not take the one lifecycle slot.
+
+    Claiming the slot is how ``checkpoint`` proves nothing else owns this
+    repository's writable state, and releasing it is what makes a second
+    writable creation permissible again. A record stranded by an earlier
+    process is reloaded with the slot free, so a later run can legitimately
+    hold it — and discarding the stranded one must not clear that run's marker
+    on release.
+    """
+    first = _manager(repo, tmp_path)
+    stranded = first.create("writer")
+    (stranded.path / "partial.txt").write_text("partial\n", encoding="utf-8")
+
+    # A fresh manager over the same runtime state: the stranded record is
+    # reloaded, but nothing holds the lifecycle slot, so a new run may start.
+    reloaded = _manager(repo, tmp_path)
+    running = reloaded.create("other-writer")
+
+    with pytest.raises(AgentWorktreeError) as caught:
+        reloaded.discard(stranded.change_set_id, approval_cb=_approve)
+
+    assert caught.value.failure_class == "writable_delegation_busy"
+    # The running lifecycle still owns the slot, and nothing was removed.
+    assert reloaded._active_id == running.change_set_id
+    assert (stranded.path / "partial.txt").is_file()
+    assert reloaded.inspect(stranded.change_set_id)["ok"] is True
+
+
 def test_cancellation_recovery_checkpoints_stable_partial_edits(
     repo: Path, tmp_path: Path
 ) -> None:

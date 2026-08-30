@@ -48,6 +48,8 @@ class DelegationFailure(str, Enum):
     AGENT_NOT_AVAILABLE = "agent_not_available"
     #: The parent-authored task was missing or empty.
     TASK_MISSING = "task_missing"
+    #: No workspace is open, so a child has nothing it may legitimately read.
+    WORKSPACE_REQUIRED = "workspace_required"
     #: The definition names a provider this build does not know.
     PROVIDER_UNKNOWN = "provider_unknown"
     #: The provider is known but has no usable credentials on this machine.

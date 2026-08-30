@@ -212,6 +212,31 @@ def test_the_prompt_block_carries_the_roster_but_not_the_briefs() -> None:
     assert "SECRET-CHILD-BRIEF" not in block
 
 
+def test_the_prompt_block_states_the_grant_it_actually_froze() -> None:
+    """The block may not make a blanket claim the frozen grant contradicts.
+
+    A writable agent's row and Aura's guidance are read together by the root
+    model; guidance that says every agent "cannot edit anything" would tell it
+    the opposite of what `delegate_agent` and the change-set tools offer.
+    """
+    writable = AgentTurnRoster(
+        entries=(
+            AgentRosterEntry(
+                definition=_definition(),
+                permission=AgentPermission.WORKTREE_EDIT,
+            ),
+        )
+    )
+
+    block = format_agent_roster_block(writable.catalog_rows())
+
+    assert AgentPermission.WORKTREE_EDIT.label in block
+    assert "cannot edit anything" not in block
+    # Read-only remains stated as a per-agent grant, never as a global fact.
+    read_only_block = format_agent_roster_block(_roster().catalog_rows())
+    assert AgentPermission.READ_ONLY.label in read_only_block
+
+
 def test_the_roster_keeps_the_users_own_order(workspace: Path) -> None:
     store = AgentStore(workspace, personal_dir=workspace / "personal")
     state = AgentLocalState(workspace, state_root=workspace / "state")
@@ -435,9 +460,10 @@ def test_the_child_runs_a_read_but_a_call_outside_its_catalog_is_refused(
 
 
 def test_a_child_registry_cannot_delegate_even_if_asked(workspace: Path) -> None:
-    from aura.agents.runtime import _default_child_registry
-
-    registry = _default_child_registry(workspace)
+    # The production owner of the child's registry, not a stand-in: the runner
+    # builds exactly one, and it is the thing that must be unable to delegate.
+    runner = AgentDelegationRunner(workspace_root=workspace)
+    registry = runner._child_registry(workspace, AgentPermission.READ_ONLY)
 
     assert registry.read_only is True
     assert registry.turn_agent_roster.is_empty
@@ -449,6 +475,28 @@ def test_a_child_registry_cannot_delegate_even_if_asked(workspace: Path) -> None
 
     assert result.ok is False
     assert result.payload["failure_class"] == DelegationFailure.AGENT_NOT_AVAILABLE.value
+
+
+def test_no_workspace_refuses_instead_of_rooting_a_child_at_home() -> None:
+    """A child is never given a root the user did not open.
+
+    The root turn already resolves an empty roster without a workspace; this
+    is the runner's own refusal, so no route can hand a child the user's home
+    directory as its read surface.
+    """
+    backend = _ScriptedBackend([_answer("should never run")])
+    runner = AgentDelegationRunner(
+        workspace_root=None,
+        inherited_provider="deepseek",
+        inherited_model="deepseek-chat",
+        backend_factory=lambda _provider: backend,
+    )
+
+    result = runner.run(_entry(), "look around")
+
+    assert result.status is DelegationStatus.FAILED
+    assert result.failure_class == DelegationFailure.WORKSPACE_REQUIRED.value
+    assert backend.requests == []
 
 
 def test_delegation_is_serialized_never_run_in_parallel() -> None:
