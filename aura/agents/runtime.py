@@ -1,4 +1,4 @@
-"""Public foreground runner for one-level Agent delegation.
+"""Public foreground runner for root-to-Agent delegation.
 
 Model resolution, private child execution, and writable worktree orchestration
 live in focused collaborators. This module owns invocation policy: frozen

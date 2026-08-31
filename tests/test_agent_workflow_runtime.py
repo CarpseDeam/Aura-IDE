@@ -958,11 +958,209 @@ def test_only_the_owning_step_gets_helper_tool_and_prompt_weight(
     assert "Aura-owned branch" not in helper_copy
     first_prompt = backend.requests[0]["messages"][0]["content"]
     second_prompt = backend.requests[1]["messages"][0]["content"]
-    assert "optional helpers listed in your delegate_agent tool" in first_prompt
+    assert "optional direct helpers listed in your delegate_agent" in first_prompt
     assert "You cannot delegate. There are no other agents" not in first_prompt
-    assert "optional helpers listed in your delegate_agent tool" not in second_prompt
+    assert "optional direct helpers listed in your delegate_agent" not in second_prompt
     assert "You cannot delegate. There are no other agents" in second_prompt
     assert all(node_id != "step1-helper" for node_id, _state in observed)
+
+
+def test_nested_helpers_see_only_direct_children_and_project_parent_first(
+    tmp_path: Path, monkeypatch
+) -> None:
+    graph = _with_helper(
+        _graph(1),
+        "step1",
+        node_id="helper-one",
+        agent_id=AGENT_IDS[1],
+        assignment="Own the delegated review.",
+        connection_id="dash-one",
+    )
+    graph = _with_helper(
+        graph,
+        "helper-one",
+        node_id="helper-two",
+        agent_id=AGENT_IDS[2],
+        assignment="Review the persistence seam.",
+        connection_id="dash-two",
+    )
+    graph = _with_helper(
+        graph,
+        "helper-two",
+        node_id="helper-three",
+        agent_id=AGENT_IDS[2],
+        assignment="Check the leaf invariant.",
+        connection_id="dash-three",
+    )
+    plan = _freeze(monkeypatch, graph)
+    step_backend = _ScriptedBackend(
+        [
+            _tool_round(
+                _call(
+                    "call-one",
+                    "delegate_agent",
+                    helper_node_id="helper-one",
+                    task="Start the nested review.",
+                )
+            ),
+            _answer("step-final", Usage(1, 1, 0, 1)),
+        ]
+    )
+    first_backend = _ScriptedBackend(
+        [
+            _tool_round(
+                _call(
+                    "call-two",
+                    "delegate_agent",
+                    helper_node_id="helper-two",
+                    task="Inspect persistence.",
+                )
+            ),
+            _answer("parent-only-result", Usage(2, 1, 0, 2)),
+        ]
+    )
+    second_backend = _ScriptedBackend(
+        [
+            _tool_round(
+                _call(
+                    "call-three",
+                    "delegate_agent",
+                    helper_node_id="helper-three",
+                    task="Inspect the leaf.",
+                )
+            ),
+            _answer("middle-only-result", Usage(4, 1, 0, 4)),
+        ]
+    )
+    third_backend = _ScriptedBackend(
+        [_answer("leaf-only-secret", Usage(8, 1, 0, 8))]
+    )
+    backends = iter((step_backend, first_backend, second_backend, third_backend))
+    observed: list[tuple[str, WorkflowStepState]] = []
+    observer_threads: set[int] = set()
+    coordinator_thread = threading.get_ident()
+
+    def observe(node_id: str, state: WorkflowStepState) -> None:
+        observer_threads.add(threading.get_ident())
+        observed.append((node_id, state))
+
+    result = WorkflowRunner(
+        workspace_root=tmp_path,
+        backend_factory=lambda _provider: next(backends),
+    ).run(plan, "Original nested workflow task", on_step=observe)
+
+    assert result.status is WorkflowRunStatus.COMPLETED
+    assert plan.agent_ids == (
+        AGENT_IDS[0],
+        AGENT_IDS[1],
+        AGENT_IDS[2],
+        AGENT_IDS[2],
+    )
+    assert plan.steps[0].helpers[0].children[0].children[0].depth == 3
+    catalog_helper = plan.catalog_row()["steps"][0]["helpers"][0]
+    assert catalog_helper["helpers"][0]["helpers"][0]["helper_node_id"] == (
+        "helper-three"
+    )
+    summary_helper = plan.summary_rows()[0]["helpers"][0]
+    assert summary_helper["helpers"][0]["immediate_parent_node_id"] == (
+        "helper-one"
+    )
+
+    def helper_ids(backend: _ScriptedBackend) -> list[str]:
+        schema = next(
+            (
+                tool
+                for tool in backend.requests[0]["tools"]
+                if tool["function"]["name"] == "delegate_agent"
+            ),
+            None,
+        )
+        if schema is None:
+            return []
+        return schema["function"]["parameters"]["properties"][
+            "helper_node_id"
+        ]["enum"]
+
+    assert helper_ids(step_backend) == ["helper-one"]
+    assert helper_ids(first_backend) == ["helper-two"]
+    assert helper_ids(second_backend) == ["helper-three"]
+    assert helper_ids(third_backend) == []
+    assert "Bounded task from Agent 1" in first_backend.requests[0]["messages"][1][
+        "content"
+    ]
+    assert "workflow node step1" in first_backend.requests[0]["messages"][1][
+        "content"
+    ]
+    assert "Bounded task from Agent 2" in second_backend.requests[0]["messages"][1][
+        "content"
+    ]
+    assert "workflow node helper-one" in second_backend.requests[0]["messages"][1][
+        "content"
+    ]
+    assert "Bounded task from Agent 3" in third_backend.requests[0]["messages"][1][
+        "content"
+    ]
+    assert "workflow node helper-two" in third_backend.requests[0]["messages"][1][
+        "content"
+    ]
+
+    middle_continuation = json.dumps(second_backend.requests[1]["messages"])
+    parent_continuation = json.dumps(first_backend.requests[1]["messages"])
+    step_continuation = json.dumps(step_backend.requests[1]["messages"])
+    assert "leaf-only-secret" in middle_continuation
+    assert "middle-only-result" in parent_continuation
+    assert "leaf-only-secret" not in parent_continuation
+    assert "parent-only-result" in step_continuation
+    assert "middle-only-result" not in step_continuation
+    assert "leaf-only-secret" not in step_continuation
+
+    assert [item.invocation for item in result.helper_invocations] == [1, 2, 3]
+    assert [item.parent_invocation for item in result.helper_invocations] == [
+        None,
+        1,
+        2,
+    ]
+    assert [item.immediate_parent_node_id for item in result.helper_invocations] == [
+        "step1",
+        "helper-one",
+        "helper-two",
+    ]
+    assert [item.depth for item in result.helper_invocations] == [1, 2, 3]
+    assert result.helper_invocations[-1].lineage == (
+        "step1",
+        "helper-one",
+        "helper-two",
+        "helper-three",
+    )
+    assert all(item.root_step_node_id == "step1" for item in result.helper_invocations)
+    payloads = result.payload()["helper_invocations"]
+    assert payloads[-1]["parent_invocation"] == 2
+    assert payloads[-1]["lineage"] == [
+        "step1",
+        "helper-one",
+        "helper-two",
+        "helper-three",
+    ]
+
+    usage = {
+        (group.provider, group.model): group.usage.prompt_tokens
+        for group in result.usage_groups
+    }
+    assert usage == {
+        ("deepseek", "aura-current-model"): 13,
+        ("deepseek", "explicit-model"): 2,
+    }
+    assert observer_threads == {coordinator_thread}
+    assert observed == [
+        ("step1", WorkflowStepState.RUNNING),
+        ("helper-one", WorkflowStepState.RUNNING),
+        ("helper-two", WorkflowStepState.RUNNING),
+        ("helper-three", WorkflowStepState.RUNNING),
+        ("helper-three", WorkflowStepState.SUCCEEDED),
+        ("helper-two", WorkflowStepState.SUCCEEDED),
+        ("helper-one", WorkflowStepState.SUCCEEDED),
+        ("step1", WorkflowStepState.SUCCEEDED),
+    ]
 
 
 def test_writable_helper_uses_child_executor_and_the_one_shared_worktree(
@@ -1038,7 +1236,7 @@ def test_writable_helper_uses_child_executor_and_the_one_shared_worktree(
     assert "run_agent_workflow" not in helper_tools
     helper_messages = helper_backend.requests[0]["messages"]
     assert [message["role"] for message in helper_messages] == ["system", "user"]
-    assert "assisting one specific Step" in helper_messages[0]["content"]
+    assert "assisting one specific Agent" in helper_messages[0]["content"]
     assert "shared by\n  its Steps and writable helpers" in helper_messages[0]["content"]
     assert "Original workflow task" in helper_messages[1]["content"]
     assert "Inspect and edit only if needed." in helper_messages[1]["content"]
@@ -1222,6 +1420,134 @@ def test_reused_nested_backend_fails_helper_without_stopping_the_workflow(
     assert observed[-2:] == [
         ("fallible-helper", WorkflowStepState.FAILED),
         ("step1", WorkflowStepState.SUCCEEDED),
+    ]
+
+
+def test_nested_failure_returns_to_immediate_parent_without_failing_ancestors(
+    tmp_path: Path, monkeypatch
+) -> None:
+    graph = _with_helper(
+        _graph(1), "step1", node_id="parent-helper", agent_id=AGENT_IDS[1]
+    )
+    graph = _with_helper(
+        graph, "parent-helper", node_id="failing-leaf", agent_id=AGENT_IDS[2]
+    )
+    plan = _freeze(monkeypatch, graph)
+    immediate_results: list[DelegationResult] = []
+
+    def handle(entry, task, resolved, cancel_event, **kwargs):
+        del task, resolved, cancel_event
+        if kwargs.get("workflow_helper") and not kwargs.get("workflow_helpers"):
+            return DelegationResult.failure(
+                entry.agent_id,
+                DelegationFailure.PROVIDER_ERROR,
+                "leaf provider failed",
+                agent_name=entry.name,
+            )
+        helper = kwargs["workflow_helpers"][0]
+        result = kwargs["workflow_helper_runner"].run(helper, "Run the next child")
+        immediate_results.append(result)
+        if kwargs.get("workflow_helper"):
+            assert result.status is DelegationStatus.FAILED
+            return _completed(entry.agent_id, entry.name, "parent handled leaf")
+        assert result.status is DelegationStatus.COMPLETED
+        return _completed(entry.agent_id, entry.name, "step handled parent")
+
+    result = WorkflowRunner(
+        workspace_root=tmp_path, child=_ForkingChild(handle)
+    ).run(plan, "Contain the nested failure")
+
+    assert result.status is WorkflowRunStatus.COMPLETED
+    assert result.result == "step handled parent"
+    assert [item.state for item in result.helper_invocations] == [
+        WorkflowStepState.SUCCEEDED,
+        WorkflowStepState.FAILED,
+    ]
+    assert [item.result.result for item in result.helper_invocations] == [
+        "parent handled leaf",
+        "",
+    ]
+    assert [item.status for item in immediate_results] == [
+        DelegationStatus.FAILED,
+        DelegationStatus.COMPLETED,
+    ]
+
+
+def test_nested_cancellation_relays_exact_event_and_starts_no_deeper_child(
+    tmp_path: Path, monkeypatch
+) -> None:
+    graph = _with_helper(
+        _graph(1), "step1", node_id="parent-helper", agent_id=AGENT_IDS[1]
+    )
+    graph = _with_helper(
+        graph, "parent-helper", node_id="cancelling-child", agent_id=AGENT_IDS[2]
+    )
+    graph = _with_helper(
+        graph, "cancelling-child", node_id="never-started", agent_id=AGENT_IDS[2]
+    )
+    plan = _freeze(monkeypatch, graph)
+    step_backend = _ScriptedBackend(
+        [
+            _tool_round(
+                _call(
+                    "parent-call",
+                    "delegate_agent",
+                    helper_node_id="parent-helper",
+                    task="Call the cancelling child",
+                )
+            )
+        ]
+    )
+    parent_backend = _ScriptedBackend(
+        [
+            _tool_round(
+                _call(
+                    "child-call",
+                    "delegate_agent",
+                    helper_node_id="cancelling-child",
+                    task="Cancel here",
+                )
+            )
+        ]
+    )
+    child_backend = _ScriptedBackend([[]], cancel_on_request=0)
+    backends = iter((step_backend, parent_backend, child_backend))
+    cancel = threading.Event()
+    observed: list[tuple[str, WorkflowStepState]] = []
+
+    result = WorkflowRunner(
+        workspace_root=tmp_path,
+        backend_factory=lambda _provider: next(backends),
+    ).run(
+        plan,
+        "Cancel in a nested helper",
+        cancel_event=cancel,
+        on_step=lambda *args: observed.append(args),
+    )
+
+    assert cancel.is_set()
+    assert result.status is WorkflowRunStatus.CANCELLED
+    assert [item.helper_node_id for item in result.helper_invocations] == [
+        "parent-helper",
+        "cancelling-child",
+    ]
+    assert all(
+        item.state is WorkflowStepState.CANCELLED
+        for item in result.helper_invocations
+    )
+    assert all(
+        request["cancel_event"] is cancel
+        for backend in (step_backend, parent_backend, child_backend)
+        for request in backend.requests
+    )
+    assert all(node_id != "never-started" for node_id, _state in observed)
+    assert observed == [
+        ("step1", WorkflowStepState.RUNNING),
+        ("parent-helper", WorkflowStepState.RUNNING),
+        ("cancelling-child", WorkflowStepState.RUNNING),
+        ("cancelling-child", WorkflowStepState.CANCELLED),
+        ("parent-helper", WorkflowStepState.CANCELLED),
+        ("step1", WorkflowStepState.CANCELLED),
     ]
 
 
@@ -1593,6 +1919,101 @@ def test_writable_helper_forces_exclusivity_but_read_only_helpers_do_not(
     ] == ["one", "two"]
 
 
+def test_writable_deep_descendant_forces_exclusivity_and_one_shared_worktree(
+    tmp_path: Path, monkeypatch
+) -> None:
+    graph = _dag_graph(
+        ("helper-owner", "reader"),
+        (
+            ("task", "helper-owner"),
+            ("task", "reader"),
+            ("helper-owner", "result"),
+            ("reader", "result"),
+        ),
+    )
+    graph = _with_helper(
+        graph,
+        "helper-owner",
+        node_id="middle-reader",
+        agent_id=AGENT_IDS[0],
+    )
+    graph = _with_helper(
+        graph,
+        "middle-reader",
+        node_id="deep-writer",
+        agent_id=AGENT_IDS[2],
+    )
+    plan = _freeze(
+        monkeypatch, graph, {AGENT_IDS[2]: AgentPermission.READ_WRITE}
+    )
+    owner = plan.step("helper-owner")
+    reader = plan.step("reader")
+    assert owner is not None and reader is not None
+    assert owner.permission is AgentPermission.READ_ONLY
+    assert owner.helpers[0].permission is AgentPermission.READ_ONLY
+    assert owner.helpers[0].children[0].permission is AgentPermission.READ_WRITE
+    assert owner.mutation_capable is True
+    assert reader.mutation_capable is False
+    assert [step.node_id for step in WorkflowWaveScheduler(plan).decide({}).wave] == [
+        "helper-owner"
+    ]
+
+    isolated = tmp_path / "isolated"
+    worktrees = _Worktrees(isolated)
+    calls: list[dict[str, Any]] = []
+    deep_finished = threading.Event()
+
+    def handle(entry, task, resolved, cancel_event, **kwargs):
+        del task, resolved, cancel_event
+        calls.append({"agent_id": entry.agent_id, **kwargs})
+        assert worktrees.created == ["workflow-workflowplan1"]
+        if kwargs.get("workflow_helper") and kwargs.get("workflow_helpers"):
+            deep = kwargs["workflow_helpers"][0]
+            result = kwargs["workflow_helper_runner"].run(
+                deep, "Make the deeply delegated edit"
+            )
+            assert result.ok
+            return _completed(entry.agent_id, entry.name, "middle done")
+        if kwargs.get("workflow_helper"):
+            assert kwargs["permission"] is AgentPermission.READ_WRITE
+            assert kwargs["worktree"] is not None
+            deep_finished.set()
+            return _completed(entry.agent_id, entry.name, "deep edit done")
+        if entry.agent_id == AGENT_IDS[0]:
+            middle = kwargs["workflow_helpers"][0]
+            result = kwargs["workflow_helper_runner"].run(
+                middle, "Coordinate the deep writer"
+            )
+            assert result.ok
+            return _completed(entry.agent_id, entry.name, "owner done")
+        assert deep_finished.is_set()
+        return _completed(entry.agent_id, entry.name, "reader done")
+
+    result = WorkflowRunner(
+        workspace_root=tmp_path,
+        worktree_manager=worktrees,
+        child=_ForkingChild(handle),
+    ).run(plan, "Use the deep writer")
+
+    assert result.status is WorkflowRunStatus.COMPLETED
+    assert [item.helper_node_id for item in result.helper_invocations] == [
+        "middle-reader",
+        "deep-writer",
+    ]
+    assert len(worktrees.created) == 1
+    assert len(worktrees.recovered) == 1
+    assert all(call["workspace_root"] == isolated for call in calls)
+    root_call, middle_call, deep_call, reader_call = calls
+    assert root_call["permission"] is AgentPermission.READ_ONLY
+    assert root_call["worktree"] is None
+    assert middle_call["permission"] is AgentPermission.READ_ONLY
+    assert middle_call["worktree"] is None
+    assert deep_call["permission"] is AgentPermission.READ_WRITE
+    assert deep_call["worktree"] is worktrees.recovered[0]
+    assert reader_call["permission"] is AgentPermission.READ_ONLY
+    assert reader_call["worktree"] is None
+
+
 def test_cancellation_starts_nothing_else_quiesces_and_checkpoints_once(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1758,8 +2179,8 @@ def test_shared_registry_is_serialized_without_permission_or_helper_scope_leaks(
     assert {"apply_patch", "delegate_agent"} <= first_tools
     assert "apply_patch" not in second_tools
     assert "delegate_agent" not in second_tools
-    assert "optional helpers listed" in requests[0]["messages"][0]["content"]
-    assert "optional helpers listed" not in requests[1]["messages"][0]["content"]
+    assert "optional direct helpers listed" in requests[0]["messages"][0]["content"]
+    assert "optional direct helpers listed" not in requests[1]["messages"][0]["content"]
 
 
 def test_shared_backend_and_unforkable_child_are_serialized(
@@ -2133,6 +2554,6 @@ def test_workflow_tool_copy_states_parallel_exclusivity_join_and_order(
     description = workflow_tool["function"]["description"]
 
     assert "Independent ready read-only Steps may overlap" in description
-    assert "Read / Write helper runs exclusively" in description
+    assert "Read / Write descendant runs exclusively" in description
     assert "Joins therefore wait for every predecessor" in description
     assert "frozen workflow order, never completion order" in description

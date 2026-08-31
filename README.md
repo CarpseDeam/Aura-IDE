@@ -42,8 +42,8 @@ Agents are a major harness capability, not a separate product. Each Agent is a r
   <img src="media/aura-agents-workflow.png" alt="Aura Agents window showing the reusable Agent library, the Aura Documentation Refresh workflow, its solid Task-to-Result sequence, a dashed Review Helper sub-agent connection, and the Website Writer inspector" width="1000">
 </p>
 
-- **Solid lines** are the ordering contract from Task through Agent steps to Aura Result. Independent ready read-only Steps may overlap against the same stable workspace view. A Step with Read / Write authority—or any Read / Write helper—runs exclusively, so readers never overlap writers and writers never overlap each other. A Step that must consume another Step's edits must be connected as its successor. Joins wait for every predecessor to settle successfully, and results remain in frozen workflow order rather than completion order.
-- **Dashed Sub-agent lines** make an optional helper available to a Step without inserting it into the automatic path.
+- **Solid lines** are the ordering contract from Task through Agent steps to Aura Result. Independent ready read-only Steps may overlap against the same stable workspace view. A Step with Read / Write authority—or a Read / Write descendant anywhere in its helper tree—runs exclusively, so readers never overlap writers and writers never overlap each other. A Step that must consume another Step's edits must be connected as its successor. Joins wait for every predecessor to settle successfully, and results remain in frozen workflow order rather than completion order.
+- **Dashed Sub-agent lines** form optional helper trees without inserting them into the automatic path. Each Step or helper may invoke only its directly attached helpers, synchronously, under each occurrence's own frozen permission.
 - **Run** explicitly executes the open workflow; **Stop** remains available while it runs.
 - The **Agents toolbar toggle** lets Aura use the selected Agents and workflow during an ordinary conversation.
 - **Read / Write work is isolated** and is never applied automatically. Aura returns structured results and retains proposed changes for explicit review and application.
@@ -177,7 +177,7 @@ See [Providers](docs/providers.md) for supported backends and configuration deta
 - **Run-and-watch verification** — start a process, observe its output over a bounded window, and retain the result.
 - **Git integration** — status, diff, commit, snapshots, restore support, `/undo`, and automatic `.aura/` ignore setup.
 - **Provider-native web search** — the selected production provider and model own hosted search in the same request when their current transport supports it; unsupported combinations omit search without switching providers.
-- **Reusable Agents and workflows** — compose permissioned specialists into explicit solid sequences with optional dashed helpers, then invoke the selected workflow from an ordinary Aura conversation.
+- **Reusable Agents and workflows** — compose permissioned specialists into explicit solid sequences with optional dashed helper trees, then invoke the selected workflow from an ordinary Aura conversation.
 - **MCP integration** — connect stdio Model Context Protocol servers and expose their tools through Aura's tool registry.
 - **Update support** — packaged Windows builds support in-app updates, while source checkouts can inspect upstream update state.
 

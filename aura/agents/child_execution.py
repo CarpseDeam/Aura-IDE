@@ -237,9 +237,7 @@ class ChildExecutor:
         )
         stop = LoopStop.API_ERROR
         registry = self._new_registry(workspace_root, permission)
-        with self._isolation.lease(
-            registry, "registry", fail_if_active=workflow_helper
-        ):
+        with self._isolation.lease(registry, "registry"):
             # Clear as well as set. If an injected factory reuses a registry,
             # the identity lease holds from this authority mutation through
             # terminal teardown, so no other invocation can observe it.
@@ -259,11 +257,9 @@ class ChildExecutor:
                     self._backend_factory, resolved.provider
                 )
                 # Keep a mutable backend session with one child across every
-                # model/tool round. Helpers fail closed on accidental nested
-                # reuse instead of waiting on the backend their parent owns.
-                with self._isolation.lease(
-                    backend, "backend", fail_if_active=workflow_helper
-                ):
+                # model/tool round. Same-thread ancestral reuse fails closed;
+                # unrelated worker threads serialize on the identity lease.
+                with self._isolation.lease(backend, "backend"):
                     loop = AgentLoop(
                         history=history,
                         stream=backend.stream,

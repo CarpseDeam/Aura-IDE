@@ -195,6 +195,38 @@ def test_backend_raise_after_cancel_keeps_terminal_answer_and_usage(
     assert cancelled.failure_class == "cancelled"
 
 
+def test_api_error_after_transport_cancellation_preserves_terminal_truth(
+    tmp_path: Path,
+) -> None:
+    cancel = threading.Event()
+    done_first = False
+
+    class _CancelledBackend:
+        def stream(self, **_kwargs):
+            if done_first:
+                yield Done(
+                    "stop", {"role": "assistant", "content": "Already complete."}
+                )
+            cancel.set()
+            yield ApiError(499, "transport observed cancellation")
+
+    runner = AgentDelegationRunner(
+        workspace_root=tmp_path,
+        inherited_provider="deepseek",
+        inherited_model="deepseek-chat",
+        backend_factory=lambda _provider: _CancelledBackend(),
+    )
+
+    cancelled = runner.run(_entry(), "Review.", cancel_event=cancel)
+    assert cancelled.status is DelegationStatus.CANCELLED
+
+    cancel.clear()
+    done_first = True
+    completed = runner.run(_entry(), "Review again.", cancel_event=cancel)
+    assert completed.status is DelegationStatus.COMPLETED
+    assert completed.result == "Already complete."
+
+
 def test_cancelled_writable_result_and_change_set_remain_canonical(
     tmp_path: Path,
 ) -> None:

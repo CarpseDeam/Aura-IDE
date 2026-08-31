@@ -9,7 +9,7 @@ identically:
   out and join back — with every agent occurrence both reachable from the
   Task and able to reach the Aura Result;
 * no solid loop, and no line that points at a node that is not there;
-* sub-agent lines that hang one level off a step and never form a cycle;
+* one acyclic dashed helper forest rooted at solid workflow Steps;
 * every agent reference resolving to a definition this workspace can read,
   and one a workflow of this scope is allowed to use.
 
@@ -32,10 +32,10 @@ from aura.agents.graph_dag import (
     solid_step_edges,
 )
 from aura.agents.graph_models import (
-    ConnectionKind,
     WorkflowGraph,
     WorkflowNodeKind,
 )
+from aura.agents.helper_topology import HelperTopology, read_helper_topology
 from aura.agents.identity import AgentScope
 
 #: What a node says when the agent it refers to is not in the library. The
@@ -110,11 +110,19 @@ def validate_graph(
     quietly removed.
     """
     issues: list[GraphIssue] = []
+    helper_topology = read_helper_topology(graph)
     issues.extend(_fixed_end_issues(graph))
     issues.extend(_reference_issues(graph, agents))
     issues.extend(_dangling_issues(graph))
-    issues.extend(_step_issues(graph))
-    issues.extend(_sub_agent_issues(graph))
+    issues.extend(_step_issues(graph, helper_topology))
+    issues.extend(
+        GraphIssue(
+            issue.message,
+            node_id=issue.node_id,
+            connection_id=issue.connection_id,
+        )
+        for issue in helper_topology.issues
+    )
     return GraphValidation(tuple(issues))
 
 
@@ -190,7 +198,9 @@ def _dangling_issues(graph: WorkflowGraph) -> list[GraphIssue]:
 # ---- the solid DAG ---------------------------------------------------------
 
 
-def _step_issues(graph: WorkflowGraph) -> list[GraphIssue]:
+def _step_issues(
+    graph: WorkflowGraph, helper_topology: HelperTopology
+) -> list[GraphIssue]:
     """The solid lines as one acyclic DAG between the two fixed ends.
 
     Branching and joining are ordinary here: a Step may lead to several next
@@ -263,11 +273,7 @@ def _step_issues(graph: WorkflowGraph) -> list[GraphIssue]:
     elif result.node_id not in forward:
         issues.append(GraphIssue("the Task does not lead to the Aura Result yet"))
 
-    helpers = {
-        edge.target_id
-        for edge in graph.connections_of_kind(ConnectionKind.SUB_AGENT)
-        if edge.source_id in forward
-    }
+    helpers = set(helper_topology.helper_node_ids)
     for node in graph.nodes:
         if not node.is_agent or node.node_id in helpers:
             continue
@@ -292,81 +298,6 @@ def _step_issues(graph: WorkflowGraph) -> list[GraphIssue]:
                     "this agent's branch stops here — it never reaches the "
                     "Aura Result",
                     node_id=node.node_id,
-                )
-            )
-    return issues
-
-
-# ---- the dashed helpers ----------------------------------------------------
-
-
-def _sub_agent_issues(graph: WorkflowGraph) -> list[GraphIssue]:
-    """A helper hangs off one step, and has no helpers of its own.
-
-    Depth is what makes this acyclic: a node that is already somebody's
-    helper may not be a helper's owner, so no chain can ever come back
-    around to where it started.
-    """
-    by_id = {node.node_id: node for node in graph.nodes}
-    helpers = graph.connections_of_kind(ConnectionKind.SUB_AGENT)
-    helper_targets = {edge.target_id for edge in helpers}
-    issues: list[GraphIssue] = []
-
-    incoming: dict[str, list] = {}
-    for edge in helpers:
-        incoming.setdefault(edge.target_id, []).append(edge)
-    for edges in incoming.values():
-        if len(edges) < 2:
-            continue
-        owners = {edge.source_id for edge in edges}
-        message = (
-            "the same sub-agent occurrence cannot be attached to multiple steps"
-            if len(owners) > 1
-            else "a sub-agent occurrence must have exactly one dashed connection"
-        )
-        issues.extend(
-            GraphIssue(message, connection_id=edge.connection_id) for edge in edges
-        )
-
-    for edge in helpers:
-        source = by_id.get(edge.source_id)
-        target = by_id.get(edge.target_id)
-        if source is None or target is None or source is target:
-            continue
-        if not target.is_agent:
-            issues.append(
-                GraphIssue(
-                    f"a {target.kind.label} node cannot be a sub-agent",
-                    connection_id=edge.connection_id,
-                )
-            )
-            continue
-        if not source.is_agent:
-            issues.append(
-                GraphIssue(
-                    f"a {source.kind.label} node cannot have sub-agents",
-                    connection_id=edge.connection_id,
-                )
-            )
-            continue
-        if edge.source_id in helper_targets:
-            issues.append(
-                GraphIssue(
-                    "a sub-agent cannot have sub-agents of its own — helpers go "
-                    "one level deep",
-                    connection_id=edge.connection_id,
-                )
-            )
-            continue
-        if any(
-            step.source_id == edge.target_id or step.target_id == edge.target_id
-            for step in graph.connections_of_kind(ConnectionKind.STEP)
-        ):
-            issues.append(
-                GraphIssue(
-                    "an agent is either a step in the workflow or a sub-agent "
-                    "helping one, not both",
-                    connection_id=edge.connection_id,
                 )
             )
     return issues

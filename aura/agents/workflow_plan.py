@@ -14,13 +14,13 @@ What is frozen, and why each of them:
   ordered Steps it unblocks — so the run cannot follow a shape that was drawn
   after it started, and a join receives its branches in the same order every
   time;
-* the **solid and helper agent definitions**, so editing a brief mid-run does
-  not change what any child is told;
+* the **solid and recursively attached helper definitions**, so editing a
+  brief mid-run does not change what any child is told;
 * the **occurrence assignments and dashed ownership**, which belong to nodes
   and connections rather than reusable agents;
 * **Aura's own provider**, because an agent never chooses one;
 * the **resolved model** and **thinking selection** for every solid and helper
-  occurrence, under that provider; and
+  occurrence at every depth, under that provider; and
 * the **local permission** for every occurrence, which decides whether the run
   needs a writable worktree before the solid path starts.
 
@@ -39,8 +39,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from aura.agents.graph_dag import runnable_dag
-from aura.agents.graph_models import ConnectionKind, WorkflowGraph, WorkflowNode
+from aura.agents.graph_models import WorkflowGraph, WorkflowNode
 from aura.agents.graph_validation import validate_graph
+from aura.agents.helper_topology import read_helper_topology
 from aura.agents.identity import AgentScope
 from aura.agents.local_state import DEFAULT_PERMISSION, AgentPermission
 from aura.agents.model_resolution import ResolvedTarget, resolve_agent_model
@@ -55,14 +56,23 @@ MAX_WORKFLOW_STEPS = 12
 
 @dataclass(frozen=True)
 class WorkflowHelperPlan:
-    """One frozen helper occurrence owned by exactly one solid workflow step."""
+    """One frozen helper occurrence and its ordered direct children."""
 
     node_id: str
-    owning_step_node_id: str
+    root_step_node_id: str
+    immediate_parent_node_id: str
     connection_id: str
+    depth: int
+    lineage: tuple[str, ...]
     entry: AgentRosterEntry
     assignment: str
     resolved: ResolvedTarget
+    children: tuple["WorkflowHelperPlan", ...] = ()
+
+    @property
+    def owning_step_node_id(self) -> str:
+        """Compatibility name for the root solid Step."""
+        return self.root_step_node_id
 
     @property
     def agent_id(self) -> str:
@@ -84,12 +94,34 @@ class WorkflowHelperPlan:
     def writable(self) -> bool:
         return self.permission.allows_edit
 
-    def summary_row(self) -> dict[str, str]:
-        """Durable identity and authority for this dashed occurrence."""
+    @property
+    def subtree_writable(self) -> bool:
+        """Whether this occurrence or any descendant may edit."""
+        return any(item.writable for item in self.preorder())
+
+    def preorder(self) -> tuple["WorkflowHelperPlan", ...]:
+        """This occurrence and every descendant in frozen dashed order."""
+        ordered: list[WorkflowHelperPlan] = []
+        pending = [self]
+        visited: set[str] = set()
+        while pending:
+            item = pending.pop()
+            if item.node_id in visited:
+                continue
+            visited.add(item.node_id)
+            ordered.append(item)
+            pending.extend(reversed(item.children))
+        return tuple(ordered)
+
+    def _base_summary_row(self) -> dict[str, Any]:
         return {
             "helper_node_id": self.node_id,
-            "owning_step_node_id": self.owning_step_node_id,
+            "owning_step_node_id": self.root_step_node_id,
+            "root_step_node_id": self.root_step_node_id,
+            "immediate_parent_node_id": self.immediate_parent_node_id,
             "connection_id": self.connection_id,
+            "depth": self.depth,
+            "lineage": list(self.lineage),
             "agent_id": self.agent_id,
             "agent_name": self.agent_name,
             "permission": self.permission.value,
@@ -97,14 +129,30 @@ class WorkflowHelperPlan:
             "model": self.resolved.model,
         }
 
-    def catalog_row(self) -> dict[str, str]:
-        """The occurrence facts its owning step may see in the helper tool."""
-        return {
-            **self.summary_row(),
-            "name": self.agent_name,
-            "description": self.definition.description,
-            "assignment": self.assignment,
-        }
+    def summary_row(self) -> dict[str, Any]:
+        """Durable identity and authority for this dashed occurrence."""
+        rows: dict[str, dict[str, Any]] = {}
+        for item in reversed(self.preorder()):
+            row = item._base_summary_row()
+            if item.children:
+                row["helpers"] = [rows[child.node_id] for child in item.children]
+            rows[item.node_id] = row
+        return rows[self.node_id]
+
+    def catalog_row(self) -> dict[str, Any]:
+        """Occurrence facts for a workflow catalog or its immediate parent."""
+        rows: dict[str, dict[str, Any]] = {}
+        for item in reversed(self.preorder()):
+            row = {
+                **item._base_summary_row(),
+                "name": item.agent_name,
+                "description": item.definition.description,
+                "assignment": item.assignment,
+            }
+            if item.children:
+                row["helpers"] = [rows[child.node_id] for child in item.children]
+            rows[item.node_id] = row
+        return rows[self.node_id]
 
 
 @dataclass(frozen=True)
@@ -132,16 +180,16 @@ class WorkflowStepPlan:
     def __post_init__(self) -> None:
         """Freeze the occurrence-wide mutation classification once.
 
-        The solid Step keeps its own permission.  Scheduling authority is a
-        separate fact: a read-only Step with any Read / Write helper must own
-        the shared worktree exclusively for its whole invocation because the
-        helper can be called while the Step is active.
+        The solid Step keeps its own permission. Scheduling authority is a
+        separate fact: a read-only Step with any Read / Write descendant must
+        own the shared worktree exclusively for its whole invocation because
+        that descendant can be called while the Step is active.
         """
         object.__setattr__(
             self,
             "mutation_capable",
             self.permission.allows_edit
-            or any(helper.permission.allows_edit for helper in self.helpers),
+            or any(helper.subtree_writable for helper in self.helpers),
         )
 
     @property
@@ -168,9 +216,9 @@ class WorkflowStepPlan:
     def writable(self) -> bool:
         return self.permission.allows_edit
 
-    def summary_row(self) -> dict[str, str]:
+    def summary_row(self) -> dict[str, Any]:
         """The compact identity of this step, for a description or a result."""
-        return {
+        row: dict[str, Any] = {
             "node_id": self.node_id,
             "agent_id": self.agent_id,
             "agent_name": self.agent_name,
@@ -178,6 +226,9 @@ class WorkflowStepPlan:
             "permission_label": self.permission.label,
             "model": self.resolved.model,
         }
+        if self.helpers:
+            row["helpers"] = [helper.summary_row() for helper in self.helpers]
+        return row
 
 
 @dataclass(frozen=True)
@@ -220,21 +271,19 @@ class WorkflowRunPlan:
 
     @property
     def writable(self) -> bool:
-        """True when any solid step or attached helper may edit."""
+        """True when any solid Step or helper descendant may edit."""
         return any(step.mutation_capable for step in self.steps)
 
     @property
     def agent_ids(self) -> tuple[str, ...]:
-        return tuple(
-            agent_id
-            for step in self.steps
-            for agent_id in (
-                step.agent_id,
-                *(helper.agent_id for helper in step.helpers),
-            )
-        )
+        agent_ids: list[str] = []
+        for step in self.steps:
+            agent_ids.append(step.agent_id)
+            for helper in step.helpers:
+                agent_ids.extend(item.agent_id for item in helper.preorder())
+        return tuple(agent_ids)
 
-    def summary_rows(self) -> tuple[dict[str, str], ...]:
+    def summary_rows(self) -> tuple[dict[str, Any], ...]:
         return tuple(step.summary_row() for step in self.steps)
 
     def catalog_row(self) -> dict[str, Any]:
@@ -355,8 +404,62 @@ def freeze_workflow_plan(
             f"has {len(dag.steps)}",
         )
 
+    topology = read_helper_topology(graph)
+    if not topology.valid:
+        # Validation uses this same reader. Keep the freeze boundary
+        # independently fail-closed if those seams ever drift apart.
+        return None, tuple(issue.message for issue in topology.issues)
+
     steps: list[WorkflowStepPlan] = []
     errors: list[str] = []
+    helper_facts: dict[
+        str, tuple[WorkflowNode, AgentRosterEntry, ResolvedTarget]
+    ] = {}
+    for occurrence in topology.occurrences:
+        helper_node = graph.node(occurrence.node_id)
+        if helper_node is None:
+            errors.append(f"helper {occurrence.node_id} is no longer on the canvas")
+            continue
+        helper_entry, helper_resolved, helper_error = _resolve_occurrence(
+            helper_node,
+            definitions=definitions,
+            permissions=permissions,
+            provider=provider,
+            model=model,
+            thinking=thinking,
+        )
+        if helper_error:
+            errors.append(helper_error)
+            continue
+        assert helper_entry is not None and helper_resolved is not None
+        helper_facts[occurrence.node_id] = (
+            helper_node,
+            helper_entry,
+            helper_resolved,
+        )
+    if errors:
+        return None, tuple(errors)
+
+    helper_plans: dict[str, WorkflowHelperPlan] = {}
+    for occurrence in reversed(topology.occurrences):
+        helper_node, helper_entry, helper_resolved = helper_facts[
+            occurrence.node_id
+        ]
+        helper_plans[occurrence.node_id] = WorkflowHelperPlan(
+            node_id=helper_node.node_id,
+            root_step_node_id=occurrence.root_step_node_id,
+            immediate_parent_node_id=occurrence.immediate_parent_node_id,
+            connection_id=occurrence.connection_id,
+            depth=occurrence.depth,
+            lineage=occurrence.lineage,
+            entry=helper_entry,
+            assignment=str(helper_node.assignment or "").strip(),
+            resolved=helper_resolved,
+            children=tuple(
+                helper_plans[node_id] for node_id in occurrence.child_node_ids
+            ),
+        )
+
     for placed in dag.steps:
         node = graph.node(placed.node_id)
         if node is None:
@@ -376,38 +479,15 @@ def freeze_workflow_plan(
             errors.append(occurrence_error)
             continue
 
-        helpers: list[WorkflowHelperPlan] = []
-        for edge in graph.outgoing(node.node_id, ConnectionKind.SUB_AGENT):
-            helper_node = graph.node(edge.target_id)
-            if helper_node is None:
-                # validate_graph() already rejects this. Keep the freeze seam
-                # independently fail-closed if a future validator regresses.
-                errors.append(
-                    f"helper connection {edge.connection_id} has no target node"
-                )
-                continue
-            helper_entry, helper_resolved, helper_error = _resolve_occurrence(
-                helper_node,
-                definitions=definitions,
-                permissions=permissions,
-                provider=provider,
-                model=model,
-                thinking=thinking,
-            )
-            if helper_error:
-                errors.append(helper_error)
-                continue
-            assert helper_entry is not None and helper_resolved is not None
-            helpers.append(
-                WorkflowHelperPlan(
-                    node_id=helper_node.node_id,
-                    owning_step_node_id=node.node_id,
-                    connection_id=edge.connection_id,
-                    entry=helper_entry,
-                    assignment=str(helper_node.assignment or "").strip(),
-                    resolved=helper_resolved,
-                )
-            )
+        direct_helpers = topology.children_of(node.node_id)
+        missing_helpers = tuple(
+            occurrence.node_id
+            for occurrence in direct_helpers
+            if occurrence.node_id not in helper_plans
+        )
+        if missing_helpers:
+            errors.append(f"step {node.node_id} has an unresolved direct helper")
+            continue
 
         assert entry is not None and resolved is not None
         steps.append(
@@ -416,7 +496,10 @@ def freeze_workflow_plan(
                 entry=entry,
                 assignment=str(node.assignment or "").strip(),
                 resolved=resolved,
-                helpers=tuple(helpers),
+                helpers=tuple(
+                    helper_plans[occurrence.node_id]
+                    for occurrence in direct_helpers
+                ),
                 predecessors=placed.predecessors,
                 successors=placed.successors,
                 from_task=placed.from_task,

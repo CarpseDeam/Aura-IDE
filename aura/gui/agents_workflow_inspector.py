@@ -171,7 +171,7 @@ class WorkflowInspector(QWidget):
 
         actions = QHBoxLayout()
         actions.setSpacing(6)
-        self.apply_assignment_button = QPushButton("Apply to this step")
+        self.apply_assignment_button = QPushButton("Apply assignment")
         self.apply_assignment_button.clicked.connect(self._emit_assignment)
         actions.addWidget(self.apply_assignment_button)
         actions.addStretch(1)
@@ -318,7 +318,9 @@ class WorkflowInspector(QWidget):
         self._occurrence_group.setVisible(occurrence is not None)
         if occurrence is None:
             return
-        self.occurrence_heading.setText(f"This step  ·  {occurrence.agent_name}")
+        self.occurrence_heading.setText(
+            f"Workflow assignment  ·  {occurrence.agent_name}"
+        )
         if not self.assignment.hasFocus():
             self.assignment.setPlainText(occurrence.assignment)
         self.occurrence_issues.setText(

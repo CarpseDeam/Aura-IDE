@@ -295,7 +295,7 @@ class _PortItem(QGraphicsObject):
         self.setToolTip(
             "Drag to the next step in this workflow."
             if kind is ConnectionKind.STEP
-            else "Drag to an agent that helps with this step."
+            else "Drag to an Agent that helps this Agent."
         )
 
     def boundingRect(self) -> QRectF:  # noqa: N802 - Qt naming

@@ -3,7 +3,7 @@
 A child agent starts from nothing. Its system prompt is built here from:
 
 1. a small **host layer** stating the invariants the runtime actually
-   enforces — the frozen grant, the exact delegation depth, a private
+   enforces — the frozen grant, direct-child-only delegation, a private
    transcript, and one final written answer;
 2. the selected definition's **full instructions**, verbatim; and
 3. **minimal workspace facts** — where its effective workspace is; and
@@ -82,15 +82,16 @@ WORKFLOW_STEP_LAYER = """\
   its result field and the only account of your work. Write it for whoever
   comes after you."""
 
-#: Present only when this solid Step actually owns frozen dashed helpers. The
-#: tool schema carries their identities; this small layer explains when and
-#: how that optional capability fits into the Step's responsibility.
+#: Present when a workflow Agent owns frozen dashed children. The tool schema
+#: carries their identities; this layer explains how the optional capability
+#: fits into the caller's own responsibility.
 WORKFLOW_STEP_HELPERS_LAYER = """\
-- This Step has optional helpers listed in your delegate_agent tool. They do
-  not run automatically. Call one only when its focused contribution would
-  help your Step, wait for its structured result, then continue your own work.
-- A helper failure is information for you to handle; you still own this Step's
-  result. A helper's grant never widens your own tools."""
+- This workflow Agent has optional direct helpers listed in your delegate_agent
+  tool. They do not run automatically. Call one only when its focused
+  contribution would help your work, wait for its structured result, then
+  continue.
+- A helper failure is information for you to handle; you still own your result.
+  A helper's grant never widens your own tools."""
 
 _NO_DELEGATION_LINE = (
     "- You cannot delegate. There are no other agents available to you."
@@ -99,17 +100,22 @@ _WORKFLOW_STEP_DELEGATION_LINE = """\
 - You may delegate only to optional helpers explicitly listed in your
   delegate_agent tool. No other agents or workflows are available to you."""
 
+_WORKFLOW_HELPER_DELEGATION_LINE = """\
+- You may invoke only helpers directly attached to this Agent and explicitly
+  listed in your delegate_agent tool. You cannot invoke workflows, root-roster
+  Agents, siblings, ancestors, or unrelated descendants. If none are listed,
+  no delegate_agent tool is available to you."""
+
 #: The role wording for a helper itself. It is not another solid Step and never
-#: addresses the user; its sole durable output returns to the calling Step.
+#: addresses the user; its sole durable output returns to its immediate caller.
 WORKFLOW_HELPER_LAYER = """\
-- You are assisting one specific Step in a workflow the user drew. That Step
+- You are assisting one specific Agent in a workflow the user drew. That Agent
   called you for a bounded task and waits synchronously for your result.
-- You read the same effective workspace as that Step and the rest of this
+- You read the same effective workspace as that Agent and the rest of this
   workflow, under only your own frozen grant.
-- Your final message returns only to the calling Step in its private history.
-  The Step continues afterward, and Aura—not you—owns the final response.
-- You cannot call helpers, delegate to agents, or run workflows. This helper
-  relationship is exactly one level deep."""
+- Your final message returns only to the immediate caller in its private
+  history. The caller continues afterward, and Aura—not you—owns the final
+  response."""
 
 WORKFLOW_HELPER_SHARED_WORKTREE_LAYER = """\
 - This linked worktree already belongs to the whole workflow and is shared by
@@ -171,7 +177,12 @@ def compose_child_system_prompt(
         if workflow_step_helpers:
             host += "\n" + WORKFLOW_STEP_HELPERS_LAYER
     if workflow_helper:
+        host = host.replace(
+            _NO_DELEGATION_LINE, _WORKFLOW_HELPER_DELEGATION_LINE
+        )
         host += "\n" + WORKFLOW_HELPER_LAYER
+        if workflow_step_helpers:
+            host += "\n" + WORKFLOW_STEP_HELPERS_LAYER
     blocks = [
         host,
         (definition.instructions or "").strip(),
@@ -253,14 +264,14 @@ def compose_workflow_helper_message(
     task: str,
     assignment: str,
     bounded_task: str,
-    owning_step: str = "",
+    immediate_caller: str = "",
 ) -> str:
-    """The original workflow ask plus this occurrence and Step-authored task."""
+    """The workflow ask, occurrence assignment, and immediate caller's task."""
     blocks = [f"Workflow task\n{str(task or '').strip()}"]
     occurrence = str(assignment or "").strip()
     if occurrence:
         blocks.append(f"Your helper role in this workflow\n{occurrence}")
-    owner = str(owning_step or "").strip() or "the calling workflow Step"
+    owner = str(immediate_caller or "").strip() or "the calling workflow Agent"
     blocks.append(
         f"Bounded task from {owner}\n{str(bounded_task or '').strip()}"
     )

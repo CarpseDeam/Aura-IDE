@@ -28,6 +28,7 @@ from aura.agents.graph_validation import (
     reference_scope_error,
     validate_graph,
 )
+from aura.agents.helper_topology import read_helper_topology
 from aura.agents.identity import AgentScope
 
 AGENTS = {
@@ -339,27 +340,104 @@ def test_a_helper_hanging_off_a_step_is_allowed() -> None:
     assert verdict.runnable is True
 
 
-def test_a_sub_agent_may_not_have_sub_agents_of_its_own() -> None:
+def test_a_three_level_helper_chain_is_allowed_and_has_stable_lineage() -> None:
     graph = _straight(_agent())
     step_node = graph.nodes_of_kind(WorkflowNodeKind.AGENT)[0]
-    helper = _agent("scout0000000")
-    deeper = _agent("scout0000000")
-    nested = _edge(ConnectionKind.SUB_AGENT, helper.node_id, deeper.node_id, 6)
+    first = _agent("scout0000000")
+    second = _agent("reviewer0000")
+    third = _agent("scout0000000")
     graph = (
-        graph.with_node(helper)
-        .with_node(deeper)
+        graph.with_node(first)
+        .with_node(second)
+        .with_node(third)
         .with_connection(
-            _edge(ConnectionKind.SUB_AGENT, step_node.node_id, helper.node_id, 5)
+            _edge(ConnectionKind.SUB_AGENT, step_node.node_id, first.node_id, 5)
         )
-        .with_connection(nested)
+        .with_connection(
+            _edge(ConnectionKind.SUB_AGENT, first.node_id, second.node_id, 6)
+        )
+        .with_connection(
+            _edge(ConnectionKind.SUB_AGENT, second.node_id, third.node_id, 7)
+        )
+    )
+
+    verdict = validate_graph(graph, agents=AGENTS)
+    topology = read_helper_topology(graph)
+
+    assert verdict.runnable is True
+    assert topology.valid is True
+    assert [item.node_id for item in topology.occurrences] == [
+        first.node_id,
+        second.node_id,
+        third.node_id,
+    ]
+    assert [item.depth for item in topology.occurrences] == [1, 2, 3]
+    assert topology.occurrences[-1].lineage == (
+        step_node.node_id,
+        first.node_id,
+        second.node_id,
+        third.node_id,
+    )
+
+
+def test_only_exact_dashed_cycle_members_are_marked() -> None:
+    graph = _straight(_agent())
+    first = _agent("scout0000000")
+    second = _agent("reviewer0000")
+    downstream = _agent("scout0000000")
+    graph = (
+        graph.with_node(first)
+        .with_node(second)
+        .with_node(downstream)
+        .with_connection(
+            _edge(ConnectionKind.SUB_AGENT, first.node_id, second.node_id, 5)
+        )
+        .with_connection(
+            _edge(ConnectionKind.SUB_AGENT, second.node_id, first.node_id, 6)
+        )
+        .with_connection(
+            _edge(ConnectionKind.SUB_AGENT, second.node_id, downstream.node_id, 7)
+        )
     )
 
     verdict = validate_graph(graph, agents=AGENTS)
 
-    assert any(
-        "one level deep" in issue.message
-        for issue in verdict.for_connection(nested.connection_id)
+    assert verdict.runnable is False
+    assert all(
+        any("run in a cycle" in issue.message for issue in verdict.for_node(node_id))
+        for node_id in (first.node_id, second.node_id)
     )
+    assert not any(
+        "run in a cycle" in issue.message
+        for issue in verdict.for_node(downstream.node_id)
+    )
+
+
+def test_a_detached_helper_tree_is_rejected_without_reparenting() -> None:
+    graph = _straight(_agent())
+    detached_root = _agent("scout0000000")
+    detached_child = _agent("reviewer0000")
+    graph = (
+        graph.with_node(detached_root)
+        .with_node(detached_child)
+        .with_connection(
+            _edge(
+                ConnectionKind.SUB_AGENT,
+                detached_root.node_id,
+                detached_child.node_id,
+                5,
+            )
+        )
+    )
+
+    verdict = validate_graph(graph, agents=AGENTS)
+
+    assert verdict.runnable is False
+    assert all(
+        any("detached" in issue.message for issue in verdict.for_node(node_id))
+        for node_id in (detached_root.node_id, detached_child.node_id)
+    )
+    assert graph.incoming(detached_root.node_id, ConnectionKind.SUB_AGENT) == ()
 
 
 def test_an_agent_is_either_a_step_or_a_helper_but_not_both() -> None:

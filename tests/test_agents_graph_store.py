@@ -32,6 +32,8 @@ from aura.agents.graph_models import (
     new_node_id,
 )
 from aura.agents.graph_store import AgentGraphStore, AgentGraphStoreError
+from aura.agents.graph_validation import validate_graph
+from aura.agents.helper_topology import read_helper_topology
 from aura.agents.identity import AgentScope
 
 
@@ -190,6 +192,59 @@ def test_a_whole_workflow_survives_a_save_and_a_reload(
     reloaded = store.get(graph.graph_id)
 
     assert reloaded == graph
+
+
+def test_a_three_level_helper_tree_survives_save_reload_in_exact_order(
+    store: AgentGraphStore,
+) -> None:
+    graph = store.create(AgentScope.PROJECT, name="Nested review")
+    task = graph.task_node
+    result = graph.result_node
+    assert task is not None and result is not None
+    step = _agent_node("reviewer0000", assignment="Own the review.")
+    first = _agent_node("reviewer0000", assignment="Check the API.")
+    second = _agent_node("reviewer0000", assignment="Check persistence.")
+    third = _agent_node("reviewer0000", assignment="Check the final invariant.")
+    graph = graph.with_node(step).with_node(first).with_node(second).with_node(third)
+    for order, (kind, source, target) in enumerate(
+        (
+            (ConnectionKind.STEP, task.node_id, step.node_id),
+            (ConnectionKind.STEP, step.node_id, result.node_id),
+            (ConnectionKind.SUB_AGENT, step.node_id, first.node_id),
+            (ConnectionKind.SUB_AGENT, first.node_id, second.node_id),
+            (ConnectionKind.SUB_AGENT, second.node_id, third.node_id),
+        )
+    ):
+        graph = graph.with_connection(
+            WorkflowConnection(
+                connection_id=new_connection_id(),
+                kind=kind,
+                source_id=source,
+                target_id=target,
+                order=order,
+            )
+        )
+
+    store.save(graph)
+    reloaded = store.get(graph.graph_id)
+
+    assert reloaded == graph
+    assert reloaded is not None
+    assert validate_graph(
+        reloaded, agents={"reviewer0000": AgentScope.PROJECT}
+    ).runnable
+    topology = read_helper_topology(reloaded)
+    assert [item.node_id for item in topology.occurrences] == [
+        first.node_id,
+        second.node_id,
+        third.node_id,
+    ]
+    assert topology.occurrences[-1].lineage == (
+        step.node_id,
+        first.node_id,
+        second.node_id,
+        third.node_id,
+    )
 
 
 def test_positions_and_manual_routing_are_persisted(store: AgentGraphStore) -> None:

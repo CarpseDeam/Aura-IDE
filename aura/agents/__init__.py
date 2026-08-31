@@ -20,8 +20,8 @@ This package owns two separate things and keeps them apart on purpose.
 * A **workflow** (:mod:`aura.agents.graph_models`,
   :mod:`aura.agents.workflow_plan`, :mod:`aura.agents.workflow_runner`) puts
   several of them in an order the user drew, freezes that order plus each
-  Step's optional helpers, and runs it serially into one structured result. As
-  with :mod:`aura.agents.runtime`, the runner is imported from its own module
+  Step's optional helper tree, and runs it into one structured result. As with
+  :mod:`aura.agents.runtime`, the runner is imported from its own module
   rather than re-exported here: it reaches into the conversation package, and
   this one must stay importable from inside it.
 
@@ -52,6 +52,12 @@ from aura.agents.graph_models import (
 )
 from aura.agents.graph_store import AgentGraphStore, AgentGraphStoreError, WorkflowSummary
 from aura.agents.graph_validation import GraphIssue, GraphValidation, validate_graph
+from aura.agents.helper_topology import (
+    HelperTopology,
+    HelperTopologyIssue,
+    HelperTopologyOccurrence,
+    read_helper_topology,
+)
 from aura.agents.identity import SCOPE_ORDER, AgentScope, is_valid_agent_id, new_agent_id
 from aura.agents.local_state import (
     DEFAULT_PERMISSION,
@@ -112,6 +118,9 @@ __all__ = [
     "GraphHistory",
     "GraphIssue",
     "GraphValidation",
+    "HelperTopology",
+    "HelperTopologyIssue",
+    "HelperTopologyOccurrence",
     "Point",
     "SolidDag",
     "SolidStep",
@@ -132,6 +141,7 @@ __all__ = [
     "new_graph_id",
     "parse_graph_document",
     "render_graph_document",
+    "read_helper_topology",
     "freeze_workflow_plan",
     "resolve_agent_turn_roster",
     "runnable_dag",

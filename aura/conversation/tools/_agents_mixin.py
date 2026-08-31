@@ -1,4 +1,4 @@
-"""Root orchestration handlers plus the Step-scoped helper delegation seam.
+"""Root orchestration handlers plus direct-child workflow delegation.
 
 This is a thin, deliberate seam.  It resolves the requested id against the
 turn's frozen roster, refuses anything that is not on it, and hands the run to
@@ -7,11 +7,9 @@ or tool surface — :mod:`aura.agents.runtime` owns all of that — and it never
 lets a child's failure escape as an exception: a delegation that could not
 happen is a structured tool result like any other.
 
-An ordinary child or helper registry has no roster, helper context, or runner,
-so this handler answers every call there with the same truthful refusal. A
-solid workflow Step is configured only with its own frozen helper occurrences.
-That is what keeps delegation one level deep at execution as well as catalog
-composition.
+An ordinary child registry has no roster, helper context, or runner, so this
+handler answers every call there with the same truthful refusal. Every running
+workflow Agent is configured only with its own frozen immediate children.
 """
 from __future__ import annotations
 
@@ -93,7 +91,7 @@ class AgentDelegationHandlersMixin:
         )
 
     def _handle_workflow_helper(self, args: dict[str, Any]) -> ToolExecResult:
-        """Run one helper already frozen for this solid workflow Step."""
+        """Run one helper frozen directly under this workflow Agent."""
         from aura.agents.delegation import DelegationFailure, DelegationResult
 
         helper_node_id = str(args.get("helper_node_id") or "").strip()
@@ -112,7 +110,7 @@ class AgentDelegationHandlersMixin:
                 DelegationFailure.AGENT_NOT_AVAILABLE,
                 (
                     f"No helper occurrence with node id '{helper_node_id}' is "
-                    "attached to this workflow Step."
+                    "directly attached to this workflow Agent."
                     + (f" Available: {available}." if available else "")
                 ),
             )
@@ -139,7 +137,11 @@ class AgentDelegationHandlersMixin:
             "agent_id": result.agent_id,
             "helper_node_id": helper.node_id,
             "owning_step_node_id": helper.owning_step_node_id,
+            "root_step_node_id": helper.root_step_node_id,
+            "immediate_parent_node_id": helper.immediate_parent_node_id,
             "connection_id": helper.connection_id,
+            "depth": helper.depth,
+            "lineage": list(helper.lineage),
             "delegation_status": result.status.value,
         }
         if result.usage is not None and not result.usage.is_empty:
@@ -191,8 +193,8 @@ class AgentDelegationHandlersMixin:
                 result = WorkflowRunResult.failure(
                     plan.graph_id,
                     DelegationFailure.ROOT_MUTATION_FORBIDDEN,
-                    "This workflow has a solid Step or attached helper with a "
-                    "Read / Write grant, but the frozen root turn forbids "
+                    "This workflow has a solid Step or helper descendant with "
+                    "a Read / Write grant, but the frozen root turn forbids "
                     "mutation. Aura did not downgrade the grant or start the "
                     "workflow.",
                     workflow_name=plan.name,

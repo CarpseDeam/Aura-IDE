@@ -230,6 +230,7 @@ class AgentLoop:
 
             full_message: dict[str, Any] | None = None
             terminal_done_before_cancel = False
+            api_error_received = False
 
             # The one request shape: the same stable catalog, the user's model,
             # and the user's thinking mode, on every round of the turn.
@@ -270,9 +271,12 @@ class AgentLoop:
                     )
                 elif isinstance(ev, ApiError):
                     _log.info("%s_api_error model=%s", self._label, model)
-                    # A provider failure stops the turn. Nothing already
-                    # completed is retracted and no success is claimed.
-                    return AgentLoopOutcome(LoopStop.API_ERROR)
+                    # Settle terminal/cancellation truth below before
+                    # classifying the provider error. A cancellation observed
+                    # while transport was waiting wins over a later ApiError;
+                    # a terminal Done fully received first remains completed.
+                    api_error_received = True
+                    break
 
             _log.info("%s_done model=%s", self._label, model)
 
@@ -311,6 +315,11 @@ class AgentLoop:
                 else:
                     self.repair_cancelled_turn(on_event)
                 return AgentLoopOutcome(LoopStop.CANCELLED)
+
+            if api_error_received:
+                # A provider failure stops the turn. Nothing already
+                # completed is retracted and no success is claimed.
+                return AgentLoopOutcome(LoopStop.API_ERROR)
 
             if full_message is None:
                 # The stream ended without a Done. There is no assistant

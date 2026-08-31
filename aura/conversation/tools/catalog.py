@@ -59,9 +59,9 @@ def _tool_name(tool_def: dict[str, Any]) -> str:
 
 
 #: The fixed base surface a delegated child agent runs with: the production
-#: read and search tools, ``glob``, and read-only Git. A solid workflow Step
-#: may add its explicitly frozen helper schema after this base; no other child
-#: gains a tool because of live graph or registry state.
+#: read and search tools, ``glob``, and read-only Git. A workflow Step or
+#: helper may add its explicitly frozen direct-child schema after this base;
+#: no child gains a tool because of live graph or registry state.
 CHILD_AGENT_TOOL_NAMES: frozenset[str] = (
     PRODUCTION_READ_TOOL_NAMES | PRODUCTION_SEARCH_TOOL_NAMES | READ_ONLY_EXTRA_TOOL_NAMES
 )
@@ -77,11 +77,11 @@ def child_agent_tool_defs(
     Every child gets read, search, and read-only Git. The exact frozen grant
     may add ``apply_patch`` and then ``shell``. There are never Skills,
     checklist or memory tools, MCP/dynamic tools, lifecycle operations, or
-    ``delegate_agent``. A solid workflow Step is the one narrow exception: when
-    its caller supplies frozen dashed helper rows, this invocation alone gets a
+    ``delegate_agent``. A workflow Agent is the narrow exception: when its
+    caller supplies frozen direct-child rows, this invocation alone gets a
     helper-specific ``delegate_agent`` schema containing only those occurrence
-    node ids. Ordinary children and helpers supply no rows, so delegation stays
-    exactly one level deep.
+    node ids. Ordinary children and helper leaves supply no rows; a helper with
+    children sees only those directly attached children.
 
     Extensible surface is absent by construction rather than by filtering —
     this function is handed no schemas to include, so nothing a server or a
@@ -115,7 +115,7 @@ class ToolCatalog:
         plan_review: bool = False,
         skills_active: bool = False,
         agents: tuple[dict[str, str], ...] | None = None,
-        workflow_helpers: tuple[dict[str, str], ...] | None = None,
+        workflow_helpers: tuple[dict[str, Any], ...] | None = None,
         workflow: dict[str, Any] | None = None,
         agent_change_sets: bool = False,
     ) -> list[dict[str, Any]]:

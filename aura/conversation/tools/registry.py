@@ -122,13 +122,12 @@ class ToolRegistry(
         # The frozen per-turn agent roster and the injected delegation runner.
         # Both are absent by default, and that absence is the ordinary case:
         # with no roster there is no ``delegate_agent`` in the catalog, and a
-        # child agent's own registry is built this way on purpose, so nothing
-        # it runs can delegate again.
+        # an ordinary child agent's registry is built this way on purpose.
         self._turn_agent_roster: AgentTurnRoster = EMPTY_AGENT_ROSTER
         self._agent_delegation_runner: Any = None
-        # A solid workflow Step may receive one narrower delegation surface:
-        # only its frozen dashed helper occurrences, resolved by node id. This
-        # is empty on every ordinary child and on helpers themselves.
+        # A workflow Step or helper may receive one narrower delegation
+        # surface: only its frozen immediate children, resolved by node id.
+        # This is empty on every ordinary child and every helper leaf.
         self._workflow_helpers: tuple[Any, ...] = ()
         self._workflow_helper_runner: Any = None
         self._agent_worktree_manager: Any = None
@@ -289,7 +288,7 @@ class ToolRegistry(
     def set_workflow_helper_context(
         self, helpers: Iterable[Any] | None, runner: Any | None
     ) -> None:
-        """Expose only one Step's frozen helpers in this private registry."""
+        """Expose only one workflow Agent's frozen direct children."""
         self._workflow_helpers = tuple(helpers or ())
         self._workflow_helper_runner = runner if self._workflow_helpers else None
 
