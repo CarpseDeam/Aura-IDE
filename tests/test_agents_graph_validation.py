@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 
+from aura.agents.graph_dag import runnable_dag
 from aura.agents.graph_models import (
     ConnectionKind,
     Point,
@@ -181,6 +182,22 @@ def test_two_branches_may_both_reach_the_aura_result() -> None:
     assert validate_graph(graph, agents=AGENTS).runnable is True
 
 
+def test_a_direct_result_bypass_is_marked_on_that_connection() -> None:
+    graph = _straight(_agent())
+    task = graph.task_node
+    result = graph.result_node
+    assert task is not None and result is not None
+    bypass = _edge(ConnectionKind.STEP, task.node_id, result.node_id, 8)
+
+    verdict = validate_graph(graph.with_connection(bypass), agents=AGENTS)
+
+    assert verdict.runnable is False
+    assert any(
+        "only valid for an empty workflow" in issue.message
+        for issue in verdict.for_connection(bypass.connection_id)
+    )
+
+
 def test_a_branch_that_never_reaches_the_aura_result_is_named_on_its_own_node() -> None:
     graph = _straight(_agent())
     task = graph.task_node
@@ -234,6 +251,47 @@ def test_a_loop_in_the_steps_is_refused() -> None:
     verdict = validate_graph(graph, agents=AGENTS)
 
     assert any("run in a loop" in message for message in verdict.messages)
+
+
+def test_only_the_agents_participating_in_a_solid_cycle_are_marked() -> None:
+    graph = new_graph(AgentScope.PROJECT, "Precise loop")
+    task = graph.task_node
+    result = graph.result_node
+    upstream = _agent()
+    first = _agent()
+    second = _agent("scout0000000")
+    downstream = _agent()
+    assert task is not None and result is not None
+    graph = (
+        graph.with_node(upstream)
+        .with_node(first)
+        .with_node(second)
+        .with_node(downstream)
+    )
+    for order, (source, target) in enumerate(
+        (
+            (task.node_id, upstream.node_id),
+            (upstream.node_id, first.node_id),
+            (first.node_id, second.node_id),
+            (second.node_id, first.node_id),
+            (second.node_id, downstream.node_id),
+            (downstream.node_id, result.node_id),
+        )
+    ):
+        graph = graph.with_connection(
+            _edge(ConnectionKind.STEP, source, target, order)
+        )
+
+    verdict = validate_graph(graph, agents=AGENTS)
+
+    assert verdict.runnable is False
+    assert all(
+        any("run in a loop" in issue.message for issue in verdict.for_node(node_id))
+        for node_id in (first.node_id, second.node_id)
+    )
+    assert verdict.for_node(upstream.node_id) == ()
+    assert verdict.for_node(downstream.node_id) == ()
+    assert runnable_dag(graph) is None
 
 
 def test_a_connection_to_a_node_that_is_not_there_is_refused() -> None:

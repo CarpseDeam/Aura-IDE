@@ -546,6 +546,8 @@ def test_a_join_waits_for_every_branch_and_is_handed_them_in_frozen_order(
     assert "Assignment for join" in joined
     assert joined.index("right answer") < joined.index("left answer")
     assert '"position": 1' in joined and '"position": 2' in joined
+    assert "Every predecessor succeeded." in joined
+    assert "did not finish" not in joined
     # One shared worktree for the whole DAG, checkpointed exactly once.
     assert worktrees.created == ["workflow-workflowplan1"]
     assert len(worktrees.recovered) == 1
@@ -600,6 +602,87 @@ def test_an_independent_branch_finishes_after_its_sibling_fails(
     assert [row["node_id"] for row in payload["branch_results"]] == ["first", "second"]
     assert "second answer" in payload["result"]
     assert payload["failure_class"] == DelegationFailure.PROVIDER_ERROR.value
+
+
+def test_later_cancellation_overrides_an_earlier_independent_failure_metadata(
+    tmp_path: Path, monkeypatch
+) -> None:
+    plan = _freeze(
+        monkeypatch,
+        _dag_graph(
+            ("first", "second"),
+            (
+                ("task", "first"),
+                ("task", "second"),
+                ("first", "result"),
+                ("second", "result"),
+            ),
+        ),
+    )
+    failure = DelegationResult.failure(
+        AGENT_IDS[0],
+        DelegationFailure.PROVIDER_ERROR,
+        "provider failed",
+        agent_name="Agent 1",
+    )
+
+    class _FailThenCancel(_Child):
+        def run(self, *args, **kwargs):
+            result = super().run(*args, **kwargs)
+            args[3].set()
+            return result
+
+    child = _FailThenCancel([failure])
+    cancel = threading.Event()
+
+    result = WorkflowRunner(workspace_root=tmp_path, child=child).run(
+        plan, "Two independent branches", cancel_event=cancel
+    )
+
+    assert result.status is WorkflowRunStatus.CANCELLED
+    assert [outcome.state for outcome in result.steps] == [
+        WorkflowStepState.FAILED,
+        WorkflowStepState.CANCELLED,
+    ]
+    assert result.failure_class == "cancelled"
+    assert result.error == "The run was stopped before this step started."
+    assert result.steps[0].result.failure_class == DelegationFailure.PROVIDER_ERROR.value
+    assert result.steps[0].result.error == "provider failed"
+    assert cancel.is_set()
+    assert child.calls[0]["cancel_event"] is cancel
+
+
+def test_freezing_refuses_a_plan_with_a_visible_direct_bypass() -> None:
+    graph = _graph()
+    task = graph.task_node
+    result = graph.result_node
+    assert task is not None and result is not None
+    graph = graph.with_connection(
+        WorkflowConnection(
+            "direct-bypass",
+            ConnectionKind.STEP,
+            task.node_id,
+            result.node_id,
+            len(graph.connections),
+        )
+    )
+    definitions = tuple(
+        _definition(agent_id, f"Agent {index}")
+        for index, agent_id in enumerate(AGENT_IDS[:2], start=1)
+    )
+
+    plan, errors = freeze_workflow_plan(
+        graph,
+        definitions=_Definitions(definitions),
+        permissions=_Permissions({}),
+        agent_scopes={item.agent_id: item.scope for item in definitions},
+        provider="deepseek",
+        model="aura-current-model",
+        thinking="high",
+    )
+
+    assert plan is None
+    assert any("only valid for an empty workflow" in error for error in errors)
 
 
 def test_a_join_is_blocked_truthfully_when_one_of_its_branches_fails(

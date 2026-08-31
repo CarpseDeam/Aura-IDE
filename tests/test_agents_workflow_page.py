@@ -349,6 +349,35 @@ def test_a_fan_out_and_join_survives_a_reload_and_becomes_runnable(wired) -> Non
     assert wired.controller.workflow_gate() == (False, True)
 
 
+def test_a_visible_direct_bypass_makes_the_workflow_ineligible_to_run(wired) -> None:
+    reviewer = _agent(wired.agents, AgentScope.PROJECT, "Reviewer")
+    page, graphs = _new_workflow(wired)
+    _drop(wired, page, reviewer, 0.0, 0.0)
+    graph = graphs.current_graph
+    (step,) = [node for node in graph.nodes if node.is_agent]
+    for source, target in (
+        (graph.task_node.node_id, step.node_id),
+        (step.node_id, graph.result_node.node_id),
+        (graph.task_node.node_id, graph.result_node.node_id),
+    ):
+        page.scene.connect_requested.emit(source, target, "step")
+        wired.app.processEvents()
+
+    graph = graphs.current_graph
+    (bypass,) = [
+        edge
+        for edge in graph.connections_of_kind(ConnectionKind.STEP)
+        if edge.source_id == graph.task_node.node_id
+        and edge.target_id == graph.result_node.node_id
+    ]
+
+    assert wired.controller.workflow_gate() == (False, False)
+    assert page.workflow_bar.run_button.isEnabled() is False
+    assert "only valid for an empty workflow" in page.scene.edge_items[
+        bypass.connection_id
+    ].toolTip()
+
+
 def test_dropping_an_agent_onto_a_solid_connection_inserts_it_into_the_path(
     wired,
 ) -> None:

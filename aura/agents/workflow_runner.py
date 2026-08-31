@@ -602,7 +602,23 @@ class WorkflowRunner:
             settled[step.node_id] = outcome
             self._notify(on_step, step.node_id, outcome.state)
 
-        return outcomes, _run_status(outcomes), failure_class, error
+        status = _run_status(outcomes)
+        if status is WorkflowRunStatus.CANCELLED:
+            # Cancellation is a fact about the whole run, not just the first
+            # non-success it encountered. Preserve earlier failures on their
+            # Step outcomes, while sourcing the run-level reason from the
+            # first cancelled Step in the plan's frozen order.
+            cancelled = next(
+                outcome
+                for outcome in outcomes
+                if outcome.state is WorkflowStepState.CANCELLED
+            )
+            failure_class = cancelled.result.failure_class or "cancelled"
+            error = (
+                cancelled.result.error
+                or "The workflow was stopped before it could finish."
+            )
+        return outcomes, status, failure_class, error
 
     @staticmethod
     def _cancelled_outcome(

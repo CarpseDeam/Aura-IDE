@@ -25,10 +25,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from aura.agents.graph_dag import (
+    cycle_node_ids,
+    direct_bypass_edges,
     reachable,
     solid_links,
     solid_step_edges,
-    topological_order,
 )
 from aura.agents.graph_models import (
     ConnectionKind,
@@ -222,6 +223,15 @@ def _step_issues(graph: WorkflowGraph) -> list[GraphIssue]:
                 )
             )
 
+    for edge in direct_bypass_edges(graph):
+        issues.append(
+            GraphIssue(
+                "the direct Task → Aura Result connection bypasses every Agent "
+                "Step — it is only valid for an empty workflow",
+                connection_id=edge.connection_id,
+            )
+        )
+
     successors, predecessors = solid_links(steps)
     forward = reachable((task.node_id,), successors)
     backward = reachable((result.node_id,), predecessors)
@@ -231,8 +241,24 @@ def _step_issues(graph: WorkflowGraph) -> list[GraphIssue]:
         for node in graph.nodes
         if node.node_id in touched or node.node_id in (task.node_id, result.node_id)
     )
-    looped = topological_order(on_path, predecessors) is None
-    if looped:
+    cyclic = set(cycle_node_ids(on_path, successors))
+    cyclic_agents = tuple(
+        node
+        for node in graph.nodes
+        if node.is_agent and node.node_id in cyclic
+    )
+    if cyclic_agents:
+        issues.extend(
+            GraphIssue(
+                "the steps in this workflow run in a loop through this agent",
+                node_id=node.node_id,
+            )
+            for node in cyclic_agents
+        )
+    elif cyclic:
+        # Fixed-end-only cycles have no Agent box to mark. Their illegal
+        # direction is already attached to the offending connection above,
+        # but retain a graph-level cycle verdict as a fail-closed backstop.
         issues.append(GraphIssue("the steps in this workflow run in a loop"))
     elif result.node_id not in forward:
         issues.append(GraphIssue("the Task does not lead to the Aura Result yet"))

@@ -176,6 +176,68 @@ def topological_order(
     return tuple(order)
 
 
+def cycle_node_ids(
+    node_ids: tuple[str, ...], successors: SolidLinks
+) -> tuple[str, ...]:
+    """Exactly the nodes that participate in a directed cycle, in node order.
+
+    The unsettled remainder of a topological sort is not precise enough for
+    presentation: it also contains every node downstream of a cycle. Walking
+    forward from each candidate and asking whether it can get back to itself
+    names only the boxes that are actually part of the loop.
+    """
+    inside = set(node_ids)
+    cyclic: list[str] = []
+    for start in node_ids:
+        pending = [
+            node_id
+            for node_id in successors.get(start, ())
+            if node_id in inside
+        ]
+        seen: set[str] = set()
+        while pending:
+            node_id = pending.pop()
+            if node_id == start:
+                cyclic.append(start)
+                break
+            if node_id in seen:
+                continue
+            seen.add(node_id)
+            pending.extend(
+                successor
+                for successor in successors.get(node_id, ())
+                if successor in inside
+            )
+    return tuple(cyclic)
+
+
+def direct_bypass_edges(graph: WorkflowGraph) -> tuple[WorkflowConnection, ...]:
+    """Direct Task-to-Result lines that coexist with solid Agent Steps.
+
+    A direct line is the complete shape of an empty workflow. Once any Agent
+    occurrence also participates in the solid graph, that same line becomes a
+    visible bypass that a frozen Agent plan cannot represent without silently
+    dropping a branch.
+    """
+    task = graph.task_node
+    result = graph.result_node
+    if task is None or result is None:
+        return ()
+    edges = solid_step_edges(graph)
+    by_id = {node.node_id: node for node in graph.nodes}
+    has_agent_step = any(
+        by_id[edge.source_id].is_agent or by_id[edge.target_id].is_agent
+        for edge in edges
+    )
+    if not has_agent_step:
+        return ()
+    return tuple(
+        edge
+        for edge in edges
+        if edge.source_id == task.node_id and edge.target_id == result.node_id
+    )
+
+
 def solid_dag(graph: WorkflowGraph) -> SolidDag | None:
     """The acyclic Task to Aura Result shape *graph* draws, or nothing.
 
@@ -188,6 +250,8 @@ def solid_dag(graph: WorkflowGraph) -> SolidDag | None:
     task = graph.task_node
     result = graph.result_node
     if task is None or result is None:
+        return None
+    if direct_bypass_edges(graph):
         return None
 
     edges = solid_step_edges(graph)
@@ -253,6 +317,8 @@ __all__ = [
     "SolidDag",
     "SolidLinks",
     "SolidStep",
+    "cycle_node_ids",
+    "direct_bypass_edges",
     "reachable",
     "runnable_dag",
     "solid_dag",

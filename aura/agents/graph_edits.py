@@ -114,6 +114,14 @@ def reconnect(
     )
     if moved.source_id == moved.target_id or moved == edge:
         return None
+    if any(
+        other.connection_id != connection_id
+        and other.kind is moved.kind
+        and other.source_id == moved.source_id
+        and other.target_id == moved.target_id
+        for other in graph.connections
+    ):
+        return None
     return graph.with_connection(moved)
 
 

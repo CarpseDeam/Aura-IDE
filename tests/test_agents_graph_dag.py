@@ -176,3 +176,13 @@ def test_a_task_wired_straight_to_the_result_is_a_shape_with_nothing_to_run() ->
 
     assert solid_dag(graph) is not None
     assert runnable_dag(graph) is None
+
+
+def test_a_direct_result_connection_cannot_bypass_solid_agent_steps() -> None:
+    graph = _graph(
+        nodes=("agent",),
+        edges=(("task", "agent"), ("agent", "result"), ("task", "result")),
+    )
+
+    assert solid_dag(graph) is None
+    assert runnable_dag(graph) is None
