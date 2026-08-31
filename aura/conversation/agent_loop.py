@@ -230,7 +230,7 @@ class AgentLoop:
 
             full_message: dict[str, Any] | None = None
             terminal_done_before_cancel = False
-            api_error_received = False
+            api_error_cancelled_at_receive: bool | None = None
 
             # The one request shape: the same stable catalog, the user's model,
             # and the user's thinking mode, on every round of the turn.
@@ -254,6 +254,7 @@ class AgentLoop:
                 cancel_event=cancel_event,
                 temperature=temperature,
             ):
+                cancelled_when_received = cancel_event.is_set()
                 if _first_event:
                     _log.info("%s_first_event model=%s", self._label, model)
                     _first_event = False
@@ -267,7 +268,7 @@ class AgentLoop:
                     terminal_done_before_cancel = bool(
                         full_message is not None
                         and not (full_message.get("tool_calls") or [])
-                        and not cancel_event.is_set()
+                        and not cancelled_when_received
                     )
                 elif isinstance(ev, ApiError):
                     _log.info("%s_api_error model=%s", self._label, model)
@@ -275,16 +276,12 @@ class AgentLoop:
                     # classifying the provider error. A cancellation observed
                     # while transport was waiting wins over a later ApiError;
                     # a terminal Done fully received first remains completed.
-                    api_error_received = True
+                    api_error_cancelled_at_receive = cancelled_when_received
                     break
 
             _log.info("%s_done model=%s", self._label, model)
 
-            if (
-                cancel_event.is_set()
-                and terminal_done_before_cancel
-                and full_message is not None
-            ):
+            if terminal_done_before_cancel and full_message is not None:
                 # A terminal assistant Done is authoritative once fully
                 # received. A cancellation observed only after that event
                 # cannot retroactively turn the completed answer into a
@@ -292,7 +289,12 @@ class AgentLoop:
                 self._history.append_assistant(full_message)
                 return AgentLoopOutcome(LoopStop.COMPLETED)
 
-            if cancel_event.is_set():
+            if api_error_cancelled_at_receive is False:
+                # The provider error had already arrived before cancellation.
+                # A callback-triggered cancellation cannot rewrite that order.
+                return AgentLoopOutcome(LoopStop.API_ERROR)
+
+            if cancel_event.is_set() or api_error_cancelled_at_receive is True:
                 # Cancellation is not a verdict: whatever the stream already
                 # completed keeps its terminal event.
                 # If we have some content but no tool calls, we can keep it.
@@ -315,11 +317,6 @@ class AgentLoop:
                 else:
                     self.repair_cancelled_turn(on_event)
                 return AgentLoopOutcome(LoopStop.CANCELLED)
-
-            if api_error_received:
-                # A provider failure stops the turn. Nothing already
-                # completed is retracted and no success is claimed.
-                return AgentLoopOutcome(LoopStop.API_ERROR)
 
             if full_message is None:
                 # The stream ended without a Done. There is no assistant

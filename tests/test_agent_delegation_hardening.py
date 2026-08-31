@@ -16,6 +16,7 @@ from aura.agents.roster import AgentRosterEntry, AgentTurnRoster
 from aura.agents.runtime import AgentDelegationRunner
 from aura.bridge.execution_event_relay import ExecutionEventRelay
 from aura.client import ApiError, ContentDelta, Done, ToolResult, Usage
+from aura.conversation.agent_loop import AgentLoop, LoopStop
 from aura.conversation.history import History
 from aura.conversation.manager_tool_round import ToolRoundRunner
 from aura.conversation.tool_runner import ToolRunner
@@ -225,6 +226,47 @@ def test_api_error_after_transport_cancellation_preserves_terminal_truth(
     completed = runner.run(_entry(), "Review again.", cancel_event=cancel)
     assert completed.status is DelegationStatus.COMPLETED
     assert completed.result == "Already complete."
+
+    def callback_cancelled_outcome(event: Done | ApiError) -> tuple[LoopStop, History]:
+        cancel.clear()
+        history = History()
+        history.append_user_text("Review callback ordering.")
+        registry = ToolRegistry(tmp_path)
+        loop = AgentLoop(
+            history=history,
+            stream=lambda **_kwargs: iter((event,)),
+            tool_round=ToolRoundRunner(
+                history=history,
+                tools=registry,
+                tool_runner=ToolRunner(history=history, workspace_root=tmp_path),
+            ),
+        )
+
+        def cancel_during_delivery(received: object) -> None:
+            assert received is event
+            cancel.set()
+
+        outcome = loop.run(
+            on_event=cancel_during_delivery,
+            approval_cb=lambda _request: ApprovalDecision(action="approve"),
+            cancel_event=cancel,
+            model="test-model",
+            thinking="off",
+            tool_defs=[],
+        )
+        return outcome.stop, history
+
+    delivered_done = Done(
+        "stop", {"role": "assistant", "content": "Delivered before callback cancel."}
+    )
+    done_stop, done_history = callback_cancelled_outcome(delivered_done)
+    assert done_stop is LoopStop.COMPLETED
+    assert done_history.messages[-1]["content"] == "Delivered before callback cancel."
+
+    delivered_error = ApiError(500, "provider failed before callback cancel")
+    error_stop, error_history = callback_cancelled_outcome(delivered_error)
+    assert error_stop is LoopStop.API_ERROR
+    assert [message["role"] for message in error_history.messages] == ["user"]
 
 
 def test_cancelled_writable_result_and_change_set_remain_canonical(
