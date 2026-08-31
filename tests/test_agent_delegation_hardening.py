@@ -151,6 +151,39 @@ def test_child_provider_errors_are_redacted_before_the_result(
     assert "[REDACTED]" in payload["error"]
 
 
+def test_backend_raise_after_cancel_keeps_terminal_answer_and_usage(
+    tmp_path: Path,
+) -> None:
+    cancel = threading.Event()
+
+    class _CancelledBackend:
+        def stream(self, **_kwargs):
+            yield Usage(30, 7, 4, 26)
+            yield Done("stop", {"role": "assistant", "content": "Stable answer."})
+            cancel.set()
+            raise RuntimeError("provider teardown failed")
+
+    runner = AgentDelegationRunner(
+        workspace_root=tmp_path,
+        inherited_provider="deepseek",
+        inherited_model="deepseek-chat",
+        backend_factory=lambda _provider: _CancelledBackend(),
+    )
+
+    result = runner.run(_entry(), "Review.", cancel_event=cancel)
+
+    assert result.status is DelegationStatus.CANCELLED
+    assert result.result == "Stable answer."
+    assert result.failure_class == "cancelled"
+    assert result.usage is not None
+    assert result.usage.as_dict() == {
+        "prompt_tokens": 30,
+        "completion_tokens": 7,
+        "cache_hit_tokens": 4,
+        "cache_miss_tokens": 26,
+    }
+
+
 def test_cancelled_writable_result_and_change_set_remain_canonical(
     tmp_path: Path,
 ) -> None:
@@ -241,6 +274,19 @@ def test_child_usage_is_emitted_once_from_the_paired_result() -> None:
                     "cache_hit_tokens": 7,
                     "cache_miss_tokens": 23,
                 },
+            },
+        ),
+    )
+    relay.relay(
+        "root-run",
+        ToolResult(
+            tool_call_id="delegate-without-usage",
+            name="delegate_agent",
+            ok=True,
+            result="{}",
+            extras={
+                "delegation_provider": "openrouter",
+                "delegation_model": "child-model",
             },
         ),
     )

@@ -122,7 +122,7 @@ class _Worktrees:
 
 
 class _ScriptedBackend:
-    """One event script shared by the Step and its synchronous helpers."""
+    """One mutable backend session with a deterministic event script."""
 
     def __init__(
         self,
@@ -984,7 +984,7 @@ def test_writable_helper_uses_child_executor_and_the_one_shared_worktree(
     isolated = tmp_path / "isolated"
     isolated.mkdir()
     worktrees = _Worktrees(isolated)
-    backend = _ScriptedBackend(
+    primary_backend = _ScriptedBackend(
         [
             _tool_round(
                 _call(
@@ -994,16 +994,19 @@ def test_writable_helper_uses_child_executor_and_the_one_shared_worktree(
                     task="Inspect the persistence seam.",
                 )
             ),
-            _answer("helper answer", Usage(11, 7, 3, 2)),
             _answer("primary incorporated the helper"),
         ]
     )
+    helper_backend = _ScriptedBackend(
+        [_answer("helper answer", Usage(11, 7, 3, 2))]
+    )
+    backends = iter((primary_backend, helper_backend))
     cancel = threading.Event()
     observed: list[tuple[str, WorkflowStepState]] = []
     runner = WorkflowRunner(
         workspace_root=tmp_path,
         worktree_manager=worktrees,
-        backend_factory=lambda _provider: backend,
+        backend_factory=lambda _provider: next(backends),
     )
 
     result = runner.run(
@@ -1017,26 +1020,30 @@ def test_writable_helper_uses_child_executor_and_the_one_shared_worktree(
     assert result.result == "primary incorporated the helper"
     assert len(worktrees.created) == 1
     assert len(worktrees.recovered) == 1
-    assert len(backend.requests) == 3
-    assert all(request["cancel_event"] is cancel for request in backend.requests)
+    requests = [
+        primary_backend.requests[0],
+        helper_backend.requests[0],
+        primary_backend.requests[1],
+    ]
+    assert all(request["cancel_event"] is cancel for request in requests)
     primary_tools = {
-        tool["function"]["name"] for tool in backend.requests[0]["tools"]
+        tool["function"]["name"] for tool in primary_backend.requests[0]["tools"]
     }
     helper_tools = {
-        tool["function"]["name"] for tool in backend.requests[1]["tools"]
+        tool["function"]["name"] for tool in helper_backend.requests[0]["tools"]
     }
     assert "apply_patch" not in primary_tools and "shell" not in primary_tools
     assert {"apply_patch", "shell"} <= helper_tools
     assert "delegate_agent" not in helper_tools
     assert "run_agent_workflow" not in helper_tools
-    helper_messages = backend.requests[1]["messages"]
+    helper_messages = helper_backend.requests[0]["messages"]
     assert [message["role"] for message in helper_messages] == ["system", "user"]
     assert "assisting one specific Step" in helper_messages[0]["content"]
     assert "shared by\n  its Steps and writable helpers" in helper_messages[0]["content"]
     assert "Original workflow task" in helper_messages[1]["content"]
     assert "Inspect and edit only if needed." in helper_messages[1]["content"]
     assert "Inspect the persistence seam." in helper_messages[1]["content"]
-    primary_continuation = json.dumps(backend.requests[2]["messages"])
+    primary_continuation = json.dumps(primary_backend.requests[1]["messages"])
     assert "helper answer" in primary_continuation
     assert "writer-helper" in primary_continuation
     assert observed == [
@@ -1078,7 +1085,7 @@ def test_multiple_calls_to_one_helper_are_all_retained(
             _graph(1), "step1", node_id="repeat-helper", agent_id=AGENT_IDS[1]
         ),
     )
-    backend = _ScriptedBackend(
+    primary_backend = _ScriptedBackend(
         [
             _tool_round(
                 _call(
@@ -1088,7 +1095,6 @@ def test_multiple_calls_to_one_helper_are_all_retained(
                     task="First bounded check",
                 )
             ),
-            _answer("first helper result"),
             _tool_round(
                 _call(
                     "help-2",
@@ -1097,12 +1103,16 @@ def test_multiple_calls_to_one_helper_are_all_retained(
                     task="Second bounded check",
                 )
             ),
-            _answer("second helper result"),
             _answer("primary final"),
         ]
     )
+    first_helper_backend = _ScriptedBackend([_answer("first helper result")])
+    second_helper_backend = _ScriptedBackend([_answer("second helper result")])
+    backends = iter(
+        (primary_backend, first_helper_backend, second_helper_backend)
+    )
     result = WorkflowRunner(
-        workspace_root=tmp_path, backend_factory=lambda _provider: backend
+        workspace_root=tmp_path, backend_factory=lambda _provider: next(backends)
     ).run(plan, "Use the helper twice")
 
     assert result.status is WorkflowRunStatus.COMPLETED
@@ -1116,7 +1126,10 @@ def test_multiple_calls_to_one_helper_are_all_retained(
         "second helper result",
     ]
     assert len(result.payload()["helper_invocations"]) == 2
-    assert [len(backend.requests[index]["messages"]) for index in (1, 3)] == [2, 2]
+    assert [
+        len(first_helper_backend.requests[0]["messages"]),
+        len(second_helper_backend.requests[0]["messages"]),
+    ] == [2, 2]
 
 
 def test_aura_triggered_workflow_uses_the_same_helper_runner_path(
@@ -1128,7 +1141,7 @@ def test_aura_triggered_workflow_uses_the_same_helper_runner_path(
             _graph(1), "step1", node_id="aura-helper", agent_id=AGENT_IDS[1]
         ),
     )
-    backend = _ScriptedBackend(
+    primary_backend = _ScriptedBackend(
         [
             _tool_round(
                 _call(
@@ -1138,12 +1151,13 @@ def test_aura_triggered_workflow_uses_the_same_helper_runner_path(
                     task="Answer the bounded question",
                 )
             ),
-            _answer("answer for the Step"),
             _answer("workflow answer for Aura"),
         ]
     )
+    helper_backend = _ScriptedBackend([_answer("answer for the Step")])
+    backends = iter((primary_backend, helper_backend))
     runner = WorkflowRunner(
-        workspace_root=tmp_path, backend_factory=lambda _provider: backend
+        workspace_root=tmp_path, backend_factory=lambda _provider: next(backends)
     )
     registry = ToolRegistry(tmp_path)
     registry.set_turn_workflow_plan(plan)
@@ -1160,10 +1174,11 @@ def test_aura_triggered_workflow_uses_the_same_helper_runner_path(
     assert tool_result.payload["helper_invocations"][0][
         "helper_node_id"
     ] == "aura-helper"
-    assert len(backend.requests) == 3
+    assert len(primary_backend.requests) == 2
+    assert len(helper_backend.requests) == 1
 
 
-def test_helper_failure_returns_to_the_step_without_stopping_the_workflow(
+def test_reused_nested_backend_fails_helper_without_stopping_the_workflow(
     tmp_path: Path, monkeypatch
 ) -> None:
     plan = _freeze(
@@ -1182,7 +1197,6 @@ def test_helper_failure_returns_to_the_step_without_stopping_the_workflow(
                     task="Try the focused check",
                 )
             ),
-            _answer(""),
             _answer("primary handled the helper failure"),
         ]
     )
@@ -1198,12 +1212,13 @@ def test_helper_failure_returns_to_the_step_without_stopping_the_workflow(
 
     assert result.status is WorkflowRunStatus.COMPLETED
     assert result.result == "primary handled the helper failure"
-    assert len(backend.requests) == 3
+    assert len(backend.requests) == 2
     assert len(result.helper_invocations) == 1
     invocation = result.helper_invocations[0]
     assert invocation.state is WorkflowStepState.FAILED
-    assert invocation.result.failure_class == DelegationFailure.EMPTY_RESULT.value
-    assert "empty_result" in json.dumps(backend.requests[2]["messages"])
+    assert invocation.result.failure_class == DelegationFailure.PROVIDER_ERROR.value
+    assert "reused by a nested child invocation" in invocation.result.error
+    assert "provider_error" in json.dumps(backend.requests[1]["messages"])
     assert observed[-2:] == [
         ("fallible-helper", WorkflowStepState.FAILED),
         ("step1", WorkflowStepState.SUCCEEDED),
@@ -1219,7 +1234,7 @@ def test_workflow_cancellation_is_the_helper_cancellation_authority(
             _graph(1), "step1", node_id="slow-helper", agent_id=AGENT_IDS[1]
         ),
     )
-    backend = _ScriptedBackend(
+    primary_backend = _ScriptedBackend(
         [
             _tool_round(
                 _call(
@@ -1229,15 +1244,15 @@ def test_workflow_cancellation_is_the_helper_cancellation_authority(
                     task="Wait for cancellation",
                 )
             ),
-            [],
-        ],
-        cancel_on_request=1,
+        ]
     )
+    helper_backend = _ScriptedBackend([[]], cancel_on_request=0)
+    backends = iter((primary_backend, helper_backend))
     cancel = threading.Event()
     observed: list[tuple[str, WorkflowStepState]] = []
 
     result = WorkflowRunner(
-        workspace_root=tmp_path, backend_factory=lambda _provider: backend
+        workspace_root=tmp_path, backend_factory=lambda _provider: next(backends)
     ).run(
         plan,
         "Cancel inside the helper",
@@ -1247,8 +1262,12 @@ def test_workflow_cancellation_is_the_helper_cancellation_authority(
 
     assert cancel.is_set()
     assert result.status is WorkflowRunStatus.CANCELLED
-    assert len(backend.requests) == 2
-    assert all(request["cancel_event"] is cancel for request in backend.requests)
+    assert len(primary_backend.requests) == 1
+    assert len(helper_backend.requests) == 1
+    assert all(
+        request["cancel_event"] is cancel
+        for request in primary_backend.requests + helper_backend.requests
+    )
     assert result.helper_invocations[0].state is WorkflowStepState.CANCELLED
     assert result.steps[0].state is WorkflowStepState.CANCELLED
     assert observed == [
@@ -1388,6 +1407,13 @@ def test_read_only_siblings_overlap_join_waits_and_projection_stays_frozen(
     assert plan.step("right").mutation_capable is False
     running = [node_id for node_id, state in observed if state is WorkflowStepState.RUNNING]
     assert running.index("left") < running.index("right") < running.index("join")
+    terminal = [
+        node_id
+        for node_id, state in observed
+        if node_id in {"left", "right", "join"}
+        and state is not WorkflowStepState.RUNNING
+    ]
+    assert terminal == ["right", "left", "join"]
 
 
 def test_readers_and_writers_run_in_exclusive_frozen_waves(
@@ -1751,27 +1777,46 @@ def test_shared_backend_and_unforkable_child_are_serialized(
             ),
         ),
     )
-    backend_entered = threading.Event()
-    backend_release = threading.Event()
+    (tmp_path / "note.txt").write_text("shared session\n", encoding="utf-8")
+    tool_entered = threading.Event()
+    tool_release = threading.Event()
     second_backend_factory = threading.Event()
     second_backend_entered = threading.Event()
     backend_factory_calls = 0
     backend_stream_calls = 0
+    first_stream_calls = 0
     backend_lock = threading.Lock()
 
     class _SharedBackend:
         def stream(self, **kwargs):
-            del kwargs
-            nonlocal backend_stream_calls
+            nonlocal backend_stream_calls, first_stream_calls
+            first_child = "first child" in json.dumps(kwargs["messages"])
             with backend_lock:
-                index = backend_stream_calls
                 backend_stream_calls += 1
-            if index == 0:
-                backend_entered.set()
-                assert backend_release.wait(timeout=5)
-            else:
+                if first_child:
+                    first_stream_calls += 1
+                    round_index = first_stream_calls
+            if not first_child:
                 second_backend_entered.set()
-            yield from _answer(f"answer {index}")
+                yield from _answer("second answer")
+            elif round_index == 1:
+                yield Done(
+                    "tool_calls",
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [_call("read", "read_file", path="note.txt")],
+                    },
+                )
+            else:
+                yield from _answer("first answer")
+
+    class _BlockingRegistry(ToolRegistry):
+        def execute(self, name, args, approval_cb, **kwargs):
+            if name == "read_file":
+                tool_entered.set()
+                assert tool_release.wait(timeout=5)
+            return super().execute(name, args, approval_cb, **kwargs)
 
     shared_backend = _SharedBackend()
 
@@ -1783,30 +1828,37 @@ def test_shared_backend_and_unforkable_child_are_serialized(
                 second_backend_factory.set()
         return shared_backend
 
-    prototype = ChildExecutor(backend_factory=backend_factory)
+    prototype = ChildExecutor(
+        backend_factory=backend_factory,
+        registry_factory=lambda root: _BlockingRegistry(root),
+    )
     step = plan.steps[0]
 
-    def invoke() -> None:
+    def invoke(task: str) -> None:
         prototype.fork().run(
             step.entry,
-            "read safely",
+            task,
             step.resolved,
             threading.Event(),
             workspace_root=tmp_path,
             permission=AgentPermission.READ_ONLY,
         )
 
-    first = threading.Thread(target=invoke)
-    second = threading.Thread(target=invoke)
+    first = threading.Thread(target=invoke, args=("first child",))
+    second = threading.Thread(target=invoke, args=("second child",))
     first.start()
-    assert backend_entered.wait(timeout=5)
+    assert tool_entered.wait(timeout=5)
     second.start()
     assert second_backend_factory.wait(timeout=5)
-    assert not second_backend_entered.is_set()
-    backend_release.set()
+    try:
+        assert not second_backend_entered.wait(timeout=0.2)
+    finally:
+        tool_release.set()
     first.join()
     second.join()
     assert second_backend_entered.is_set()
+    assert first_stream_calls == 2
+    assert backend_stream_calls == 3
 
     child_entered = threading.Event()
     child_release = threading.Event()

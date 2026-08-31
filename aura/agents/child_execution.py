@@ -133,9 +133,12 @@ class ChildTranscript:
         self._round_parts.clear()
 
     def answer(self, stop: LoopStop) -> str:
-        if stop is LoopStop.COMPLETED:
+        if stop is LoopStop.COMPLETED or (
+            stop is LoopStop.CANCELLED and self._terminal_seen
+        ):
             # An empty terminal response is authoritative. Never fall back to
-            # prose from a prior tool-call round.
+            # prose from a prior tool-call round. A terminal response also
+            # survives a later cancellation raised from backend teardown.
             return self._terminal_text if self._terminal_seen else ""
         return "".join(self._round_parts).strip()
 
@@ -243,45 +246,46 @@ class ChildExecutor:
                 backend = self._isolation.construct(
                     self._backend_factory, resolved.provider
                 )
-
-                def isolated_stream(**kwargs: Any):
-                    # A factory that returns one mutable backend is serialized
-                    # per stream round. Each ChildExecutor remains a distinct
-                    # session owner; no two threads enter that backend at once.
-                    with self._isolation.lease(backend, "backend"):
-                        yield from backend.stream(**kwargs)
-
-                loop = AgentLoop(
-                    history=history,
-                    stream=isolated_stream,
-                    tool_round=tool_round,
-                    label=_CHILD_STREAM_LABEL,
-                )
-                outcome = loop.run(
-                    on_event=transcript,
-                    approval_cb=(
-                        _approve_isolated_write
-                        if permission.allows_edit
-                        else _refuse_approval
-                    ),
-                    cancel_event=cancel,
-                    model=resolved.model,
-                    thinking=resolved.thinking,
-                    tool_defs=tool_defs,
-                    temperature=0.7,
-                )
-                stop = outcome.stop
+                # Keep a mutable backend session with one child across every
+                # model/tool round. Helpers fail closed on accidental nested
+                # reuse instead of waiting on the backend their parent owns.
+                with self._isolation.lease(
+                    backend, "backend", fail_if_active=workflow_helper
+                ):
+                    loop = AgentLoop(
+                        history=history,
+                        stream=backend.stream,
+                        tool_round=tool_round,
+                        label=_CHILD_STREAM_LABEL,
+                    )
+                    outcome = loop.run(
+                        on_event=transcript,
+                        approval_cb=(
+                            _approve_isolated_write
+                            if permission.allows_edit
+                            else _refuse_approval
+                        ),
+                        cancel_event=cancel,
+                        model=resolved.model,
+                        thinking=resolved.thinking,
+                        tool_defs=tool_defs,
+                        temperature=0.7,
+                    )
+                    stop = outcome.stop
             except Exception as exc:
                 # A backend can fail after yielding Usage. Wrap the transcript
                 # here, where its cumulative counters and elapsed time still
                 # exist, rather than letting an outer generic failure discard them.
-                detail = redact_secrets(f"{type(exc).__name__}: {exc}")
-                transcript.api_errors.append(detail)
-                logger.warning(
-                    "agents: child backend raised agent_id=%s error=%s",
-                    definition.agent_id,
-                    detail,
-                )
+                if cancel.is_set():
+                    stop = LoopStop.CANCELLED
+                else:
+                    detail = redact_secrets(f"{type(exc).__name__}: {exc}")
+                    transcript.api_errors.append(detail)
+                    logger.warning(
+                        "agents: child backend raised agent_id=%s error=%s",
+                        definition.agent_id,
+                        detail,
+                    )
             finally:
                 try:
                     tool_runner.close()

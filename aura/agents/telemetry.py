@@ -15,11 +15,13 @@ def delegation_usage_signals(
         rows = tuple(groups)
     else:
         data = source.get("delegation_usage")
+        if not isinstance(data, dict):
+            return ()
         rows = (
             {
                 "provider": source.get("delegation_provider"),
                 "model": source.get("delegation_model"),
-                **(data if isinstance(data, dict) else {}),
+                **data,
             },
         )
     signals: list[tuple[str, str, int, int, int, int]] = []

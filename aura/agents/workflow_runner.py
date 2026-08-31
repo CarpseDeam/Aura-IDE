@@ -664,11 +664,15 @@ class WorkflowRunner:
                     remaining -= 1
                     active.discard(event.future)
                     try:
-                        worker_results[event.step.node_id] = event.future.result()
+                        worker = event.future.result()
                     except Exception as exc:
-                        worker_results[event.step.node_id] = _StepWorkerResult(
+                        worker = _StepWorkerResult(
                             self._internal_error_result(event.step, exc)
                         )
+                    worker_results[event.step.node_id] = worker
+                    self._notify(
+                        on_step, event.step.node_id, _state_of(worker.result)
+                    )
 
                 for step, _future in launched:
                     worker = worker_results[step.node_id]
@@ -680,7 +684,6 @@ class WorkflowRunner:
                         outcome.state is WorkflowStepState.SUCCEEDED
                     )
                     helpers_by_step[step.node_id] = worker.helper_invocations
-                    self._notify(on_step, step.node_id, outcome.state)
 
                 if cancel.is_set():
                     break
