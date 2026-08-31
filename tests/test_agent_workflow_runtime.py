@@ -1216,9 +1216,9 @@ def test_reused_nested_backend_fails_helper_without_stopping_the_workflow(
     assert len(result.helper_invocations) == 1
     invocation = result.helper_invocations[0]
     assert invocation.state is WorkflowStepState.FAILED
-    assert invocation.result.failure_class == DelegationFailure.PROVIDER_ERROR.value
+    assert invocation.result.failure_class == DelegationFailure.INTERNAL_ERROR.value
     assert "reused by a nested child invocation" in invocation.result.error
-    assert "provider_error" in json.dumps(backend.requests[1]["messages"])
+    assert "internal_error" in json.dumps(backend.requests[1]["messages"])
     assert observed[-2:] == [
         ("fallible-helper", WorkflowStepState.FAILED),
         ("step1", WorkflowStepState.SUCCEEDED),

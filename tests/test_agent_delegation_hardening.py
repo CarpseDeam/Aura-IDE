@@ -155,12 +155,16 @@ def test_backend_raise_after_cancel_keeps_terminal_answer_and_usage(
     tmp_path: Path,
 ) -> None:
     cancel = threading.Event()
+    cancel_before_done = False
 
     class _CancelledBackend:
         def stream(self, **_kwargs):
             yield Usage(30, 7, 4, 26)
+            if cancel_before_done:
+                cancel.set()
             yield Done("stop", {"role": "assistant", "content": "Stable answer."})
-            cancel.set()
+            if not cancel_before_done:
+                cancel.set()
             raise RuntimeError("provider teardown failed")
 
     runner = AgentDelegationRunner(
@@ -170,18 +174,25 @@ def test_backend_raise_after_cancel_keeps_terminal_answer_and_usage(
         backend_factory=lambda _provider: _CancelledBackend(),
     )
 
-    result = runner.run(_entry(), "Review.", cancel_event=cancel)
+    completed = runner.run(_entry(), "Review.", cancel_event=cancel)
 
-    assert result.status is DelegationStatus.CANCELLED
-    assert result.result == "Stable answer."
-    assert result.failure_class == "cancelled"
-    assert result.usage is not None
-    assert result.usage.as_dict() == {
+    assert completed.status is DelegationStatus.COMPLETED
+    assert completed.result == "Stable answer."
+    assert completed.failure_class == ""
+    assert completed.usage is not None
+    assert completed.usage.as_dict() == {
         "prompt_tokens": 30,
         "completion_tokens": 7,
         "cache_hit_tokens": 4,
         "cache_miss_tokens": 26,
     }
+
+    cancel.clear()
+    cancel_before_done = True
+    cancelled = runner.run(_entry(), "Review again.", cancel_event=cancel)
+
+    assert cancelled.status is DelegationStatus.CANCELLED
+    assert cancelled.failure_class == "cancelled"
 
 
 def test_cancelled_writable_result_and_change_set_remain_canonical(
@@ -290,9 +301,30 @@ def test_child_usage_is_emitted_once_from_the_paired_result() -> None:
             },
         ),
     )
+    for call_id, usage in (
+        ("delegate-empty-usage", {}),
+        ("delegate-unrelated-usage", {"total_tokens": 37}),
+        ("delegate-invalid-usage", {"prompt_tokens": "invalid"}),
+        ("delegate-zero-usage", {"prompt_tokens": 0}),
+    ):
+        relay.relay(
+            "root-run",
+            ToolResult(
+                tool_call_id=call_id,
+                name="delegate_agent",
+                ok=True,
+                result="{}",
+                extras={
+                    "delegation_provider": "openrouter",
+                    "delegation_model": "child-model",
+                    "delegation_usage": usage,
+                },
+            ),
+        )
 
     assert observed == [
-        ("delegate-1", "openrouter", "child-model", 30, 7, 7, 23)
+        ("delegate-1", "openrouter", "child-model", 30, 7, 7, 23),
+        ("delegate-zero-usage", "openrouter", "child-model", 0, 0, 0, 0),
     ]
 
 

@@ -34,6 +34,10 @@ logger = logging.getLogger(__name__)
 _CHILD_STREAM_LABEL = "agent_child_stream"
 
 
+class _InvocationObjectIsolationError(RuntimeError):
+    """An injected mutable object cannot be isolated for this invocation."""
+
+
 class _InvocationObjectIsolation:
     """Serialize accidental reuse of mutable factory products.
 
@@ -61,7 +65,7 @@ class _InvocationObjectIsolation:
         with self._condition:
             while key in self._active:
                 if fail_if_active or self._active[key][1] == owner:
-                    raise RuntimeError(
+                    raise _InvocationObjectIsolationError(
                         f"An injected {kind} instance was reused by a nested "
                         "child invocation and cannot be isolated."
                     )
@@ -91,9 +95,11 @@ def _approve_isolated_write(_request: ApprovalRequest) -> ApprovalDecision:
 class ChildTranscript:
     """Keep only terminal prose, aggregate usage, and redacted provider errors."""
 
-    def __init__(self) -> None:
+    def __init__(self, cancel_event: threading.Event) -> None:
+        self._cancel_event = cancel_event
         self._round_parts: list[str] = []
         self._terminal_seen = False
+        self._terminal_done_before_cancel = False
         self._terminal_text = ""
         self._prompt = 0
         self._completion = 0
@@ -130,6 +136,8 @@ class ChildTranscript:
             else "".join(self._round_parts).strip()
         )
         self._terminal_seen = True
+        if not self._cancel_event.is_set():
+            self._terminal_done_before_cancel = True
         self._round_parts.clear()
 
     def answer(self, stop: LoopStop) -> str:
@@ -151,6 +159,10 @@ class ChildTranscript:
             cache_miss_tokens=self._miss,
         )
         return None if usage.is_empty else usage
+
+    @property
+    def terminal_done_before_cancel(self) -> bool:
+        return self._terminal_done_before_cancel
 
 
 class ChildExecutor:
@@ -207,8 +219,8 @@ class ChildExecutor:
         )
         history.append_user_text(task)
 
-        transcript = ChildTranscript()
         cancel = cancel_event if cancel_event is not None else threading.Event()
+        transcript = ChildTranscript(cancel)
         tool_defs = child_agent_tool_defs(
             permission,
             workflow_helpers=tuple(
@@ -272,12 +284,20 @@ class ChildExecutor:
                         temperature=0.7,
                     )
                     stop = outcome.stop
+            except _InvocationObjectIsolationError:
+                # Injected-object isolation is an internal invariant, not a
+                # provider failure. The workflow boundary reports it as such.
+                raise
             except Exception as exc:
                 # A backend can fail after yielding Usage. Wrap the transcript
                 # here, where its cumulative counters and elapsed time still
                 # exist, rather than letting an outer generic failure discard them.
                 if cancel.is_set():
-                    stop = LoopStop.CANCELLED
+                    stop = (
+                        LoopStop.COMPLETED
+                        if transcript.terminal_done_before_cancel
+                        else LoopStop.CANCELLED
+                    )
                 else:
                     detail = redact_secrets(f"{type(exc).__name__}: {exc}")
                     transcript.api_errors.append(detail)

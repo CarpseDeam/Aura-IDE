@@ -3,6 +3,15 @@ from __future__ import annotations
 
 from typing import Any
 
+_LEGACY_TOKEN_FIELDS = frozenset(
+    {
+        "prompt_tokens",
+        "completion_tokens",
+        "cache_hit_tokens",
+        "cache_miss_tokens",
+    }
+)
+
 
 def delegation_usage_signals(
     extras: dict[str, Any] | None,
@@ -15,7 +24,7 @@ def delegation_usage_signals(
         rows = tuple(groups)
     else:
         data = source.get("delegation_usage")
-        if not isinstance(data, dict):
+        if not isinstance(data, dict) or not _LEGACY_TOKEN_FIELDS.intersection(data):
             return ()
         rows = (
             {
