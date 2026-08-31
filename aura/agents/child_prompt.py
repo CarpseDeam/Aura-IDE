@@ -18,6 +18,7 @@ where the first one did.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -216,6 +217,41 @@ def compose_workflow_step_message(
     return "\n\n".join(blocks)
 
 
+def compose_workflow_join_message(
+    task: str,
+    assignment: str,
+    predecessors: Sequence[Mapping[str, Any]],
+) -> str:
+    """The single user message one *joining* workflow Step runs from.
+
+    A join is the point where several branches come back together, so it is
+    given all of their structured results at once rather than one of them. The
+    bundle is ordered by the workflow's own drawing, not by which branch
+    finished first, so the same graph hands the same agent the same thing in
+    the same order on every run — including the branches that failed, because
+    a join that is told only about the successes would be reasoning from a
+    picture with pieces quietly missing.
+    """
+    blocks = [f"Workflow task\n{str(task or '').strip()}"]
+    brief = str(assignment or "").strip()
+    if brief:
+        blocks.append(f"Your step in this workflow\n{brief}")
+    bundle = [
+        {"position": index, **dict(entry)}
+        for index, entry in enumerate(predecessors, start=1)
+    ]
+    handed_on = json.dumps(bundle, ensure_ascii=False, indent=2)
+    blocks.append(
+        f"Structured results from the {len(bundle)} steps that lead here\n"
+        f"{handed_on}\n\n"
+        "They are in this workflow's own order, and they are the only record "
+        "of the work before you; nothing else of it survives. Verify anything "
+        "you rely on, and say plainly in your answer if one of them did not "
+        "finish."
+    )
+    return "\n\n".join(blocks)
+
+
 def compose_workflow_helper_message(
     task: str,
     assignment: str,
@@ -243,5 +279,6 @@ __all__ = [
     "compose_child_system_prompt",
     "compose_child_task_message",
     "compose_workflow_helper_message",
+    "compose_workflow_join_message",
     "compose_workflow_step_message",
 ]

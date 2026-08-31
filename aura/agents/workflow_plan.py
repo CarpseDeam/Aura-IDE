@@ -9,8 +9,11 @@ there when it was authorized.
 
 What is frozen, and why each of them:
 
-* the **workflow identity and its validated solid order**, so the run cannot
-  follow a path that was drawn after it started;
+* the **workflow identity and its validated solid DAG** — the Steps in a
+  settled order, and for each of them the ordered Steps it waits for and the
+  ordered Steps it unblocks — so the run cannot follow a shape that was drawn
+  after it started, and a join receives its branches in the same order every
+  time;
 * the **solid and helper agent definitions**, so editing a brief mid-run does
   not change what any child is told;
 * the **occurrence assignments and dashed ownership**, which belong to nodes
@@ -35,8 +38,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from aura.agents.graph_dag import runnable_dag
 from aura.agents.graph_models import ConnectionKind, WorkflowGraph, WorkflowNode
-from aura.agents.graph_validation import solid_execution_order, validate_graph
+from aura.agents.graph_validation import validate_graph
 from aura.agents.identity import AgentScope
 from aura.agents.local_state import DEFAULT_PERMISSION, AgentPermission
 from aura.agents.model_resolution import ResolvedTarget, resolve_agent_model
@@ -105,13 +109,28 @@ class WorkflowHelperPlan:
 
 @dataclass(frozen=True)
 class WorkflowStepPlan:
-    """One solid occurrence and the frozen helpers available only to it."""
+    """One solid occurrence, its frozen place in the DAG, and its helpers.
+
+    ``predecessors`` is the ordered list of Step node ids this one waits for —
+    empty when the workflow task reaches it directly, more than one when it is
+    a join. ``successors`` is the ordered list it unblocks. Both are frozen
+    with the plan, so a join's bundle and the order branches are considered in
+    are decided at submission and never by whichever branch finished first.
+    """
 
     node_id: str
     entry: AgentRosterEntry
     assignment: str
     resolved: ResolvedTarget
     helpers: tuple[WorkflowHelperPlan, ...] = ()
+    predecessors: tuple[str, ...] = ()
+    successors: tuple[str, ...] = ()
+    from_task: bool = False
+    to_result: bool = False
+
+    @property
+    def is_join(self) -> bool:
+        return len(self.predecessors) > 1
 
     @property
     def agent_id(self) -> str:
@@ -161,6 +180,28 @@ class WorkflowRunPlan:
     def is_empty(self) -> bool:
         return not self.steps
 
+    def step(self, node_id: str) -> WorkflowStepPlan | None:
+        return next((item for item in self.steps if item.node_id == node_id), None)
+
+    @property
+    def terminal_steps(self) -> tuple[WorkflowStepPlan, ...]:
+        """The Steps that hand an answer to the Aura Result, in frozen order.
+
+        This is what makes the hand-off back to Aura deterministic: which
+        branches speak to the Aura Result, and in what order, is decided here
+        at submission rather than by whichever branch happened to finish last.
+        """
+        return tuple(step for step in self.steps if step.to_result)
+
+    @property
+    def branched(self) -> bool:
+        """True when this plan is anything other than one straight line."""
+        return (
+            any(step.is_join or len(step.successors) > 1 for step in self.steps)
+            or len(self.terminal_steps) > 1
+            or sum(1 for step in self.steps if step.from_task) > 1
+        )
+
     @property
     def writable(self) -> bool:
         """True when any solid step or attached helper may edit."""
@@ -187,20 +228,34 @@ class WorkflowRunPlan:
         """What the model is told about this workflow before it calls it.
 
         The agents' names and what each was asked to do here, in order — the
-        shape of the hand-off. Never their instructions: those are each
-        child's own brief and stay in the definition.
+        shape of the hand-off, including which steps a branched workflow waits
+        for. Never their instructions: those are each child's own brief and
+        stay in the definition.
         """
+        branched = self.branched
+        names = {step.node_id: step.agent_name for step in self.steps}
         return {
             "graph_id": self.graph_id,
             "name": self.name,
             "description": self.description,
             "writable": self.writable,
+            "branched": branched,
             "steps": [
                 {
                     "position": index,
                     "agent_name": step.agent_name,
                     "assignment": step.assignment,
                     "permission_label": step.permission.label,
+                    **(
+                        {
+                            "after": [
+                                names.get(node_id, node_id)
+                                for node_id in step.predecessors
+                            ]
+                        }
+                        if branched and step.predecessors
+                        else {}
+                    ),
                     **(
                         {
                             "helpers": [
@@ -278,18 +333,24 @@ def freeze_workflow_plan(
     if not verdict.runnable:
         return None, verdict.messages
 
-    order = solid_execution_order(graph)
-    if not order:
+    dag = runnable_dag(graph)
+    if dag is None:
         return None, ("this workflow has no steps between the Task and the Aura Result",)
-    if len(order) > MAX_WORKFLOW_STEPS:
+    if len(dag.steps) > MAX_WORKFLOW_STEPS:
         return None, (
             f"a workflow runs at most {MAX_WORKFLOW_STEPS} steps, and this one "
-            f"has {len(order)}",
+            f"has {len(dag.steps)}",
         )
 
     steps: list[WorkflowStepPlan] = []
     errors: list[str] = []
-    for node in order:
+    for placed in dag.steps:
+        node = graph.node(placed.node_id)
+        if node is None:
+            # solid_dag() only names nodes it read off this graph. Keep the
+            # freeze seam independently fail-closed if that ever regresses.
+            errors.append(f"step {placed.node_id} is no longer on the canvas")
+            continue
         entry, resolved, occurrence_error = _resolve_occurrence(
             node,
             definitions=definitions,
@@ -343,6 +404,10 @@ def freeze_workflow_plan(
                 assignment=str(node.assignment or "").strip(),
                 resolved=resolved,
                 helpers=tuple(helpers),
+                predecessors=placed.predecessors,
+                successors=placed.successors,
+                from_task=placed.from_task,
+                to_result=placed.to_result,
             )
         )
 

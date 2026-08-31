@@ -42,7 +42,7 @@ Agents are a major harness capability, not a separate product. Each Agent is a r
   <img src="media/aura-agents-workflow.png" alt="Aura Agents window showing the reusable Agent library, the Aura Documentation Refresh workflow, its solid Task-to-Result sequence, a dashed Review Helper sub-agent connection, and the Website Writer inspector" width="1000">
 </p>
 
-- **Solid lines** set the automatic workflow order from Task through Agent steps to Aura Result.
+- **Solid lines** set the automatic workflow order from Task through Agent steps to Aura Result. A Step may fan out to several branches and a later Step may join them; branches run one at a time, in the workflow's own order, and a join waits for every branch feeding it.
 - **Dashed Sub-agent lines** make an optional helper available to a Step without inserting it into the automatic path.
 - **Run** explicitly executes the open workflow; **Stop** remains available while it runs.
 - The **Agents toolbar toggle** lets Aura use the selected Agents and workflow during an ordinary conversation.

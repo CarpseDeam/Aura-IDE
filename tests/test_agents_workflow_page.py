@@ -298,7 +298,7 @@ def test_the_right_port_makes_a_step_and_the_bottom_port_makes_a_sub_agent(
     assert wired.graphs.get(graph.graph_id) == graph
 
 
-def test_a_second_next_step_replaces_the_first_rather_than_forking(wired) -> None:
+def test_a_second_next_step_fans_out_beside_the_first(wired) -> None:
     reviewer = _agent(wired.agents, AgentScope.PROJECT, "Reviewer")
     scout = _agent(wired.agents, AgentScope.PROJECT, "Scout")
     page, graphs = _new_workflow(wired)
@@ -311,9 +311,42 @@ def test_a_second_next_step_replaces_the_first_rather_than_forking(wired) -> Non
     wired.app.processEvents()
     page.scene.connect_requested.emit(task.node_id, second.node_id, "step")
     wired.app.processEvents()
+    # The same hand-off drawn again says nothing new and is refused.
+    page.scene.connect_requested.emit(task.node_id, second.node_id, "step")
+    wired.app.processEvents()
 
     steps = graphs.current_graph.outgoing(task.node_id, ConnectionKind.STEP)
-    assert [edge.target_id for edge in steps] == [second.node_id]
+    assert [edge.target_id for edge in steps] == [first.node_id, second.node_id]
+
+
+def test_a_fan_out_and_join_survives_a_reload_and_becomes_runnable(wired) -> None:
+    reviewer = _agent(wired.agents, AgentScope.PROJECT, "Reviewer")
+    scout = _agent(wired.agents, AgentScope.PROJECT, "Scout")
+    summarizer = _agent(wired.agents, AgentScope.PROJECT, "Summarizer")
+    page, graphs = _new_workflow(wired)
+    _drop(wired, page, reviewer, 0.0, 0.0)
+    _drop(wired, page, scout, 0.0, 140.0)
+    _drop(wired, page, summarizer, 200.0, 70.0)
+    left, right, join = [node for node in graphs.current_graph.nodes if node.is_agent]
+    graph = graphs.current_graph
+
+    for source, target in (
+        (graph.task_node.node_id, left.node_id),
+        (graph.task_node.node_id, right.node_id),
+        (left.node_id, join.node_id),
+        (right.node_id, join.node_id),
+        (join.node_id, graph.result_node.node_id),
+    ):
+        page.scene.connect_requested.emit(source, target, "step")
+        wired.app.processEvents()
+
+    graph_id = graphs.current_graph.graph_id
+    reloaded = wired.graphs.get(graph_id)
+    assert [
+        (edge.source_id, edge.target_id)
+        for edge in reloaded.incoming(join.node_id, ConnectionKind.STEP)
+    ] == [(left.node_id, join.node_id), (right.node_id, join.node_id)]
+    assert wired.controller.workflow_gate() == (False, True)
 
 
 def test_dropping_an_agent_onto_a_solid_connection_inserts_it_into_the_path(
@@ -582,3 +615,37 @@ def test_run_states_are_visible_on_steps_helpers_and_their_handoffs(wired) -> No
     page.set_run_states(succeeded, run_edge_states(graph, succeeded))
     assert page.scene.node_items[step.node_id].run_state == "succeeded"
     assert page.scene.edge_items[dashed[0].connection_id].run_state == ""
+
+
+def test_each_line_into_a_join_shows_the_branch_it_carries(wired) -> None:
+    from aura.gui.agents_workflow_presenter import run_edge_states
+
+    reviewer = _agent(wired.agents, AgentScope.PROJECT, "Reviewer")
+    scout = _agent(wired.agents, AgentScope.PROJECT, "Scout")
+    summarizer = _agent(wired.agents, AgentScope.PROJECT, "Summarizer")
+    page, graphs = _new_workflow(wired)
+    _drop(wired, page, reviewer, 0.0, 0.0)
+    _drop(wired, page, scout, 0.0, 140.0)
+    _drop(wired, page, summarizer, 220.0, 70.0)
+    left, right, join = [node for node in graphs.current_graph.nodes if node.is_agent]
+    graph = graphs.current_graph
+    for source, target in (
+        (graph.task_node.node_id, left.node_id),
+        (graph.task_node.node_id, right.node_id),
+        (left.node_id, join.node_id),
+        (right.node_id, join.node_id),
+        (join.node_id, graph.result_node.node_id),
+    ):
+        page.scene.connect_requested.emit(source, target, "step")
+        wired.app.processEvents()
+    graph = graphs.current_graph
+
+    # The left branch failed and the join never ran; the right branch did.
+    states = {left.node_id: "failed", right.node_id: "succeeded", join.node_id: "skipped"}
+    edges = run_edge_states(graph, states)
+
+    into_join = {
+        edge.source_id: edges.get(edge.connection_id, "")
+        for edge in graph.incoming(join.node_id, ConnectionKind.STEP)
+    }
+    assert into_join == {left.node_id: "failed", right.node_id: "succeeded"}

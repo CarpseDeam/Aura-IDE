@@ -35,6 +35,7 @@ from aura.agents.delegation import (
     DelegationStatus,
     DelegationUsage,
 )
+from aura.agents.graph_dag import SolidDag, SolidStep, runnable_dag, solid_dag
 from aura.agents.graph_document import parse_graph_document, render_graph_document
 from aura.agents.graph_history import GraphHistory
 from aura.agents.graph_local_state import WorkflowLocalState, WorkflowLocalStateError
@@ -50,12 +51,7 @@ from aura.agents.graph_models import (
     new_graph_id,
 )
 from aura.agents.graph_store import AgentGraphStore, AgentGraphStoreError, WorkflowSummary
-from aura.agents.graph_validation import (
-    GraphIssue,
-    GraphValidation,
-    solid_execution_order,
-    validate_graph,
-)
+from aura.agents.graph_validation import GraphIssue, GraphValidation, validate_graph
 from aura.agents.identity import SCOPE_ORDER, AgentScope, is_valid_agent_id, new_agent_id
 from aura.agents.local_state import (
     DEFAULT_PERMISSION,
@@ -117,6 +113,8 @@ __all__ = [
     "GraphIssue",
     "GraphValidation",
     "Point",
+    "SolidDag",
+    "SolidStep",
     "WorkflowConnection",
     "WorkflowGraph",
     "WorkflowHelperPlan",
@@ -136,6 +134,7 @@ __all__ = [
     "render_graph_document",
     "freeze_workflow_plan",
     "resolve_agent_turn_roster",
-    "solid_execution_order",
+    "runnable_dag",
+    "solid_dag",
     "validate_graph",
 ]

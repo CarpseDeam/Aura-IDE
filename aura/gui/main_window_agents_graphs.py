@@ -38,6 +38,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtWidgets import QInputDialog, QMessageBox, QWidget
 
 from aura.agents import graph_edits
+from aura.agents.graph_dag import runnable_dag
 from aura.agents.graph_local_state import WorkflowLocalStateError
 from aura.agents.graph_models import ConnectionKind, Point, WorkflowGraph
 from aura.agents.graph_session import WorkflowSession
@@ -45,7 +46,6 @@ from aura.agents.graph_store import AgentGraphStoreError
 from aura.agents.graph_validation import (
     GraphValidation,
     reference_scope_error,
-    solid_execution_order,
     validate_graph,
 )
 from aura.agents.identity import AgentScope
@@ -197,7 +197,7 @@ class AgentsGraphController(QObject):
         self._page.scene.render_graph(graph, node_visuals(graph, agents, verdict), verdict)
         self._page.set_workflow_info(workflow_info(graph, verdict))
         self._page.set_workflow_runnable(
-            verdict.runnable and bool(solid_execution_order(graph))
+            verdict.runnable and runnable_dag(graph) is not None
         )
         self._page.set_workflow_running(self._runs.running)
         self._paint_run_states()

@@ -32,10 +32,11 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QMessageBox, QWidget
 
+from aura.agents.graph_dag import runnable_dag
 from aura.agents.graph_local_state import WorkflowLocalState, WorkflowLocalStateError
 from aura.agents.graph_session import WorkflowSession
 from aura.agents.graph_store import AgentGraphStore
-from aura.agents.graph_validation import solid_execution_order, validate_graph
+from aura.agents.graph_validation import validate_graph
 from aura.agents.identity import is_valid_agent_id
 from aura.agents.local_state import (
     DEFAULT_PERMISSION,
@@ -296,7 +297,7 @@ class MainWindowAgentsController(QObject):
         if graph is None:
             return False
         verdict = validate_graph(graph, agents=self._agent_scopes())
-        return verdict.runnable and bool(solid_execution_order(graph))
+        return verdict.runnable and runnable_dag(graph) is not None
 
     def _current_model_context(self) -> tuple[str, str, str]:
         """Aura's own provider, model, and thinking, as the window has them."""

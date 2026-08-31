@@ -113,9 +113,19 @@ def run_edge_states(
 ) -> dict[str, str]:
     """What each connection shows, derived from the node that actually ran.
 
-    A line carries work *into* the box at its end, so it wears that box's
-    state — except the last line, which arrives at the Aura Result and has no
-    step of its own to speak for, so it wears the state of the step it left.
+    A line carries work *into* the box at its end, so ordinarily it wears that
+    box's state — except the last line, which arrives at the Aura Result and
+    has no step of its own to speak for, so it wears the state of the step it
+    left.
+
+    A line arriving at a *join* is different, and deliberately so. Several
+    branches end there, and they did not all do the same thing: painting every
+    incoming line with the join's one final state would say a branch that
+    succeeded had been skipped along with the one that failed. So a join's
+    incoming line wears the state of the branch it carries, falling back to the
+    join itself only for the line that comes from the Task and has no branch of
+    its own to report.
+
     A dashed line likewise wears its helper target's state. An optional helper
     that was never called has no node state, so its node and line stay unmarked.
     """
@@ -123,11 +133,20 @@ def run_edge_states(
     for edge in graph.connections_of_kind(ConnectionKind.STEP):
         target = graph.node(edge.target_id)
         source = graph.node(edge.source_id)
-        state = ""
-        if target is not None and target.is_agent:
-            state = str(node_states.get(target.node_id, ""))
-        elif source is not None and source.is_agent:
-            state = str(node_states.get(source.node_id, ""))
+        source_state = (
+            str(node_states.get(edge.source_id, ""))
+            if source is not None and source.is_agent
+            else ""
+        )
+        target_state = (
+            str(node_states.get(edge.target_id, ""))
+            if target is not None and target.is_agent
+            else ""
+        )
+        joins = target is not None and len(
+            graph.incoming(edge.target_id, ConnectionKind.STEP)
+        ) > 1
+        state = (source_state or target_state) if joins else (target_state or source_state)
         if state:
             states[edge.connection_id] = state
     for edge in graph.connections_of_kind(ConnectionKind.SUB_AGENT):

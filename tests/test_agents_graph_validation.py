@@ -1,10 +1,11 @@
-"""The first runnable topology, and what it refuses.
+"""The runnable topology, and what it refuses.
 
 Validation decides what is *marked*, never what survives. Every graph below —
 branched, looping, half-drawn, pointing at an agent that no longer exists —
 is still a graph, and would still save and still draw. What changes is
 whether it could be run, and what the canvas says about the part that is
-wrong.
+wrong. Fan-out and fan-in are shapes a person draws on purpose; a loop, a
+branch that leads nowhere, and a step nothing leads to are not.
 """
 from __future__ import annotations
 
@@ -137,33 +138,83 @@ def test_nothing_may_run_before_the_task_or_after_the_result() -> None:
 # ── the path itself ──────────────────────────────────────────────────────────
 
 
-def test_a_solid_branch_is_refused_and_named_on_the_node_it_leaves() -> None:
+def test_a_branch_that_fans_out_and_joins_back_is_runnable() -> None:
+    graph = new_graph(AgentScope.PROJECT, "Two readers, one writer")
+    task = graph.task_node
+    result = graph.result_node
+    assert task is not None and result is not None
+    left = _agent()
+    right = _agent("scout0000000")
+    join = _agent("personalagent")
+    graph = (
+        graph.with_node(left)
+        .with_node(right)
+        .with_node(join)
+        .with_connection(_edge(ConnectionKind.STEP, task.node_id, left.node_id, 0))
+        .with_connection(_edge(ConnectionKind.STEP, task.node_id, right.node_id, 1))
+        .with_connection(_edge(ConnectionKind.STEP, left.node_id, join.node_id, 2))
+        .with_connection(_edge(ConnectionKind.STEP, right.node_id, join.node_id, 3))
+        .with_connection(_edge(ConnectionKind.STEP, join.node_id, result.node_id, 4))
+    )
+
+    verdict = validate_graph(
+        graph,
+        agents={**AGENTS, "personalagent": AgentScope.PROJECT},
+    )
+
+    assert verdict.runnable is True
+    assert verdict.messages == ()
+
+
+def test_two_branches_may_both_reach_the_aura_result() -> None:
     graph = _straight(_agent())
     task = graph.task_node
-    extra = _agent("scout0000000")
+    result = graph.result_node
+    second = _agent("scout0000000")
+    assert task is not None and result is not None
+    graph = (
+        graph.with_node(second)
+        .with_connection(_edge(ConnectionKind.STEP, task.node_id, second.node_id, 7))
+        .with_connection(_edge(ConnectionKind.STEP, second.node_id, result.node_id, 8))
+    )
+
+    assert validate_graph(graph, agents=AGENTS).runnable is True
+
+
+def test_a_branch_that_never_reaches_the_aura_result_is_named_on_its_own_node() -> None:
+    graph = _straight(_agent())
+    task = graph.task_node
+    dead_end = _agent("scout0000000")
     assert task is not None
-    graph = graph.with_node(extra).with_connection(
-        _edge(ConnectionKind.STEP, task.node_id, extra.node_id, 7)
+    graph = graph.with_node(dead_end).with_connection(
+        _edge(ConnectionKind.STEP, task.node_id, dead_end.node_id, 7)
     )
 
     verdict = validate_graph(graph, agents=AGENTS)
 
     assert verdict.runnable is False
-    assert any("leads to 2" in issue.message for issue in verdict.for_node(task.node_id))
+    assert any(
+        "never reaches the Aura Result" in issue.message
+        for issue in verdict.for_node(dead_end.node_id)
+    )
 
 
-def test_a_solid_join_is_refused() -> None:
+def test_a_step_the_task_never_leads_to_is_named_on_its_own_node() -> None:
     graph = _straight(_agent())
     result = graph.result_node
-    extra = _agent("scout0000000")
+    orphan = _agent("scout0000000")
     assert result is not None
-    graph = graph.with_node(extra).with_connection(
-        _edge(ConnectionKind.STEP, extra.node_id, result.node_id, 7)
+    graph = graph.with_node(orphan).with_connection(
+        _edge(ConnectionKind.STEP, orphan.node_id, result.node_id, 7)
     )
 
     verdict = validate_graph(graph, agents=AGENTS)
 
-    assert any("follows 2" in issue.message for issue in verdict.for_node(result.node_id))
+    assert verdict.runnable is False
+    assert any(
+        "nothing leads to this agent" in issue.message
+        for issue in verdict.for_node(orphan.node_id)
+    )
 
 
 def test_a_loop_in_the_steps_is_refused() -> None:

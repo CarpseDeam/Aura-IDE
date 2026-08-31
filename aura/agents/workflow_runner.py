@@ -1,11 +1,19 @@
-"""Run a frozen Task → Agent steps → Aura Result plan serially.
+"""Run a frozen Task → Agent DAG → Aura Result plan in the foreground.
 
-Each solid step uses :class:`ChildExecutor` with private history and receives
-the task, its assignment, and the previous structured result. A step may call
-only its frozen dashed helpers; those calls synchronously reuse ChildExecutor
-and return into that step's history. Writable plans use one shared isolated
-worktree and checkpoint it once on every exit path. This module creates no
-conversation manager, alternate Agent runtime, history, or worktree system.
+One deterministic scheduler walks the plan's frozen Steps in their settled
+order and runs each ready one to completion before looking at the next: every
+outgoing branch runs unconditionally, each occurrence runs at most once, and a
+join runs only once every Step it waits for has succeeded. Nothing here is
+concurrent — a branch is a shape, not a thread.
+
+Each Step uses :class:`ChildExecutor` with private history and receives the
+task, its assignment, and its predecessors' structured results — one of them
+for an ordinary hand-off, an ordered bundle of all of them at a join. A Step
+may call only its frozen dashed helpers; those calls synchronously reuse
+ChildExecutor and return into that Step's history. Writable plans use one
+shared isolated worktree and checkpoint it once on every exit path. This
+module creates no conversation manager, alternate Agent runtime, history, or
+worktree system.
 """
 from __future__ import annotations
 
@@ -20,6 +28,7 @@ from typing import Any, Callable
 from aura.agents.child_execution import ChildExecutor
 from aura.agents.child_prompt import (
     compose_workflow_helper_message,
+    compose_workflow_join_message,
     compose_workflow_step_message,
 )
 from aura.agents.delegation import DelegationFailure, DelegationResult, DelegationStatus
@@ -102,6 +111,32 @@ class WorkflowStepOutcome:
 
 
 @dataclass(frozen=True)
+class WorkflowBranchResult:
+    """One terminal branch's answer, as the Aura Result received it.
+
+    Which branches speak to the Aura Result, and in what order, is frozen with
+    the plan — so this is never a report of whichever branch finished last.
+    """
+
+    node_id: str
+    agent_name: str
+    state: WorkflowStepState
+    result: str = ""
+    error: str = ""
+
+    def payload(self) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "node_id": self.node_id,
+            "agent_name": self.agent_name,
+            "state": self.state.value,
+            "result": self.result,
+        }
+        if self.error:
+            body["error"] = self.error
+        return body
+
+
+@dataclass(frozen=True)
 class WorkflowRunResult:
     """The complete, self-contained outcome of one workflow run."""
 
@@ -110,6 +145,7 @@ class WorkflowRunResult:
     workflow_name: str = ""
     result: str = ""
     steps: tuple[WorkflowStepOutcome, ...] = ()
+    branch_results: tuple[WorkflowBranchResult, ...] = ()
     helper_invocations: tuple[WorkflowHelperInvocation, ...] = ()
     failure_class: str = ""
     error: str = ""
@@ -136,6 +172,12 @@ class WorkflowRunResult:
             "result": self.result,
             "steps": [step.payload() for step in self.steps],
         }
+        if len(self.branch_results) > 1:
+            # Only a workflow that actually ends in several branches reports
+            # them. A linear run has one answer and says exactly that.
+            body["branch_results"] = [
+                branch.payload() for branch in self.branch_results
+            ]
         if self.failure_class:
             body["failure_class"] = self.failure_class
         if self.error:
@@ -303,13 +345,7 @@ class _WorkflowStepHelperRunner:
                 "permission": helper.permission.value,
             },
         )
-        state = (
-            WorkflowStepState.SUCCEEDED
-            if result.status is DelegationStatus.COMPLETED
-            else WorkflowStepState.CANCELLED
-            if result.status is DelegationStatus.CANCELLED
-            else WorkflowStepState.FAILED
-        )
+        state = _state_of(result)
         self._invocations.append(
             WorkflowHelperInvocation(
                 invocation=len(self._invocations) + 1,
@@ -466,21 +502,14 @@ class WorkflowRunner:
                 worktree,
                 helper_invocations,
             )
-            answer = next(
-                (
-                    outcome.result.result
-                    for outcome in reversed(outcomes)
-                    if outcome.state is WorkflowStepState.SUCCEEDED
-                    and outcome.result.result
-                ),
-                "",
-            )
+            branches = _branch_results(plan, outcomes)
             run = WorkflowRunResult(
                 status=status,
                 graph_id=plan.graph_id,
                 workflow_name=plan.name,
-                result=answer,
+                result=_final_answer(outcomes, branches),
                 steps=tuple(outcomes),
+                branch_results=branches,
                 helper_invocations=tuple(helper_invocations),
                 failure_class=failure_class,
                 error=error,
@@ -509,93 +538,142 @@ class WorkflowRunner:
         worktree: AgentWorktree | None,
         helper_invocations: list[WorkflowHelperInvocation],
     ) -> tuple[list[WorkflowStepOutcome], WorkflowRunStatus, str, str]:
-        """Run the steps until one stops the workflow, and say why it stopped."""
+        """Walk the frozen DAG once, in order, and say how the whole run ended.
+
+        The plan's Steps are already in dependency order, so one pass is the
+        whole scheduler: by the time a Step is reached every Step it waits for
+        has been decided. A Step whose predecessors all succeeded runs; one
+        blocked by a failed predecessor is marked not run and named for what
+        blocked it; an independent branch beside it is untouched and carries
+        on. Cancellation stops the pass wherever it is: the Step that was
+        about to start is cancelled and the rest are left unrun.
+        """
         root = worktree.path if worktree is not None else self._workspace_root
         outcomes: list[WorkflowStepOutcome] = []
-        previous: DelegationResult | None = None
-        status = WorkflowRunStatus.COMPLETED
+        settled: dict[str, WorkflowStepOutcome] = {}
+        succeeded: set[str] = set()
+        stopped = False
         failure_class = ""
         error = ""
 
-        for index, step in enumerate(plan.steps):
+        for step in plan.steps:
             if cancel.is_set():
-                status = WorkflowRunStatus.CANCELLED
-                failure_class = failure_class or "cancelled"
-                error = error or "The run was stopped before this step started."
-                cancelled = DelegationResult(
+                outcome = self._cancelled_outcome(step, first=not stopped)
+                if not stopped:
+                    stopped = True
+                    failure_class = failure_class or "cancelled"
+                    error = error or outcome.result.error
+            else:
+                blocked = tuple(
+                    node_id
+                    for node_id in step.predecessors
+                    if node_id not in succeeded
+                )
+                if blocked:
+                    outcome = self._blocked_outcome(plan, step, blocked)
+                else:
+                    self._notify(on_step, step.node_id, WorkflowStepState.RUNNING)
+                    result = self._run_step(
+                        step,
+                        plan,
+                        task,
+                        tuple(settled[node_id] for node_id in step.predecessors),
+                        cancel,
+                        root,
+                        worktree,
+                        on_step,
+                        helper_invocations,
+                    )
+                    outcome = WorkflowStepOutcome(
+                        step.node_id, _state_of(result), result
+                    )
+                    if outcome.state is WorkflowStepState.SUCCEEDED:
+                        succeeded.add(step.node_id)
+                    elif not failure_class:
+                        failure_class = result.failure_class or outcome.state.value
+                        error = (
+                            result.error
+                            or f"{step.agent_name} did not finish its step."
+                        )
+                    if outcome.state is WorkflowStepState.CANCELLED:
+                        stopped = True
+
+            outcomes.append(outcome)
+            settled[step.node_id] = outcome
+            self._notify(on_step, step.node_id, outcome.state)
+
+        return outcomes, _run_status(outcomes), failure_class, error
+
+    @staticmethod
+    def _cancelled_outcome(
+        step: WorkflowStepPlan, *, first: bool
+    ) -> WorkflowStepOutcome:
+        """The Step a stop landed on, and every Step left behind it."""
+        if first:
+            return WorkflowStepOutcome(
+                step.node_id,
+                WorkflowStepState.CANCELLED,
+                DelegationResult(
                     status=DelegationStatus.CANCELLED,
                     agent_id=step.agent_id,
                     agent_name=step.agent_name,
                     failure_class="cancelled",
-                    error=error,
+                    error="The run was stopped before this step started.",
                     provider=step.resolved.provider,
                     model=step.resolved.model,
-                )
-                outcomes.append(
-                    WorkflowStepOutcome(
-                        step.node_id, WorkflowStepState.CANCELLED, cancelled
-                    )
-                )
-                self._notify(on_step, step.node_id, WorkflowStepState.CANCELLED)
-                outcomes.extend(self._skipped(plan.steps[index + 1 :], on_step))
-                break
-
-            self._notify(on_step, step.node_id, WorkflowStepState.RUNNING)
-            result = self._run_step(
-                step,
-                plan,
-                task,
-                previous,
-                cancel,
-                root,
-                worktree,
-                on_step,
-                helper_invocations,
+                ),
             )
+        return WorkflowStepOutcome(
+            step.node_id,
+            WorkflowStepState.SKIPPED,
+            DelegationResult.failure(
+                step.agent_id,
+                DelegationFailure.DELEGATION_UNAVAILABLE,
+                "The workflow stopped before this step ran.",
+                agent_name=step.agent_name,
+            ),
+        )
 
-            if result.status is DelegationStatus.COMPLETED:
-                outcomes.append(
-                    WorkflowStepOutcome(
-                        step.node_id, WorkflowStepState.SUCCEEDED, result
-                    )
-                )
-                self._notify(on_step, step.node_id, WorkflowStepState.SUCCEEDED)
-                previous = result
-                continue
+    @staticmethod
+    def _blocked_outcome(
+        plan: WorkflowRunPlan, step: WorkflowStepPlan, blocked: tuple[str, ...]
+    ) -> WorkflowStepOutcome:
+        """A Step that never ran because a Step it joins did not succeed.
 
-            state = (
-                WorkflowStepState.CANCELLED
-                if result.status is DelegationStatus.CANCELLED
-                else WorkflowStepState.FAILED
-            )
-            outcomes.append(WorkflowStepOutcome(step.node_id, state, result))
-            self._notify(on_step, step.node_id, state)
-            failure_class = result.failure_class or state.value
-            error = result.error or f"{step.agent_name} did not finish its step."
-            if state is WorkflowStepState.CANCELLED:
-                status = WorkflowRunStatus.CANCELLED
-            else:
-                # Earlier steps did real work and their answers are reported.
-                # Calling the whole run "failed" when two of three finished
-                # would be the untrue half of the story.
-                status = (
-                    WorkflowRunStatus.PARTIAL
-                    if any(
-                        item.state is WorkflowStepState.SUCCEEDED for item in outcomes
-                    )
-                    else WorkflowRunStatus.FAILED
-                )
-            outcomes.extend(self._skipped(plan.steps[index + 1:], on_step))
-            break
-
-        return outcomes, status, failure_class, error
+        Named rather than merely skipped: the reason carries the node ids and
+        the agents that blocked it, so a person reading the result can see
+        which branch stopped and which ones carried on regardless.
+        """
+        names = []
+        for node_id in blocked:
+            blocker = plan.step(node_id)
+            names.append(blocker.agent_name if blocker is not None else node_id)
+        reason = (
+            f"This step runs after {names[0]}, which did not succeed"
+            if len(names) == 1
+            else "This step runs after "
+            + ", ".join(names[:-1])
+            + f" and {names[-1]}, and not all of them succeeded"
+        )
+        result = DelegationResult.failure(
+            step.agent_id,
+            DelegationFailure.DEPENDENCY_NOT_MET,
+            f"{reason}, so it was not run. Other branches of this workflow were "
+            "not affected.",
+            agent_name=step.agent_name,
+        )
+        return WorkflowStepOutcome(
+            step.node_id,
+            WorkflowStepState.SKIPPED,
+            replace(result, extras={**result.extras, "blocked_by": list(blocked)}),
+        )
 
     def _run_step(
         self,
         step: WorkflowStepPlan,
         plan: WorkflowRunPlan,
         task: str,
-        previous: DelegationResult | None,
+        inbound: tuple[WorkflowStepOutcome, ...],
         cancel: threading.Event,
         root: Path,
         worktree: AgentWorktree | None,
@@ -603,12 +681,7 @@ class WorkflowRunner:
         helper_invocations: list[WorkflowHelperInvocation],
     ) -> DelegationResult:
         """One step: one ordinary child run, with this step's own authority."""
-        message = compose_workflow_step_message(
-            task,
-            step.assignment,
-            previous.payload() if previous is not None else None,
-            previous.agent_name if previous is not None else "",
-        )
+        message = _step_message(task, step, inbound)
         try:
             helper_kwargs: dict[str, Any] = {}
             if step.helpers:
@@ -703,25 +776,6 @@ class WorkflowRunner:
         )
 
     @staticmethod
-    def _skipped(
-        steps: tuple[WorkflowStepPlan, ...], on_step: StepObserver | None
-    ) -> list[WorkflowStepOutcome]:
-        """Report the steps that never ran, rather than leaving them unsaid."""
-        outcomes: list[WorkflowStepOutcome] = []
-        for step in steps:
-            result = DelegationResult.failure(
-                step.agent_id,
-                DelegationFailure.DELEGATION_UNAVAILABLE,
-                "The workflow stopped before this step ran.",
-                agent_name=step.agent_name,
-            )
-            outcomes.append(
-                WorkflowStepOutcome(step.node_id, WorkflowStepState.SKIPPED, result)
-            )
-            WorkflowRunner._notify(on_step, step.node_id, WorkflowStepState.SKIPPED)
-        return outcomes
-
-    @staticmethod
     def _notify(
         on_step: StepObserver | None, node_id: str, state: WorkflowStepState
     ) -> None:
@@ -733,8 +787,105 @@ class WorkflowRunner:
             logger.debug("agents: workflow step observer raised", exc_info=True)
 
 
+def _state_of(result: DelegationResult) -> WorkflowStepState:
+    if result.status is DelegationStatus.COMPLETED:
+        return WorkflowStepState.SUCCEEDED
+    if result.status is DelegationStatus.CANCELLED:
+        return WorkflowStepState.CANCELLED
+    return WorkflowStepState.FAILED
+
+
+def _run_status(outcomes: list[WorkflowStepOutcome]) -> WorkflowRunStatus:
+    """How the whole DAG ended, read off every Step rather than the last one.
+
+    Earlier branches did real work and their answers are reported, so calling
+    the whole run "failed" when two of three branches finished would be the
+    untrue half of the story.
+    """
+    states = [outcome.state for outcome in outcomes]
+    if any(state is WorkflowStepState.CANCELLED for state in states):
+        return WorkflowRunStatus.CANCELLED
+    if all(state is WorkflowStepState.SUCCEEDED for state in states):
+        return WorkflowRunStatus.COMPLETED
+    if any(state is WorkflowStepState.SUCCEEDED for state in states):
+        return WorkflowRunStatus.PARTIAL
+    return WorkflowRunStatus.FAILED
+
+
+def _step_message(
+    task: str, step: WorkflowStepPlan, inbound: tuple[WorkflowStepOutcome, ...]
+) -> str:
+    """What this Step is asked, given what reached it.
+
+    One predecessor is the ordinary hand-off and is worded exactly as it
+    always has been — a linear workflow reads no differently for having a DAG
+    behind it. Several is a join, and gets the whole ordered bundle.
+    """
+    if len(inbound) > 1:
+        return compose_workflow_join_message(
+            task, step.assignment, tuple(item.payload() for item in inbound)
+        )
+    previous = inbound[0].result if inbound else None
+    return compose_workflow_step_message(
+        task,
+        step.assignment,
+        previous.payload() if previous is not None else None,
+        previous.agent_name if previous is not None else "",
+    )
+
+
+def _branch_results(
+    plan: WorkflowRunPlan, outcomes: list[WorkflowStepOutcome]
+) -> tuple[WorkflowBranchResult, ...]:
+    """What each terminal branch handed the Aura Result, in frozen order."""
+    settled = {outcome.node_id: outcome for outcome in outcomes}
+    branches: list[WorkflowBranchResult] = []
+    for step in plan.terminal_steps:
+        outcome = settled.get(step.node_id)
+        if outcome is None:
+            continue
+        branches.append(
+            WorkflowBranchResult(
+                node_id=step.node_id,
+                agent_name=step.agent_name,
+                state=outcome.state,
+                result=outcome.result.result,
+                error=outcome.result.error,
+            )
+        )
+    return tuple(branches)
+
+
+def _final_answer(
+    outcomes: list[WorkflowStepOutcome], branches: tuple[WorkflowBranchResult, ...]
+) -> str:
+    """The workflow's answer to Aura, chosen by the drawing and never by time.
+
+    One terminal branch keeps the behaviour a linear workflow has always had:
+    the last Step in the frozen order that actually answered. Several terminal
+    branches have no single answer to pick, and choosing one would be choosing
+    for Aura — so all of them are handed over, labelled and in the workflow's
+    own order, for Aura to write the user-facing response from.
+    """
+    if len(branches) > 1:
+        answered = [branch for branch in branches if branch.result]
+        if answered:
+            return "\n\n".join(
+                f"{branch.agent_name}\n{branch.result}" for branch in answered
+            )
+    return next(
+        (
+            outcome.result.result
+            for outcome in reversed(outcomes)
+            if outcome.state is WorkflowStepState.SUCCEEDED and outcome.result.result
+        ),
+        "",
+    )
+
+
 __all__ = [
     "StepObserver",
+    "WorkflowBranchResult",
     "WorkflowHelperInvocation",
     "WorkflowRunResult",
     "WorkflowRunStatus",

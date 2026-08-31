@@ -186,6 +186,38 @@ def _graph(count: int = 2) -> WorkflowGraph:
     )
 
 
+def _dag_graph(
+    steps: tuple[str, ...], edges: tuple[tuple[str, str], ...]
+) -> WorkflowGraph:
+    """Task and Aura Result, plus the named occurrences and the lines drawn."""
+    agents = tuple(
+        WorkflowNode(
+            node_id,
+            WorkflowNodeKind.AGENT,
+            agent_id=AGENT_IDS[index],
+            assignment=f"Assignment for {node_id}",
+        )
+        for index, node_id in enumerate(steps)
+    )
+    return WorkflowGraph(
+        graph_id="workflowplan1",
+        scope=AgentScope.PROJECT,
+        name="Release workflow",
+        description="Fan out, then join.",
+        nodes=(
+            WorkflowNode("task", WorkflowNodeKind.TASK),
+            *agents,
+            WorkflowNode("result", WorkflowNodeKind.AURA_RESULT),
+        ),
+        connections=tuple(
+            WorkflowConnection(
+                f"edge{index}", ConnectionKind.STEP, source, target, index
+            )
+            for index, (source, target) in enumerate(edges)
+        ),
+    )
+
+
 def _with_helper(
     graph: WorkflowGraph,
     owner_node_id: str,
@@ -468,6 +500,193 @@ def test_pre_start_cancellation_marks_a_step_and_checkpoints_once(
     ]
     assert child.calls == []
     assert len(worktrees.recovered) == 1
+
+
+def test_a_join_waits_for_every_branch_and_is_handed_them_in_frozen_order(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Drawn right-to-join before left-to-join, so the bundle order is the
+    # drawing's and not the order the branches happen to run in.
+    graph = _dag_graph(
+        ("left", "right", "join"),
+        (
+            ("task", "left"),
+            ("task", "right"),
+            ("right", "join"),
+            ("left", "join"),
+            ("join", "result"),
+        ),
+    )
+    plan = _freeze(monkeypatch, graph, {AGENT_IDS[0]: AgentPermission.READ_WRITE})
+    worktrees = _Worktrees(tmp_path / "isolated")
+    child = _Child(
+        [
+            _completed(AGENT_IDS[0], "Agent 1", "left answer"),
+            _completed(AGENT_IDS[1], "Agent 2", "right answer"),
+            _completed(AGENT_IDS[2], "Agent 3", "joined answer"),
+        ]
+    )
+
+    assert [step.node_id for step in plan.steps] == ["left", "right", "join"]
+    assert plan.step("join").predecessors == ("right", "left")
+    assert plan.step("left").successors == ("join",)
+    assert plan.terminal_steps == (plan.step("join"),)
+    assert plan.branched is True
+    assert plan.catalog_row()["steps"][2]["after"] == ["Agent 2", "Agent 1"]
+
+    result = WorkflowRunner(
+        workspace_root=tmp_path, worktree_manager=worktrees, child=child
+    ).run(plan, "Read it twice, then summarize")
+
+    assert result.status is WorkflowRunStatus.COMPLETED
+    assert result.result == "joined answer"
+    assert [call["agent_id"] for call in child.calls] == list(AGENT_IDS)
+    joined = child.calls[2]["task"]
+    assert "Read it twice, then summarize" in joined
+    assert "Assignment for join" in joined
+    assert joined.index("right answer") < joined.index("left answer")
+    assert '"position": 1' in joined and '"position": 2' in joined
+    # One shared worktree for the whole DAG, checkpointed exactly once.
+    assert worktrees.created == ["workflow-workflowplan1"]
+    assert len(worktrees.recovered) == 1
+    assert result.change_set_id == "aw-workflow"
+
+
+def test_an_independent_branch_finishes_after_its_sibling_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    plan = _freeze(
+        monkeypatch,
+        _dag_graph(
+            ("first", "second"),
+            (
+                ("task", "first"),
+                ("task", "second"),
+                ("first", "result"),
+                ("second", "result"),
+            ),
+        ),
+    )
+    child = _Child(
+        [
+            DelegationResult.failure(
+                AGENT_IDS[0],
+                DelegationFailure.PROVIDER_ERROR,
+                "provider failed",
+                agent_name="Agent 1",
+            ),
+            _completed(AGENT_IDS[1], "Agent 2", "second answer"),
+        ]
+    )
+    observed: list[tuple[str, WorkflowStepState]] = []
+
+    result = WorkflowRunner(workspace_root=tmp_path, child=child).run(
+        plan, "Two independent branches", on_step=lambda *args: observed.append(args)
+    )
+
+    assert result.status is WorkflowRunStatus.PARTIAL
+    assert [outcome.state for outcome in result.steps] == [
+        WorkflowStepState.FAILED,
+        WorkflowStepState.SUCCEEDED,
+    ]
+    assert len(child.calls) == 2
+    assert ("second", WorkflowStepState.RUNNING) in observed
+    assert [branch.node_id for branch in result.branch_results] == ["first", "second"]
+    assert [branch.state for branch in result.branch_results] == [
+        WorkflowStepState.FAILED,
+        WorkflowStepState.SUCCEEDED,
+    ]
+    payload = result.payload()
+    assert [row["node_id"] for row in payload["branch_results"]] == ["first", "second"]
+    assert "second answer" in payload["result"]
+    assert payload["failure_class"] == DelegationFailure.PROVIDER_ERROR.value
+
+
+def test_a_join_is_blocked_truthfully_when_one_of_its_branches_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    plan = _freeze(
+        monkeypatch,
+        _dag_graph(
+            ("left", "right", "join"),
+            (
+                ("task", "left"),
+                ("task", "right"),
+                ("left", "join"),
+                ("right", "join"),
+                ("join", "result"),
+            ),
+        ),
+    )
+    child = _Child(
+        [
+            DelegationResult.failure(
+                AGENT_IDS[0],
+                DelegationFailure.PROVIDER_ERROR,
+                "provider failed",
+                agent_name="Agent 1",
+            ),
+            _completed(AGENT_IDS[1], "Agent 2", "right answer"),
+        ]
+    )
+
+    result = WorkflowRunner(workspace_root=tmp_path, child=child).run(
+        plan, "One branch will fail"
+    )
+
+    assert result.status is WorkflowRunStatus.PARTIAL
+    assert [outcome.state for outcome in result.steps] == [
+        WorkflowStepState.FAILED,
+        WorkflowStepState.SUCCEEDED,
+        WorkflowStepState.SKIPPED,
+    ]
+    # The sibling branch still ran; only the join was held back.
+    assert [call["agent_id"] for call in child.calls] == list(AGENT_IDS[:2])
+    blocked = result.steps[2]
+    assert blocked.result.failure_class == DelegationFailure.DEPENDENCY_NOT_MET.value
+    assert "Agent 1" in blocked.result.error
+    assert blocked.payload()["blocked_by"] == ["left"]
+    # One terminal branch, so nothing changes about how the answer is reported.
+    assert "branch_results" not in result.payload()
+    assert result.result == "right answer"
+
+
+def test_several_terminal_branches_hand_aura_their_ordered_results(
+    tmp_path: Path, monkeypatch
+) -> None:
+    plan = _freeze(
+        monkeypatch,
+        _dag_graph(
+            ("first", "second"),
+            (
+                ("task", "first"),
+                ("first", "second"),
+                ("first", "result"),
+                ("second", "result"),
+            ),
+        ),
+    )
+    child = _Child(
+        [
+            _completed(AGENT_IDS[0], "Agent 1", "the first answer"),
+            _completed(AGENT_IDS[1], "Agent 2", "the second answer"),
+        ]
+    )
+
+    result = WorkflowRunner(workspace_root=tmp_path, child=child).run(
+        plan, "Both ends report"
+    )
+
+    assert result.status is WorkflowRunStatus.COMPLETED
+    assert [branch.node_id for branch in result.branch_results] == ["first", "second"]
+    assert result.result.index("the first answer") < result.result.index(
+        "the second answer"
+    )
+    assert "Agent 1" in result.result and "Agent 2" in result.result
+    assert [row["agent_name"] for row in result.payload()["branch_results"]] == [
+        "Agent 1",
+        "Agent 2",
+    ]
 
 
 def test_workflow_tool_and_its_copy_are_completely_absent_without_a_plan(

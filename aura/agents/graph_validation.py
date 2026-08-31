@@ -1,14 +1,14 @@
 """Whether a drawn workflow is one Aura could actually run.
 
-This is the whole definition of the first runnable topology, in one non-Qt
-place, so the canvas, the inspector, and any later runtime all answer the
-question identically:
+This is the whole definition of the runnable topology, in one non-Qt place,
+so the canvas, the inspector, and any later runtime all answer the question
+identically:
 
 * exactly one Task and one Aura Result;
-* one unbranched, acyclic solid path from the Task to the Aura Result, with
-  every agent occurrence on it;
-* no solid branch, join, loop, or line that points at a node that is not
-  there;
+* one acyclic solid DAG from the Task to the Aura Result — branches may fan
+  out and join back — with every agent occurrence both reachable from the
+  Task and able to reach the Aura Result;
+* no solid loop, and no line that points at a node that is not there;
 * sub-agent lines that hang one level off a step and never form a cycle;
 * every agent reference resolving to a definition this workspace can read,
   and one a workflow of this scope is allowed to use.
@@ -24,10 +24,15 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from aura.agents.graph_dag import (
+    reachable,
+    solid_links,
+    solid_step_edges,
+    topological_order,
+)
 from aura.agents.graph_models import (
     ConnectionKind,
     WorkflowGraph,
-    WorkflowNode,
     WorkflowNodeKind,
 )
 from aura.agents.identity import AgentScope
@@ -181,20 +186,19 @@ def _dangling_issues(graph: WorkflowGraph) -> list[GraphIssue]:
     return issues
 
 
-# ---- the solid path --------------------------------------------------------
+# ---- the solid DAG ---------------------------------------------------------
 
 
 def _step_issues(graph: WorkflowGraph) -> list[GraphIssue]:
-    known = {node.node_id for node in graph.nodes}
-    steps = tuple(
-        edge
-        for edge in graph.connections_of_kind(ConnectionKind.STEP)
-        if edge.source_id in known
-        and edge.target_id in known
-        and edge.source_id != edge.target_id
-    )
+    """The solid lines as one acyclic DAG between the two fixed ends.
+
+    Branching and joining are ordinary here: a Step may lead to several next
+    Steps, and a join may follow several. What is refused is a shape that
+    could not be run — a loop, a Step nothing leads to, or a Step whose work
+    reaches no answer — and each is said on the node or line it is about.
+    """
+    steps = solid_step_edges(graph)
     issues: list[GraphIssue] = []
-    issues.extend(_branch_issues(graph, steps))
 
     task = graph.task_node
     result = graph.result_node
@@ -218,113 +222,53 @@ def _step_issues(graph: WorkflowGraph) -> list[GraphIssue]:
                 )
             )
 
-    walked, looped = _walk(task.node_id, steps)
+    successors, predecessors = solid_links(steps)
+    forward = reachable((task.node_id,), successors)
+    backward = reachable((result.node_id,), predecessors)
+    touched = set(successors) | set(predecessors)
+    on_path = tuple(
+        node.node_id
+        for node in graph.nodes
+        if node.node_id in touched or node.node_id in (task.node_id, result.node_id)
+    )
+    looped = topological_order(on_path, predecessors) is None
     if looped:
         issues.append(GraphIssue("the steps in this workflow run in a loop"))
-    elif result.node_id not in walked:
-        issues.append(
-            GraphIssue("the Task does not lead to the Aura Result yet")
-        )
+    elif result.node_id not in forward:
+        issues.append(GraphIssue("the Task does not lead to the Aura Result yet"))
 
     helpers = {
         edge.target_id
         for edge in graph.connections_of_kind(ConnectionKind.SUB_AGENT)
-        if edge.source_id in walked
+        if edge.source_id in forward
     }
     for node in graph.nodes:
-        if node.node_id in walked or node.node_id in helpers or not node.is_agent:
+        if not node.is_agent or node.node_id in helpers:
             continue
-        issues.append(
-            GraphIssue(
-                "this agent is not connected to the workflow yet",
-                node_id=node.node_id,
-            )
-        )
-    return issues
-
-
-def _branch_issues(graph: WorkflowGraph, steps: tuple) -> list[GraphIssue]:
-    """One step in, one step out: a solid path never forks or merges."""
-    issues: list[GraphIssue] = []
-    for node in graph.nodes:
-        outgoing = [edge for edge in steps if edge.source_id == node.node_id]
-        incoming = [edge for edge in steps if edge.target_id == node.node_id]
-        if len(outgoing) > 1:
+        if node.node_id not in touched:
             issues.append(
                 GraphIssue(
-                    "a step can only lead to one next step, and this one leads to "
-                    f"{len(outgoing)}",
+                    "this agent is not connected to the workflow yet",
                     node_id=node.node_id,
                 )
             )
-        if len(incoming) > 1:
+        elif node.node_id not in forward:
             issues.append(
                 GraphIssue(
-                    "a step can only follow one other step, and this one follows "
-                    f"{len(incoming)}",
+                    "nothing leads to this agent from the Task, so it would "
+                    "never run",
+                    node_id=node.node_id,
+                )
+            )
+        elif node.node_id not in backward:
+            issues.append(
+                GraphIssue(
+                    "this agent's branch stops here — it never reaches the "
+                    "Aura Result",
                     node_id=node.node_id,
                 )
             )
     return issues
-
-
-def _walk(start: str, steps: tuple) -> tuple[set[str], bool]:
-    """Follow steps from *start*, reporting where it got and whether it looped."""
-    walked, looped = _walk_order(start, steps)
-    return set(walked), looped
-
-
-def _walk_order(start: str, steps: tuple) -> tuple[tuple[str, ...], bool]:
-    """The node ids the solid path visits from *start*, in order."""
-    by_source: dict[str, list] = {}
-    for edge in steps:
-        by_source.setdefault(edge.source_id, []).append(edge)
-
-    order: list[str] = [start]
-    seen: set[str] = {start}
-    current = start
-    while True:
-        outgoing = by_source.get(current, [])
-        if len(outgoing) != 1:
-            return tuple(order), False
-        current = outgoing[0].target_id
-        if current in seen:
-            return tuple(order), True
-        seen.add(current)
-        order.append(current)
-
-
-def solid_execution_order(graph: WorkflowGraph) -> tuple[WorkflowNode, ...]:
-    """The agent occurrences the solid path runs, Task first, in order.
-
-    This is the one definition of "what runs, and when", so the canvas, the
-    inspector, and the runner can never disagree about it. It answers only
-    for the shape :func:`validate_graph` accepts: an unbranched, acyclic
-    Task → agents → Aura Result path. Anything else returns ``()`` — a
-    workflow that is not runnable has no execution order to describe, and
-    inventing one would be the first step towards running the wrong thing.
-    """
-    task = graph.task_node
-    result = graph.result_node
-    if task is None or result is None:
-        return ()
-    known = {node.node_id for node in graph.nodes}
-    steps = tuple(
-        edge
-        for edge in graph.connections_of_kind(ConnectionKind.STEP)
-        if edge.source_id in known
-        and edge.target_id in known
-        and edge.source_id != edge.target_id
-    )
-    order, looped = _walk_order(task.node_id, steps)
-    if looped or order[-1] != result.node_id:
-        return ()
-    by_id = {node.node_id: node for node in graph.nodes}
-    return tuple(
-        by_id[node_id]
-        for node_id in order
-        if node_id in by_id and by_id[node_id].is_agent
-    )
 
 
 # ---- the dashed helpers ----------------------------------------------------
@@ -407,6 +351,5 @@ __all__ = [
     "GraphIssue",
     "GraphValidation",
     "reference_scope_error",
-    "solid_execution_order",
     "validate_graph",
 ]

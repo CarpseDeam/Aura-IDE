@@ -66,6 +66,8 @@ class DelegationFailure(str, Enum):
     DELEGATION_BUSY = "delegation_busy"
     #: Delegation is not available in this runtime at all (no child runner).
     DELEGATION_UNAVAILABLE = "delegation_unavailable"
+    #: A workflow Step never ran because a Step it joins did not succeed.
+    DEPENDENCY_NOT_MET = "dependency_not_met"
     #: The child runtime raised where it should have reported.
     INTERNAL_ERROR = "internal_error"
     #: Writable execution requires a real, non-bare Git repository root.

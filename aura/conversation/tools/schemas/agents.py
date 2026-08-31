@@ -197,7 +197,10 @@ def _workflow_step_lines(steps: Iterable[Mapping[str, Any]]) -> str:
         name = str(step.get("agent_name") or "").strip() or "an agent"
         permission = str(step.get("permission_label") or "Read only").strip()
         assignment = " ".join(str(step.get("assignment") or "").split())
+        after = [str(item).strip() for item in (step.get("after") or ()) if str(item).strip()]
         head = f"{position}. {name} [{permission}]"
+        if after:
+            head += f" (after {', '.join(after)})"
         lines.append(f"{head}: {assignment}" if assignment else head)
         for helper in step.get("helpers") or ():
             helper_node_id = str(helper.get("helper_node_id") or "").strip()
@@ -241,6 +244,7 @@ def build_run_workflow_tool_def(workflow: Mapping[str, Any]) -> dict[str, Any]:
         if has_helpers
         else ""
     )
+    branched = bool(workflow.get("branched"))
     writable = bool(workflow.get("writable"))
     if writable and has_helpers:
         authority = (
@@ -260,17 +264,30 @@ def build_run_workflow_tool_def(workflow: Mapping[str, Any]) -> dict[str, Any]:
         authority = "Every solid Step and attached helper is read-only."
     else:
         authority = "Every step of this workflow is read-only."
+    order_copy = (
+        "The agents below run one at a time, in the order shown; a branch that "
+        "fans out runs every path, and a step marked (after ...) waits for all "
+        "of the steps it names to succeed."
+        if branched
+        else "The agents below run one after another, in this order."
+    )
     return {
         "type": "function",
         "function": {
             "name": "run_agent_workflow",
             "description": (
                 f"Run the user's Agent workflow '{name}' and wait for its "
-                "result. The agents below run one after another, in this order; "
-                "each is given your task, its own assignment, and the previous "
-                "agent's structured result, and none of them can see this conversation. "
-                f"{helper_copy}{authority} You receive one structured result and write the "
-                "final answer to the user yourself.\n\n"
+                "result. " + order_copy + " Each is given your task, its own "
+                "assignment, and the structured result of the step or steps before "
+                "it, and none of them can see this conversation. "
+                f"{helper_copy}{authority} You receive one structured result"
+                + (
+                    ", carrying every branch that reaches the end in the "
+                    "workflow's own order,"
+                    if branched
+                    else ""
+                )
+                + " and write the final answer to the user yourself.\n\n"
                 + (f"{description}\n\n" if description else "")
                 + "Steps:\n"
                 + (steps or "- (none)")

@@ -2,10 +2,10 @@
 
 Every function here takes a graph and returns the next one, or ``None`` when
 what was asked for is not an edit at all. That keeps the decisions a canvas
-implies — a next Step replaces the one it displaces rather than forking the
-path, dropping an agent on a solid line splits it in two, a line may not be
-pointed back at the node it already leaves — readable in one place and
-testable without a widget.
+implies — a Step may fan out to several next Steps and a join may follow
+several, dropping an agent on a solid line splits it in two, a line may not
+be drawn twice or pointed back at the node it already leaves — readable in
+one place and testable without a widget.
 
 Nothing here writes, validates, or renders. The caller saves what it gets
 back, and :mod:`aura.agents.graph_validation` says whether the result could
@@ -73,9 +73,12 @@ def connect(
 ) -> WorkflowGraph | None:
     """Draw a new line, or return None when there is nothing to draw.
 
-    A step has one next step and one previous one, so a new one replaces
-    whichever it displaces rather than quietly forking the path. Undo puts
-    the displaced line back.
+    A step may lead to several next steps and follow several previous ones, so
+    a new line is added beside whatever is already there rather than replacing
+    it: fan-out and fan-in are shapes a person draws on purpose, and quietly
+    deleting the line they drew a moment ago would be the surprising thing.
+    What is still refused is a line that says nothing new — the same hand-off
+    drawn twice, an end that is not on the canvas, or a node joined to itself.
     """
     if source_id == target_id:
         return None
@@ -86,17 +89,13 @@ def connect(
         for edge in graph.connections
     ):
         return None
-    updated = graph
-    if kind is ConnectionKind.STEP:
-        for edge in graph.outgoing(source_id, kind) + graph.incoming(target_id, kind):
-            updated = updated.without_connection(edge.connection_id)
-    return updated.with_connection(
+    return graph.with_connection(
         WorkflowConnection(
             connection_id=new_connection_id(),
             kind=kind,
             source_id=source_id,
             target_id=target_id,
-            order=updated.next_order(),
+            order=graph.next_order(),
         )
     )
 
