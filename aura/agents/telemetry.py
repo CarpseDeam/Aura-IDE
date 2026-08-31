@@ -4,26 +4,54 @@ from __future__ import annotations
 from typing import Any
 
 
+def delegation_usage_signals(
+    extras: dict[str, Any] | None,
+) -> tuple[tuple[str, str, int, int, int, int], ...]:
+    """Return every exact provider/model usage group in supplied order."""
+    source = extras or {}
+    groups = source.get("delegation_usage_groups")
+    rows: tuple[Any, ...]
+    if isinstance(groups, list):
+        rows = tuple(groups)
+    else:
+        data = source.get("delegation_usage")
+        rows = (
+            {
+                "provider": source.get("delegation_provider"),
+                "model": source.get("delegation_model"),
+                **(data if isinstance(data, dict) else {}),
+            },
+        )
+    signals: list[tuple[str, str, int, int, int, int]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        provider = str(row.get("provider") or "")
+        model = str(row.get("model") or "")
+        if not provider or not model:
+            continue
+        try:
+            signals.append(
+                (
+                    provider,
+                    model,
+                    max(0, int(row.get("prompt_tokens") or 0)),
+                    max(0, int(row.get("completion_tokens") or 0)),
+                    max(0, int(row.get("cache_hit_tokens") or 0)),
+                    max(0, int(row.get("cache_miss_tokens") or 0)),
+                )
+            )
+        except (TypeError, ValueError):
+            continue
+    return tuple(signals)
+
+
 def delegation_usage_signal(
     extras: dict[str, Any] | None,
 ) -> tuple[str, str, int, int, int, int] | None:
-    """Return actual provider/model plus cumulative usage once per result."""
-    data = (extras or {}).get("delegation_usage")
-    provider = str((extras or {}).get("delegation_provider") or "")
-    model = str((extras or {}).get("delegation_model") or "")
-    if not isinstance(data, dict) or not provider or not model:
-        return None
-    try:
-        return (
-            provider,
-            model,
-            max(0, int(data.get("prompt_tokens") or 0)),
-            max(0, int(data.get("completion_tokens") or 0)),
-            max(0, int(data.get("cache_hit_tokens") or 0)),
-            max(0, int(data.get("cache_miss_tokens") or 0)),
-        )
-    except (TypeError, ValueError):
-        return None
+    """Backward-compatible singular projection for ordinary delegation."""
+    signals = delegation_usage_signals(extras)
+    return signals[0] if signals else None
 
 
-__all__ = ["delegation_usage_signal"]
+__all__ = ["delegation_usage_signal", "delegation_usage_signals"]

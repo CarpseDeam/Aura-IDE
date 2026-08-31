@@ -1,4 +1,4 @@
-"""Frozen Agent workflow plans, serial execution, and turn-tool exposure."""
+"""Frozen Agent workflow plans, safe parallel waves, and turn-tool exposure."""
 from __future__ import annotations
 
 import json
@@ -7,7 +7,13 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from aura.agents.delegation import DelegationFailure, DelegationResult, DelegationStatus
+from aura.agents.child_execution import ChildExecutor
+from aura.agents.delegation import (
+    DelegationFailure,
+    DelegationResult,
+    DelegationStatus,
+    DelegationUsage,
+)
 from aura.agents.graph_models import (
     ConnectionKind,
     WorkflowConnection,
@@ -24,6 +30,7 @@ from aura.agents.workflow_runner import (
     WorkflowRunStatus,
     WorkflowStepState,
 )
+from aura.agents.workflow_scheduler import WorkflowWaveScheduler
 from aura.agents.worktree import AgentChangeSet, AgentWorktree
 from aura.client import ContentDelta, Done, Event, Usage
 from aura.conversation.tools.registry import ToolRegistry
@@ -1290,3 +1297,790 @@ def test_root_read_only_and_plan_review_refuse_a_helper_writable_workflow(
             == DelegationFailure.ROOT_MUTATION_FORBIDDEN.value
         )
         assert runner.calls == 0
+
+
+class _ForkingChild:
+    """Fresh collaborator per invocation with intentionally shared test state."""
+
+    def __init__(self, handler) -> None:
+        self._handler = handler
+
+    def fork(self):
+        return _ForkingChild(self._handler)
+
+    def run(self, *args, **kwargs):
+        return self._handler(*args, **kwargs), ()
+
+
+def test_read_only_siblings_overlap_join_waits_and_projection_stays_frozen(
+    tmp_path: Path, monkeypatch
+) -> None:
+    graph = _dag_graph(
+        ("left", "right", "join"),
+        (
+            ("task", "left"),
+            ("task", "right"),
+            ("left", "join"),
+            ("right", "join"),
+            ("join", "result"),
+        ),
+    )
+    graph = _with_helper(
+        graph, "left", node_id="left-helper", connection_id="left-dash"
+    )
+    graph = _with_helper(
+        graph, "right", node_id="right-helper", connection_id="right-dash"
+    )
+    plan = _freeze(monkeypatch, graph)
+    siblings = threading.Barrier(2)
+    right_finished = threading.Event()
+    left_finished = threading.Event()
+    join_started = threading.Event()
+    completion_order: list[str] = []
+    completion_lock = threading.Lock()
+
+    def handle(entry, task, resolved, cancel_event, **kwargs):
+        del resolved, cancel_event
+        if kwargs.get("workflow_helper"):
+            owner = "left" if "Agent 1" in task else "right"
+            return _completed(entry.agent_id, entry.name, f"{owner} helper answer")
+        if entry.agent_id in AGENT_IDS[:2]:
+            siblings.wait(timeout=5)
+            helper = kwargs["workflow_helpers"][0]
+            kwargs["workflow_helper_runner"].run(helper, "Check this branch")
+            if entry.agent_id == AGENT_IDS[1]:
+                with completion_lock:
+                    completion_order.append("right")
+                right_finished.set()
+                return _completed(entry.agent_id, entry.name, "right answer")
+            assert right_finished.wait(timeout=5)
+            with completion_lock:
+                completion_order.append("left")
+            left_finished.set()
+            return _completed(entry.agent_id, entry.name, "left answer")
+        assert right_finished.is_set() and left_finished.is_set()
+        join_started.set()
+        return _completed(entry.agent_id, entry.name, "joined answer")
+
+    observed: list[tuple[str, WorkflowStepState]] = []
+    observer_threads: set[int] = set()
+    coordinator_thread = threading.get_ident()
+
+    def observe(node_id: str, state: WorkflowStepState) -> None:
+        observer_threads.add(threading.get_ident())
+        observed.append((node_id, state))
+
+    result = WorkflowRunner(
+        workspace_root=tmp_path, child=_ForkingChild(handle)
+    ).run(plan, "Inspect both branches", on_step=observe)
+
+    assert join_started.is_set()
+    assert completion_order == ["right", "left"]
+    assert [outcome.node_id for outcome in result.steps] == ["left", "right", "join"]
+    assert [item.owning_step_node_id for item in result.helper_invocations] == [
+        "left",
+        "right",
+    ]
+    assert [item.invocation for item in result.helper_invocations] == [1, 2]
+    assert result.result == "joined answer"
+    assert observer_threads == {coordinator_thread}
+    assert plan.step("left").mutation_capable is False
+    assert plan.step("right").mutation_capable is False
+    running = [node_id for node_id, state in observed if state is WorkflowStepState.RUNNING]
+    assert running.index("left") < running.index("right") < running.index("join")
+
+
+def test_readers_and_writers_run_in_exclusive_frozen_waves(
+    tmp_path: Path, monkeypatch
+) -> None:
+    plan = _freeze(
+        monkeypatch,
+        _dag_graph(
+            ("reader", "writer-one", "writer-two"),
+            (
+                ("task", "reader"),
+                ("task", "writer-one"),
+                ("task", "writer-two"),
+                ("reader", "result"),
+                ("writer-one", "result"),
+                ("writer-two", "result"),
+            ),
+        ),
+        {
+            AGENT_IDS[1]: AgentPermission.READ_WRITE,
+            AGENT_IDS[2]: AgentPermission.READ_WRITE,
+        },
+    )
+    scheduler = WorkflowWaveScheduler(plan)
+    assert [step.node_id for step in scheduler.decide({}).wave] == ["reader"]
+    assert [
+        step.node_id for step in scheduler.decide({"reader": True}).wave
+    ] == ["writer-one"]
+    assert [
+        step.node_id
+        for step in scheduler.decide({"reader": True, "writer-one": True}).wave
+    ] == ["writer-two"]
+
+    reader_started = threading.Event()
+    reader_release = threading.Event()
+    reader_finished = threading.Event()
+    first_writer_started = threading.Event()
+    first_writer_release = threading.Event()
+    first_writer_finished = threading.Event()
+    second_writer_started = threading.Event()
+
+    def handle(entry, task, resolved, cancel_event, **kwargs):
+        del task, resolved, cancel_event, kwargs
+        if entry.agent_id == AGENT_IDS[0]:
+            reader_started.set()
+            assert reader_release.wait(timeout=5)
+            reader_finished.set()
+            return _completed(entry.agent_id, entry.name, "read")
+        if entry.agent_id == AGENT_IDS[1]:
+            assert reader_finished.is_set()
+            first_writer_started.set()
+            assert first_writer_release.wait(timeout=5)
+            first_writer_finished.set()
+            return _completed(entry.agent_id, entry.name, "write one")
+        assert reader_finished.is_set() and first_writer_finished.is_set()
+        second_writer_started.set()
+        return _completed(entry.agent_id, entry.name, "write two")
+
+    done = threading.Event()
+    result_box: list[Any] = []
+    worktrees = _Worktrees(tmp_path / "isolated")
+
+    def run() -> None:
+        try:
+            result_box.append(
+                WorkflowRunner(
+                    workspace_root=tmp_path,
+                    worktree_manager=worktrees,
+                    child=_ForkingChild(handle),
+                ).run(plan, "Read, then perform independent writes")
+            )
+        finally:
+            done.set()
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    assert reader_started.wait(timeout=5)
+    assert not first_writer_started.is_set()
+    reader_release.set()
+    assert first_writer_started.wait(timeout=5)
+    assert reader_finished.is_set() and not second_writer_started.is_set()
+    first_writer_release.set()
+    assert done.wait(timeout=5)
+    thread.join()
+
+    assert second_writer_started.is_set()
+    assert result_box[0].status is WorkflowRunStatus.COMPLETED
+    assert len(worktrees.recovered) == 1
+
+
+def test_writable_helper_forces_exclusivity_but_read_only_helpers_do_not(
+    tmp_path: Path, monkeypatch
+) -> None:
+    graph = _dag_graph(
+        ("helper-owner", "reader"),
+        (
+            ("task", "helper-owner"),
+            ("task", "reader"),
+            ("helper-owner", "result"),
+            ("reader", "result"),
+        ),
+    )
+    graph = _with_helper(graph, "helper-owner", node_id="writer-helper")
+    plan = _freeze(
+        monkeypatch, graph, {AGENT_IDS[2]: AgentPermission.READ_WRITE}
+    )
+    owner = plan.step("helper-owner")
+    assert owner.permission is AgentPermission.READ_ONLY
+    assert owner.mutation_capable is True
+    assert plan.step("reader").mutation_capable is False
+    assert [step.node_id for step in WorkflowWaveScheduler(plan).decide({}).wave] == [
+        "helper-owner"
+    ]
+
+    helper_started = threading.Event()
+    helper_release = threading.Event()
+    helper_finished = threading.Event()
+    reader_started = threading.Event()
+
+    def handle(entry, task, resolved, cancel_event, **kwargs):
+        del task, resolved, cancel_event
+        if kwargs.get("workflow_helper"):
+            helper_started.set()
+            assert helper_release.wait(timeout=5)
+            helper_finished.set()
+            return _completed(entry.agent_id, entry.name, "edited")
+        if entry.agent_id == AGENT_IDS[0]:
+            helper = kwargs["workflow_helpers"][0]
+            kwargs["workflow_helper_runner"].run(helper, "Make the bounded edit")
+            return _completed(entry.agent_id, entry.name, "owner done")
+        assert helper_finished.is_set()
+        reader_started.set()
+        return _completed(entry.agent_id, entry.name, "reader done")
+
+    done = threading.Event()
+    worktrees = _Worktrees(tmp_path / "isolated")
+
+    def run() -> None:
+        try:
+            WorkflowRunner(
+                workspace_root=tmp_path,
+                worktree_manager=worktrees,
+                child=_ForkingChild(handle),
+            ).run(plan, "Edit and read")
+        finally:
+            done.set()
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    assert helper_started.wait(timeout=5)
+    assert not reader_started.is_set()
+    helper_release.set()
+    assert done.wait(timeout=5)
+    thread.join()
+    assert reader_started.is_set()
+
+    read_helper_plan = _freeze(
+        monkeypatch,
+        _with_helper(
+            _dag_graph(
+                ("one", "two"),
+                (
+                    ("task", "one"),
+                    ("task", "two"),
+                    ("one", "result"),
+                    ("two", "result"),
+                ),
+            ),
+            "one",
+            node_id="reader-helper",
+        ),
+    )
+    assert read_helper_plan.step("one").mutation_capable is False
+    assert [
+        step.node_id
+        for step in WorkflowWaveScheduler(read_helper_plan).decide({}).wave
+    ] == ["one", "two"]
+
+
+def test_cancellation_starts_nothing_else_quiesces_and_checkpoints_once(
+    tmp_path: Path, monkeypatch
+) -> None:
+    plan = _freeze(
+        monkeypatch,
+        _graph(),
+        {AGENT_IDS[0]: AgentPermission.READ_WRITE},
+    )
+    first_started = threading.Event()
+    first_release = threading.Event()
+    first_finished = threading.Event()
+    second_started = threading.Event()
+    cancel = threading.Event()
+
+    class _CheckingWorktrees(_Worktrees):
+        def recover(self, worktree):
+            assert first_finished.is_set()
+            return super().recover(worktree)
+
+    def handle(entry, task, resolved, cancel_event, **kwargs):
+        del task, resolved, kwargs
+        if entry.agent_id == AGENT_IDS[0]:
+            first_started.set()
+            assert first_release.wait(timeout=5)
+            first_finished.set()
+            assert cancel_event is cancel and cancel_event.is_set()
+            return DelegationResult(
+                status=DelegationStatus.CANCELLED,
+                agent_id=entry.agent_id,
+                agent_name=entry.name,
+                failure_class="cancelled",
+                error="cancelled while active",
+            )
+        second_started.set()
+        return _completed(entry.agent_id, entry.name, "must not run")
+
+    done = threading.Event()
+    result_box: list[Any] = []
+    worktrees = _CheckingWorktrees(tmp_path / "isolated")
+
+    def run() -> None:
+        try:
+            result_box.append(
+                WorkflowRunner(
+                    workspace_root=tmp_path,
+                    worktree_manager=worktrees,
+                    child=_ForkingChild(handle),
+                ).run(plan, "Cancel safely", cancel_event=cancel)
+            )
+        finally:
+            done.set()
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    assert first_started.wait(timeout=5)
+    cancel.set()
+    assert not second_started.is_set()
+    first_release.set()
+    assert done.wait(timeout=5)
+    thread.join()
+
+    result = result_box[0]
+    assert not second_started.is_set()
+    assert [item.state for item in result.steps] == [
+        WorkflowStepState.CANCELLED,
+        WorkflowStepState.SKIPPED,
+    ]
+    assert len(worktrees.recovered) == 1
+
+
+def test_shared_registry_is_serialized_without_permission_or_helper_scope_leaks(
+    tmp_path: Path, monkeypatch
+) -> None:
+    plan = _freeze(
+        monkeypatch,
+        _with_helper(
+            _graph(1),
+            "step1",
+            node_id="scoped-helper",
+            agent_id=AGENT_IDS[1],
+        ),
+    )
+    shared_registry = ToolRegistry(tmp_path, read_only=True, isolated_agent=True)
+    first_entered = threading.Event()
+    first_release = threading.Event()
+    second_entered = threading.Event()
+    factory_calls: list[int] = []
+    registry_calls: list[int] = []
+    second_registry_constructed = threading.Event()
+    requests: list[dict[str, Any]] = []
+    lock = threading.Lock()
+
+    class _Backend:
+        def __init__(self, index: int) -> None:
+            self.index = index
+
+        def stream(self, **kwargs):
+            with lock:
+                requests.append(kwargs)
+            if self.index == 0:
+                first_entered.set()
+                assert first_release.wait(timeout=5)
+            else:
+                second_entered.set()
+            yield from _answer(f"answer {self.index}")
+
+    def backend_factory(_provider: str):
+        with lock:
+            index = len(factory_calls)
+            factory_calls.append(index)
+        return _Backend(index)
+
+    def registry_factory(_root: Path):
+        with lock:
+            registry_calls.append(len(registry_calls))
+            if len(registry_calls) == 2:
+                second_registry_constructed.set()
+        return shared_registry
+
+    prototype = ChildExecutor(
+        backend_factory=backend_factory,
+        registry_factory=registry_factory,
+    )
+    step = plan.steps[0]
+    results: list[DelegationResult] = []
+
+    def invoke(*, writable: bool, helpers=()) -> None:
+        result, _tests = prototype.fork().run(
+            step.entry,
+            "isolated child",
+            step.resolved,
+            threading.Event(),
+            workspace_root=tmp_path,
+            permission=(
+                AgentPermission.READ_WRITE if writable else AgentPermission.READ_ONLY
+            ),
+            workflow_step=True,
+            workflow_helpers=helpers,
+            workflow_helper_runner=object() if helpers else None,
+        )
+        results.append(result)
+
+    first = threading.Thread(
+        target=invoke, kwargs={"writable": True, "helpers": step.helpers}
+    )
+    second = threading.Thread(target=invoke, kwargs={"writable": False})
+    first.start()
+    assert first_entered.wait(timeout=5)
+    second.start()
+    # The second invocation cannot even construct its backend until the first
+    # releases the shared registry and clears its writable/helper context.
+    assert second_registry_constructed.wait(timeout=5)
+    assert factory_calls == [0]
+    assert not second_entered.is_set()
+    first_release.set()
+    first.join()
+    second.join()
+
+    assert second_entered.is_set()
+    assert len(results) == 2 and all(result.ok for result in results)
+    first_tools = {tool["function"]["name"] for tool in requests[0]["tools"]}
+    second_tools = {tool["function"]["name"] for tool in requests[1]["tools"]}
+    assert {"apply_patch", "delegate_agent"} <= first_tools
+    assert "apply_patch" not in second_tools
+    assert "delegate_agent" not in second_tools
+    assert "optional helpers listed" in requests[0]["messages"][0]["content"]
+    assert "optional helpers listed" not in requests[1]["messages"][0]["content"]
+
+
+def test_shared_backend_and_unforkable_child_are_serialized(
+    tmp_path: Path, monkeypatch
+) -> None:
+    plan = _freeze(
+        monkeypatch,
+        _dag_graph(
+            ("one", "two"),
+            (
+                ("task", "one"),
+                ("task", "two"),
+                ("one", "result"),
+                ("two", "result"),
+            ),
+        ),
+    )
+    backend_entered = threading.Event()
+    backend_release = threading.Event()
+    second_backend_factory = threading.Event()
+    second_backend_entered = threading.Event()
+    backend_factory_calls = 0
+    backend_stream_calls = 0
+    backend_lock = threading.Lock()
+
+    class _SharedBackend:
+        def stream(self, **kwargs):
+            del kwargs
+            nonlocal backend_stream_calls
+            with backend_lock:
+                index = backend_stream_calls
+                backend_stream_calls += 1
+            if index == 0:
+                backend_entered.set()
+                assert backend_release.wait(timeout=5)
+            else:
+                second_backend_entered.set()
+            yield from _answer(f"answer {index}")
+
+    shared_backend = _SharedBackend()
+
+    def backend_factory(_provider: str):
+        nonlocal backend_factory_calls
+        with backend_lock:
+            backend_factory_calls += 1
+            if backend_factory_calls == 2:
+                second_backend_factory.set()
+        return shared_backend
+
+    prototype = ChildExecutor(backend_factory=backend_factory)
+    step = plan.steps[0]
+
+    def invoke() -> None:
+        prototype.fork().run(
+            step.entry,
+            "read safely",
+            step.resolved,
+            threading.Event(),
+            workspace_root=tmp_path,
+            permission=AgentPermission.READ_ONLY,
+        )
+
+    first = threading.Thread(target=invoke)
+    second = threading.Thread(target=invoke)
+    first.start()
+    assert backend_entered.wait(timeout=5)
+    second.start()
+    assert second_backend_factory.wait(timeout=5)
+    assert not second_backend_entered.is_set()
+    backend_release.set()
+    first.join()
+    second.join()
+    assert second_backend_entered.is_set()
+
+    child_entered = threading.Event()
+    child_release = threading.Event()
+    second_child_running = threading.Event()
+    child_calls = 0
+    child_lock = threading.Lock()
+
+    class _UnforkableChild:
+        def run(self, entry, task, resolved, cancel_event, **kwargs):
+            del task, resolved, cancel_event, kwargs
+            nonlocal child_calls
+            with child_lock:
+                index = child_calls
+                child_calls += 1
+            if index == 0:
+                child_entered.set()
+                assert child_release.wait(timeout=5)
+            return _completed(entry.agent_id, entry.name, f"child {index}"), ()
+
+    finished = threading.Event()
+
+    def observe(node_id: str, state: WorkflowStepState) -> None:
+        if node_id == "two" and state is WorkflowStepState.RUNNING:
+            second_child_running.set()
+
+    def run_workflow() -> None:
+        try:
+            WorkflowRunner(
+                workspace_root=tmp_path, child=_UnforkableChild()
+            ).run(plan, "serialize unsafe injection", on_step=observe)
+        finally:
+            finished.set()
+
+    workflow_thread = threading.Thread(target=run_workflow)
+    workflow_thread.start()
+    assert child_entered.wait(timeout=5)
+    assert second_child_running.wait(timeout=5)
+    assert child_calls == 1
+    child_release.set()
+    assert finished.wait(timeout=5)
+    workflow_thread.join()
+    assert child_calls == 2
+
+
+def test_nested_shared_registry_reuse_fails_closed_without_deadlock(
+    tmp_path: Path, monkeypatch
+) -> None:
+    plan = _freeze(
+        monkeypatch,
+        _with_helper(
+            _graph(1),
+            "step1",
+            node_id="nested-helper",
+            agent_id=AGENT_IDS[1],
+        ),
+    )
+    shared_registry = ToolRegistry(tmp_path, read_only=True, isolated_agent=True)
+    backend = _ScriptedBackend(
+        [
+            _tool_round(
+                _call(
+                    "nested-call",
+                    "delegate_agent",
+                    helper_node_id="nested-helper",
+                    task="Try the isolated helper",
+                )
+            ),
+            _answer("parent handled the isolated failure"),
+        ]
+    )
+
+    result = WorkflowRunner(
+        workspace_root=tmp_path,
+        backend_factory=lambda _provider: backend,
+        registry_factory=lambda _root: shared_registry,
+    ).run(plan, "Do not reuse mutable helper scope")
+
+    assert result.status is WorkflowRunStatus.COMPLETED
+    assert result.result == "parent handled the isolated failure"
+    assert len(result.helper_invocations) == 1
+    assert (
+        result.helper_invocations[0].result.failure_class
+        == DelegationFailure.INTERNAL_ERROR.value
+    )
+    assert "cannot be isolated" in result.helper_invocations[0].result.error
+    assert len(backend.requests) == 2
+
+
+def test_worker_exception_becomes_structured_without_stopping_its_sibling(
+    tmp_path: Path, monkeypatch
+) -> None:
+    plan = _freeze(
+        monkeypatch,
+        _dag_graph(
+            ("broken", "healthy"),
+            (
+                ("task", "broken"),
+                ("task", "healthy"),
+                ("broken", "result"),
+                ("healthy", "result"),
+            ),
+        ),
+    )
+    siblings = threading.Barrier(2)
+
+    def handle(entry, task, resolved, cancel_event, **kwargs):
+        del task, resolved, cancel_event, kwargs
+        siblings.wait(timeout=5)
+        if entry.agent_id == AGENT_IDS[0]:
+            raise RuntimeError("worker exploded with secret-safe detail")
+        return _completed(entry.agent_id, entry.name, "healthy answer")
+
+    result = WorkflowRunner(
+        workspace_root=tmp_path, child=_ForkingChild(handle)
+    ).run(plan, "Contain one worker exception")
+
+    assert result.status is WorkflowRunStatus.PARTIAL
+    assert result.steps[0].state is WorkflowStepState.FAILED
+    assert (
+        result.steps[0].result.failure_class
+        == DelegationFailure.INTERNAL_ERROR.value
+    )
+    assert result.steps[1].state is WorkflowStepState.SUCCEEDED
+    assert result.steps[1].result.result == "healthy answer"
+
+
+def test_workflow_usage_groups_keep_provider_models_distinct_and_frozen(
+    tmp_path: Path, monkeypatch
+) -> None:
+    plan = _freeze(monkeypatch, _graph(3))
+    first = replace(
+        _completed(AGENT_IDS[0], "Agent 1", "first"),
+        provider="deepseek",
+        model="model-a",
+        usage=DelegationUsage(10, 2, 3, 7),
+    )
+    second = replace(
+        _completed(AGENT_IDS[1], "Agent 2", "second"),
+        provider="deepseek",
+        model="model-b",
+        usage=DelegationUsage(20, 4, 5, 15),
+    )
+    third = replace(
+        _completed(AGENT_IDS[2], "Agent 3", "third"),
+        provider="deepseek",
+        model="model-a",
+        usage=DelegationUsage(30, 6, 7, 23),
+    )
+    registry = ToolRegistry(tmp_path)
+    registry.set_turn_workflow_plan(plan)
+    registry.set_agent_workflow_runner(
+        WorkflowRunner(
+            workspace_root=tmp_path, child=_Child([first, second, third])
+        )
+    )
+
+    tool_result = registry.execute(
+        "run_agent_workflow",
+        {"task": "Account for both models"},
+        approval_cb=lambda _request: None,
+    )
+
+    assert [
+        (row["provider"], row["model"])
+        for row in tool_result.extras["delegation_usage_groups"]
+    ] == [("deepseek", "model-a"), ("deepseek", "model-b")]
+    assert tool_result.extras["delegation_usage_groups"][0]["prompt_tokens"] == 40
+    assert tool_result.extras["delegation_usage_groups"][1]["prompt_tokens"] == 20
+
+
+def test_descendant_blocks_only_after_every_predecessor_settles(
+    tmp_path: Path, monkeypatch
+) -> None:
+    plan = _freeze(
+        monkeypatch,
+        _dag_graph(
+            ("left", "right", "join"),
+            (
+                ("task", "left"),
+                ("task", "right"),
+                ("right", "join"),
+                ("left", "join"),
+                ("join", "result"),
+            ),
+        ),
+    )
+    siblings = threading.Barrier(2)
+    left_failed = threading.Event()
+    right_release = threading.Event()
+    right_failed = threading.Event()
+    join_settled = threading.Event()
+
+    def handle(entry, task, resolved, cancel_event, **kwargs):
+        del task, resolved, cancel_event, kwargs
+        if entry.agent_id == AGENT_IDS[0]:
+            siblings.wait(timeout=5)
+            left_failed.set()
+            return DelegationResult.failure(
+                entry.agent_id,
+                DelegationFailure.PROVIDER_ERROR,
+                "left failed",
+                agent_name=entry.name,
+            )
+        if entry.agent_id == AGENT_IDS[1]:
+            siblings.wait(timeout=5)
+            assert right_release.wait(timeout=5)
+            right_failed.set()
+            return DelegationResult.failure(
+                entry.agent_id,
+                DelegationFailure.EMPTY_RESULT,
+                "right failed",
+                agent_name=entry.name,
+            )
+        raise AssertionError("the blocked join must not launch")
+
+    done = threading.Event()
+    result_box: list[Any] = []
+
+    def observe(node_id: str, state: WorkflowStepState) -> None:
+        if node_id == "join" and state is WorkflowStepState.SKIPPED:
+            join_settled.set()
+
+    def run() -> None:
+        try:
+            result_box.append(
+                WorkflowRunner(
+                    workspace_root=tmp_path, child=_ForkingChild(handle)
+                ).run(plan, "Both branches fail", on_step=observe)
+            )
+        finally:
+            done.set()
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    assert left_failed.wait(timeout=5)
+    assert not right_failed.is_set()
+    assert not join_settled.is_set()
+    right_release.set()
+    assert done.wait(timeout=5)
+    thread.join()
+
+    blocked = result_box[0].steps[2]
+    assert join_settled.is_set()
+    assert blocked.state is WorkflowStepState.SKIPPED
+    assert blocked.payload()["blocked_by"] == ["right", "left"]
+
+
+def test_workflow_tool_copy_states_parallel_exclusivity_join_and_order(
+    tmp_path: Path, monkeypatch
+) -> None:
+    graph = _dag_graph(
+        ("left", "right", "join"),
+        (
+            ("task", "left"),
+            ("task", "right"),
+            ("left", "join"),
+            ("right", "join"),
+            ("join", "result"),
+        ),
+    )
+    graph = _with_helper(graph, "left", node_id="writer-helper")
+    plan = _freeze(
+        monkeypatch, graph, {AGENT_IDS[2]: AgentPermission.READ_WRITE}
+    )
+    registry = ToolRegistry(tmp_path)
+    registry.set_turn_workflow_plan(plan)
+    workflow_tool = next(
+        tool
+        for tool in registry.tool_defs()
+        if tool["function"]["name"] == "run_agent_workflow"
+    )
+    description = workflow_tool["function"]["description"]
+
+    assert "Independent ready read-only Steps may overlap" in description
+    assert "Read / Write helper runs exclusively" in description
+    assert "Joins therefore wait for every predecessor" in description
+    assert "frozen workflow order, never completion order" in description

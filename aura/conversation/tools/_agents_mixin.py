@@ -204,13 +204,18 @@ class AgentDelegationHandlersMixin:
         result = runner.run(
             plan, str(args.get("task") or ""), cancel_event=self.active_cancel_event
         )
+        extras: dict[str, Any] = {
+            "workflow_graph_id": result.graph_id,
+            "workflow_status": result.status.value,
+        }
+        if result.usage_groups:
+            extras["delegation_usage_groups"] = [
+                group.payload() for group in result.usage_groups
+            ]
         return ToolExecResult(
             ok=result.ok,
             payload=result.payload(),
-            extras={
-                "workflow_graph_id": result.graph_id,
-                "workflow_status": result.status.value,
-            },
+            extras=extras,
         )
 
     def _handle_list_agent_change_sets(

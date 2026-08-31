@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from aura.agents.telemetry import delegation_usage_signal
+from aura.agents.telemetry import delegation_usage_signals
 from aura.client import (
     ApiError,
     ContentDelta,
@@ -64,8 +64,7 @@ def emit_read_only_facts(emitter: ReadOnlySignalEmitter, ev: Any, model_id: str)
         emitter.toolResultEmitted.emit(
             ev.tool_call_id, ev.name, ev.ok, ev.result, ev.extras or {}
         )
-        child_usage = delegation_usage_signal(ev.extras)
-        if child_usage is not None:
+        for child_usage in delegation_usage_signals(ev.extras):
             provider, model, prompt, completion, hit, miss = child_usage
             emitter.delegationUsage.emit(
                 ev.tool_call_id,

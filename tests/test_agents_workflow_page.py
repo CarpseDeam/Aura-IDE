@@ -678,3 +678,34 @@ def test_each_line_into_a_join_shows_the_branch_it_carries(wired) -> None:
         for edge in graph.incoming(join.node_id, ConnectionKind.STEP)
     }
     assert into_join == {left.node_id: "failed", right.node_id: "succeeded"}
+
+
+def test_two_sibling_nodes_and_their_edges_show_running_together(wired) -> None:
+    from aura.gui.agents_workflow_presenter import run_edge_states
+
+    left_agent = _agent(wired.agents, AgentScope.PROJECT, "Left reader")
+    right_agent = _agent(wired.agents, AgentScope.PROJECT, "Right reader")
+    page, graphs = _new_workflow(wired)
+    _drop(wired, page, left_agent, 0.0, 0.0)
+    _drop(wired, page, right_agent, 0.0, 140.0)
+    left, right = [node for node in graphs.current_graph.nodes if node.is_agent]
+    graph = graphs.current_graph
+    for source, target in (
+        (graph.task_node.node_id, left.node_id),
+        (graph.task_node.node_id, right.node_id),
+        (left.node_id, graph.result_node.node_id),
+        (right.node_id, graph.result_node.node_id),
+    ):
+        page.scene.connect_requested.emit(source, target, "step")
+        wired.app.processEvents()
+    graph = graphs.current_graph
+
+    states = {left.node_id: "running", right.node_id: "running"}
+    page.set_run_states(states, run_edge_states(graph, states))
+
+    assert page.scene.node_items[left.node_id].run_state == "running"
+    assert page.scene.node_items[right.node_id].run_state == "running"
+    assert {
+        page.scene.edge_items[edge.connection_id].run_state
+        for edge in graph.connections_of_kind(ConnectionKind.STEP)
+    } == {"running"}

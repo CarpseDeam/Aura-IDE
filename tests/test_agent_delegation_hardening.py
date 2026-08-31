@@ -248,3 +248,48 @@ def test_child_usage_is_emitted_once_from_the_paired_result() -> None:
     assert observed == [
         ("delegate-1", "openrouter", "child-model", 30, 7, 7, 23)
     ]
+
+
+def test_workflow_usage_emits_each_provider_model_group_in_order() -> None:
+    class ApprovalProxy:
+        @staticmethod
+        def consume_last_event():
+            return None
+
+    relay = ExecutionEventRelay(ApprovalProxy(), EventBus())
+    observed: list[tuple] = []
+    relay.delegationUsage.connect(lambda *args: observed.append(args))
+    relay.relay(
+        "root-run",
+        ToolResult(
+            tool_call_id="workflow-1",
+            name="run_agent_workflow",
+            ok=True,
+            result="{}",
+            extras={
+                "delegation_usage_groups": [
+                    {
+                        "provider": "deepseek",
+                        "model": "step-model",
+                        "prompt_tokens": 30,
+                        "completion_tokens": 7,
+                        "cache_hit_tokens": 7,
+                        "cache_miss_tokens": 23,
+                    },
+                    {
+                        "provider": "deepseek",
+                        "model": "helper-model",
+                        "prompt_tokens": 11,
+                        "completion_tokens": 5,
+                        "cache_hit_tokens": 1,
+                        "cache_miss_tokens": 10,
+                    },
+                ]
+            },
+        ),
+    )
+
+    assert observed == [
+        ("workflow-1", "deepseek", "step-model", 30, 7, 7, 23),
+        ("workflow-1", "deepseek", "helper-model", 11, 5, 1, 10),
+    ]

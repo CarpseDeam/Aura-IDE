@@ -250,26 +250,35 @@ def build_run_workflow_tool_def(workflow: Mapping[str, Any]) -> dict[str, Any]:
         authority = (
             "At least one solid Step or attached helper may edit files. Every child "
             "in this run reads one shared isolated Git worktree, and the whole run "
-            "is checkpointed into a single change set. Nothing is written to the "
-            "user's workspace unless they later approve applying it."
+            "is checkpointed into a single change set. A Step that may edit, or "
+            "that owns a Read / Write helper, runs exclusively. Nothing is written "
+            "to the user's workspace unless they later approve applying it."
         )
     elif writable:
         authority = (
             "At least one step may edit files. Every step of this run shares one "
             "isolated Git worktree, and the whole run is checkpointed into a "
-            "single change set. Nothing is written to the user's workspace unless "
-            "they later approve applying it."
+            "single change set. A Step that may edit runs exclusively. Nothing is "
+            "written to the user's workspace unless they later approve applying it."
         )
     elif has_helpers:
         authority = "Every solid Step and attached helper is read-only."
     else:
         authority = "Every step of this workflow is read-only."
     order_copy = (
-        "The agents below run one at a time, in the order shown; a branch that "
-        "fans out runs every path, and a step marked (after ...) waits for all "
-        "of the steps it names to succeed."
+        "DAG edges are the ordering contract. Independent ready read-only Steps "
+        "may overlap; every Step that may edit or owns a Read / Write helper runs "
+        "exclusively. A Step that must consume another Step's edits must be its "
+        "successor. A branch that fans out runs every path, and a Step marked "
+        "(after ...) waits for every named predecessor to settle successfully. "
+        "Joins therefore wait for every predecessor. Results are always returned "
+        "in the frozen workflow order, never completion order."
         if branched
-        else "The agents below run one after another, in this order."
+        else (
+            "The agents below run one after another according to their DAG edges. "
+            "A mutation-capable Step runs exclusively, and results retain this "
+            "frozen order."
+        )
     )
     return {
         "type": "function",

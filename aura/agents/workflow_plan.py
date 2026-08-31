@@ -35,7 +35,7 @@ Nothing here is Qt-aware and nothing here runs anything — see
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from aura.agents.graph_dag import runnable_dag
@@ -127,6 +127,22 @@ class WorkflowStepPlan:
     successors: tuple[str, ...] = ()
     from_task: bool = False
     to_result: bool = False
+    mutation_capable: bool = field(init=False)
+
+    def __post_init__(self) -> None:
+        """Freeze the occurrence-wide mutation classification once.
+
+        The solid Step keeps its own permission.  Scheduling authority is a
+        separate fact: a read-only Step with any Read / Write helper must own
+        the shared worktree exclusively for its whole invocation because the
+        helper can be called while the Step is active.
+        """
+        object.__setattr__(
+            self,
+            "mutation_capable",
+            self.permission.allows_edit
+            or any(helper.permission.allows_edit for helper in self.helpers),
+        )
 
     @property
     def is_join(self) -> bool:
@@ -205,10 +221,7 @@ class WorkflowRunPlan:
     @property
     def writable(self) -> bool:
         """True when any solid step or attached helper may edit."""
-        return any(
-            step.writable or any(helper.writable for helper in step.helpers)
-            for step in self.steps
-        )
+        return any(step.mutation_capable for step in self.steps)
 
     @property
     def agent_ids(self) -> tuple[str, ...]:

@@ -6,7 +6,7 @@ from typing import Any
 
 from PySide6.QtCore import QObject, Signal
 
-from aura.agents.telemetry import delegation_usage_signal
+from aura.agents.telemetry import delegation_usage_signals
 from aura.bridge.execution_event_ledger import EventRelayExecutionLedger
 from aura.bridge.execution_event_terminal_tracking import EventRelayTerminalTracker
 from aura.client import (
@@ -202,8 +202,7 @@ class ExecutionEventRelay(QObject):
         elif isinstance(ev, WorkspaceReconcileRequested):
             self.workspaceReconcileRequested.emit(tool_call_id, ev.tool_call_id)
         elif isinstance(ev, ToolResult):
-            child_usage = delegation_usage_signal(ev.extras)
-            if child_usage is not None:
+            for child_usage in delegation_usage_signals(ev.extras):
                 provider, model, prompt, completion, hit, miss = child_usage
                 self.delegationUsage.emit(
                     ev.tool_call_id,
