@@ -34,7 +34,7 @@ class SetupDialog(QDialog):
         label = QLabel(
             f"{APP_NAME} needs at least one AI provider configured before the production agent can run.\n\n"
             "Configure an AI provider in Settings → API Keys. Supported providers include\n"
-            "DeepSeek, OpenAI, Anthropic, Gemini, OpenRouter, Claude Code, and Codex.\n\n"
+            "DeepSeek, OpenAI, Anthropic, Gemini, and OpenRouter.\n\n"
             "You can still browse your project folder and explore the app without configuring AI."
         )
         label.setWordWrap(True)

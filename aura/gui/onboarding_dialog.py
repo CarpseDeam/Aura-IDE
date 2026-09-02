@@ -363,7 +363,7 @@ class OnboardingDialog(QDialog):
         body = self._make_body(
             f"{APP_NAME} needs an AI provider to run production tasks.\n\n"
             "Configure a provider key in Settings → API Keys. Supported providers include "
-            "DeepSeek, OpenAI, Anthropic, Gemini, OpenRouter, Claude Code, and Codex.\n\n"
+            "DeepSeek, OpenAI, Anthropic, Gemini, and OpenRouter.\n\n"
             "You can still browse your project folder and explore the app without configuring AI."
         )
         layout.addWidget(body)

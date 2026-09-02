@@ -51,6 +51,23 @@ class ProviderRegistry:
         return dict(self._providers)
 
     def create_client(self, provider_id: str) -> DeepSeekClient | GoogleCloudClient:
+        """Build the API client for *provider_id*.
+
+        Only ``api_key`` providers have an API client.  An unregistered id, or
+        a provider of any other kind, raises instead of falling through to the
+        DeepSeek client — a wrong-provider client would otherwise send the
+        turn to DeepSeek under another provider's name.
+        """
+        if provider_id not in self._providers:
+            raise ValueError(f"Unknown provider {provider_id!r}: no client can be created.")
+
+        spec = self._providers[provider_id]
+        if spec.kind != "api_key":
+            raise ValueError(
+                f"{spec.label} ({provider_id}) is a {spec.kind!r} provider and has no "
+                f"API client. Select an API-key provider in Settings -> Provider Setup."
+            )
+
         if provider_id == "google_cloud":
             from aura.providers.google_cloud.client import GoogleCloudClient
             from aura.providers.google_cloud.config import (

@@ -44,6 +44,23 @@ _WEB_DEFAULT_VARIANTS = frozenset({
 DEFAULT_PROVIDER: ProviderId = "deepseek"
 DEFAULT_SANDBOX_MODE: str = "host"
 
+#: Providers that were once selectable and are no longer registered. A saved
+#: selection naming one of these migrates to ``DEFAULT_PROVIDER``.
+REMOVED_PROVIDERS: frozenset[str] = frozenset({
+    "google_ai",
+    "vertex_ai",
+    "aura",
+    "claude_code",
+    "codex",
+})
+
+#: Model ids that only ever existed on a removed provider. They are refused on
+#: their own so a migrated provider can never be paired with a stale model id.
+REMOVED_PROVIDER_MODELS: frozenset[str] = frozenset({
+    "claude-code",
+    "codex",
+})
+
 
 def resolve_production_default_model(provider_id: ProviderId | None) -> str:
     """Return the configured default model for Aura's production provider."""
@@ -116,10 +133,13 @@ class AppSettings:
         raw_vertical = data.get("playground_vertical_splitter_sizes")
         if isinstance(raw_vertical, list) and len(raw_vertical) == 2 and sum(raw_vertical) > 0 and all(isinstance(v, int) and v >= 40 for v in raw_vertical):
             s.playground_vertical_splitter_sizes = raw_vertical
-        # Provider
-        s.provider = _provider_from_data(data, "provider", s.provider)
-        # Models
-        s.default_model = _model_from_data(data, "default_model", s.provider)
+        # Provider and model resolve as one unit, so a removed provider never
+        # leaves its retired model id attached to the replacement provider.
+        s.provider, s.default_model = migrate_provider_and_model(
+            data.get("provider"),
+            data.get("default_model"),
+            fallback_provider=s.provider,
+        )
         thinking = normalize_thinking_mode(data.get("default_thinking"))
         if thinking is not None:
             s.default_thinking = thinking
@@ -180,9 +200,7 @@ def _valid_provider(raw: Any) -> ProviderId | None:
     """Return *raw* as a ProviderId when it names a currently registered provider."""
     if not isinstance(raw, str) or not raw:
         return None
-    if raw in ("google_ai", "vertex_ai"):  # removed providers
-        return None
-    if raw == "aura":  # removed Aura Credits provider
+    if raw in REMOVED_PROVIDERS:
         return None
     if provider_registry.has(raw):
         return cast(ProviderId, raw)
@@ -198,57 +216,79 @@ def _valid_model(raw: Any, provider: ProviderId) -> str | None:
     return raw if raw in provider_registry.get(provider).models else None
 
 
-def _provider_from_data(
-    data: dict[str, Any], key: str, current: ProviderId
-) -> ProviderId:
-    raw = data.get(key)
-    if not isinstance(raw, str):
-        return current
-    # Auto-migrate removed Google providers to DeepSeek.
-    if raw in ("google_ai", "vertex_ai", "aura"):
-        logger.warning(
-            "Migrating removed provider %s (%r) -> %s",
-            key,
-            raw,
-            DEFAULT_PROVIDER,
-        )
-        return DEFAULT_PROVIDER
+def _migrated_provider(raw: str) -> tuple[ProviderId, bool]:
+    """Resolve a persisted provider id. Returns ``(provider, migrated)``."""
+    if raw in REMOVED_PROVIDERS:
+        logger.warning("Migrating removed provider %r -> %s", raw, DEFAULT_PROVIDER)
+        return DEFAULT_PROVIDER, True
     if provider_registry.has(raw):
-        return cast(ProviderId, raw)
+        return cast(ProviderId, raw), False
 
     logger.warning(
-        "Invalid provider value for %s: %r; falling back to %s",
-        key,
-        raw,
-        DEFAULT_PROVIDER,
+        "Invalid provider value %r; falling back to %s", raw, DEFAULT_PROVIDER
     )
-    return DEFAULT_PROVIDER
+    return DEFAULT_PROVIDER, True
 
 
-def _model_from_data(data: dict[str, Any], key: str, provider: ProviderId) -> str:
-    provider_cfg = provider_registry.get(provider)
-    raw = data.get(key)
-    if isinstance(raw, str) and raw in provider_cfg.models:
-        return raw
+def _migrated_model(raw: Any, provider: ProviderId, *, strict: bool) -> str:
+    default_model = resolve_production_default_model(provider)
 
-    if isinstance(raw, str):
+    if isinstance(raw, str) and raw in REMOVED_PROVIDER_MODELS:
         logger.warning(
-            "Invalid model value for %s: %r is not available for provider %s; "
+            "Migrating removed provider model %r -> %s", raw, default_model
+        )
+        return default_model
+
+    if isinstance(raw, str) and raw:
+        if not strict or raw in provider_registry.get(provider).models:
+            return raw
+        logger.warning(
+            "Invalid model value: %r is not available for provider %s; "
             "falling back to %s",
-            key,
             raw,
             provider,
-            provider_cfg.default_model,
+            default_model,
         )
-    elif key in data:
+    elif raw is not None:
         logger.warning(
-            "Invalid model value for %s: %r; falling back to %s",
-            key,
-            raw,
-            provider_cfg.default_model,
+            "Invalid model value: %r; falling back to %s", raw, default_model
         )
 
-    return provider_cfg.default_model
+    return default_model
+
+
+def migrate_provider_and_model(
+    provider_raw: Any,
+    model_raw: Any,
+    *,
+    fallback_provider: ProviderId = DEFAULT_PROVIDER,
+    strict_model: bool = True,
+) -> tuple[ProviderId, str]:
+    """Resolve a persisted provider/model pair, migrating stale values together.
+
+    Provider and model always move as one unit.  When the saved provider is no
+    longer registered — the removed ``claude_code`` and ``codex`` CLI entries
+    included — the saved model belonged to that retired provider, so it is
+    discarded along with it and the replacement provider's own default model is
+    used.  A retired model id is refused on its own as well, so a pairing such
+    as DeepSeek + ``claude-code`` can never be produced.
+
+    ``strict_model`` controls the surviving-provider case.  Settings validate
+    the model against the provider catalog (``True``).  Persisted conversations
+    keep whatever model id they actually ran with (``False``), because the
+    dynamic catalog is not authoritative for history.
+    """
+    if not isinstance(provider_raw, str) or not provider_raw:
+        # No saved provider: keep the caller's current one and judge the model
+        # against it.
+        return fallback_provider, _migrated_model(
+            model_raw, fallback_provider, strict=strict_model
+        )
+
+    provider, migrated = _migrated_provider(provider_raw)
+    if migrated:
+        return provider, resolve_production_default_model(provider)
+    return provider, _migrated_model(model_raw, provider, strict=strict_model)
 
 
 def settings_path() -> Path:

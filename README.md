@@ -129,7 +129,7 @@ These figures are supporting evidence for sustained harness-driven development�
 - **Reviewable diffs** — proposed file writes can be inspected and approved before they reach disk.
 - **Project-aware validation** — Aura detects project tooling, selects focused checks for changed files, and reports results without hiding failures.
 - **Inspectable receipts** — completed runs retain tool, file, validation, cost, and outcome information as an audit record; receipt status does not drive internal item state.
-- **Provider flexibility** — choose any supported BYOK or CLI provider for production work.
+- **Provider flexibility** — choose any supported BYOK provider for production work.
 - **Local-first control** — the desktop owns the real workspace, execution, keys, and approval surface.
 
 ### The harness effect
@@ -165,7 +165,7 @@ Enable Companion on the desktop, pair from the phone browser, and connect throug
 
 ## Providers
 
-Aura works with user-configured AI providers. Connect directly to **DeepSeek**, **OpenAI**, **Anthropic**, **Gemini**, **OpenRouter**, **Claude Code**, or **Codex**. Your key, your provider billing, and your choice of models remain under your control. Keys can be supplied through Settings or environment variables.
+Aura works with user-configured AI providers. Connect directly to **DeepSeek**, **OpenAI**, **Anthropic**, **Gemini**, or **OpenRouter**. Your key, your provider billing, and your choice of models remain under your control. Keys can be supplied through Settings or environment variables.
 
 See [Providers](docs/providers.md) for supported backends and configuration details.
 

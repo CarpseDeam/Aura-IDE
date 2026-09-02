@@ -18,22 +18,11 @@ On first launch and periodically thereafter, Aura fetches the latest model lists
 
 For DeepSeek and Google Cloud, models are hardcoded in the catalog and supplemented by dynamic fetching. OpenRouter model pricing is fetched in real-time when available.
 
-## CLI Agent Backends
-
-Aura supports three CLI-based agent backends as alternative execution layers. These use the tool's own OAuth flow, so you don't need to manage API keys through Aura.
-
-| Backend      | Provider ID    | CLI Command   | Auth                        |
-|--------------|----------------|---------------|-----------------------------|
-| Claude Code  | claude_code    | `claude`      | OAuth via Anthropic         |
-| Codex CLI    | codex          | `codex`       | OAuth via OpenAI            |
-| Antigravity  | antigravity    | `antigravity` | OAuth via Antigravity       |
-
-CLI providers can be selected as the production provider. Their own OAuth flow
-replaces API-key configuration in Aura.
-
 ## Plugable Backend Architecture
 
-Aura's `AgentBackend` abstract class defines the streaming interface. The `APIAgentBackend` handles REST API providers through the provider registry. CLI backends wrap subprocess calls to external tools. Custom backends can be implemented by subclassing `AgentBackend`.
+Aura's `AgentBackend` abstract class defines the streaming interface. The `APIAgentBackend` handles REST API providers through the provider registry. Custom backends can be implemented by subclassing `AgentBackend`.
+
+Every provider Aura currently registers is API-key based. `ProviderRegistry.create_client()` builds a client only for providers whose kind is `api_key`; any other kind raises rather than falling back to another provider's client.
 
 ## MCP Tool Integration
 

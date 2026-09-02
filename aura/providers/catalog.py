@@ -343,42 +343,6 @@ PROVIDER_CATALOG: dict[str, dict] = {
         "pricing": GOOGLE_CLOUD_PRICING,
         "kind": "api_key",
     },
-    "claude_code": {
-        "label": "Claude Code",
-        "base_url": "",
-        "env_key": "",
-        "default_model": "claude-code",
-        "default_thinking": "off",
-        "models": {
-            "claude-code": ModelInfo(
-                id="claude-code",
-                label="Claude Code Agent",
-                input_per_m_usd=0.0,
-                output_per_m_usd=0.0,
-                cache_hit_per_m_usd=0.0,
-            )
-        },
-        "pricing": {},
-        "kind": "external_cli",
-    },
-    "codex": {
-        "label": "Codex",
-        "base_url": "",
-        "env_key": "",
-        "default_model": "codex",
-        "default_thinking": "off",
-        "models": {
-            "codex": ModelInfo(
-                id="codex",
-                label="Codex Agent",
-                input_per_m_usd=0.0,
-                output_per_m_usd=0.0,
-                cache_hit_per_m_usd=0.0,
-            )
-        },
-        "pricing": {},
-        "kind": "external_cli",
-    },
 }
 
 # Default model / thinking constants

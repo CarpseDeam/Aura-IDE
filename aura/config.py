@@ -57,16 +57,21 @@ def provider_needs_api_key(provider_id: str) -> bool:
     return get_provider_kind(provider_id) == "api_key"
 
 
+#: Bare executable name for each registered ``external_cli`` provider. No
+#: provider is currently of that kind, so this is the extension seam an
+#: external CLI backend would register itself in.
+_EXTERNAL_CLI_EXECUTABLES: dict[str, str] = {}
+
+
 def is_external_cli_available(provider_id: str) -> bool:
     """Check whether an external_cli provider's executable is on PATH."""
     if get_provider_kind(provider_id) != "external_cli":
         return False
-    if provider_id == "claude_code":
-        exe = "claude.exe" if os.name == "nt" else "claude"
-    elif provider_id == "codex":
-        exe = "codex.exe" if os.name == "nt" else "codex"
-    else:
+    exe = _EXTERNAL_CLI_EXECUTABLES.get(provider_id)
+    if exe is None:
         return False
+    if os.name == "nt":
+        exe = f"{exe}.exe"
     return shutil.which(exe) is not None
 
 

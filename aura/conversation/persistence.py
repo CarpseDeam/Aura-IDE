@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Any
 
 from aura.config import (
-    DEFAULT_MODEL,
     DEFAULT_THINKING,
     ProviderId,
     ThinkingMode,
@@ -30,7 +29,7 @@ from aura.conversation.telemetry import ConversationTelemetry
 from aura.git_ops import ensure_aura_gitignored
 from aura.paths import safe_is_relative_to
 from aura.providers.base import normalize_thinking_mode
-from aura.providers.registry import provider_registry
+from aura.settings import migrate_provider_and_model
 
 SCHEMA_VERSION = 3
 CONVERSATIONS_SUBDIR = ".aura/conversations"
@@ -165,17 +164,23 @@ def load_conversation(path: Path) -> LoadedConversation:
     else:
         chat_items = legacy_chat_items_from_messages(history.messages)
 
-    # Any string is now valid as a model ID — no hardcoded valid_models list.
     # Legacy records containing "auto" are loaded as High; explicit modes are
     # kept unchanged.
-    model = data.get("model") if isinstance(data.get("model"), str) else DEFAULT_MODEL
     thinking = normalize_thinking_mode(data.get("thinking")) or DEFAULT_THINKING
 
-    # Provider: default to "deepseek" for backward compat with v1/v2 files.
-    provider_raw = data.get("provider")
-    provider: ProviderId = "deepseek"
-    if isinstance(provider_raw, str) and provider_registry.has(provider_raw):
-        provider = provider_raw  # type: ignore[assignment]
+    # Provider and model migrate as one unit, the same way saved settings do:
+    # a record written against a removed provider is restored on
+    # DEFAULT_PROVIDER with that provider's own default model, never with the
+    # retired model id still attached. ``strict_model=False`` keeps the
+    # permissive rule for surviving providers — any string is a valid model ID
+    # here, because a conversation must reload with the model it actually ran
+    # on even when the dynamic catalog no longer lists it. Files with no
+    # provider field (v1/v2) default to DeepSeek.
+    provider, model = migrate_provider_and_model(
+        data.get("provider"),
+        data.get("model"),
+        strict_model=False,
+    )
 
     return LoadedConversation(
         history=history,
