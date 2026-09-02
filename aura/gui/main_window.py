@@ -569,6 +569,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     def _on_open_update(self) -> None:
         dlg = UpdateDialog(self)
         dlg.exec()
+        if dlg.exit_after_install:
+            self.close()
 
     def _open_logs_folder(self) -> None:
         from aura.startup_logging import logs_dir

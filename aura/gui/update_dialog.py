@@ -69,6 +69,8 @@ class UpdateDialog(QDialog):
         self._thread: QThread | None = None
         self._worker: UpdateWorker | None = None
         self._last_status: UpdateStatus | None = None
+        self._exit_after_install = False
+        self._exit_after_install_pending = False
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(20, 18, 20, 14)
@@ -198,6 +200,7 @@ class UpdateDialog(QDialog):
     def _clear_worker(self) -> None:
         self._thread = None
         self._worker = None
+        self._finish_installer_handoff_if_ready()
 
     def _set_busy(self, busy: bool) -> None:
         self._check_btn.setEnabled(not busy)
@@ -256,7 +259,7 @@ class UpdateDialog(QDialog):
         if result.success:
             if is_packaged():
                 self._summary.setText("Installer launched. Aura will now exit to complete the update.")
-                self._request_app_quit()
+                self._request_app_close()
             else:
                 old_commit = _short(result.old_commit)
                 new_commit = _short(result.new_commit)
@@ -312,11 +315,21 @@ class UpdateDialog(QDialog):
         message_box.exec()
         return message_box.clickedButton() == open_button
 
-    def _request_app_quit(self) -> None:
-        from PySide6.QtCore import QTimer
-        from PySide6.QtWidgets import QApplication
+    @property
+    def exit_after_install(self) -> bool:
+        """Whether a successfully launched installer requires Aura to close."""
+        return self._exit_after_install
 
-        QTimer.singleShot(2000, QApplication.quit)
+    def _request_app_close(self) -> None:
+        self._exit_after_install = True
+        self._exit_after_install_pending = True
+        self._finish_installer_handoff_if_ready()
+
+    def _finish_installer_handoff_if_ready(self) -> None:
+        if not self._exit_after_install_pending or self._thread is not None:
+            return
+        self._exit_after_install_pending = False
+        self.accept()
 
     def _state_text(self, status: UpdateStatus) -> str:
         if status.state == "up_to_date":
