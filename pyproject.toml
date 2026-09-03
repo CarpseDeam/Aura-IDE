@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aura"
-version = "2.2.02"
+version = "2.3.00"
 description = "Aura — a local-first desktop coding harness for hosted and OpenAI-compatible local models."
 requires-python = ">=3.10"
 dependencies = [
