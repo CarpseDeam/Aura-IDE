@@ -177,8 +177,7 @@ def _looks_like_command(command: str) -> bool:
     first = _clean_token(tokens[0]).lower().replace("\\", "/").rsplit("/", 1)[-1]
     if first.endswith(".exe"):
         first = first[:-4]
-    is_godot = bool(re.match(r"^godot(?:4|[-_.].*)?$", first))
-    return first in _KNOWN_COMMANDS or is_godot
+    return first in _KNOWN_COMMANDS
 
 
 def _split_tokens(command: str) -> list[str]:

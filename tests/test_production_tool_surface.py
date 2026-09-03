@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 
-from aura.conversation.tools.capability_groups import GODOT, tool_names_for
 from aura.conversation.tools.catalog import ToolCatalog
 from aura.conversation.tools.registry import ToolRegistry
 
@@ -29,8 +28,6 @@ EXPECTED_PRODUCTION_TOOLS: frozenset[str] = frozenset({
     "shell",
     "update_task_checklist",
 })
-
-GODOT_TOOL_NAMES = tool_names_for({GODOT})
 
 #: Redundant/removed surface: reachable through a tool that stayed (mostly
 #: ``shell``), superseded, or unrelated to normal implementation. Handlers
@@ -104,8 +101,6 @@ RETIRED_WORKFLOW_PHRASES: tuple[str, ...] = (
     "use search_codebase",
     "use read_file to verify",
     "inspect before and after",
-    "inspect the preview afterward",
-    "before live scene edits",
 )
 
 
@@ -135,14 +130,6 @@ def test_the_live_registry_exposes_that_same_set(tmp_path) -> None:
     registry = ToolRegistry(workspace_root=tmp_path)
 
     assert set(_names(registry.tool_defs())) == EXPECTED_PRODUCTION_TOOLS
-
-
-def test_regular_catalog_modes_expose_no_godot_capability_tools() -> None:
-    for read_only in (False, True):
-        names = set(
-            _names(ToolCatalog().build_tool_defs(read_only=read_only))
-        )
-        assert not names & GODOT_TOOL_NAMES
 
 
 def test_withheld_observations_are_absent_from_the_exposed_catalog(tmp_path) -> None:

@@ -40,9 +40,6 @@ DIAGNOSTIC_RETURN_CAP = 20
 _ADAPTER_PROVENANCE: dict[str, str] = {
     "python": "aura_parser",
     "text": "lexical_heuristic",
-    "godot_project": "aura_godot_adapter",
-    "godot_resource": "aura_godot_adapter",
-    "gdscript": "aura_godot_adapter",
 }
 
 

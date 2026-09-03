@@ -51,7 +51,7 @@ PROVIDER_RULES = """### provider_rules
 - Do not hardcode pricing or model lists unless explicitly required."""
 
 WINDOWS_COMPUTER_USE_CONTEXT = """### Windows Computer Use
-Structured Windows UI Automation tools are available for GUI-only workflows. Prefer file, terminal, Git, and Godot tools when they can perform the task deterministically. Treat successful tool results as the only evidence that a UI action occurred."""
+Structured Windows UI Automation tools are available for GUI-only workflows. Prefer file, terminal, and Git tools when they can perform the task deterministically. Treat successful tool results as the only evidence that a UI action occurred."""
 
 BUILD_PIPELINE_RULES = """### build_pipeline_rules
 - Do not break the Nuitka or installer flow.

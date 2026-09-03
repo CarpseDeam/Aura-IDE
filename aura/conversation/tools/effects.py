@@ -70,11 +70,6 @@ DEFAULT_EXTENSIBLE_TOOL_EFFECT: ToolEffect = ToolEffect.COMMAND
 #: enumeration test fails if a built-in exposed by ``ToolCatalog`` is missing.
 BUILTIN_TOOL_EFFECTS: dict[str, ToolEffect] = {
     # --- observation: read-only inspection, no state change ---
-    "inspect_godot_assets": ToolEffect.OBSERVATION,
-    "inspect_godot_asset_preview": ToolEffect.OBSERVATION,
-    "capture_godot_asset_preview": ToolEffect.OBSERVATION,
-    "inspect_godot_api": ToolEffect.OBSERVATION,
-    "inspect_godot_editor": ToolEffect.OBSERVATION,
     "read_file": ToolEffect.OBSERVATION,
     "read_file_range": ToolEffect.OBSERVATION,
     "read_file_outline": ToolEffect.OBSERVATION,
@@ -103,13 +98,9 @@ BUILTIN_TOOL_EFFECTS: dict[str, ToolEffect] = {
     "search_project_memory": ToolEffect.OBSERVATION,
     "load_skills": ToolEffect.OBSERVATION,
     "read_skill_resource": ToolEffect.OBSERVATION,
-    # --- mutation: changes workspace files or the open scene ---
+    # --- mutation: changes workspace files ---
     "apply_patch": ToolEffect.MUTATION,
     "apply_agent_change_set": ToolEffect.MUTATION,
-    "edit_godot_scene": ToolEffect.MUTATION,
-    "edit_godot_editor": ToolEffect.MUTATION,
-    "edit_godot_asset_preview": ToolEffect.MUTATION,
-    "install_godot_editor_bridge": ToolEffect.MUTATION,
     # --- command/validation: runs an external command or validation ---
     "shell": ToolEffect.COMMAND,
     "run_diagnostic_command": ToolEffect.COMMAND,

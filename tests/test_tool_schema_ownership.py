@@ -12,11 +12,6 @@ def _names(defs: list[dict]) -> list[str]:
 
 def test_aggregate_schema_order_matches_the_existing_model_surface() -> None:
     assert _names(READ_TOOL_DEFS) == [
-        "inspect_godot_assets",
-        "inspect_godot_asset_preview",
-        "capture_godot_asset_preview",
-        "inspect_godot_api",
-        "inspect_godot_editor",
         "read_file",
         "read_task_context",
         "list_directory",
@@ -32,10 +27,6 @@ def test_aggregate_schema_order_matches_the_existing_model_surface() -> None:
         "code_intel_audit",
     ]
     assert _names(WRITE_TOOL_DEFS) == [
-        "install_godot_editor_bridge",
-        "edit_godot_editor",
-        "edit_godot_asset_preview",
-        "edit_godot_scene",
         "apply_patch",
     ]
     assert _names(GIT_TOOL_DEFS) == [

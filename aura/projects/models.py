@@ -15,7 +15,6 @@ class ProjectSpace:
     last_thread_id: str | None = None
     pinned: bool = False
     archived: bool = False
-    godot_executable: str = ""
 
     def __post_init__(self) -> None:
         if not isinstance(self.root_path, Path):
@@ -31,7 +30,6 @@ class ProjectSpace:
             "last_thread_id": self.last_thread_id,
             "pinned": self.pinned,
             "archived": self.archived,
-            "godot_executable": self.godot_executable,
         }
 
     @classmethod
@@ -45,7 +43,6 @@ class ProjectSpace:
             last_thread_id=data.get("last_thread_id"),
             pinned=bool(data.get("pinned", False)),
             archived=bool(data.get("archived", False)),
-            godot_executable=str(data.get("godot_executable") or ""),
         )
 
 

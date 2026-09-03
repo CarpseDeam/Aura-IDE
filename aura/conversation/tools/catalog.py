@@ -6,7 +6,6 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from aura.agents.local_state import AgentPermission
-from aura.conversation.tools.capability_groups import GODOT, tool_names_for
 from aura.conversation.tools.effects import BUILTIN_TOOL_EFFECTS, ToolEffect
 from aura.conversation.tools.schemas import (
     AGENT_CHANGE_SET_TOOL_DEFS,
@@ -22,10 +21,6 @@ from aura.conversation.tools.schemas import (
     build_run_workflow_tool_def,
     build_workflow_helper_tool_def,
 )
-
-# Godot remains implemented and registered, but is not part of the ordinary
-# model-facing catalogs.
-GODOT_TOOL_NAMES: frozenset[str] = tool_names_for({GODOT})
 
 #: The single production read tool. Line windows via offset/limit already
 #: cover the rest of what a bulk-read wrapper would add.
@@ -44,13 +39,7 @@ READ_ONLY_EXTRA_TOOL_NAMES: frozenset[str] = frozenset({"glob"})
 #: The production mutation tool — the one edit tool the model acts through.
 #: Used by the effect-model tests to prove every mutation tool is explicitly
 #: classified.
-MUTATION_TOOL_NAMES: frozenset[str] = frozenset({
-    "apply_patch",
-    "edit_godot_scene",
-    "edit_godot_editor",
-    "edit_godot_asset_preview",
-    "install_godot_editor_bridge",
-})
+MUTATION_TOOL_NAMES: frozenset[str] = frozenset({"apply_patch"})
 
 
 def _tool_name(tool_def: dict[str, Any]) -> str:

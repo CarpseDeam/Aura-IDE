@@ -293,7 +293,6 @@ def test_read_only_catalog_exposes_only_observation_capabilities(tmp_path) -> No
     assert "read_file" in names
     assert "grep_search" in names
     assert "apply_patch" not in names
-    assert "edit_godot_scene" not in names
 
     for name in names:
         assert BUILTIN_TOOL_EFFECTS.get(name) in (

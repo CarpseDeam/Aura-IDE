@@ -16,10 +16,6 @@ from aura.conversation.tools._agents_mixin import AgentDelegationHandlersMixin
 from aura.conversation.tools._code_intel_mixin import CodeIntelHandlersMixin
 from aura.conversation.tools._diagnostic_mixin import DiagnosticHandlersMixin
 from aura.conversation.tools._git_mixin import GitHandlersMixin
-from aura.conversation.tools._godot_asset_preview_mixin import GodotAssetPreviewHandlersMixin
-from aura.conversation.tools._godot_assets_mixin import GodotAssetHandlersMixin
-from aura.conversation.tools._godot_editor_mixin import GodotEditorHandlersMixin
-from aura.conversation.tools._godot_scene_mixin import GodotSceneHandlersMixin
 from aura.conversation.tools._memory_mixin import MemoryHandlersMixin
 from aura.conversation.tools._plan_review_mixin import PlanReviewHandlersMixin
 from aura.conversation.tools._read_mixin import ReadHandlersMixin
@@ -60,10 +56,6 @@ class ToolRegistry(
     ReadHandlersMixin,
     SearchHandlersMixin,
     GitHandlersMixin,
-    GodotAssetHandlersMixin,
-    GodotAssetPreviewHandlersMixin,
-    GodotEditorHandlersMixin,
-    GodotSceneHandlersMixin,
     WriteHandlersMixin,
     TaskChecklistHandlersMixin,
     MemoryHandlersMixin,
@@ -610,15 +602,6 @@ TOOL_HANDLERS["git_branch_list"] = ToolRegistry._handle_git_branch_list
 TOOL_HANDLERS["git_stash_list"] = ToolRegistry._handle_git_stash_list
 TOOL_HANDLERS["git_stash_show"] = ToolRegistry._handle_git_stash_show
 TOOL_HANDLERS["apply_patch"] = ToolRegistry._handle_apply_patch
-TOOL_HANDLERS["edit_godot_scene"] = ToolRegistry._handle_edit_godot_scene
-TOOL_HANDLERS["inspect_godot_assets"] = ToolRegistry._handle_inspect_godot_assets
-TOOL_HANDLERS["inspect_godot_asset_preview"] = ToolRegistry._handle_inspect_godot_asset_preview
-TOOL_HANDLERS["capture_godot_asset_preview"] = ToolRegistry._handle_capture_godot_asset_preview
-TOOL_HANDLERS["inspect_godot_editor"] = ToolRegistry._handle_inspect_godot_editor
-TOOL_HANDLERS["inspect_godot_api"] = ToolRegistry._handle_inspect_godot_api
-TOOL_HANDLERS["edit_godot_editor"] = ToolRegistry._handle_edit_godot_editor
-TOOL_HANDLERS["edit_godot_asset_preview"] = ToolRegistry._handle_edit_godot_asset_preview
-TOOL_HANDLERS["install_godot_editor_bridge"] = ToolRegistry._handle_install_godot_editor_bridge
 TOOL_HANDLERS["update_task_checklist"] = ToolRegistry._handle_update_task_checklist
 
 TOOL_HANDLERS["search_project_memory"] = ToolRegistry._handle_search_project_memory

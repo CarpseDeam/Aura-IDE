@@ -10,9 +10,9 @@ This object is the single owner of that authority. It holds the turn's
 allowlist, resolves a raw path argument to a canonical target, decides
 file-versus-directory containment, rejects traversal and symlink/junction
 escapes, clears itself at every lifecycle boundary, and reports safe display
-metadata. It is never passed to write, terminal, MCP, dynamic-tool, Godot
-mutation, or Git handlers: its only consumers are the read and search
-handlers, and everything it authorizes is read-only.
+metadata. It is never passed to write, terminal, MCP, dynamic-tool, or Git
+handlers: its only consumers are the read and search handlers, and
+everything it authorizes is read-only.
 """
 from __future__ import annotations
 

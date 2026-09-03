@@ -600,8 +600,7 @@ def test_read_only_never_receives_mutation_tools_or_an_aura_web_search_function(
     names = set(_function_tool_names(requests[0]))
     assert names.isdisjoint({
         "apply_patch", "shell", "update_task_checklist", "write_file",
-        "delete_file", "edit_godot_scene", "install_godot_editor_bridge",
-        "web_search",
+        "delete_file", "web_search",
     })
     # Hosted search is a provider server tool, never an Aura client function.
     assert "web_search" not in names

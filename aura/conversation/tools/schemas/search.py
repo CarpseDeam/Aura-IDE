@@ -91,7 +91,7 @@ SEARCH_TOOL_DEFS: list[dict[str, Any]] = [
                                     "type": "string",
                                     "description": (
                                         "Optional glob pattern to restrict which files to search "
-                                        "(e.g. '**/*.gd' to only search GDScript files)."
+                                        "(e.g. '**/*.py' to only search Python files)."
                                     ),
                                 },
                                 "max_results": {

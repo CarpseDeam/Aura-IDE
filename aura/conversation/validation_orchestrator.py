@@ -441,34 +441,7 @@ def looks_like_validation_command(command: str) -> bool:
         r"(^|[;&|]\s*)cargo\s+(?:test|build)\b",
         r"(^|[;&|]\s*)go\s+test\b",
     )
-    if any(re.search(pattern, normalized) for pattern in patterns):
-        return True
-
-    tokens = [_clean_token(token) for token in _split_tokens(command)]
-    if not tokens:
-        return False
-    executable = tokens[0].lower().replace("\\", "/").rsplit("/", 1)[-1]
-    if executable.endswith(".exe"):
-        executable = executable[:-4]
-    if not re.match(r"^godot(?:4|[-_.].*)?$", executable):
-        return False
-    flags = {token.lower() for token in tokens[1:] if token.startswith("-")}
-    validation_flags = {
-        "--check-only",
-        "--import",
-        "--script",
-        "--scene",
-        "--export-release",
-        "--export-debug",
-        "--export-pack",
-        "--build-solutions",
-        "--test",
-    }
-    return bool(
-        flags & validation_flags
-        or any(flag.startswith("--validat") for flag in flags)
-        or {"--headless", "--path"}.issubset(flags)
-    )
+    return any(re.search(pattern, normalized) for pattern in patterns)
 
 
 def classify_terminal_run(

@@ -656,7 +656,7 @@ class TestConnectedOnlyContext:
         assert WINDOWS_COMPUTER_USE_CONTEXT == (
             "### Windows Computer Use\n"
             "Structured Windows UI Automation tools are available for GUI-only "
-            "workflows. Prefer file, terminal, Git, and Godot tools when they "
+            "workflows. Prefer file, terminal, and Git tools when they "
             "can perform the task deterministically. Treat successful tool "
             "results as the only evidence that a UI action occurred."
         )

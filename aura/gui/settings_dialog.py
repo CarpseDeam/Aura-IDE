@@ -160,7 +160,6 @@ class SettingsDialog(QDialog):
         new_settings = self.result_settings()
         save_settings(new_settings)
         self._models_page.commit_changes()
-        self._sandbox_page.apply_project_settings()
         self._settings = new_settings
         if self._on_live_settings_applied is not None:
             self._on_live_settings_applied(new_settings)
@@ -171,6 +170,5 @@ class SettingsDialog(QDialog):
         new_settings = self.result_settings()
         save_settings(new_settings)
         self._models_page.commit_changes()
-        self._sandbox_page.apply_project_settings()
         self._settings = new_settings
         super().accept()

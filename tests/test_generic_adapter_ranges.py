@@ -5,14 +5,12 @@ capture node (not just the ``name`` identifier) so that ``SymbolInfo`` gets a
 truthful end range whenever the bundled grammar's tags query actually
 supplies one.
 
-Not every bundled grammar's tags query exposes a definition node — e.g. the
-``gdscript`` tags query bundled with this environment has no
-``definition.*`` capture at all, so it cannot prove this behavior. The
-``gdshader`` grammar's tags query does wrap the full ``function_definition``/
-``struct_definition`` node, so it is used here instead. Both grammars are
-pre-warmed on disk under ``grammars/`` for this dev environment already —
-this test does not download anything, and skips (rather than fakes a
-result) if that grammar isn't available.
+Not every bundled grammar's tags query exposes a definition node. The
+``java`` grammar's tags query wraps the full ``class_declaration``/
+``method_declaration`` node, so it is used here. The grammar is fetched by
+the packaging pre-warm step into ``grammars/`` — this test does not download
+anything, and skips (rather than fakes a result) if that grammar isn't
+available.
 """
 
 from __future__ import annotations
@@ -25,7 +23,7 @@ pytestmark = pytest.mark.filterwarnings("ignore")
 
 
 def _make_adapter() -> GenericSymbolAdapter | None:
-    adapter = GenericSymbolAdapter("gdshader", (".gdshader",))
+    adapter = GenericSymbolAdapter("java", (".java",))
     if not adapter._lazy_init():
         return None
     if adapter._tags_query is None:
@@ -33,44 +31,40 @@ def _make_adapter() -> GenericSymbolAdapter | None:
     return adapter
 
 
-def test_gdshader_definition_nodes_produce_exact_ranges() -> None:
+def test_java_definition_nodes_produce_exact_ranges() -> None:
     adapter = _make_adapter()
     if adapter is None:
         pytest.skip(
-            "gdshader tree-sitter grammar/tags query not available in this "
+            "java tree-sitter grammar/tags query not available in this "
             "environment; cannot prove definition-node range extraction "
             "without faking it"
         )
 
     source = (
-        "shader_type canvas_item;\n"
-        "\n"
-        "void fragment() {\n"
-        "    COLOR = vec4(1.0);\n"
+        "class Greeter {\n"
+        "    void greet() {\n"
+        "        int x = 1;\n"
+        "    }\n"
         "}\n"
-        "\n"
-        "struct Foo {\n"
-        "    int x;\n"
-        "};\n"
     )
 
-    symbols, _, diags = adapter.parse("shader.gdshader", source)
+    symbols, _, diags = adapter.parse("Greeter.java", source)
     assert not diags
 
-    fn = next((s for s in symbols if s.name == "fragment"), None)
-    assert fn is not None, [s.name for s in symbols]
-    assert fn.kind == "function"
-    # The definition node starts at "void fragment()" (line 3), not the
-    # bare identifier token further into the line.
-    assert fn.line == 3
-    assert fn.column == 0
-    assert fn.end_line == 5
-    assert fn.end_column == 1
+    cls = next((s for s in symbols if s.name == "Greeter"), None)
+    assert cls is not None, [s.name for s in symbols]
+    assert cls.kind == "class"
+    assert cls.line == 1
+    assert cls.column == 0
+    assert cls.end_line == 5
+    assert cls.end_column == 1
 
-    struct = next((s for s in symbols if s.name == "Foo"), None)
-    assert struct is not None, [s.name for s in symbols]
-    assert struct.kind == "class"
-    assert struct.line == 7
-    assert struct.column == 0
-    assert struct.end_line == 9
-    assert struct.end_column == 2
+    method = next((s for s in symbols if s.name == "greet"), None)
+    assert method is not None, [s.name for s in symbols]
+    assert method.kind == "method"
+    # The definition node starts at "void greet()" (line 2, column 4), not the
+    # bare identifier token further into the line.
+    assert method.line == 2
+    assert method.column == 4
+    assert method.end_line == 4
+    assert method.end_column == 5

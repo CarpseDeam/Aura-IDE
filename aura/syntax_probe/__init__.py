@@ -18,7 +18,6 @@ from aura.syntax_probe.rust_probe import RustSyntaxProbe  # noqa: F401 — trigg
 from aura.syntax_probe.shell_probe import ShellSyntaxProbe  # noqa: F401 — triggers self-registration
 from aura.syntax_probe.sql_probe import SQLSyntaxProbe  # noqa: F401 — triggers self-registration
 from aura.syntax_probe.toml_probe import TOMLSyntaxProbe  # noqa: F401 — triggers self-registration
-from aura.syntax_probe.gdscript_probe import GDScriptSyntaxProbe  # noqa: F401 — triggers self-registration
 from aura.syntax_probe.typescript_probe import TypeScriptSyntaxProbe  # noqa: F401 — triggers self-registration
 from aura.syntax_probe.yaml_probe import YAMLSyntaxProbe  # noqa: F401 — triggers self-registration
 
@@ -36,7 +35,6 @@ __all__ = [
     "TOMLSyntaxProbe",
     "YAMLSyntaxProbe",
     "GoSyntaxProbe",
-    "GDScriptSyntaxProbe",
     "HTMLSyntaxProbe",
     "JavaSyntaxProbe",
     "CSharpSyntaxProbe",

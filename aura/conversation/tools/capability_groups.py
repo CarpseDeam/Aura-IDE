@@ -28,7 +28,6 @@ INSPECT = "inspect"
 BULK_READ = "bulk_read"
 DIAGNOSTICS = "diagnostics"
 SNAPSHOT = "snapshot"
-GODOT = "godot"
 
 CAPABILITY_TOOLS: dict[str, frozenset[str]] = {
     CORE_READ: frozenset({"read_file", "glob"}),
@@ -70,17 +69,6 @@ CAPABILITY_TOOLS: dict[str, frozenset[str]] = {
     }),
     DIAGNOSTICS: frozenset({"run_diagnostic_command"}),
     SNAPSHOT: frozenset({"get_workspace_snapshot"}),
-    GODOT: frozenset({
-        "inspect_godot_assets",
-        "inspect_godot_asset_preview",
-        "capture_godot_asset_preview",
-        "inspect_godot_api",
-        "inspect_godot_editor",
-        "edit_godot_scene",
-        "edit_godot_editor",
-        "edit_godot_asset_preview",
-        "install_godot_editor_bridge",
-    }),
 }
 
 _TOOL_CAPABILITY: dict[str, str] = {

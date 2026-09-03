@@ -10,14 +10,6 @@ import fnmatch
 from pathlib import Path
 from typing import Any
 
-from aura.godot_toolchain import (
-    build_godot_check_command,
-    build_godot_import_command,
-    build_godot_resource_check_command,
-    find_godot_project_root,
-    resolve_godot_executable,
-)
-
 ValidationPlan = dict[str, Any]
 
 _KIND_LABELS: dict[str, str] = {
@@ -26,7 +18,6 @@ _KIND_LABELS: dict[str, str] = {
     "build": "build",
     "general_python": "general Python",
     "not_applicable": "skipped",
-    "godot": "Godot",
 }
 
 # Known source file to test file mappings (non-exhaustive, covers common
@@ -82,25 +73,10 @@ def select_validation_plan(
 
     # Extract changed .py files for focused compile commands.
     changed_py_files: list[str] = []
-    changed_gd_files: list[str] = []
-    changed_godot_resource_files: list[str] = []
-    changed_godot_project_files: list[str] = []
     if changed_files:
         changed_py_files = [
             p.replace("\\", "/") for p in changed_files
             if p.replace("\\", "/").endswith(".py")
-        ]
-        changed_gd_files = [
-            p.replace("\\", "/") for p in changed_files
-            if p.replace("\\", "/").lower().endswith(".gd")
-        ]
-        changed_godot_resource_files = [
-            p.replace("\\", "/") for p in changed_files
-            if Path(p.replace("\\", "/")).suffix.lower() in {".tscn", ".tres"}
-        ]
-        changed_godot_project_files = [
-            p.replace("\\", "/") for p in changed_files
-            if Path(p.replace("\\", "/")).name.lower() == "project.godot"
         ]
 
     # Extract loaded context-gearbox source IDs.
@@ -111,77 +87,7 @@ def select_validation_plan(
 
     # ── Ordered selection rules ───────────────────────────────────────
 
-    # 1. Godot validation uses the real editor binary for touched project files.
-    changed_godot_files = (
-        changed_gd_files + changed_godot_resource_files + changed_godot_project_files
-    )
-    if changed_godot_files and workspace_root is not None:
-        workspace = Path(workspace_root).resolve(strict=False)
-        godot_root = find_godot_project_root(workspace)
-        if godot_root is not None:
-            resolution = resolve_godot_executable(godot_root)
-            if not resolution.available:
-                plan = _plan(
-                    kind="godot",
-                    commands=[],
-                    reason="Godot project files changed but Godot is unavailable",
-                    confidence="unavailable",
-                    skipped=[resolution.message],
-                )
-                plan["available"] = False
-                plan["setup_message"] = resolution.message
-                return plan
-
-            commands: list[str] = []
-            for changed_path in sorted(changed_gd_files):
-                file_path = Path(changed_path)
-                if not file_path.is_absolute():
-                    file_path = workspace / file_path
-                try:
-                    command = build_godot_check_command(
-                        resolution.path,
-                        godot_root,
-                        file_path,
-                    )
-                except ValueError:
-                    continue
-                if command:
-                    commands.append(command)
-
-            resource_paths: list[Path] = []
-            for changed_path in sorted(changed_godot_resource_files):
-                file_path = Path(changed_path)
-                if not file_path.is_absolute():
-                    file_path = workspace / file_path
-                resource_paths.append(file_path)
-            if resource_paths:
-                # Import dependencies first, then prove Godot can load each
-                # touched scene/resource through ResourceLoader.
-                commands.append(build_godot_import_command(resolution.path, godot_root))
-                try:
-                    resource_command = build_godot_resource_check_command(
-                        resolution.path,
-                        godot_root,
-                        resource_paths,
-                    )
-                except ValueError:
-                    resource_command = None
-                if resource_command:
-                    commands.append(resource_command)
-            elif changed_godot_project_files:
-                commands.append(build_godot_import_command(resolution.path, godot_root))
-            plan = _plan(
-                kind="godot",
-                commands=commands,
-                reason="Godot project files changed in a Godot project",
-                confidence="focused",
-            )
-            plan["available"] = True
-            plan["godot_executable"] = str(resolution.path)
-            plan["project_root"] = str(godot_root)
-            return plan
-
-    # 2. GUI validation
+    # 1. GUI validation
     if _any_matches(all_candidates, _GUI_PATTERNS) or "gui_rules" in loaded_sources:
         _c = _focused_python_commands(changed_py_files, "python -m compileall aura/gui")
         return _plan(
@@ -192,7 +98,7 @@ def select_validation_plan(
             test_suggestions_skipped=_test_skipped,
         )
 
-    # 3. Provider validation
+    # 2. Provider validation
     if _any_matches(all_candidates, _PROVIDER_PATTERNS) or "provider_rules" in loaded_sources:
         _c = _focused_python_commands(changed_py_files, "python -m compileall aura/providers aura/backends aura/client")
         return _plan(
@@ -203,7 +109,7 @@ def select_validation_plan(
             test_suggestions_skipped=_test_skipped,
         )
 
-    # 4. Build validation
+    # 3. Build validation
     if _any_matches(all_candidates, _BUILD_PATTERNS) or "build_pipeline_rules" in loaded_sources:
         _c = _focused_python_commands(changed_py_files, "python -m compileall scripts/")
         return _plan(
@@ -215,7 +121,7 @@ def select_validation_plan(
             test_suggestions_skipped=_test_skipped,
         )
 
-    # 5. General Python validation
+    # 4. General Python validation
     python_dirs = _collect_python_dirs(all_candidates)
     if python_dirs:
         compile_command = "python -m compileall " + " ".join(sorted(python_dirs))
@@ -232,7 +138,7 @@ def select_validation_plan(
             test_suggestions_skipped=_test_skipped,
         )
 
-    # 6. Not applicable
+    # 5. Not applicable
     return _plan(
         kind="not_applicable",
         commands=[],

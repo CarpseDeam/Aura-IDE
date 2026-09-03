@@ -7,14 +7,6 @@ import sys as _sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from aura.godot_toolchain import (
-    GODOT_SETUP_MESSAGE,
-    build_godot_check_command,
-    build_godot_import_command,
-    find_godot_project_root,
-    resolve_godot_executable,
-)
-
 if _sys.version_info >= (3, 11):
     import tomllib
 
@@ -82,9 +74,6 @@ class ProjectProfile:
     declared_dependencies: tuple[str, ...]
     validation_commands: tuple[str, ...]
     node_scripts: tuple[tuple[str, str], ...]
-    godot_project_root: str | None = None
-    godot_executable: str | None = None
-    godot_setup_message: str | None = None
 
     def summarize(self) -> str:
         lines: list[str] = []
@@ -106,29 +95,6 @@ class ProjectProfile:
         if self.node_scripts:
             script_names = ", ".join(name for name, _cmd in self.node_scripts)
             lines.append(f"Node scripts: {script_names}")
-        if "godot" in self.project_types:
-            lines.append("Godot project root: " + (self.godot_project_root or self.workspace_root))
-            lines.append(
-                "Aura live Godot editor bridge: bundled. If addons/aura_bridge is absent, do not "
-                "author a replacement plugin. Call install_godot_editor_bridge, "
-                "then restart Godot and use inspect_godot_editor/edit_godot_editor."
-            )
-            if self.godot_executable:
-                lines.append("Godot executable: " + self.godot_executable)
-                root = Path(self.godot_project_root or self.workspace_root)
-                command = build_godot_check_command(
-                    self.godot_executable,
-                    root,
-                    root / "path" / "to" / "touched_file.gd",
-                )
-                if command:
-                    lines.append("Godot focused validation format: " + command)
-                lines.append(
-                    "Godot project import validation: "
-                    + build_godot_import_command(self.godot_executable, root)
-                )
-            elif self.godot_setup_message:
-                lines.append(self.godot_setup_message)
         return "\n".join(lines)
 
 
@@ -306,15 +272,12 @@ def detect_project_profile(workspace_root: str | Path) -> ProjectProfile:
         raise FileNotFoundError(f"Workspace root not found: {root}")
 
     entries: set[str] = set(os.listdir(root))
-    godot_root = find_godot_project_root(root)
 
     # --- manifests ---
     found_manifests: set[str] = set()
     for filename in _MANIFEST_FILENAMES:
         if filename in entries and (root / filename).is_file():
             found_manifests.add(filename)
-    if godot_root is not None:
-        found_manifests.add("project.godot")
 
     # --- lockfiles ---
     found_lockfiles: set[str] = set()
@@ -328,8 +291,6 @@ def detect_project_profile(workspace_root: str | Path) -> ProjectProfile:
         t = _MANIFEST_TO_TYPE.get(m)
         if t:
             project_types.add(t)
-    if godot_root is not None:
-        project_types.add("godot")
 
     # --- package manager ---
     package_manager: str | None = None
@@ -418,8 +379,6 @@ def detect_project_profile(workspace_root: str | Path) -> ProjectProfile:
     if "go" in project_types:
         validation_cmds.extend(_go_validation_commands())
 
-    godot_resolution = resolve_godot_executable(godot_root) if godot_root is not None else None
-
     return ProjectProfile(
         workspace_root=str(root),
         project_types=tuple(sorted(project_types)),
@@ -432,15 +391,4 @@ def detect_project_profile(workspace_root: str | Path) -> ProjectProfile:
         declared_dependencies=tuple(sorted(declared_deps)),
         validation_commands=tuple(validation_cmds),
         node_scripts=node_scripts,
-        godot_project_root=str(godot_root) if godot_root is not None else None,
-        godot_executable=(
-            str(godot_resolution.path)
-            if godot_resolution is not None and godot_resolution.path is not None
-            else None
-        ),
-        godot_setup_message=(
-            GODOT_SETUP_MESSAGE
-            if godot_resolution is not None and not godot_resolution.available
-            else None
-        ),
     )

@@ -18,7 +18,6 @@ normalization logic across entry points.
 from __future__ import annotations
 
 import os
-import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -62,13 +61,11 @@ def normalize_command(
         shell-dialect validation error.
     """
     plan = build_project_command_rewrite(workspace_root, command)
-    rewritten, godot_reason = _rewrite_godot_validation_aliases(plan.command)
-    error = _validate_command_shell(rewritten, allow_persistent_cd=allow_persistent_cd)
+    error = _validate_command_shell(plan.command, allow_persistent_cd=allow_persistent_cd)
     return NormalizedCommand(
-        command=rewritten,
+        command=plan.command,
         original_command=plan.original_command,
-        normalized=rewritten != plan.original_command,
-        normalization_reason=godot_reason,
+        normalized=plan.command != plan.original_command,
         validation_error=error,
     )
 
@@ -109,10 +106,6 @@ def _validate_command_shell(command: str, *, allow_persistent_cd: bool = False) 
             "Set environment variables through the harness configuration instead."
         )
 
-    godot_error = _validate_godot_check_command(stripped)
-    if godot_error:
-        return godot_error
-
     return ""
 
 
@@ -152,117 +145,6 @@ def _starts_with_export(command: str) -> bool:
     # The second token must look like an assignment or variable name.
     second = tokens[1].strip("'\"")
     return "=" in second or (second.isidentifier() and second.isupper())
-
-
-def _validate_godot_check_command(command: str) -> str:
-    """Reject Godot invocations that look like validation but do no work."""
-    try:
-        tokens = shlex.split(command, posix=(os.name != "nt"))
-    except ValueError:
-        tokens = command.split()
-    cleaned = [str(token).strip("'\"") for token in tokens]
-    if not cleaned:
-        return ""
-    executable = cleaned[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
-    if executable.endswith(".exe"):
-        executable = executable[:-4]
-    if not (
-        executable == "godot"
-        or executable == "godot4"
-        or executable.startswith(("godot_", "godot-", "godot."))
-    ):
-        return ""
-
-    lowered = [token.lower() for token in cleaned]
-    if "--headless" in lowered and "--path" in lowered:
-        purposeful_flags = {
-            "--check-only",
-            "--import",
-            "--script",
-            "--scene",
-            "--editor",
-            "--export-release",
-            "--export-debug",
-            "--export-pack",
-            "--build-solutions",
-            "--test",
-        }
-        if not any(flag in lowered for flag in purposeful_flags):
-            return (
-                "Invalid Godot validation command: --headless --path only starts the engine; "
-                "add --check-only --script for GDScript, --import for the project, or "
-                "--scene/--script for an explicit runtime check."
-            )
-    if "--check-only" not in lowered:
-        return ""
-    if "--script" not in lowered:
-        return (
-            "Invalid Godot validation command: --check-only requires "
-            "--script res://path/to/script.gd."
-        )
-    script_index = lowered.index("--script")
-    if script_index + 1 >= len(cleaned) or not cleaned[script_index + 1].lower().endswith(".gd"):
-        return (
-            "Invalid Godot validation command: --script must name a touched .gd file "
-            "under the project as a res:// path."
-        )
-    return ""
-
-
-def _rewrite_godot_validation_aliases(command: str) -> tuple[str, str]:
-    """Translate common model-generated Godot validation into real CLI flags.
-
-    Godot has no ``--validate-project`` flag.  ``--import`` is the supported
-    editor operation that imports project resources and exits.  A bare
-    headless project invocation is also ambiguous in a validation context, so
-    make it useful by adding ``--import`` instead of rejecting it.
-    """
-    try:
-        tokens = shlex.split(command, posix=(os.name != "nt"))
-    except ValueError:
-        tokens = command.split()
-    cleaned = [str(token).strip("'\"") for token in tokens]
-    if not cleaned:
-        return command, ""
-    executable = cleaned[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
-    if executable.endswith(".exe"):
-        executable = executable[:-4]
-    if not (
-        executable == "godot"
-        or executable == "godot4"
-        or executable.startswith(("godot_", "godot-", "godot."))
-    ):
-        return command, ""
-
-    rewritten, alias_count = re.subn(
-        r"(?<!\S)--validate-project(?!\S)",
-        "--import",
-        command,
-        flags=re.IGNORECASE,
-    )
-    if alias_count:
-        return rewritten, "Godot --validate-project alias rewritten to --import"
-
-    lowered = [token.lower() for token in cleaned]
-    purposeful_flags = {
-        "--check-only",
-        "--import",
-        "--script",
-        "--scene",
-        "--editor",
-        "--export-release",
-        "--export-debug",
-        "--export-pack",
-        "--build-solutions",
-        "--test",
-    }
-    if (
-        "--headless" in lowered
-        and "--path" in lowered
-        and not any(flag in lowered for flag in purposeful_flags)
-    ):
-        return command.rstrip() + " --import", "bare Godot headless project probe upgraded to --import"
-    return command, ""
 
 
 __all__ = [

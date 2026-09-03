@@ -27,7 +27,6 @@ from .code_intel import (
     INSPECT_CODE_TOOL_DEF,
 )
 from .git import GIT_TOOL_DEFS
-from .godot import GODOT_READ_TOOL_DEFS, GODOT_WRITE_TOOL_DEFS
 from .memory import PROJECT_MEMORY_TOOL_DEFS
 from .plan_review import REVIEW_IMPLEMENTATION_PLAN_TOOL_DEF
 from .read import CORE_READ_TOOL_DEFS
@@ -40,14 +39,12 @@ from .write import APPLY_PATCH_TOOL_DEF, FILESYSTEM_WRITE_TOOL_DEFS
 # Capability modules own the definitions; this module only assembles the
 # stable public lists.
 READ_TOOL_DEFS: list[dict[str, Any]] = [
-    *GODOT_READ_TOOL_DEFS,
     *CORE_READ_TOOL_DEFS,
     *SEARCH_TOOL_DEFS,
     *CODE_INTEL_TOOL_DEFS,
 ]
 
 WRITE_TOOL_DEFS: list[dict[str, Any]] = [
-    *GODOT_WRITE_TOOL_DEFS,
     *FILESYSTEM_WRITE_TOOL_DEFS,
 ]
 
@@ -61,7 +58,7 @@ __all__ = [
     "CORE_READ_TOOL_DEFS",
     "DIAGNOSTIC_TOOL_DEF", "FILESYSTEM_WRITE_TOOL_DEFS", "GIT_TOOL_DEFS",
     "DISCARD_AGENT_CHANGE_SET_TOOL_DEF",
-    "GODOT_READ_TOOL_DEFS", "GODOT_WRITE_TOOL_DEFS", "INSPECT_CODE_TOOL_DEF",
+    "INSPECT_CODE_TOOL_DEF",
     "LOAD_SKILLS_TOOL_DEF",
     "INSPECT_AGENT_CHANGE_SET_TOOL_DEF",
     "LIST_AGENT_CHANGE_SETS_TOOL_DEF",
