@@ -8,7 +8,8 @@ one reads as prose:
     id: 6f1c...            # minted once, never edited
     name: Reviewer
     description: Reviews a diff for correctness bugs.
-    model: claude-sonnet-4-6   # omitted entirely for Aura's current model
+    provider: anthropic       # omitted to inherit Aura's provider
+    model: claude-sonnet-4-6  # omitted to inherit/default as described below
     thinking: high
     ---
 
@@ -18,12 +19,18 @@ Three rules keep the format honest. The declared ``id`` must equal the file
 name stem, so identity is visible in the directory listing and can never be
 ambiguous. A definition may not declare permission of any kind: authority is
 private local state, so a definition committed to a repository cannot grant
-itself anything on a machine that merely opened the project. And a definition
-may not choose a provider — an agent runs on whichever provider Aura is set
-to. A ``provider:`` key left over from an older definition is read as the
-noise it now is: dropped on load, never honoured, and gone the next time the
-file is written. It is normalization in one direction only, so there is no
-second provider path to keep in step with the first.
+itself anything on a machine that merely opened the project. Provider and
+model are identifiers only: endpoints, credentials, and all other provider
+configuration remain local to the machine running Aura. An omitted provider
+inherits Aura's submitted provider. An omitted model inherits Aura's submitted
+model when the provider is also omitted, or uses an explicitly named
+provider's default model.
+
+The brief CLI-provider experiment used two provider/model pairs that never
+became runnable Agent backends. Those exact retired pairs normalize to an
+inherited target on read, so an untouched definition from that release does
+not become permanently unrunnable when provider targeting is enabled again.
+Model-only definitions keep their historical meaning under Aura's provider.
 """
 from __future__ import annotations
 
@@ -37,6 +44,17 @@ from aura.agents.models import AgentDefinition, AgentThinking
 from aura.agents.validation import agent_name_error, delegation_description_error
 
 _DELIMITER = "---"
+
+# Exact provider/model pairs written by the retired CLI-provider experiment.
+# Keep this deliberately narrow: supported targets and unknown future targets
+# are portable identifiers and must survive even when this machine cannot run
+# them yet.
+_RETIRED_AGENT_TARGETS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("claude_code", "claude-code"),
+        ("codex", "codex"),
+    }
+)
 
 #: Front-matter keys a definition may never declare. A project definition
 #: that names one is refused outright rather than loaded with the key
@@ -126,7 +144,11 @@ def parse_agent_document(
     if description_error:
         errors.append(description_error)
 
+    provider = _string(loaded.get("provider"))
     model = _string(loaded.get("model"))
+    if (provider, model) in _RETIRED_AGENT_TARGETS:
+        provider = ""
+        model = ""
 
     thinking = AgentThinking.parse(loaded.get("thinking", AgentThinking.INHERIT.value))
     if thinking is None:
@@ -147,6 +169,7 @@ def parse_agent_document(
             name=name,
             description=description,
             instructions=instructions,
+            provider=provider,
             model=model,
             thinking=thinking,
         )
@@ -160,6 +183,8 @@ def render_agent_document(definition: AgentDefinition) -> str:
         "name": definition.name,
         "description": definition.description,
     }
+    if definition.provider.strip():
+        front["provider"] = definition.provider.strip()
     if definition.model.strip():
         front["model"] = definition.model.strip()
     front["thinking"] = definition.thinking.value

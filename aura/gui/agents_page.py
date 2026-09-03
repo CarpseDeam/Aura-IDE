@@ -53,6 +53,7 @@ from aura.gui.agents_editor import (
     AgentDraft,
     AgentEditor,
     ModelChoices,
+    ModelTargetChoice,
     catalog_choices,
 )
 from aura.gui.agents_library import (
@@ -300,7 +301,7 @@ class AgentsPage(QDialog):
         self.scene.set_run_states(nodes, connections)
 
     def set_model_choices(self, choices: ModelChoices) -> None:
-        """Re-list the editor's models after Aura's provider or model moved."""
+        """Re-list the editor's qualified targets after catalogs change."""
         self._choices = choices
         self._editor.set_choices(choices)
 
@@ -346,6 +347,7 @@ __all__ = [
     "AgentsPage",
     "ConnectionInfo",
     "ModelChoices",
+    "ModelTargetChoice",
     "OccurrenceInfo",
     "WorkflowInfo",
     "WorkflowRow",

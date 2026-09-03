@@ -326,14 +326,14 @@ class MainWindowAgentsController(QObject):
         return provider, model, thinking
 
     def model_choices(self) -> ModelChoices:
-        """The editor's model list, built for Aura's current provider."""
+        """The editor's provider-qualified model targets and Aura baseline."""
         if self._choices is not None:
             return self._choices
         provider, model, _thinking = self._current_model_context()
         return catalog_choices(provider, model)
 
     def refresh_model_choices(self) -> None:
-        """Re-list the editor's models after Aura's provider or model moved."""
+        """Re-list targets after Aura's target or a provider catalog moved."""
         if self._agents_page is not None and self._choices is None:
             self._agents_page.set_model_choices(self.model_choices())
 
@@ -563,6 +563,7 @@ class MainWindowAgentsController(QObject):
                     name=draft.name,
                     description=draft.description,
                     instructions=draft.instructions,
+                    provider=draft.provider,
                     model=draft.model,
                     thinking=draft.thinking,
                 )

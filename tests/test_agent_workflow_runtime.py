@@ -146,6 +146,7 @@ def _definition(
     agent_id: str,
     name: str,
     *,
+    provider: str = "",
     model: str = "",
     thinking: AgentThinking = AgentThinking.INHERIT,
 ) -> AgentDefinition:
@@ -155,6 +156,7 @@ def _definition(
         name=name,
         description=f"{name} does one workflow step.",
         instructions=f"Work as {name}.",
+        provider=provider,
         model=model,
         thinking=thinking,
     )
@@ -372,6 +374,94 @@ def test_freezing_captures_graph_order_definitions_models_thinking_and_grants(
         ("deepseek", "explicit-model"),
     ]
     assert [step.resolved.thinking for step in plan.steps] == ["high", "max"]
+
+
+def test_freezing_qualifies_solid_dashed_and_nested_agent_targets(
+    monkeypatch,
+) -> None:
+    nested_agent_id = "agentfour0004"
+    graph = _with_helper(
+        _graph(2),
+        "step1",
+        node_id="helper-one",
+        agent_id=AGENT_IDS[2],
+        connection_id="dash-one",
+    )
+    graph = _with_helper(
+        graph,
+        "helper-one",
+        node_id="helper-two",
+        agent_id=nested_agent_id,
+        connection_id="dash-two",
+    )
+    definitions = (
+        _definition(AGENT_IDS[0], "Inherited step"),
+        _definition(
+            AGENT_IDS[1],
+            "Qualified step",
+            provider="openai",
+            model="gpt-5.5",
+        ),
+        _definition(
+            AGENT_IDS[2],
+            "Provider-default helper",
+            provider="anthropic",
+        ),
+        _definition(
+            nested_agent_id,
+            "Local nested helper",
+            provider="local_openai",
+            model="local-coder",
+        ),
+    )
+    monkeypatch.setattr(
+        "aura.config.has_usable_provider_configuration", lambda _provider: True
+    )
+
+    plan, errors = freeze_workflow_plan(
+        graph,
+        definitions=_Definitions(definitions),
+        permissions=_Permissions({}),
+        agent_scopes={item.agent_id: item.scope for item in definitions},
+        provider="deepseek",
+        model="root-model",
+        thinking="max",
+    )
+
+    assert errors == ()
+    assert plan is not None
+    step_one, step_two = plan.steps
+    helper_one = step_one.helpers[0]
+    helper_two = helper_one.children[0]
+    assert (
+        step_one.resolved.provider,
+        step_one.resolved.model,
+        step_one.resolved.thinking,
+    ) == ("deepseek", "root-model", "max")
+    assert (
+        step_two.resolved.provider,
+        step_two.resolved.model,
+        step_two.resolved.thinking,
+    ) == ("openai", "gpt-5.5", "max")
+    assert (
+        helper_one.resolved.provider,
+        helper_one.resolved.model,
+        helper_one.resolved.thinking,
+    ) == ("anthropic", "claude-sonnet-4-6", "max")
+    assert (
+        helper_two.resolved.provider,
+        helper_two.resolved.model,
+        helper_two.resolved.thinking,
+    ) == ("local_openai", "local-coder", "off")
+    summary = plan.summary_rows()
+    assert (summary[0]["provider"], summary[0]["model"]) == (
+        "deepseek",
+        "root-model",
+    )
+    assert (
+        summary[0]["helpers"][0]["helpers"][0]["provider"],
+        summary[0]["helpers"][0]["helpers"][0]["model"],
+    ) == ("local_openai", "local-coder")
 
 
 def test_runner_is_serial_and_hands_the_previous_structured_result_forward(
@@ -2418,8 +2508,8 @@ def test_workflow_usage_groups_keep_provider_models_distinct_and_frozen(
     )
     second = replace(
         _completed(AGENT_IDS[1], "Agent 2", "second"),
-        provider="deepseek",
-        model="model-b",
+        provider="openai",
+        model="model-a",
         usage=DelegationUsage(20, 4, 5, 15),
     )
     third = replace(
@@ -2445,7 +2535,7 @@ def test_workflow_usage_groups_keep_provider_models_distinct_and_frozen(
     assert [
         (row["provider"], row["model"])
         for row in tool_result.extras["delegation_usage_groups"]
-    ] == [("deepseek", "model-a"), ("deepseek", "model-b")]
+    ] == [("deepseek", "model-a"), ("openai", "model-a")]
     assert tool_result.extras["delegation_usage_groups"][0]["prompt_tokens"] == 40
     assert tool_result.extras["delegation_usage_groups"][1]["prompt_tokens"] == 20
 

@@ -22,8 +22,8 @@ from aura.config import (
     is_external_cli_available,
     set_api_key,
 )
-from aura.providers.registry import provider_registry
 from aura.gui.theme import FG_DIM, FG_MUTED, SUCCESS, WARN
+from aura.providers.registry import provider_registry
 
 
 class ApiKeysPage(QWidget):
@@ -49,8 +49,8 @@ class ApiKeysPage(QWidget):
         form.addRow("", title)
 
         sub_label = QLabel(
-            "API key providers are configured inside Aura. "
-            "External CLI providers are configured outside Aura."
+            "Store API keys securely for hosted providers. "
+            "Local model endpoints are configured in Models."
         )
         sub_label.setStyleSheet(f"color: {FG_MUTED}; font-size: 11px;")
         sub_label.setWordWrap(True)
@@ -122,8 +122,10 @@ class ApiKeysPage(QWidget):
                 self._refresh_key_status(pid)
 
             elif kind == "local":
-                status_label = QLabel("Coming soon")
-                status_label.setStyleSheet(f"color: {FG_MUTED}; font-style: italic;")
+                status_label = QLabel(
+                    "No API key required — configure the endpoint in Models."
+                )
+                status_label.setStyleSheet(f"color: {FG_MUTED};")
                 status_label.setWordWrap(True)
                 form.addRow(f"{spec.label}:", status_label)
 
@@ -159,8 +161,11 @@ class ApiKeysPage(QWidget):
             else:
                 text = f"{cfg.label} — Install/sign in to the CLI, then refresh."
                 color = WARN
+        elif kind == "local":
+            text = "No API key required — configure the endpoint in Models."
+            color = FG_MUTED
         else:
-            text = "Coming soon"
+            text = "Provider configuration is unavailable."
             color = FG_MUTED
 
         status_label.setText(text)

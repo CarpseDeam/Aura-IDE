@@ -75,6 +75,7 @@ class _Stream:
         self._raises = raises
         self._release = threading.Event()
         self.closed = False
+        self.close_calls = 0
 
     def __iter__(self):
         for chunk in self._chunks:
@@ -87,6 +88,7 @@ class _Stream:
             self._release.wait(30)
 
     def close(self) -> None:
+        self.close_calls += 1
         self.closed = True
         self._release.set()
 
@@ -152,6 +154,7 @@ def test_no_first_chunk_triggers_the_first_event_timeout(monkeypatch, released) 
     assert len(errors) == 1
     assert "first response chunk" in errors[0].message
     assert not [e for e in events if isinstance(e, Done)]
+    assert stream.close_calls == 1
 
 
 # ── Inter-event bound (the repair) ──────────────────────────────────────
@@ -248,6 +251,51 @@ def test_cancellation_wins_over_the_timeout(monkeypatch, released) -> None:
     events = _run(_client(stream), cancel_event=cancel)
 
     assert _api_errors(events) == []
+    assert stream.close_calls == 1
+
+
+def test_cancellation_closes_once_and_keeps_the_consumed_partial_message(released) -> None:
+    stream = _Stream([_chunk(content="partial")], stall=True)
+    released(stream)
+    cancel = threading.Event()
+    events = iter(
+        _client(stream).stream(
+            messages=[{"role": "user", "content": "go"}],
+            tools=None,
+            model="deepseek-chat",
+            thinking="high",
+            cancel_event=cancel,
+        )
+    )
+
+    first = next(events)
+    assert isinstance(first, ContentDelta)
+    assert first.text == "partial"
+
+    cancel.set()
+    remaining = list(events)
+
+    assert stream.close_calls == 1
+    assert _api_errors(remaining) == []
+    done = [event for event in remaining if isinstance(event, Done)]
+    assert len(done) == 1
+    assert done[0].full_message["content"] == "partial"
+
+
+def test_closing_the_event_iterator_closes_the_created_stream_once(released) -> None:
+    stream = _Stream([_chunk(content="partial")], stall=True)
+    released(stream)
+    events = _client(stream).stream(
+        messages=[{"role": "user", "content": "go"}],
+        tools=None,
+        model="deepseek-chat",
+        thinking="high",
+    )
+
+    assert isinstance(next(events), ContentDelta)
+    events.close()
+
+    assert stream.close_calls == 1
 
 
 def test_terminal_sentinel_completes_normally(monkeypatch) -> None:
@@ -268,6 +316,7 @@ def test_terminal_sentinel_completes_normally(monkeypatch) -> None:
     done = [e for e in events if isinstance(e, Done)]
     assert len(done) == 1
     assert done[0].full_message["content"] == "answer"
+    assert stream.close_calls == 1
 
 
 def test_producer_exception_still_surfaces(monkeypatch) -> None:
@@ -281,6 +330,7 @@ def test_producer_exception_still_surfaces(monkeypatch) -> None:
     assert "connection reset" in errors[0].message
     assert "stalled after starting" not in errors[0].message
     assert not [e for e in events if isinstance(e, Done)]
+    assert stream.close_calls == 1
 
 
 def test_inter_event_constant_is_its_own_value() -> None:

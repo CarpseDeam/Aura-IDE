@@ -25,6 +25,8 @@ from aura.gui.left_pane import (
     _ThreadRow,
 )
 from aura.projects.models import ProjectSpace, ProjectThread
+from aura.providers.base import ModelInfo
+from aura.providers.registry import provider_registry
 
 
 # ── QApplication singleton for the test session ──────────────────────────
@@ -119,6 +121,36 @@ def pane(qapp, mock_store):
     yield pane
     # Cleanup
     pane.deleteLater()
+
+
+def test_local_production_model_forces_thinking_off(pane: LeftPane) -> None:
+    local = provider_registry.get("local_openai")
+    saved_models = dict(local.models)
+    try:
+        local.models.clear()
+        local.models["qwen-local"] = ModelInfo(
+            id="qwen-local",
+            label="qwen-local",
+            input_per_m_usd=0.0,
+            output_per_m_usd=0.0,
+            cache_hit_per_m_usd=0.0,
+        )
+
+        pane.populate_models("local_openai")
+
+        assert pane.current_production_model() == "qwen-local"
+        assert pane.current_production_thinking() == "off"
+        assert not pane._production_thinking_combo.isEnabled()
+        pane.set_production_thinking("max")
+        assert pane.current_production_thinking() == "off"
+
+        pane.populate_models("deepseek")
+        assert pane._production_thinking_combo.isEnabled()
+        pane.set_production_thinking("max")
+        assert pane.current_production_thinking() == "max"
+    finally:
+        local.models.clear()
+        local.models.update(saved_models)
 
 
 # ── Tests: structural snapshot helpers ────────────────────────────────────

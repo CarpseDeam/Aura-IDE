@@ -110,18 +110,26 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
     selected_provider = settings.provider
 
     _should_open_api_settings = False
+    _should_open_model_settings = False
 
-    if not has_usable_provider_configuration():
-        logger.info("no providers configured — opening API settings post-startup if not first launch")
-        if settings.first_launch_done:
-            _should_open_api_settings = True
-        # When first_launch_done is False, OnboardingDialog Step 4 covers
-        # provider awareness with its "Open Settings" button.
-    elif not has_usable_provider_configuration(selected_provider):
+    if not has_usable_provider_configuration(selected_provider):
         cfg = PROVIDERS[selected_provider]
         kind = get_provider_kind(selected_provider)
-        if kind == "external_cli":
-            if not args.selfcheck:
+        if kind == "local":
+            if not args.selfcheck and settings.first_launch_done:
+                logger.info("selected local provider is not ready warning start")
+                QMessageBox.warning(
+                    None,
+                    APP_NAME,
+                    f"{cfg.label} is selected, but no discovered local model is ready.\n\n"
+                    "Start your OpenAI-compatible local server, then use "
+                    "Settings → Models → Test / Discover.\n\n"
+                    "The app will open, but chat will fail until a local model is selected.",
+                )
+                logger.info("selected local provider is not ready warning end")
+            _should_open_model_settings = settings.first_launch_done
+        elif kind == "external_cli":
+            if not args.selfcheck and settings.first_launch_done:
                 logger.info("selected provider external CLI unavailable warning start")
                 QMessageBox.warning(
                     None,
@@ -133,9 +141,9 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
                     "the CLI is available.",
                 )
                 logger.info("selected provider external CLI unavailable warning end")
-            _should_open_api_settings = True
+            _should_open_api_settings = settings.first_launch_done
         else:
-            if not args.selfcheck:
+            if not args.selfcheck and settings.first_launch_done:
                 logger.info("provider key warning start")
                 QMessageBox.warning(
                     None,
@@ -146,7 +154,7 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
                     "The app will open, but chat will fail until a provider is configured.",
                 )
                 logger.info("provider key warning end")
-            _should_open_api_settings = True
+            _should_open_api_settings = settings.first_launch_done
 
     from aura.gui.main_window import MainWindow
 
@@ -159,7 +167,10 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
     logger.info("win.show end")
 
     if not args.selfcheck:
-        if _should_open_api_settings:
+        if _should_open_model_settings:
+            logger.info("opening model settings post-startup")
+            QTimer.singleShot(100, win.open_settings)
+        elif _should_open_api_settings:
             logger.info("opening API settings post-startup")
             QTimer.singleShot(100, win.open_api_settings)
 

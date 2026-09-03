@@ -22,6 +22,7 @@ from aura.providers.catalog import (  # noqa: F401
     DEFAULT_MODEL,
     DEFAULT_THINKING,
 )
+from aura.providers.local_openai import is_valid_local_openai_base_url
 from aura.providers.pricing import load_pricing_cache, refresh_provider_pricing
 from aura.providers.registry import provider_registry
 from aura.settings import (  # noqa: F401
@@ -135,17 +136,21 @@ def has_usable_provider_configuration(provider_id: str | None = None) -> bool:
     If provider_id is given:
       - api_key providers: usable if an API key is available
       - external_cli providers: usable if the CLI executable is on PATH
-      - local providers: not yet supported, returns False
+      - local providers: usable with a valid endpoint and a discovered/cached model
 
     If provider_id is None: returns True if at least one registered provider is usable.
     """
     if provider_id is not None:
+        if not provider_registry.has(provider_id):
+            return False
         kind = get_provider_kind(provider_id)
         if kind == "api_key":
             return get_api_key(provider_id) is not None
         if kind == "external_cli":
             return is_external_cli_available(provider_id)
-        # local providers not yet supported
+        if kind == "local":
+            cfg = provider_registry.get(provider_id)
+            return is_valid_local_openai_base_url(cfg.base_url) and bool(cfg.models)
         return False
 
     for pid in provider_registry.ids():
@@ -180,8 +185,16 @@ def list_stored_providers() -> list[str]:
     return result
 
 
-def fetch_provider_models(provider_id: str) -> tuple[dict[str, ModelInfo], dict[str, dict[str, float]], str | None]:
+def fetch_provider_models(
+    provider_id: str,
+    *,
+    base_url: str | None = None,
+) -> tuple[dict[str, ModelInfo], dict[str, dict[str, float]], str | None]:
     """Fetch models and pricing from the provider's API.
+
+    ``base_url`` is an unsaved Settings override for a local provider. It lets
+    Test / Discover validate a newly typed endpoint before changing the live
+    production configuration.
 
     Returns (models_dict, pricing_dict, error_message).
     """
@@ -194,15 +207,23 @@ def fetch_provider_models(provider_id: str) -> tuple[dict[str, ModelInfo], dict[
     # reporting; the status bar reads the store alone and never fetches.
     refresh_provider_pricing(provider_id)
     try:
-        client = provider_registry.create_client(provider_id)
+        client = provider_registry.create_client(provider_id, base_url=base_url)
         raw = client.fetch_raw_models()
         if not raw:
+            if provider_registry.get(provider_id).kind == "local":
+                return {}, {}, (
+                    "Local server returned no models. Check the endpoint and "
+                    "that the server is running."
+                )
             return {}, {}, "Provider returned no models. Check your API key or connection."
     except Exception as exc:
         return {}, {}, str(exc)
 
     models: dict[str, ModelInfo] = {}
     pricing: dict[str, dict[str, float]] = {}
+
+    provider_cfg = provider_registry.get(provider_id)
+    is_local = provider_cfg.kind == "local"
 
     if provider_id == "openrouter":
         for m in raw:
@@ -254,8 +275,8 @@ def fetch_provider_models(provider_id: str) -> tuple[dict[str, ModelInfo], dict[
             if not mid:
                 continue
 
-            existing_p = get_pricing(mid)
-            if existing_p:
+            existing_p = None if is_local else get_pricing(mid)
+            if existing_p is not None:
                 in_m = existing_p["in_miss"]
                 hit_m = existing_p["in_hit"]
                 out_m = existing_p["out"]
@@ -270,7 +291,10 @@ def fetch_provider_models(provider_id: str) -> tuple[dict[str, ModelInfo], dict[
             supports_vision = False
             ctx_tokens = 0
             max_out = 0
-            for p_cfg in provider_registry.all().values():
+            metadata_providers = (
+                (provider_cfg,) if is_local else provider_registry.all().values()
+            )
+            for p_cfg in metadata_providers:
                 if mid in p_cfg.models:
                     known = p_cfg.models[mid]
                     supports_vision = known.supports_vision
@@ -454,6 +478,8 @@ def save_dynamic_catalog(provider_id: str, models: dict[str, ModelInfo], pricing
     if not provider_registry.has(provider_id):
         return
 
+    cfg = provider_registry.get(provider_id)
+
     path = catalog_cache_path()
     data = {}
     if path.exists():
@@ -463,6 +489,15 @@ def save_dynamic_catalog(provider_id: str, models: dict[str, ModelInfo], pricing
             pass
 
     models_raw = {k: asdict(v) for k, v in models.items()}
+    if cfg.kind == "local":
+        for model in models_raw.values():
+            model["input_per_m_usd"] = 0.0
+            model["output_per_m_usd"] = 0.0
+            model["cache_hit_per_m_usd"] = 0.0
+        pricing = {
+            mid: {"in_miss": 0.0, "in_hit": 0.0, "out": 0.0}
+            for mid in models
+        }
     data[provider_id] = {
         "models": models_raw,
         "pricing": pricing,
@@ -556,6 +591,35 @@ def load_dynamic_catalog() -> None:
                 cfg.pricing.clear()
                 for mid, p_data in cached_pricing.items():
                     cfg.pricing[mid] = p_data
+        elif cfg.kind == "local":
+            # Local discovery is also a complete endpoint snapshot. Replace
+            # instead of merging so models removed by the server do not live
+            # forever. Cached rates are never trusted: a local request has no
+            # provider bill even if its model id collides with a hosted model.
+            if cached_models:
+                existing_before = dict(cfg.models)
+                cfg.models.clear()
+                cfg.pricing.clear()
+                for mid, m_data in cached_models.items():
+                    model = _model_info_from_cache(
+                        m_data, existing_before.get(mid)
+                    )
+                    cfg.models[mid] = ModelInfo(
+                        id=model.id,
+                        label=model.label,
+                        input_per_m_usd=0.0,
+                        output_per_m_usd=0.0,
+                        cache_hit_per_m_usd=0.0,
+                        supports_vision=model.supports_vision,
+                        context_window_tokens=model.context_window_tokens,
+                        max_output_tokens=model.max_output_tokens,
+                        created=model.created,
+                    )
+                    cfg.pricing[mid] = {
+                        "in_miss": 0.0,
+                        "in_hit": 0.0,
+                        "out": 0.0,
+                    }
         else:
             for mid, m_data in cached_models.items():
                 if mid in cfg.models:

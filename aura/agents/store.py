@@ -215,6 +215,7 @@ class AgentStore:
         name: str,
         description: str,
         instructions: str,
+        provider: str = "",
         model: str = "",
         thinking: AgentThinking = AgentThinking.INHERIT,
     ) -> AgentDefinition:
@@ -225,6 +226,7 @@ class AgentStore:
             name=str(name or "").strip(),
             description=str(description or "").strip(),
             instructions=str(instructions or "").strip(),
+            provider=str(provider or "").strip(),
             model=str(model or "").strip(),
             thinking=thinking,
         )

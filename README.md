@@ -36,7 +36,7 @@ Aura remains the stable root owner for every turn. Agent work stays inside Aura'
 
 ## Agents and visual workflows
 
-Agents are a major harness capability, not a separate product. Each Agent is a reusable identity with its own instructions, model, thinking level, and private Read only or Read / Write permissions. Place an Agent in a workflow to give that occurrence a concise assignment while keeping the reusable identity intact.
+Agents are a major harness capability, not a separate product. Each Agent is a reusable identity with its own instructions, model target, thinking level, and private Read only or Read / Write permissions. An Agent can inherit Aura's provider and model or target any configured hosted or local model. Place an Agent in a workflow to give that occurrence a concise assignment while keeping the reusable identity intact.
 
 <p align="center">
   <img src="media/aura-agents-workflow.png" alt="Aura Agents window showing the reusable Agent library, the Aura Documentation Refresh workflow, its solid Task-to-Result sequence, a dashed Review Helper sub-agent connection, and the Website Writer inspector" width="1000">
@@ -103,7 +103,7 @@ aura
 ### First run
 
 1. Open a workspace.
-2. Configure a provider API key in Settings → API Keys.
+2. Configure a hosted provider in Settings → API Keys, or discover a local model in Settings → Models.
 3. Ask for a small task such as `fix a typo in README.md`.
 4. Review proposed diffs and visible validation results.
 5. Inspect the completion receipt.
@@ -129,7 +129,7 @@ These figures are supporting evidence for sustained harness-driven development�
 - **Reviewable diffs** — proposed file writes can be inspected and approved before they reach disk.
 - **Project-aware validation** — Aura detects project tooling, selects focused checks for changed files, and reports results without hiding failures.
 - **Inspectable receipts** — completed runs retain tool, file, validation, cost, and outcome information as an audit record; receipt status does not drive internal item state.
-- **Provider flexibility** — choose any supported BYOK provider for production work.
+- **Provider flexibility** — choose a supported BYOK provider or OpenAI-compatible local model for production work, then mix targets across Agents.
 - **Local-first control** — the desktop owns the real workspace, execution, keys, and approval surface.
 
 ### The harness effect
@@ -165,7 +165,7 @@ Enable Companion on the desktop, pair from the phone browser, and connect throug
 
 ## Providers
 
-Aura works with user-configured AI providers. Connect directly to **DeepSeek**, **OpenAI**, **Anthropic**, **Gemini**, or **OpenRouter**. Your key, your provider billing, and your choice of models remain under your control. Keys can be supplied through Settings or environment variables.
+Aura works with user-configured AI providers. Connect directly to **DeepSeek**, **OpenAI**, **Anthropic**, **Gemini**, or **OpenRouter**, or point Aura at an OpenAI-compatible local server such as Ollama, LM Studio, or llama.cpp. Hosted keys can be supplied through Settings or environment variables; local models remain inside Aura's same tools, diffs, validation, and Agent workflow.
 
 See [Providers](docs/providers.md) for supported backends and configuration details.
 

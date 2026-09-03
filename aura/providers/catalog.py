@@ -9,6 +9,7 @@ same dicts, any mutation propagates everywhere.
 from __future__ import annotations
 
 from aura.providers.base import ModelInfo, ThinkingMode
+from aura.providers.local_openai import DEFAULT_LOCAL_OPENAI_BASE_URL
 
 # Mutable model / pricing caches — shared references
 
@@ -270,6 +271,11 @@ GOOGLE_CLOUD_PRICING: dict[str, dict[str, float]] = {
     "gemini-1.5-flash": {"in_miss": 0.075, "in_hit": 0.01875, "out": 0.30},
 }
 
+# OpenAI-compatible local server. Models are intentionally discovery-only:
+# inventing a placeholder/default would make an unverified server look usable.
+LOCAL_OPENAI_MODELS: dict[str, ModelInfo] = {}
+LOCAL_OPENAI_PRICING: dict[str, dict[str, float]] = {}
+
 # Provider catalogue — raw dict form consumed by ProviderRegistry
 
 PROVIDER_CATALOG: dict[str, dict] = {
@@ -342,6 +348,18 @@ PROVIDER_CATALOG: dict[str, dict] = {
         "models": GOOGLE_CLOUD_MODELS,
         "pricing": GOOGLE_CLOUD_PRICING,
         "kind": "api_key",
+    },
+    "local_openai": {
+        "label": "Local Model",
+        "base_url": DEFAULT_LOCAL_OPENAI_BASE_URL,
+        "env_key": "",
+        "default_model": "",
+        "default_thinking": "off",
+        "models": LOCAL_OPENAI_MODELS,
+        "pricing": LOCAL_OPENAI_PRICING,
+        "kind": "local",
+        "chat_protocol": "openai_chat",
+        "requires_reasoning_replay": False,
     },
 }
 

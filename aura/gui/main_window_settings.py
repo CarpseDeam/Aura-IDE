@@ -77,6 +77,11 @@ class MainWindowSettingsController(QObject):
 
         window.set_model(settings.default_model)
         window.set_thinking(settings.default_thinking)
+        # ``populate_models`` deliberately blocks combo signals while it
+        # rebuilds. Refresh explicitly so an already-open Agents page sees a
+        # changed provider and newly discovered local models even when the
+        # selected model index itself did not emit.
+        window._agents_controller.refresh_model_choices()
         window._enter_production_mode()
         window._bridge.set_temperature(settings.temperature)
         window._bridge.set_auto_approve(settings.auto_approve)

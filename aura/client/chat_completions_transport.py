@@ -48,6 +48,30 @@ _FOREIGN_MESSAGE_KEYS = (
 )
 
 
+class _StreamLifetime:
+    """Own one best-effort close attempt for a created SDK stream."""
+
+    def __init__(self, provider: ProviderId) -> None:
+        self._provider = provider
+        self._stream: Any | None = None
+        self._closed = False
+
+    def attach(self, stream: Any) -> None:
+        self._stream = stream
+
+    def close(self) -> None:
+        if self._closed or self._stream is None:
+            return
+        self._closed = True
+        closer = getattr(self._stream, "close", None)
+        if closer is None:
+            return
+        try:
+            closer()
+        except Exception:  # noqa: BLE001
+            _log.debug("provider_stream_close_failed provider=%s", self._provider)
+
+
 def _strip_foreign_message_keys(
     messages: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -100,6 +124,46 @@ def stream_chat_completions(
     temperature: float = 0.7,
     requires_reasoning_replay: bool = False,
     hosted_search_tool: dict[str, Any] | None = None,
+) -> Iterator[Event]:
+    """Stream Chat Completions and deterministically retire a created stream."""
+    lifetime = _StreamLifetime(provider)
+    try:
+        yield from _stream_chat_completions_impl(
+            client=client,
+            provider=provider,
+            chat_protocol=chat_protocol,
+            base_url=base_url,
+            timeout=timeout,
+            messages=messages,
+            tools=tools,
+            model=model,
+            thinking=thinking,
+            cancel_event=cancel_event,
+            temperature=temperature,
+            requires_reasoning_replay=requires_reasoning_replay,
+            hosted_search_tool=hosted_search_tool,
+            stream_lifetime=lifetime,
+        )
+    finally:
+        lifetime.close()
+
+
+def _stream_chat_completions_impl(
+    *,
+    client: Any,
+    provider: ProviderId,
+    chat_protocol: str,
+    base_url: str,
+    timeout: Any,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+    model: str,
+    thinking: ThinkingMode,
+    cancel_event: threading.Event | None = None,
+    temperature: float = 0.7,
+    requires_reasoning_replay: bool = False,
+    hosted_search_tool: dict[str, Any] | None = None,
+    stream_lifetime: _StreamLifetime,
 ) -> Iterator[Event]:
     """Stream the existing OpenAI-compatible Chat Completions request."""
     outbound = _strip_foreign_message_keys(messages)
@@ -212,6 +276,7 @@ def stream_chat_completions(
     except Exception as exc:  # network errors, ssl, etc.
         yield ApiError(status_code=None, message=f"{type(exc).__name__}: {exc}")
         return
+    stream_lifetime.attach(stream)
 
     _log.info(
         "provider_stream_first_event_wait_start provider=%s model=%s timeout_s=%s",
@@ -239,17 +304,11 @@ def stream_chat_completions(
     meaningful_emitted = False
 
     def _close_stream_quietly() -> None:
-        """Best-effort release of the underlying HTTP stream on timeout."""
-        closer = getattr(stream, "close", None)
-        if closer is None:
-            return
-        try:
-            closer()
-        except Exception:  # noqa: BLE001
-            _log.debug("provider_stream_close_failed provider=%s", provider)
+        stream_lifetime.close()
 
     while True:
         if cancel_event is not None and cancel_event.is_set():
+            _close_stream_quietly()
             break
 
         try:
@@ -269,6 +328,7 @@ def stream_chat_completions(
                         int(elapsed * 1000),
                         urlparse(base_url).hostname,
                     )
+                    _close_stream_quietly()
                     yield ApiError(
                         status_code=None,
                         message=(
@@ -310,8 +370,10 @@ def stream_chat_completions(
             continue
 
         if kind == "sentinel":
+            _close_stream_quietly()
             break
         if kind == "error":
+            _close_stream_quietly()
             exc = value
             if isinstance(exc, APIStatusError):
                 yield ApiError(status_code=exc.status_code, message=str(exc))

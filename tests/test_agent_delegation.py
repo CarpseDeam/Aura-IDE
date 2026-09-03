@@ -10,9 +10,8 @@ What this file holds Aura to:
   frozen read/search/read-only-Git catalog it cannot step outside of;
 * it cannot delegate again, cannot write, and cannot reach a skill, an MCP
   tool, or the root's transcript;
-* the provider is Aura's submitted-turn provider, while the model is inherited
-  or explicitly selected, and a target that cannot be resolved fails the
-  *delegation*, not the conversation;
+* each definition may inherit or qualify its provider/model, and a target that
+  cannot be resolved fails the *delegation*, not the conversation;
 * the user's Stop stops the child, through the root turn's own event;
 * exactly one paired tool result reaches canonical root History, and it is
   the structured result — never the child's messages.
@@ -58,6 +57,7 @@ def _definition(
     name: str = "Reviewer",
     description: str = "Reviews a change for defects.",
     instructions: str = INSTRUCTIONS,
+    provider: str = "",
     model: str = "",
     thinking: AgentThinking = AgentThinking.INHERIT,
 ) -> AgentDefinition:
@@ -67,6 +67,7 @@ def _definition(
         name=name,
         description=description,
         instructions=instructions,
+        provider=provider,
         model=model,
         thinking=thinking,
     )
@@ -542,7 +543,7 @@ def test_an_agent_with_no_model_runs_the_turns_own_provider_and_model() -> None:
 
 
 def test_an_explicit_model_resolves_under_the_turns_provider() -> None:
-    """The agent picks the model; the provider is always Aura's own."""
+    """A historical model-only definition still inherits Aura's provider."""
     resolved, failure, _message = resolve_agent_model(
         "gpt-x",
         AgentThinking.MAX,
@@ -559,20 +560,108 @@ def test_an_explicit_model_resolves_under_the_turns_provider() -> None:
     )
 
 
-def test_every_hosted_api_provider_can_back_an_agent() -> None:
+@pytest.mark.parametrize(
+    ("agent_provider", "agent_model", "expected"),
+    [
+        ("", "", ("deepseek", "root-model", "max")),
+        ("", "agent-model", ("deepseek", "agent-model", "max")),
+        ("anthropic", "", ("anthropic", "claude-sonnet-4-6", "max")),
+        ("openai", "gpt-5.5", ("openai", "gpt-5.5", "max")),
+        ("local_openai", "local-coder", ("local_openai", "local-coder", "off")),
+    ],
+)
+def test_agent_target_supports_all_inheritance_combinations(
+    agent_provider: str,
+    agent_model: str,
+    expected: tuple[str, str, str],
+) -> None:
+    resolved, failure, message = resolve_agent_model(
+        agent_model,
+        AgentThinking.INHERIT,
+        provider="deepseek",
+        turn_model="root-model",
+        turn_thinking="max",
+        agent_provider=agent_provider,
+    )
+
+    assert failure is None, message
+    assert resolved is not None
+    assert (resolved.provider, resolved.model, resolved.thinking) == expected
+
+
+def test_local_agent_target_forces_explicit_thinking_off() -> None:
+    resolved, failure, message = resolve_agent_model(
+        "local-coder",
+        AgentThinking.MAX,
+        provider="deepseek",
+        turn_model="root-model",
+        turn_thinking="max",
+        agent_provider="local_openai",
+    )
+
+    assert failure is None, message
+    assert resolved is not None
+    assert resolved.thinking == "off"
+
+
+def test_direct_agent_constructs_the_backend_for_its_frozen_provider(
+    workspace: Path,
+) -> None:
+    backend = _ScriptedBackend([_answer("done")])
+    constructed: list[str] = []
+    runner = AgentDelegationRunner(
+        workspace_root=workspace,
+        inherited_provider="deepseek",
+        inherited_model="root-model",
+        inherited_thinking="max",
+        backend_factory=lambda provider: constructed.append(provider) or backend,
+    )
+
+    result = runner.run(
+        _entry(_definition(provider="anthropic", model="claude-sonnet-4-6")),
+        "review this",
+    )
+
+    assert result.status is DelegationStatus.COMPLETED
+    assert constructed == ["anthropic"]
+    assert (result.provider, result.model) == (
+        "anthropic",
+        "claude-sonnet-4-6",
+    )
+
+
+def test_explicit_provider_does_not_change_inherited_thinking() -> None:
+    resolved, failure, message = resolve_agent_model(
+        "gpt-5.5",
+        AgentThinking.INHERIT,
+        provider="deepseek",
+        turn_model="root-model",
+        turn_thinking="high",
+        agent_provider="openai",
+    )
+
+    assert failure is None, message
+    assert resolved is not None
+    assert resolved.thinking == "high"
+
+
+def test_every_api_or_local_provider_can_back_an_agent() -> None:
     from aura.providers.registry import provider_registry
 
-    hosted = [
-        pid for pid in provider_registry.ids() if provider_registry.get(pid).kind == "api_key"
+    executable = [
+        pid
+        for pid in provider_registry.ids()
+        if provider_registry.get(pid).kind in {"api_key", "local"}
     ]
-    assert hosted, "there must be at least one hosted provider"
-    for provider in hosted:
+    assert executable, "there must be at least one executable provider"
+    for provider in executable:
         resolved, failure, message = resolve_agent_model(
             "some-model",
             AgentThinking.INHERIT,
-            provider=provider,
-            turn_model="",
+            provider="deepseek",
+            turn_model="root-model",
             turn_thinking="off",
+            agent_provider=provider,
         )
         assert failure is None, f"{provider}: {message}"
         assert resolved.provider == provider
@@ -605,20 +694,31 @@ def test_no_model_anywhere_is_a_refusal_not_a_default() -> None:
     assert failure is DelegationFailure.MODEL_TARGET_INCOMPLETE
 
 
-def test_a_local_or_cli_provider_is_refused_for_now() -> None:
-    from aura.providers.registry import provider_registry
+def test_an_unsupported_provider_kind_is_refused(monkeypatch) -> None:
+    from aura.providers.registry import ProviderRegistry
 
-    cli = [
-        pid for pid in provider_registry.ids() if provider_registry.get(pid).kind != "api_key"
-    ]
-    if not cli:
-        pytest.skip("this build registers only hosted providers")
+    registry = ProviderRegistry(
+        {
+            "cli": {
+                "label": "CLI",
+                "base_url": "",
+                "env_key": "",
+                "default_model": "cli-model",
+                "default_thinking": "off",
+                "models": {},
+                "pricing": {},
+                "kind": "external_cli",
+            }
+        }
+    )
+    monkeypatch.setattr("aura.providers.registry.provider_registry", registry)
     resolved, failure, _message = resolve_agent_model(
         "m",
         AgentThinking.INHERIT,
-        provider=cli[0],
+        provider="deepseek",
         turn_model="",
         turn_thinking="off",
+        agent_provider="cli",
     )
 
     assert resolved is None
@@ -650,6 +750,7 @@ def test_a_definition_carries_no_provider_credential_or_url() -> None:
         "name",
         "description",
         "instructions",
+        "provider",
         "model",
         "thinking",
     }

@@ -133,8 +133,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         self._agents_controller = MainWindowAgentsController(
             self,
-            # An Agent never chooses a provider: it runs on whichever one
-            # Aura is set to, with Aura's own model as its fallback.
+            # Agent definitions may inherit this target or name another
+            # configured provider/model; the controller freezes either form.
             model_context=self._current_model_context,
             workflow_runner=lambda: self._bridge.workflow_runner,
         )
@@ -565,6 +565,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     def open_api_settings(self) -> None:
         """Open settings dialog directly to the API Keys tab."""
         self._settings_controller.open_api_settings()
+
+    def open_settings(self) -> None:
+        """Open settings on the Models page."""
+        self._settings_controller.open_settings()
 
     def _on_open_update(self) -> None:
         dlg = UpdateDialog(self)

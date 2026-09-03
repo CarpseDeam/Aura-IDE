@@ -49,7 +49,8 @@ class AgentRow:
 
     ``available`` and ``permission`` come from this user's private local
     state, never from the definition — a project definition has no say in
-    either.
+    either. ``model_label`` is already provider-qualified when the definition
+    selects a provider, so the tooltip never hides a mixed-model target.
     """
 
     agent_id: str

@@ -20,6 +20,7 @@ from aura.config import (
     get_provider,
     resolve_api_key,
 )
+from aura.providers.local_openai import require_valid_local_openai_base_url
 from aura.providers.native_search import native_web_search_capability
 
 
@@ -35,19 +36,31 @@ class DeepSeekClient:
         self,
         api_key: str | None = None,
         provider: ProviderId = "deepseek",
+        base_url: str | None = None,
     ) -> None:
         self._provider = provider
         cfg = get_provider(provider)
-        key = api_key if api_key is not None else resolve_api_key(provider)
+        self._is_local = cfg.kind == "local"
+        if base_url is not None and cfg.kind != "local":
+            raise ValueError("A base URL override is only supported for local providers.")
+
+        endpoint = cfg.base_url
+        if cfg.kind == "local":
+            endpoint = require_valid_local_openai_base_url(base_url or endpoint)
+            # The OpenAI SDK requires a non-empty key even when the compatible
+            # local server performs no authentication.
+            key = api_key or "local"
+        else:
+            key = api_key if api_key is not None else resolve_api_key(provider)
         self._api_key = key
-        self._base_url = cfg.base_url.rstrip("/")
+        self._base_url = endpoint.rstrip("/")
         self._chat_protocol = cfg.chat_protocol
-        self._chat_base_url = (cfg.chat_base_url or cfg.base_url).rstrip("/")
+        self._chat_base_url = (cfg.chat_base_url or endpoint).rstrip("/")
         self._requires_reasoning_replay = bool(cfg.requires_reasoning_replay)
         self._timeout = httpx.Timeout(120.0, connect=10.0, read=None)
         self._client = OpenAI(
             api_key=key,
-            base_url=cfg.base_url,
+            base_url=endpoint,
             timeout=self._timeout,
             max_retries=3,
         )
@@ -90,6 +103,13 @@ class DeepSeekClient:
         temperature: float = 0.7,
     ) -> Iterator[Event]:
         """Select the configured protocol and delegate the stream execution."""
+        if getattr(self, "_is_local", False):
+            # OpenAI-compatible local servers do not share one portable
+            # reasoning parameter. Keep the first implementation honest and
+            # send ordinary Chat Completions until a server-specific contract
+            # is introduced.
+            thinking = "off"
+
         if self._uses_responses(model):
             capability = native_web_search_capability(
                 self._provider,

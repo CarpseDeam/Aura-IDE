@@ -22,8 +22,9 @@ from aura.agents.graph_store import AgentGraphStore  # noqa: E402
 from aura.agents.local_state import AgentLocalState, AgentPermission  # noqa: E402
 from aura.agents.models import AgentScope, AgentThinking  # noqa: E402
 from aura.agents.store import AgentStore  # noqa: E402
-from aura.gui.agents_page import ModelChoices  # noqa: E402
+from aura.gui.agents_page import ModelChoices, ModelTargetChoice  # noqa: E402
 from aura.gui.main_window_agents import MainWindowAgentsController  # noqa: E402
+from aura.gui.widgets.searchable_model_combo import SearchableModelCombo  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -42,14 +43,27 @@ class _Tab:
         return self.checked
 
 
-#: A fixed model list for Aura's pretend current provider, so the model
-#: control is asserted against known options rather than whatever the real
-#: catalog happens to hold. There is no provider list, because an agent has
-#: no provider to choose.
+#: A fixed qualified target list, so the combined picker is asserted against
+#: known options rather than whatever the real catalog happens to hold.
 _CHOICES = ModelChoices(
-    models=("claude-sonnet-4-6", "gpt-5.5"),
+    targets=(
+        ModelTargetChoice(
+            "anthropic", "claude-sonnet-4-6", "Anthropic — Claude Sonnet 4.6"
+        ),
+        ModelTargetChoice("openai", "gpt-5.5", "OpenAI — GPT-5.5"),
+    ),
+    current_provider="anthropic",
     current_model="claude-sonnet-4-6",
 )
+
+
+def _target_index(page, provider: str, model: str) -> int:
+    target = (provider, model)
+    return next(
+        index
+        for index in range(page._model.count())
+        if page._model.itemData(index) == target
+    )
 
 
 @pytest.fixture()
@@ -222,16 +236,17 @@ def test_editing_and_saving_keeps_the_id_and_rewrites_the_file(wired) -> None:
 
 
 def test_the_editor_has_a_model_control_and_no_provider_control(wired) -> None:
-    """An Agent never pins a provider, so there is nowhere to pick one."""
+    """Provider and model are one target, never two controls."""
     agent_id = _seed(wired.store, AgentScope.PROJECT, "Reviewer")
     wired.controller.on_agents_requested()
     page = wired.controller.agents_page
     page.select_agent(agent_id)
 
+    assert isinstance(page._model, SearchableModelCombo)
     assert page._model.isEnabled() is True
     assert not hasattr(page, "_provider")
     assert not hasattr(page._editor, "provider")
-    assert "provider" not in {
+    assert "provider" in {
         field.lower() for field in type(page.draft()).__dataclass_fields__
     }
 
@@ -245,11 +260,15 @@ def test_the_model_control_offers_the_current_providers_models(wired) -> None:
     listed = [page._model.itemText(index) for index in range(page._model.count())]
 
     assert listed == [
-        "Use Aura's current model (claude-sonnet-4-6)",
-        "claude-sonnet-4-6",
-        "gpt-5.5",
+        "Use Aura's current model (Anthropic — Claude Sonnet 4.6)",
+        "Anthropic — Claude Sonnet 4.6",
+        "OpenAI — GPT-5.5",
     ]
-    assert page._model.itemData(0) == ""
+    assert [page._model.itemData(index) for index in range(page._model.count())] == [
+        ("", ""),
+        ("anthropic", "claude-sonnet-4-6"),
+        ("openai", "gpt-5.5"),
+    ]
 
 
 def test_an_agent_with_no_model_keeps_the_inherit_choice_when_saved(wired) -> None:
@@ -258,29 +277,149 @@ def test_an_agent_with_no_model_keeps_the_inherit_choice_when_saved(wired) -> No
     page = wired.controller.agents_page
     page.select_agent(agent_id)
 
+    assert wired.store.get(agent_id).provider == ""
     assert wired.store.get(agent_id).model == ""
-    assert page._model.currentData() == ""
+    assert page._model.currentData() == ("", "")
     assert "aura's current model" in page._model.currentText().lower()
 
     page._save_btn.click()
 
+    assert wired.store.get(agent_id).provider == ""
     assert wired.store.get(agent_id).model == ""
 
 
-def test_choosing_an_explicit_model_is_saved_without_a_provider(wired) -> None:
+def test_choosing_a_qualified_target_saves_provider_and_model(wired) -> None:
     agent_id = _seed(wired.store, AgentScope.PROJECT, "Reviewer")
     wired.controller.on_agents_requested()
     page = wired.controller.agents_page
     page.select_agent(agent_id)
 
-    page._model.setCurrentText("gpt-5.5")
+    page._model.setCurrentIndex(_target_index(page, "openai", "gpt-5.5"))
     page._save_btn.click()
 
     saved = wired.store.get(agent_id)
     assert saved is not None
+    assert saved.provider == "openai"
     assert saved.model == "gpt-5.5"
     text = wired.store.path_for(AgentScope.PROJECT, agent_id).read_text(encoding="utf-8")
-    assert "provider" not in text.lower()
+    assert "provider: openai" in text
+    assert "model: gpt-5.5" in text
+
+
+def test_local_model_target_forces_thinking_off(wired) -> None:
+    agent_id = _seed(wired.store, AgentScope.PROJECT, "Local coder")
+    wired.controller.on_agents_requested()
+    page = wired.controller.agents_page
+    page.select_agent(agent_id)
+    page.set_model_choices(
+        ModelChoices(
+            targets=(
+                ModelTargetChoice(
+                    "local_openai",
+                    "qwen-local",
+                    "Local Model — qwen-local",
+                ),
+            ),
+            current_provider="anthropic",
+            current_model="claude-sonnet-4-6",
+        )
+    )
+    page._thinking.setCurrentIndex(
+        page._thinking.findData(AgentThinking.MAX.value)
+    )
+
+    page._model.setCurrentIndex(
+        _target_index(page, "local_openai", "qwen-local")
+    )
+
+    assert page._thinking.currentData() == AgentThinking.OFF.value
+    assert not page._thinking.isEnabled()
+    assert page.draft().thinking is AgentThinking.OFF
+
+
+def test_inherited_local_target_keeps_inherit_definition_semantics(wired) -> None:
+    agent_id = _seed(wired.store, AgentScope.PROJECT, "Inherited local coder")
+    wired.controller.on_agents_requested()
+    page = wired.controller.agents_page
+    page.select_agent(agent_id)
+
+    page.set_model_choices(
+        ModelChoices(
+            targets=(
+                ModelTargetChoice(
+                    "local_openai",
+                    "qwen-local",
+                    "Local Model — qwen-local",
+                ),
+            ),
+            current_provider="local_openai",
+            current_model="qwen-local",
+        )
+    )
+
+    assert page._model.currentData() == ("", "")
+    assert page._thinking.currentData() == AgentThinking.INHERIT.value
+    assert not page._thinking.isEnabled()
+    assert page.draft().thinking is AgentThinking.INHERIT
+
+
+@pytest.mark.parametrize(
+    ("provider", "model"),
+    [("old-provider", "old-model"), ("", "old-model")],
+)
+def test_a_stale_saved_target_remains_selectable_and_round_trips(
+    wired, provider: str, model: str
+) -> None:
+    definition = wired.store.create(
+        AgentScope.PROJECT,
+        name="Legacy",
+        description="Carries an older target.",
+        instructions="Keep it intact.",
+        provider=provider,
+        model=model,
+    )
+    wired.controller.on_agents_requested()
+    page = wired.controller.agents_page
+    page.select_agent(definition.agent_id)
+
+    assert page._model.currentData() == (provider, model)
+
+    page._save_btn.click()
+
+    saved = wired.store.get(definition.agent_id)
+    assert saved is not None
+    assert (saved.provider, saved.model) == (provider, model)
+
+
+def test_refreshing_choices_preserves_the_live_unsaved_target(wired) -> None:
+    agent_id = _seed(wired.store, AgentScope.PROJECT, "Reviewer")
+    wired.controller.on_agents_requested()
+    page = wired.controller.agents_page
+    page.select_agent(agent_id)
+    page._model.setCurrentIndex(_target_index(page, "openai", "gpt-5.5"))
+
+    # Simulate a root target/catalog refresh that no longer lists the draft's
+    # target. It must stay as a compatibility row instead of reverting to the
+    # definition currently on disk.
+    page.set_model_choices(
+        ModelChoices(
+            targets=(
+                ModelTargetChoice(
+                    "anthropic",
+                    "claude-sonnet-4-6",
+                    "Anthropic — Claude Sonnet 4.6",
+                ),
+            ),
+            current_provider="anthropic",
+            current_model="claude-sonnet-4-6",
+        )
+    )
+
+    assert page._model.currentData() == ("openai", "gpt-5.5")
+    page._save_btn.click()
+    saved = wired.store.get(agent_id)
+    assert saved is not None
+    assert (saved.provider, saved.model) == ("openai", "gpt-5.5")
 
 
 def test_deleting_removes_the_file_and_every_local_decision(wired) -> None:

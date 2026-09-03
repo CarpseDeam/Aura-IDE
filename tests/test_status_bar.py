@@ -254,3 +254,20 @@ def test_footer_cost_tooltip_is_generic_for_any_eventless_conversation() -> None
         "latest_context": {},
     })
     assert _footer_cost_tooltip(legacy, legacy.cost_summary()) == "No priced usage recorded."
+
+
+def test_footer_cost_tooltip_identifies_zero_cost_local_inference() -> None:
+    telemetry = ConversationTelemetry()
+    telemetry.record_usage(
+        provider_id="local_openai",
+        model_id="qwen-local",
+        prompt=100,
+        completion=50,
+        hit=0,
+        miss=100,
+        context_window_tokens=0,
+    )
+
+    tooltip = _footer_cost_tooltip(telemetry, telemetry.cost_summary())
+    assert "Local inference is recorded at $0 provider cost." in tooltip
+    assert "published rates" not in tooltip

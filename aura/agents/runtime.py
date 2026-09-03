@@ -94,12 +94,13 @@ class AgentDelegationRunner:
             provider=self._inherited_provider,
             turn_model=self._inherited_model,
             turn_thinking=self._inherited_thinking,
+            agent_provider=definition.provider,
         )
         if resolved is None:
             return DelegationResult.failure(
                 agent_id, failure or DelegationFailure.INTERNAL_ERROR, message,
                 agent_name=definition.name,
-                provider=self._inherited_provider,
+                provider=definition.provider.strip() or self._inherited_provider,
                 model=definition.model,
             )
         if not self._lock.acquire(blocking=False):

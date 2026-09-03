@@ -21,6 +21,10 @@ from aura.models import (
 )
 from aura.paths import config_dir
 from aura.providers.base import normalize_thinking_mode
+from aura.providers.local_openai import (
+    DEFAULT_LOCAL_OPENAI_BASE_URL,
+    normalize_local_openai_base_url,
+)
 from aura.providers.registry import provider_registry
 
 # Default-ish old localhost variants that should migrate to hosted
@@ -70,7 +74,11 @@ def resolve_production_default_model(provider_id: ProviderId | None) -> str:
         return DEFAULT_MODEL
 
     cfg = provider_registry.get(provider_id)
-    return cfg.default_model
+    if cfg.default_model:
+        return cfg.default_model
+    # Discovery-only providers deliberately carry no invented default. Once a
+    # real model snapshot exists, its first entry is the usable fallback.
+    return next(iter(cfg.models), "")
 
 
 logger = logging.getLogger(__name__)
@@ -80,6 +88,7 @@ class AppSettings:
     provider: ProviderId = DEFAULT_PROVIDER
     default_model: str = DEFAULT_MODEL
     default_thinking: ThinkingMode = DEFAULT_THINKING
+    local_openai_base_url: str = DEFAULT_LOCAL_OPENAI_BASE_URL
     restore_last_conversation: bool = True
     temperature: float = 0.7
     auto_approve: bool = False
@@ -115,6 +124,12 @@ class AppSettings:
     @classmethod
     def from_dict(cls, data: dict) -> "AppSettings":
         s = cls()
+        raw_local_endpoint = data.get("local_openai_base_url")
+        if isinstance(raw_local_endpoint, str):
+            s.local_openai_base_url = normalize_local_openai_base_url(
+                raw_local_endpoint
+            )
+        provider_registry.configure_local_base_url(s.local_openai_base_url)
         # Flags
         if isinstance(data.get("first_launch_done"), bool):
             s.first_launch_done = data["first_launch_done"]
@@ -240,7 +255,16 @@ def _migrated_model(raw: Any, provider: ProviderId, *, strict: bool) -> str:
         return default_model
 
     if isinstance(raw, str) and raw:
-        if not strict or raw in provider_registry.get(provider).models:
+        provider_spec = provider_registry.get(provider)
+        if (
+            not strict
+            or raw in provider_spec.models
+            # Local catalogs are loaded by ``aura.config``. Preserve the
+            # persisted selection when this lightweight settings module is
+            # used on its own before that cache has been hydrated; the local
+            # provider still remains unusable until discovery supplies models.
+            or (provider_spec.kind == "local" and not provider_spec.models)
+        ):
             return raw
         logger.warning(
             "Invalid model value: %r is not available for provider %s; "
@@ -310,6 +334,10 @@ def load_settings() -> AppSettings:
 
 def save_settings(settings: AppSettings) -> None:
     p = settings_path()
+    settings.local_openai_base_url = normalize_local_openai_base_url(
+        settings.local_openai_base_url
+    )
+    provider_registry.configure_local_base_url(settings.local_openai_base_url)
     data = asdict(settings)
     data["companion_enabled"] = False  # session-only; never persist as enabled
     p.write_text(json.dumps(data, indent=2), encoding="utf-8")

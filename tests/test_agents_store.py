@@ -233,19 +233,21 @@ def test_the_file_is_readable_markdown_with_the_body_as_instructions(
     assert reloaded.thinking is AgentThinking.MAX
 
 
-def test_a_definition_never_names_a_provider(store: AgentStore) -> None:
-    """An agent runs on Aura's provider, so a definition cannot pin one."""
+def test_a_definition_can_name_a_provider_without_machine_configuration(
+    store: AgentStore,
+) -> None:
     created = store.create(
         AgentScope.PROJECT,
         name="Named",
-        description="Names a model only.",
+        description="Names a qualified model target.",
         instructions="Work.",
+        provider="anthropic",
         model="claude-sonnet-4-6",
     )
 
     text = store.path_for(AgentScope.PROJECT, created.agent_id).read_text(encoding="utf-8")
 
-    assert "provider" not in text.lower()
+    assert "provider: anthropic" in text
     assert "model: claude-sonnet-4-6" in text
 
 
@@ -257,14 +259,15 @@ def test_naming_no_model_omits_the_line_entirely(store: AgentStore) -> None:
     text = store.path_for(AgentScope.PROJECT, created.agent_id).read_text(encoding="utf-8")
 
     assert "model:" not in text
+    assert "provider:" not in text
+    assert created.provider == ""
     assert created.model == ""
     assert created.model_label == "Aura's current model"
 
 
-def test_a_legacy_provider_line_is_dropped_rather_than_honoured(
+def test_an_existing_provider_line_is_preserved_as_the_qualified_target(
     store: AgentStore,
 ) -> None:
-    """One-way normalization: the file still loads, the provider does not."""
     _write(
         store.project_dir,
         "legacyagentid",
@@ -276,13 +279,64 @@ def test_a_legacy_provider_line_is_dropped_rather_than_honoured(
 
     assert row.valid is True
     assert row.definition is not None
+    assert row.definition.provider == "anthropic"
     assert row.definition.model == "claude-sonnet-4-6"
-    assert not hasattr(row.definition, "provider")
 
-    # Writing it back leaves no provider behind to be honoured later.
+    # Writing it back retains only the portable ids, never local credentials.
     store.update(row.definition)
     text = store.path_for(AgentScope.PROJECT, "legacyagentid").read_text(encoding="utf-8")
-    assert "provider" not in text.lower()
+    assert "provider: anthropic" in text
+
+
+def test_parsing_does_not_require_the_target_provider_on_this_machine() -> None:
+    parsed = parse_agent_document(
+        "---\nid: portableagent\nname: Portable\ndescription: d.\n"
+        "provider: future-provider\nmodel: future-model\n---\n\nWork.\n",
+        scope=AgentScope.PROJECT,
+        expected_id="portableagent",
+    )
+
+    assert parsed.ok
+    assert parsed.definition is not None
+    assert (parsed.definition.provider, parsed.definition.model) == (
+        "future-provider",
+        "future-model",
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider", "model"),
+    [("claude_code", "claude-code"), ("codex", "codex")],
+)
+def test_retired_cli_agent_target_pair_migrates_to_inherit(
+    provider: str, model: str
+) -> None:
+    parsed = parse_agent_document(
+        "---\nid: legacycliagent\nname: Legacy CLI\ndescription: d.\n"
+        f"provider: {provider}\nmodel: {model}\n---\n\nWork.\n",
+        scope=AgentScope.PROJECT,
+        expected_id="legacycliagent",
+    )
+
+    assert parsed.ok
+    assert parsed.definition is not None
+    assert (parsed.definition.provider, parsed.definition.model) == ("", "")
+    rewritten = render_agent_document(parsed.definition)
+    assert "provider:" not in rewritten
+    assert "model:" not in rewritten
+
+
+def test_retired_cli_model_without_provider_keeps_model_only_compatibility() -> None:
+    parsed = parse_agent_document(
+        "---\nid: legacymodelonly\nname: Legacy model\ndescription: d.\n"
+        "model: codex\n---\n\nWork.\n",
+        scope=AgentScope.PROJECT,
+        expected_id="legacymodelonly",
+    )
+
+    assert parsed.ok
+    assert parsed.definition is not None
+    assert (parsed.definition.provider, parsed.definition.model) == ("", "codex")
 
 
 def test_render_and_parse_round_trip() -> None:
@@ -292,6 +346,7 @@ def test_render_and_parse_round_trip() -> None:
         name="Round Trip",
         description="Goes out and comes back.",
         instructions="Stay the same.",
+        provider="openai",
         model="gpt-5.5",
         thinking=AgentThinking.OFF,
     )

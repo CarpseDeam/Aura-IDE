@@ -602,6 +602,8 @@ class WorkflowRunner:
                 DelegationFailure.DELEGATION_UNAVAILABLE,
                 "The workflow stopped before this step ran.",
                 agent_name=step.agent_name,
+                provider=step.resolved.provider,
+                model=step.resolved.model,
             ),
         )
 
@@ -632,6 +634,8 @@ class WorkflowRunner:
             f"{reason}, so it was not run. Other branches of this workflow were "
             "not affected.",
             agent_name=step.agent_name,
+            provider=step.resolved.provider,
+            model=step.resolved.model,
         )
         return WorkflowStepOutcome(
             step.node_id,

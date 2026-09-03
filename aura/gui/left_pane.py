@@ -448,6 +448,10 @@ class LeftPane(QFrame):
             default_model=cfg.default_model,
         )
         self._production_model_combo.set_items(items, cfg.default_model)
+        local_only = cfg.kind == "local"
+        self._production_thinking_combo.setEnabled(not local_only)
+        if local_only:
+            _select_thinking(self._production_thinking_combo, "off")
 
     def current_production_model(self) -> str:
         return self._production_model_combo.currentData()
@@ -461,7 +465,10 @@ class LeftPane(QFrame):
             self._production_model_combo.setCurrentIndex(idx)
 
     def set_production_thinking(self, thinking: ThinkingMode) -> None:
-        _select_thinking(self._production_thinking_combo, thinking)
+        _select_thinking(
+            self._production_thinking_combo,
+            "off" if not self._production_thinking_combo.isEnabled() else thinking,
+        )
 
     def _clear_projects_layout(self) -> None:
         while self._projects_layout.count():

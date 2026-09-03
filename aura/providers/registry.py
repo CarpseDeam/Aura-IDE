@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from aura.providers.base import ProviderSpec
 from aura.providers.catalog import PROVIDER_CATALOG
+from aura.providers.local_openai import normalize_local_openai_base_url
 
 if TYPE_CHECKING:
     from aura.client.deepseek import DeepSeekClient
@@ -50,31 +51,52 @@ class ProviderRegistry:
     def all(self) -> dict[str, ProviderSpec]:
         return dict(self._providers)
 
-    def create_client(self, provider_id: str) -> DeepSeekClient | GoogleCloudClient:
+    def configure_local_base_url(self, base_url: object) -> str:
+        """Apply the persisted Local Model endpoint to the runtime spec.
+
+        Invalid values remain visible in the spec so usability checks fail and
+        Settings can show the value that needs correction. Client creation is
+        the validation boundary.
+        """
+        normalized = normalize_local_openai_base_url(base_url)
+        spec = self._providers.get("local_openai")
+        if spec is not None:
+            spec.base_url = normalized
+        return normalized
+
+    def create_client(
+        self,
+        provider_id: str,
+        *,
+        base_url: str | None = None,
+    ) -> DeepSeekClient | GoogleCloudClient:
         """Build the API client for *provider_id*.
 
-        Only ``api_key`` providers have an API client.  An unregistered id, or
-        a provider of any other kind, raises instead of falling through to the
-        DeepSeek client — a wrong-provider client would otherwise send the
-        turn to DeepSeek under another provider's name.
+        API-key providers and the OpenAI-compatible local provider share the
+        production client transport. An unregistered id or unsupported kind
+        raises instead of falling through to DeepSeek. ``base_url`` is an
+        unsaved discovery override and is accepted only for a local provider.
         """
         if provider_id not in self._providers:
             raise ValueError(f"Unknown provider {provider_id!r}: no client can be created.")
 
         spec = self._providers[provider_id]
-        if spec.kind != "api_key":
+        if spec.kind not in {"api_key", "local"}:
             raise ValueError(
                 f"{spec.label} ({provider_id}) is a {spec.kind!r} provider and has no "
-                f"API client. Select an API-key provider in Settings -> Provider Setup."
+                "API client. Select a supported provider in Settings."
             )
 
+        if base_url is not None and spec.kind != "local":
+            raise ValueError("A base URL override is only supported for local providers.")
+
         if provider_id == "google_cloud":
+            from aura.config import get_api_key
             from aura.providers.google_cloud.client import GoogleCloudClient
             from aura.providers.google_cloud.config import (
                 get_google_cloud_location,
                 get_google_cloud_project,
             )
-            from aura.config import get_api_key
 
             return GoogleCloudClient(
                 project=get_google_cloud_project(),
@@ -83,7 +105,7 @@ class ProviderRegistry:
             )
         from aura.client.deepseek import DeepSeekClient
 
-        return DeepSeekClient(provider=provider_id)
+        return DeepSeekClient(provider=provider_id, base_url=base_url)
 
 
 provider_registry = ProviderRegistry()

@@ -11,7 +11,11 @@ import pytest
 
 from aura.conversation.history import History
 from aura.conversation.persistence import SCHEMA_VERSION, load_conversation, save_conversation
-from aura.conversation.telemetry import ConversationTelemetry, UsageEvent
+from aura.conversation.telemetry import (
+    ConversationTelemetry,
+    UsageEvent,
+    context_window_for_model,
+)
 from aura.gui.conv_persistence import ConversationPersistence
 from aura.gui.execution_handler import ExecutionEventHandler
 from aura.providers import pricing
@@ -55,6 +59,7 @@ def test_telemetry_round_trips_through_conversation_json(tmp_path) -> None:
             "model_id": "deepseek-v4-pro",
             "input_tokens": 556_000,
             "context_window_tokens": 1_000_000,
+            "provider_id": "deepseek",
         },
         "events": [
             {
@@ -84,7 +89,12 @@ def test_legacy_conversation_loads_zero_telemetry(tmp_path) -> None:
 
     assert load_conversation(path).telemetry.to_dict() == {
         "per_model": {},
-        "latest_context": {"model_id": "", "input_tokens": 0, "context_window_tokens": 0},
+        "latest_context": {
+            "model_id": "",
+            "input_tokens": 0,
+            "context_window_tokens": 0,
+            "provider_id": "",
+        },
         "events": [],
     }
 
@@ -106,6 +116,76 @@ def test_record_usage_calculates_decimal_cost_for_catalog_priced_model() -> None
     assert event.cost_decimal() == Decimal("0.15") + Decimal("0.60")
     assert event.exact is False
     assert event.stale is False
+
+
+def test_local_usage_stays_exactly_free_when_model_id_matches_hosted_catalog() -> None:
+    telemetry = ConversationTelemetry()
+    telemetry.record_usage(
+        provider_id="local_openai",
+        model_id="gpt-5.4-mini",
+        prompt=1_000_000,
+        completion=1_000_000,
+        hit=0,
+        miss=1_000_000,
+        context_window_tokens=0,
+        now=_FIXED_NOW,
+    )
+
+    event = telemetry.events[0]
+    assert event.provider_id == "local_openai"
+    assert event.pricing_tier == "local"
+    assert event.cost_decimal() == Decimal("0")
+    assert event.exact is True
+    assert telemetry.latest_context.provider_id == "local_openai"
+
+
+def test_latest_context_provider_round_trips_and_legacy_payload_defaults_empty() -> None:
+    current = ConversationTelemetry()
+    current.record_usage(
+        provider_id="local_openai",
+        model_id="gpt-5.4-mini",
+        prompt=12,
+        completion=3,
+        hit=0,
+        miss=12,
+        context_window_tokens=0,
+        now=_FIXED_NOW,
+    )
+
+    restored = ConversationTelemetry.from_dict(current.to_dict())
+    assert restored.latest_context.provider_id == "local_openai"
+
+    legacy = ConversationTelemetry.from_dict(
+        {
+            "latest_context": {
+                "model_id": "gpt-5.4-mini",
+                "input_tokens": 12,
+                "context_window_tokens": 0,
+            }
+        }
+    )
+    assert legacy.latest_context.provider_id == ""
+
+
+def test_provider_qualified_context_lookup_does_not_cross_model_id_collision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "aura.models.PROVIDERS",
+        {
+            "hosted": SimpleNamespace(
+                models={
+                    "shared-id": SimpleNamespace(context_window_tokens=128_000)
+                }
+            ),
+            "local_openai": SimpleNamespace(
+                models={"shared-id": SimpleNamespace(context_window_tokens=0)}
+            ),
+        },
+    )
+
+    assert context_window_for_model("shared-id", "local_openai") == 0
+    assert context_window_for_model("shared-id") == 128_000
 
 
 def test_cost_summary_has_no_known_total_when_there_are_no_events() -> None:
@@ -187,6 +267,7 @@ def test_execution_usage_accumulates_but_latest_context_is_replaced() -> None:
         "model_id": "deepseek-v4-pro",
         "input_tokens": 250,
         "context_window_tokens": 1_000_000,
+        "provider_id": "deepseek",
     }
 
 

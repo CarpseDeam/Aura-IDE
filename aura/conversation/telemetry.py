@@ -16,9 +16,20 @@ def _token_count(value: Any) -> int:
         return 0
 
 
-def context_window_for_model(model_id: str) -> int:
-    """Return the catalogued capacity for *model_id*, or zero when unknown."""
+def context_window_for_model(model_id: str, provider_id: str = "") -> int:
+    """Return the catalogued capacity for *model_id*, or zero when unknown.
+
+    Prefer the provider that actually served the request.  Model ids are not
+    globally unique (a local server may deliberately expose the same id as a
+    hosted provider), so a provider-qualified observation must never borrow a
+    different provider's capacity metadata.
+    """
     from aura.models import PROVIDERS
+
+    provider = PROVIDERS.get(str(provider_id or ""))
+    if provider is not None:
+        model = provider.models.get(model_id)
+        return _token_count(model.context_window_tokens) if model is not None else 0
 
     for provider in PROVIDERS.values():
         model = provider.models.get(model_id)
@@ -54,6 +65,7 @@ def _price_event(
     """Price one usage observation. Returns (tier, source_url, retrieved_at, stale, exact, cost)."""
     from aura.models import get_pricing
     from aura.providers.pricing import has_pricing_source, priced_lookup_for
+    from aura.providers.registry import provider_registry
 
     if provider_id and has_pricing_source(provider_id):
         lookup = priced_lookup_for(provider_id, model_id, now)
@@ -67,7 +79,24 @@ def _price_event(
         ) / Decimal(1_000_000)
         return lookup.tier, lookup.source_url, lookup.retrieved_at, lookup.stale, False, cost
 
-    rates = get_pricing(model_id)
+    # A local OpenAI-compatible endpoint has no provider bill.  Keep that
+    # exact even when it exposes an id also present in a hosted catalog.
+    if provider_id and provider_registry.has(provider_id):
+        provider = provider_registry.get(provider_id)
+        if provider.kind == "local":
+            return "local", "", "", False, True, Decimal(0)
+
+        rates = provider.pricing.get(model_id)
+        if rates is None:
+            model = provider.models.get(model_id)
+            if model is not None:
+                rates = {
+                    "in_miss": model.input_per_m_usd,
+                    "in_hit": model.cache_hit_per_m_usd,
+                    "out": model.output_per_m_usd,
+                }
+    else:
+        rates = get_pricing(model_id)
     if rates is None:
         return "unknown", "", "", False, False, None
     cost = (
@@ -88,7 +117,7 @@ class UsageEvent:
     cache_hit_tokens: int
     cache_miss_tokens: int
     output_tokens: int
-    pricing_tier: str  # "off_peak" | "peak" | "catalog" | "unknown"
+    pricing_tier: str  # "off_peak" | "peak" | "catalog" | "local" | "unknown"
     source_url: str = ""
     retrieved_at: str = ""
     stale: bool = False
@@ -164,12 +193,16 @@ class LatestContext:
     model_id: str = ""
     input_tokens: int = 0
     context_window_tokens: int = 0
+    # Persist the serving provider because model ids are not globally unique.
+    # Kept last so existing positional construction remains compatible.
+    provider_id: str = ""
 
     def to_dict(self) -> dict[str, int | str]:
         return {
             "model_id": self.model_id,
             "input_tokens": self.input_tokens,
             "context_window_tokens": self.context_window_tokens,
+            "provider_id": self.provider_id,
         }
 
     @classmethod
@@ -177,10 +210,12 @@ class LatestContext:
         if not isinstance(data, dict):
             return cls()
         model_id = data.get("model_id")
+        provider_id = data.get("provider_id")
         return cls(
             model_id=model_id if isinstance(model_id, str) else "",
             input_tokens=_token_count(data.get("input_tokens")),
             context_window_tokens=_token_count(data.get("context_window_tokens")),
+            provider_id=provider_id if isinstance(provider_id, str) else "",
         )
 
 
@@ -222,15 +257,16 @@ class ConversationTelemetry:
         bucket["hit"] += hit
         bucket["miss"] += miss
         bucket["out"] += completion
+        event_provider_id = str(provider_id or provider_id_for_model(model_id))
         if update_latest_context:
             self.latest_context = LatestContext(
                 model_id=model_id,
                 input_tokens=prompt,
                 context_window_tokens=_token_count(context_window_tokens),
+                provider_id=event_provider_id,
             )
 
         moment = now or datetime.now(timezone.utc)
-        event_provider_id = str(provider_id or provider_id_for_model(model_id))
         tier, source_url, retrieved_at, stale, exact, cost = _price_event(
             provider_id=event_provider_id,
             model_id=model_id,

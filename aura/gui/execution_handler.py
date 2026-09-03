@@ -336,7 +336,11 @@ class ExecutionEventHandler(QObject):
             completion=completion,
             hit=hit,
             miss=miss,
-            context_window_tokens=context_window_for_model(model_id),
+            context_window_tokens=context_window_for_model(
+                model_id,
+                str(getattr(self._settings, "provider", "") or ""),
+            ),
+            provider_id=str(getattr(self._settings, "provider", "") or ""),
         )
         self.usage_updated.emit()
 

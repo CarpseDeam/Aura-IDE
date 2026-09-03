@@ -279,8 +279,10 @@ class TestByokProviders:
         spec = provider_registry.get("openai")
         assert len(spec.models) > 0
 
-    def test_all_providers_have_default_model(self) -> None:
+    def test_api_key_providers_have_default_model(self) -> None:
         for pid, spec in provider_registry.all().items():
+            if spec.kind != "api_key":
+                continue
             assert spec.default_model, f"{pid} is missing default_model"
 
 

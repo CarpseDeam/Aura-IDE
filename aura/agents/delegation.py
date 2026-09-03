@@ -54,7 +54,7 @@ class DelegationFailure(str, Enum):
     PROVIDER_UNKNOWN = "provider_unknown"
     #: The provider is known but has no usable credentials on this machine.
     PROVIDER_NOT_CONFIGURED = "provider_not_configured"
-    #: The provider is real but cannot back an agent yet (CLI or local kinds).
+    #: The provider is real but has no Aura Agent backend (for example a CLI).
     PROVIDER_UNSUPPORTED = "provider_unsupported"
     #: Neither an explicit Agent model nor Aura's current model could resolve.
     MODEL_TARGET_INCOMPLETE = "model_target_incomplete"

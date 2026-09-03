@@ -18,9 +18,10 @@ What is frozen, and why each of them:
   brief mid-run does not change what any child is told;
 * the **occurrence assignments and dashed ownership**, which belong to nodes
   and connections rather than reusable agents;
-* **Aura's own provider**, because an agent never chooses one;
-* the **resolved model** and **thinking selection** for every solid and helper
-  occurrence at every depth, under that provider; and
+* **Aura's own provider/model/thinking baseline**, from which definitions may
+  inherit; and
+* the **resolved provider, model, and thinking selection** for every solid and
+  helper occurrence at every depth; and
 * the **local permission** for every occurrence, which decides whether the run
   needs a writable worktree before the solid path starts.
 
@@ -126,6 +127,7 @@ class WorkflowHelperPlan:
             "agent_name": self.agent_name,
             "permission": self.permission.value,
             "permission_label": self.permission.label,
+            "provider": self.resolved.provider,
             "model": self.resolved.model,
         }
 
@@ -224,6 +226,7 @@ class WorkflowStepPlan:
             "agent_name": self.agent_name,
             "permission": self.permission.value,
             "permission_label": self.permission.label,
+            "provider": self.resolved.provider,
             "model": self.resolved.model,
         }
         if self.helpers:
@@ -360,6 +363,7 @@ def _resolve_occurrence(
         provider=provider,
         turn_model=model,
         turn_thinking=thinking,
+        agent_provider=definition.provider,
     )
     if resolved is None:
         return None, None, f"{definition.name}: {message}"

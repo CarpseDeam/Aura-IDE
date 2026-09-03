@@ -6,12 +6,11 @@ is *allowed to do* — permission is private local state
 (:mod:`aura.agents.local_state`), so a definition committed to a repository
 can never hand itself authority on someone else's machine.
 
-A definition never names a provider. An agent runs on whichever provider
-Aura itself is set to for the turn that invoked it, so a reusable agent — a
-project one especially — cannot pin a machine to a provider its owner has no
-key for. What a definition *may* name is a model, and that model is resolved
-under Aura's current provider. An empty model means "whatever model Aura is
-running", which is what a brand-new agent starts as.
+A definition may name a provider and model target without carrying any of the
+machine-local configuration that makes that provider usable. Empty values
+inherit Aura's submitted turn. A model on its own keeps the historical
+behaviour of resolving under Aura's provider; a provider on its own follows
+that provider's configured default model.
 """
 from __future__ import annotations
 
@@ -81,9 +80,9 @@ class AgentDefinition:
 
     ``instructions`` is the Markdown body — the full brief the agent runs
     with. ``description`` is the short line Aura reads when deciding whether
-    this agent is the right one to hand a piece of work to. ``model`` is a
-    model id resolved under Aura's own provider, or ``""`` for Aura's current
-    model.
+    this agent is the right one to hand a piece of work to. ``provider`` and
+    ``model`` are the optional target identifiers; empty values follow the
+    compatibility matrix described in the module docstring.
     """
 
     agent_id: str
@@ -91,13 +90,20 @@ class AgentDefinition:
     name: str
     description: str
     instructions: str
+    provider: str = ""
     model: str = ""
     thinking: AgentThinking = AgentThinking.INHERIT
 
     @property
     def model_label(self) -> str:
-        """How the model choice reads in a list or a detail line."""
-        return self.model.strip() or CURRENT_MODEL_LABEL
+        """How the qualified model choice reads in a list or detail line."""
+        provider = self.provider.strip()
+        model = self.model.strip()
+        if provider:
+            return f"{provider} · {model or 'default model'}"
+        if model:
+            return f"Aura's provider · {model}"
+        return CURRENT_MODEL_LABEL
 
 
 __all__ = [

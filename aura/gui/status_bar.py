@@ -86,7 +86,10 @@ def _footer_cost_tooltip(telemetry: ConversationTelemetry, summary: CostSummary)
 
     if summary.unknown_count:
         lines.append(f"{summary.unknown_count} call(s) have no pricing data and are excluded from the total.")
-    lines.append("Calculated from published rates — not a provider-issued invoice.")
+    if any(event.pricing_tier != "local" for event in telemetry.events):
+        lines.append("Calculated from published rates — not a provider-issued invoice.")
+    if any(event.pricing_tier == "local" for event in telemetry.events):
+        lines.append("Local inference is recorded at $0 provider cost.")
     return "\n".join(lines)
 
 
@@ -329,7 +332,8 @@ class AuraStatusBar(QStatusBar):
         self._status_cache.setText(usage_text)
         snapshot = latest_context or LatestContext()
         context_capacity = snapshot.context_window_tokens or context_window_for_model(
-            snapshot.model_id or model_id
+            snapshot.model_id or model_id,
+            snapshot.provider_id,
         )
         context_text, meter_value = _format_context_occupancy(snapshot.input_tokens, context_capacity)
         self._status_context.setText(context_text)

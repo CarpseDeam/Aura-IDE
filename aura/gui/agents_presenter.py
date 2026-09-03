@@ -51,6 +51,7 @@ def agent_detail(
         name=summary.name,
         description=summary.description,
         instructions=definition.instructions if definition else "",
+        provider=definition.provider if definition else "",
         model=definition.model if definition else "",
         thinking=definition.thinking if definition else AgentThinking.INHERIT,
         permission=permission if addressable else DEFAULT_PERMISSION,

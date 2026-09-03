@@ -8,6 +8,7 @@ from typing import Callable
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
+    QMessageBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -116,10 +117,13 @@ class SettingsDialog(QDialog):
                 page.cleanup_threads()
 
     def done(self, result: int) -> None:  # type: ignore[override]
+        if result != QDialog.DialogCode.Accepted:
+            self._models_page.discard_changes()
         self._cleanup_threads()
         super().done(result)
 
     def closeEvent(self, event):  # type: ignore[override]
+        self._models_page.discard_changes()
         self._cleanup_threads()
         super().closeEvent(event)
 
@@ -141,18 +145,32 @@ class SettingsDialog(QDialog):
         self._windows_page.collect_settings(result)
         return result
 
+    def _validate(self) -> bool:
+        error = self._models_page.validation_error()
+        if error is None:
+            return True
+        self._tabs.setCurrentIndex(0)
+        QMessageBox.warning(self, APP_NAME, error)
+        return False
+
     def apply(self) -> None:
         """Persist and live-apply the current values without closing."""
+        if not self._validate():
+            return
         new_settings = self.result_settings()
         save_settings(new_settings)
+        self._models_page.commit_changes()
         self._sandbox_page.apply_project_settings()
         self._settings = new_settings
         if self._on_live_settings_applied is not None:
             self._on_live_settings_applied(new_settings)
 
     def accept(self) -> None:  # type: ignore[override]
+        if not self._validate():
+            return
         new_settings = self.result_settings()
         save_settings(new_settings)
+        self._models_page.commit_changes()
         self._sandbox_page.apply_project_settings()
         self._settings = new_settings
         super().accept()

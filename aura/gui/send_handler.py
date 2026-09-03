@@ -19,7 +19,13 @@ from dataclasses import dataclass
 
 from aura.agents.roster import EMPTY_AGENT_ROSTER, AgentTurnRoster
 from aura.agents.workflow_plan import WorkflowRunPlan
-from aura.config import PROVIDERS, AppSettings, ModelInfo, ThinkingMode, has_usable_provider_configuration
+from aura.config import (
+    PROVIDERS,
+    AppSettings,
+    ModelInfo,
+    ThinkingMode,
+    has_usable_provider_configuration,
+)
 from aura.conversation.external_paths import extract_external_read_paths
 from aura.conversation.target_files import extract_target_files
 from aura.git_ops import (
@@ -219,11 +225,23 @@ class SendHandler(QObject):
 
         # Guard: no provider configured
         if not has_usable_provider_configuration(self._settings.provider):
+            provider_cfg = PROVIDERS.get(self._settings.provider)
+            if provider_cfg is not None and provider_cfg.kind == "local":
+                detail = (
+                    "Start your OpenAI-compatible local server, then use "
+                    "Settings → Models → Test / Discover and select a model.\n\n"
+                    "You can still open and browse a project folder without a model."
+                )
+            else:
+                detail = (
+                    "Configure a hosted provider in Settings → API Keys, or a local "
+                    "OpenAI-compatible endpoint in Settings → Models. DeepSeek, OpenAI, "
+                    "Anthropic, Gemini, OpenRouter, and local models are supported.\n\n"
+                    "You can also open/browse a project folder before configuring AI."
+                )
             self._chat.add_error(
                 "No AI provider configured",
-                "Configure an AI provider in Settings → API Keys to start chatting. "
-                "DeepSeek, OpenAI, Anthropic, Gemini, and OpenRouter are supported.\n\n"
-                "You can also open/browse a project folder before configuring AI.",
+                detail,
             )
             return False
 
