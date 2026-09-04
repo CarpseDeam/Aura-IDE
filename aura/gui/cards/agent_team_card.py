@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aura.agents.models import AgentDefinition
 from aura.agents.team_compiler import CompiledAgentTeam
 from aura.agents.workflow_helper_execution import WorkflowStepState
 from aura.agents.workflow_plan import WorkflowHelperPlan, WorkflowStepPlan
@@ -182,6 +183,7 @@ class AgentTeamCard(QFrame):
         self._rows: dict[str, _AgentTeamOccurrenceRow] = {}
         self._solid_node_ids = tuple(step.node_id for step in team.plan.steps)
         self._helper_node_ids: set[str] = set()
+        self._helper_agent_ids: dict[str, str] = {}
         self._occurrence_count = len(team.plan.agent_ids)
         self._is_agent_run = self._occurrence_count == 1
 
@@ -313,9 +315,13 @@ class AgentTeamCard(QFrame):
         retention_layout.setSpacing(5)
         self._save_buttons: dict[str, QPushButton] = {}
         self._save_statuses: dict[str, QLabel] = {}
-        generated: dict[str, object] = {}
+        self._save_rows: dict[str, QWidget] = {}
+        generated: dict[str, AgentDefinition] = {}
         for definition in team.generated_definitions:
             generated.setdefault(definition.agent_id, definition)
+        self._save_eligible_ids = {
+            step.agent_id for step in team.plan.steps if step.agent_id in generated
+        }
         for agent_id, definition in generated.items():
             row = QWidget(self._retention_widget)
             row.setStyleSheet("background: transparent;")
@@ -336,8 +342,10 @@ class AgentTeamCard(QFrame):
             )
             row_layout.addWidget(button)
             retention_layout.addWidget(row)
+            row.setVisible(agent_id in self._save_eligible_ids)
             self._save_buttons[agent_id] = button
             self._save_statuses[agent_id] = status
+            self._save_rows[agent_id] = row
 
         self._keep_button: QPushButton | None = None
         self._keep_status: QLabel | None = None
@@ -393,7 +401,11 @@ class AgentTeamCard(QFrame):
 
     @property
     def save_agent_ids(self) -> tuple[str, ...]:
-        return tuple(self._save_buttons)
+        return tuple(
+            agent_id
+            for agent_id in self._save_buttons
+            if agent_id in self._save_eligible_ids
+        )
 
     @property
     def can_keep_team(self) -> bool:
@@ -420,6 +432,7 @@ class AgentTeamCard(QFrame):
             return False
         if node_id in self._helper_node_ids:
             row.setVisible(True)
+            self._reveal_helper_save_action(node_id)
         row.set_state(state)
         self._set_details_prefix(self._progress_title())
         self.layout_changed.emit()
@@ -433,7 +446,11 @@ class AgentTeamCard(QFrame):
     def mark_agent_saved(self, agent_id: str) -> bool:
         button = self._save_buttons.get(agent_id)
         status = self._save_statuses.get(agent_id)
-        if button is None or status is None:
+        if (
+            button is None
+            or status is None
+            or agent_id not in self._save_eligible_ids
+        ):
             return False
         button.setVisible(False)
         status.setVisible(True)
@@ -483,6 +500,7 @@ class AgentTeamCard(QFrame):
             if row is None:
                 continue
             row.setVisible(True)
+            self._reveal_helper_save_action(node_id)
             aggregate = _aggregate_helper_state(states)
             row.set_state(
                 aggregate,
@@ -533,11 +551,20 @@ class AgentTeamCard(QFrame):
         return button
 
     def _refresh_retention_visibility(self) -> None:
-        has_actions = bool(self._save_buttons or self._keep_button is not None)
+        has_actions = bool(self._save_eligible_ids or self._keep_button is not None)
         self._retention_widget.setVisible(
             self._finished and self._root_settled and has_actions
         )
         self.layout_changed.emit()
+
+    def _reveal_helper_save_action(self, node_id: str) -> None:
+        """Offer a generated helper only after that helper actually ran."""
+        agent_id = self._helper_agent_ids.get(node_id, "")
+        row = self._save_rows.get(agent_id)
+        if row is None or agent_id in self._save_eligible_ids:
+            return
+        self._save_eligible_ids.add(agent_id)
+        row.setVisible(True)
 
     def _clear_retention_error(self) -> None:
         self._retention_error.clear()
@@ -603,6 +630,7 @@ class AgentTeamCard(QFrame):
         row.setVisible(False)
         self._rows[helper.node_id] = row
         self._helper_node_ids.add(helper.node_id)
+        self._helper_agent_ids[helper.node_id] = helper.agent_id
         layout.addWidget(row)
         for child in helper.children:
             self._add_helper_rows(child, occurrence_names, parent, layout)

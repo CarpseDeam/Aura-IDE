@@ -12,7 +12,7 @@ import pytest
 pytest.importorskip("PySide6.QtWidgets")
 
 from PySide6.QtCore import QObject, Qt, Signal, Slot  # noqa: E402
-from PySide6.QtWidgets import QAbstractButton, QApplication, QLabel  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLabel  # noqa: E402
 
 from aura.agents.delegation import (  # noqa: E402
     DelegationFailure,
@@ -272,12 +272,37 @@ def test_completed_card_collapses_and_reveals_working_retention_only_after_root(
     assert card.retention_actions_visible is False
     card.settle_root_turn()
     assert card.retention_actions_visible is True
-    action_text = " ".join(
-        button.text().lower() for button in card.findChildren(QAbstractButton)
-    )
-    assert action_text.count("save agent") == len(team.generated_definitions)
-    assert "keep team" in action_text
+    invoked_agent_ids = {step.agent_id for step in team.plan.steps}
+    invoked_agent_ids.add(first_helper_call.agent_id)
+    assert set(card.save_agent_ids) == invoked_agent_ids
+    deep_helper = helper.children[0]
+    assert card._save_rows[deep_helper.agent_id].isHidden()
+    assert card._keep_button.text() == "Keep Team"
     assert card.finish(result) is False
+
+
+def test_generated_helper_becomes_saveable_only_after_it_is_invoked(qapp) -> None:
+    team = _compiled_team()
+    card = AgentTeamCard(team)
+    helper = team.plan.steps[-1].helpers[0]
+    deep_helper = helper.children[0]
+
+    assert helper.agent_id not in card.save_agent_ids
+    assert deep_helper.agent_id not in card.save_agent_ids
+    assert card._save_rows[helper.agent_id].isHidden()
+    assert card._save_rows[deep_helper.agent_id].isHidden()
+
+    assert card.update_occurrence(helper.node_id, "running") is True
+
+    assert helper.agent_id in card.save_agent_ids
+    assert deep_helper.agent_id not in card.save_agent_ids
+    assert not card._save_rows[helper.agent_id].isHidden()
+    assert card._save_rows[deep_helper.agent_id].isHidden()
+
+    assert card.update_occurrence(deep_helper.node_id, "failed") is True
+
+    assert deep_helper.agent_id in card.save_agent_ids
+    assert not card._save_rows[deep_helper.agent_id].isHidden()
 
 
 def test_completed_run_keeps_failed_helper_fact_in_collapsed_receipt(qapp) -> None:

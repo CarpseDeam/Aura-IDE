@@ -135,8 +135,8 @@ class ToolRegistry(
         self._workflow_helpers: tuple[Any, ...] = ()
         self._workflow_helper_runner: Any = None
         self._agent_worktree_manager: Any = None
-        # The same workflow runner executes both an active saved workflow and
-        # a native in-memory plan compiled by ``run_agent_team``.
+        # The same workflow runner executes a saved Workflow chosen from the
+        # frozen turn catalog or a native plan compiled by ``run_agent_team``.
         self._agent_workflow_runner: Any = None
         # Optional presentation only. It receives immutable automatic-team
         # facts but grants no authority and is never consulted by tool policy.

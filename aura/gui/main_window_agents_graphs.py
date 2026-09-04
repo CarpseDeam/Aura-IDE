@@ -19,13 +19,14 @@ workflow into a plan, asks for a task, and hands both to the shared
 :class:`~aura.agents.workflow_runner.WorkflowRunner` on a worker thread; what
 comes back is a node id and a state, which this controller turns into what the
 canvas draws. It is deliberately independent of the Agents switch in the main
-toolbar: that switch decides whether *Aura* may reach for this workflow
-mid-conversation, and authoring one means running it long before that.
+toolbar: that switch decides whether *Aura* may use Agents and any runnable
+saved Workflow; this controller's selection remains only an editor and manual
+Run choice.
 
 The session this controller drives is owned by
 :class:`aura.gui.main_window_agents.MainWindowAgentsController`, because the
-selected workflow and whether Aura may call it must be answerable whether or
-not this window has ever been opened.
+selected workflow and the workspace's independent Agents gate must be
+answerable whether or not this window has ever been opened.
 """
 
 from __future__ import annotations

@@ -45,7 +45,11 @@ def _generated(
     )
 
 
-def _mixed_team(existing: AgentDefinition) -> CompiledAgentTeam:
+def _mixed_team(
+    existing: AgentDefinition,
+    *,
+    existing_permission: AgentPermission = AgentPermission.READ_WRITE,
+) -> CompiledAgentTeam:
     spec = AgentTeamSpec(
         task="Review both branches, combine them, and use focused help if needed.",
         name="Mixed retained workflow",
@@ -74,7 +78,7 @@ def _mixed_team(existing: AgentDefinition) -> CompiledAgentTeam:
         roster=AgentTurnRoster(
             (
                 AgentRosterEntry(
-                    existing, permission=AgentPermission.READ_WRITE
+                    existing, permission=existing_permission
                 ),
             )
         ),
@@ -237,6 +241,90 @@ def test_changed_saved_definition_refuses_keep_without_cloning_or_overwrite(
     assert workflows.get(team.plan.graph_id) is None
 
 
+@pytest.mark.parametrize(
+    ("compiled_permission", "current_permission"),
+    (
+        (AgentPermission.READ_ONLY, AgentPermission.READ_WRITE),
+        (AgentPermission.READ_WRITE, AgentPermission.READ_ONLY),
+    ),
+)
+def test_changed_saved_permission_refuses_keep_without_rewriting_authority(
+    tmp_path: Path,
+    compiled_permission: AgentPermission,
+    current_permission: AgentPermission,
+) -> None:
+    agents, state, workflows, retention = _stores(tmp_path)
+    existing = agents.create(
+        AgentScope.PROJECT,
+        name="Existing Builder",
+        description="Combines review results.",
+        instructions="Combine the original inputs.",
+    )
+    state.set_permission(existing.agent_id, compiled_permission)
+    team = _mixed_team(existing, existing_permission=compiled_permission)
+    state.set_permission(existing.agent_id, current_permission)
+
+    with pytest.raises(
+        AgentRetentionError, match="permission changed after this run"
+    ) as caught:
+        retention.keep_team(team)
+
+    assert compiled_permission.label in str(caught.value)
+    assert current_permission.label in str(caught.value)
+    assert state.permission(existing.agent_id) is current_permission
+    assert all(agents.get(item.agent_id) is None for item in team.generated_definitions)
+    assert workflows.get(team.plan.graph_id) is None
+
+
+def test_changed_saved_generated_permission_is_not_reset_by_retention(
+    tmp_path: Path,
+) -> None:
+    agents, state, workflows, retention = _stores(tmp_path)
+    existing = agents.create(
+        AgentScope.PROJECT,
+        name="Existing Builder",
+        description="Combines review results.",
+        instructions="Combine the original inputs.",
+    )
+    state.set_permission(existing.agent_id, AgentPermission.READ_WRITE)
+    team = _mixed_team(existing)
+    reviewer, helper = team.generated_definitions
+    retention.save_agent(team, reviewer.agent_id)
+    state.set_permission(reviewer.agent_id, AgentPermission.READ_WRITE)
+
+    with pytest.raises(AgentRetentionError, match="permission changed after this run"):
+        retention.save_agent(team, reviewer.agent_id)
+    with pytest.raises(AgentRetentionError, match="permission changed after this run"):
+        retention.keep_team(team)
+
+    assert state.permission(reviewer.agent_id) is AgentPermission.READ_WRITE
+    assert agents.get(reviewer.agent_id) == reviewer
+    assert agents.get(helper.agent_id) is None
+    assert workflows.get(team.plan.graph_id) is None
+
+
+def test_retry_repairs_a_missing_generated_permission_after_definition_write(
+    tmp_path: Path,
+) -> None:
+    agents, state, _workflows, retention = _stores(tmp_path)
+    existing = agents.create(
+        AgentScope.PROJECT,
+        name="Existing Builder",
+        description="Combines review results.",
+        instructions="Combine the original inputs.",
+    )
+    team = _mixed_team(existing)
+    helper = team.generated_definitions[1]
+    agents.create_supplied(helper)
+
+    assert state.explicit_permission(helper.agent_id) is None
+    saved = retention.save_agent(team, helper.agent_id)
+
+    assert saved.agent_ids == (helper.agent_id,)
+    assert state.permission(helper.agent_id) is AgentPermission.READ_WRITE
+    assert state.available_ids() == (helper.agent_id,)
+
+
 def test_workflow_id_collision_refuses_before_saving_generated_members(
     tmp_path: Path,
 ) -> None:
@@ -247,6 +335,7 @@ def test_workflow_id_collision_refuses_before_saving_generated_members(
         description="Combines review results.",
         instructions="Combine inputs.",
     )
+    state.set_permission(existing.agent_id, AgentPermission.READ_WRITE)
     team = _mixed_team(existing)
     collision = replace(team.plan.graph, name="Different saved Workflow")
     workflows.create_supplied(collision)
@@ -269,6 +358,7 @@ def test_partial_failure_is_reported_and_retry_reuses_identical_definitions(
         description="Combines review results.",
         instructions="Combine inputs.",
     )
+    state.set_permission(existing.agent_id, AgentPermission.READ_WRITE)
     team = _mixed_team(existing)
     original_create = workflows.create_supplied
     failures = 0

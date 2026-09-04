@@ -18,6 +18,7 @@ from aura.agents.graph_store import AgentGraphStore, AgentGraphStoreError
 from aura.agents.graph_validation import validate_graph
 from aura.agents.identity import AgentScope
 from aura.agents.local_state import (
+    DEFAULT_PERMISSION,
     AgentLocalState,
     AgentLocalStateError,
     AgentPermission,
@@ -160,7 +161,16 @@ class AgentTeamRetention:
         )
         if definition is None:
             raise AgentRetentionError("That generated Agent is not part of this run.")
-        self._preflight_generated((definition,))
+        existing_generated = self._preflight_generated((definition,))
+        self._preflight_permissions(
+            (
+                {definition.agent_id: facts.permissions[definition.agent_id]}
+                if existing_generated
+                else {}
+            ),
+            definitions=facts.definitions,
+            allow_unrecorded=existing_generated,
+        )
         try:
             self._agents.create_supplied(definition)
             self._local_state.retain_available_agent(
@@ -176,13 +186,21 @@ class AgentTeamRetention:
     def keep_team(self, team: CompiledAgentTeam) -> AgentRetentionResult:
         facts = validate_compiled_team(team)
         generated_ids = {item.agent_id for item in facts.generated_definitions}
-        self._preflight_generated(facts.generated_definitions)
-        self._preflight_existing(
+        existing_generated = self._preflight_generated(facts.generated_definitions)
+        reused_definitions = {
+            agent_id: definition
+            for agent_id, definition in facts.definitions.items()
+            if agent_id not in generated_ids
+        }
+        self._preflight_existing(reused_definitions)
+        self._preflight_permissions(
             {
-                agent_id: definition
-                for agent_id, definition in facts.definitions.items()
-                if agent_id not in generated_ids
-            }
+                agent_id: permission
+                for agent_id, permission in facts.permissions.items()
+                if agent_id in reused_definitions or agent_id in existing_generated
+            },
+            definitions=facts.definitions,
+            allow_unrecorded=existing_generated,
         )
         self._preflight_workflow(facts.graph)
 
@@ -206,11 +224,12 @@ class AgentTeamRetention:
 
     def _preflight_generated(
         self, definitions: tuple[AgentDefinition, ...]
-    ) -> None:
+    ) -> frozenset[str]:
         try:
             rows = self._agents.list_summaries()
         except Exception as exc:
             raise AgentRetentionError(f"Could not inspect saved Agents: {exc}") from exc
+        existing_ids: set[str] = set()
         for definition in definitions:
             matches = [row for row in rows if row.agent_id == definition.agent_id]
             if not matches:
@@ -220,10 +239,12 @@ class AgentTeamRetention:
                 and matches[0].scope is definition.scope
                 and matches[0].definition == definition
             ):
+                existing_ids.add(definition.agent_id)
                 continue
             raise AgentRetentionError(
                 f"Agent id {definition.agent_id} already exists with different content."
             )
+        return frozenset(existing_ids)
 
     def _preflight_existing(
         self, definitions: Mapping[str, AgentDefinition]
@@ -243,6 +264,33 @@ class AgentTeamRetention:
                 raise AgentRetentionError(
                     f"Saved Agent id {agent_id} changed after this run; the team was not kept."
                 )
+
+    def _preflight_permissions(
+        self,
+        permissions: Mapping[str, AgentPermission],
+        *,
+        definitions: Mapping[str, AgentDefinition],
+        allow_unrecorded: frozenset[str] = frozenset(),
+    ) -> None:
+        """Refuse a stale grant without blocking an interrupted-save retry."""
+        for agent_id, expected in sorted(permissions.items()):
+            try:
+                explicit = self._local_state.explicit_permission(agent_id)
+            except AgentLocalStateError as exc:
+                raise AgentRetentionError(str(exc)) from exc
+            current = explicit or DEFAULT_PERMISSION
+            if current is expected:
+                continue
+            if agent_id in allow_unrecorded and explicit is None:
+                # The immutable definition exists but its grant does not. This
+                # is the only partial state an earlier exact save may repair.
+                continue
+            definition = definitions[agent_id]
+            raise AgentRetentionError(
+                f'Agent "{definition.name}": permission changed after this run '
+                f"from {expected.label} to {current.label}. Aura did not overwrite "
+                "the newer grant."
+            )
 
     def _preflight_workflow(self, graph: WorkflowGraph) -> None:
         try:

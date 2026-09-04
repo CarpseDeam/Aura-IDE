@@ -181,9 +181,19 @@ class AgentLocalState:
 
     def permission(self, agent_id: str) -> AgentPermission:
         """What *agent_id* may do here. Unknown agents are read-only."""
+        return self.explicit_permission(agent_id) or DEFAULT_PERMISSION
+
+    def explicit_permission(self, agent_id: str) -> AgentPermission | None:
+        """Return the persisted grant, or None while the safe default applies.
+
+        Most callers want :meth:`permission`. Retention also needs to tell a
+        missing grant left by an interrupted multi-file save from a later,
+        explicit permission change so retries stay safe without overwriting a
+        newer user decision.
+        """
         self._require_agent_id(agent_id)
         raw = self._load()["permissions"].get(agent_id)
-        return AgentPermission.parse(raw) or DEFAULT_PERMISSION
+        return AgentPermission.parse(raw)
 
     def set_permission(self, agent_id: str, permission: AgentPermission) -> None:
         self._require_agent_id(agent_id)

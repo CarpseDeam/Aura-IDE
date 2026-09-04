@@ -3,10 +3,12 @@
 Choosing, creating, renaming, and deleting a workflow live here, and so does
 running one by hand. Run and Stop are deliberately not connected to the
 Agents switch in the main toolbar: that switch decides whether *Aura* may
-reach for this workflow mid-conversation, and someone authoring a workflow
-needs to try it long before they are willing to hand it to anybody. So this
-bar can always run the workflow it has open, and it says nothing at all
-about availability — there is exactly one such control, and it is not here.
+use Agents, including any saved Workflow that is runnable when a turn is
+submitted. The picker changes only what is being edited or run manually; it
+never hides a conversation target. Someone authoring a workflow needs to try
+it long before they enable Agents, so this bar can always run the workflow it
+has open and says nothing about availability — there is exactly one such
+control, and it is not here.
 """
 
 from __future__ import annotations
