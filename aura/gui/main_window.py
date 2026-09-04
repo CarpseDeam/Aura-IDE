@@ -33,6 +33,7 @@ from aura.config import (
 )
 from aura.git_ops import is_git_repo
 from aura.gui._screen import clamp_to_screen
+from aura.gui.agent_team_chat_controller import AgentTeamChatController
 from aura.gui.chat_view import ChatView
 from aura.gui.checkpoint_dialog import CheckpointDialog
 from aura.gui.conv_persistence import ConversationPersistence
@@ -182,6 +183,13 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             proxy=self._bridge.plan_review_proxy,
             chat=self._chat,
             parent_widget=self,
+        )
+        # Automatic teams stay in the conversation: this controller receives
+        # immutable runner facts and owns only their session-local live card.
+        self._agent_team_chat_controller = AgentTeamChatController(
+            bridge=self._bridge,
+            chat=self._chat,
+            parent=self,
         )
 
         self._center_stack.addWidget(center)

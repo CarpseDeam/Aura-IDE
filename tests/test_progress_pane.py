@@ -60,6 +60,7 @@ class _FakeBridge(QObject):
     executionStarted = Signal(str)
     executionFinished = Signal(str, bool, str)
     executionCancelled = Signal(str)
+    agentTeamAccepted = Signal(object)
     executionToolCallStart = Signal(str, str, str)
     executionToolResult = Signal(str, str, str, bool, str, dict)
     executionFileEditLifecycle = Signal(str, str, str, str, list, str)

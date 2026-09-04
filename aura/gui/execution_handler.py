@@ -16,9 +16,6 @@ from PySide6.QtCore import QObject, Signal
 
 from aura.config import redact_secrets
 from aura.conversation.telemetry import ConversationTelemetry, context_window_for_model
-
-_log = logging.getLogger(__name__)
-
 from aura.gui.execution_tool_event_router import ExecutionToolEventRouter
 
 if TYPE_CHECKING:
@@ -28,6 +25,10 @@ if TYPE_CHECKING:
     from aura.config import AppSettings
     from aura.gui.chat_view import ChatView
     from aura.gui.playground import AuraPlayground
+
+_log = logging.getLogger(__name__)
+
+_CHAT_ONLY_TOOL_NAMES: Final[frozenset[str]] = frozenset({"run_agent_team"})
 
 
 class ExecutionEventHandler(QObject):
@@ -113,6 +114,7 @@ class ExecutionEventHandler(QObject):
         self._active_execution_tool_call_id: str | None = None
         self._tool_router = ExecutionToolEventRouter(playground=playground)
         self._workspace_activated = False
+        self._team_presented = False
         self._activity_slots: list[Callable[..., None]] = []
 
     # ---- public property -------------------------------------------------------
@@ -153,6 +155,7 @@ class ExecutionEventHandler(QObject):
         # it exists here purely to open the workspace lifecycle before the
         # first workspace event lands.
         self._bridge.executionToolCallStart.connect(self._on_execution_tool_call_start)
+        self._bridge.agentTeamAccepted.connect(self._on_agent_team_accepted)
         self._bridge.executionApiError.connect(self._on_execution_api_error)
         self._bridge.executionUsage.connect(self._on_execution_usage)
         self._bridge.executionDelegationUsage.connect(self._on_delegation_usage)
@@ -168,7 +171,9 @@ class ExecutionEventHandler(QObject):
         """
         for route, signal_name in self._BRIDGE_SIGNAL_BY_ROUTE.items():
             forward = getattr(self._tool_router, route)
-            if route in self.WORKSPACE_ACTIVITY_ROUTES:
+            if route == "on_execution_tool_result":
+                slot = self._on_execution_tool_result
+            elif route in self.WORKSPACE_ACTIVITY_ROUTES:
                 slot = self._activating(forward)
             elif route in self.PROVIDER_STARTUP_ROUTES:
                 slot = forward
@@ -248,6 +253,7 @@ class ExecutionEventHandler(QObject):
 
         self._active_execution_tool_call_id = tool_call_id
         self._workspace_activated = False
+        self._team_presented = False
         self.execution_started.emit()
 
         self.execution_running_changed.emit(True)
@@ -256,7 +262,34 @@ class ExecutionEventHandler(QObject):
         self, run_id: str, execution_tool_id: str, name: str
     ) -> None:
         """Activate the workspace: the model has begun a concrete tool call."""
+        if name in _CHAT_ONLY_TOOL_NAMES:
+            return
         self._ensure_workspace_activated()
+
+    def _on_agent_team_accepted(self, _team: object) -> None:
+        """Remember that this production run owns a dedicated chat receipt."""
+        self._team_presented = True
+
+    def _on_execution_tool_result(
+        self,
+        run_id: str,
+        execution_tool_id: str,
+        name: str,
+        ok: bool,
+        result: str,
+        extras: dict,
+    ) -> None:
+        """Forward every result, opening the workspace only for workspace work."""
+        if name not in _CHAT_ONLY_TOOL_NAMES:
+            self._ensure_workspace_activated()
+        self._tool_router.on_execution_tool_result(
+            run_id,
+            execution_tool_id,
+            name,
+            ok,
+            result,
+            extras,
+        )
 
     def _on_execution_finished(
         self,
@@ -285,17 +318,21 @@ class ExecutionEventHandler(QObject):
             self._deactivate_workspace()
         if self._active_execution_tool_call_id == tool_call_id:
             self._active_execution_tool_call_id = None
+        self._team_presented = False
         self.execution_running_changed.emit(False)
 
     def _on_execution_cancelled(self, tool_call_id: str) -> None:
         """Stop execution aura, surface the stop in chat, and set the pane status."""
 
-        self._deactivate_workspace()
-        self._chat.add_info("Execution", "Stopped by user.")
-        self._playground.execution_cancelled()
+        if self._workspace_activated or not self._team_presented:
+            self._deactivate_workspace()
+            self._playground.execution_cancelled()
+        if not self._team_presented:
+            self._chat.add_info("Execution", "Stopped by user.")
 
         if self._active_execution_tool_call_id == tool_call_id:
             self._active_execution_tool_call_id = None
+        self._team_presented = False
         self.execution_running_changed.emit(False)
 
     # ---- execution error slots --------------------------------------------------
@@ -312,11 +349,13 @@ class ExecutionEventHandler(QObject):
             "api_error tool_call_id=%s status=%s message_redacted=%s",
             tool_call_id, status, redact_secrets(message)[:200],
         )
-        self._playground.mark_execution_error()
-        self._deactivate_workspace()
-        self._playground.set_execution_running(False)
+        if self._workspace_activated or not self._team_presented:
+            self._playground.mark_execution_error()
+            self._deactivate_workspace()
+            self._playground.set_execution_running(False)
         if self._active_execution_tool_call_id == tool_call_id:
             self._active_execution_tool_call_id = None
+        self._team_presented = False
         self.execution_running_changed.emit(False)
 
     def _on_execution_usage(

@@ -333,6 +333,34 @@ class AssistantCard(QFrame):
         if self._chat_view is None or not self._chat_view._is_bulk_updating:
             _fade_in_widget(w)
 
+    def add_activity_widget(self, widget: QWidget) -> None:
+        """Insert live work between any preamble and the later Aura Result.
+
+        Model tool rounds share one AssistantCard. Freeze the content streamed
+        before the activity, then make a fresh stream label after it so the
+        final answer grows below the live receipt instead of above it.
+        """
+        self.finalize_content()
+        active_label = self._content_label
+        label_index = self._outer.indexOf(active_label)
+
+        if active_label.text_buffer():
+            # Plain Markdown finalization keeps the populated label in place.
+            # It is now the immutable pre-tool segment; later tokens need a
+            # fresh label on the other side of the activity widget.
+            active_label = _StreamLabel(italic=False, parent=self)
+            active_label.setVisible(False)
+            self._content_label = active_label
+            self._outer.insertWidget(label_index + 1, widget)
+            self._outer.insertWidget(label_index + 2, active_label)
+        else:
+            # Empty streams, and fenced-code finalization, already leave an
+            # empty active label in the correct place for later root prose.
+            self._outer.insertWidget(label_index, widget)
+
+        if self._chat_view is None or not self._chat_view._is_bulk_updating:
+            _fade_in_widget(widget)
+
     def finalize_content(self) -> None:
         """Replace the streaming label with a rich layout that renders code
         blocks as CodeBlockCard widgets instead of inline HTML pre blocks.

@@ -101,6 +101,12 @@ class _ConversationRunner(QObject):
     # projecting any production worker activity.
     usage = Signal(str, str, int, int, int, int)  # tool_id, model, prompt, comp, hit, miss
     delegationUsage = Signal(str, str, str, int, int, int, int)
+    # The private runner-to-bridge hop carries a presentation generation so
+    # queued facts from a reset workspace/conversation cannot recreate stale
+    # cards. The bridge's public signals remain generation-free.
+    agentTeamAccepted = Signal(int, object)  # generation, exact CompiledAgentTeam
+    agentTeamStepChanged = Signal(int, str, str, str)
+    agentTeamFinished = Signal(int, object)  # generation, exact WorkflowRunResult
     finished = Signal()
 
     def __init__(
@@ -114,6 +120,7 @@ class _ConversationRunner(QObject):
         workspace_root: Path | None = None,
         production_session: "ProductionExecutionSession | None" = None,
         read_only_turn: bool = False,
+        agent_team_generation: int = 0,
     ) -> None:
         super().__init__()
         self._manager = manager
@@ -125,6 +132,7 @@ class _ConversationRunner(QObject):
         self._workspace_root = workspace_root
         self._production_session = production_session
         self._read_only_turn = read_only_turn
+        self._agent_team_generation = int(agent_team_generation)
         self._blocked_reason: str = ""
 
     @Slot()
@@ -177,6 +185,22 @@ class _ConversationRunner(QObject):
             self._emit_chat_facts(ev)
             return
 
+    # ---- automatic Agent-team presentation ------------------------------
+
+    def team_accepted(self, team) -> None:
+        """Relay one validated, authorized compiled team to the GUI thread."""
+        self.agentTeamAccepted.emit(self._agent_team_generation, team)
+
+    def step_changed(self, graph_id: str, node_id: str, state) -> None:
+        """Relay a native Workflow occurrence state without touching Qt UI."""
+        self.agentTeamStepChanged.emit(
+            self._agent_team_generation, graph_id, node_id, state.value
+        )
+
+    def team_finished(self, result) -> None:
+        """Relay the runner's exact terminal result to the GUI thread."""
+        self.agentTeamFinished.emit(self._agent_team_generation, result)
+
     def _emit_chat_facts(self, ev: Event) -> None:
         """Emit the event set the chat and persistence layers own.
 
@@ -211,6 +235,9 @@ class ConversationBridge(QObject):
     apiError = Signal(int, str)
     streamDone = Signal(str, dict)
     toolResult = Signal(str, str, bool, str, dict)
+    agentTeamAccepted = Signal(object)
+    agentTeamStepChanged = Signal(str, str, str)
+    agentTeamFinished = Signal(object)
     diffApplied = Signal(str, str, str, str, bool)
     diffDecided = Signal(str, str, str, str, str, bool)
     started = Signal()
@@ -332,6 +359,9 @@ class ConversationBridge(QObject):
         # ToolRegistry remains the authority used by every model/tool round.
         self._requested_read_only: bool = self._registry.read_only
         self._turn_active: bool = False
+        # Invalidates already-queued private runner signals when a new turn,
+        # workspace, or conversation supersedes their presentation.
+        self._agent_team_generation: int = 0
 
         # Re-emit production session signals on the same bridge signals so the
         # polished workspace projection binds once and stays role-neutral.
@@ -388,6 +418,7 @@ class ConversationBridge(QObject):
         return copy.deepcopy(self._context_gearbox_metadata)
 
     def set_workspace_root(self, root) -> None:
+        self._invalidate_agent_team_presentation()
         self._cancel.set()
         self._turn_explicit_install_ids = ()
         # Agent authority belongs to the workspace in which it was captured.
@@ -472,6 +503,7 @@ class ConversationBridge(QObject):
 
     def shutdown(self) -> None:
         """Close the conversation shell and all bridge-owned execution state."""
+        self._invalidate_agent_team_presentation()
         self._cancel.set()
         self._approval_proxy.cancel_active_dialog()
         self._plan_review_proxy.cancel_active()
@@ -540,6 +572,7 @@ class ConversationBridge(QObject):
 
 
     def reset_history(self) -> None:
+        self._invalidate_agent_team_presentation()
         self._cancel.set()
         self._manager.reset_conversation_runtime()
         self._turn_agent_context = EMPTY_AGENT_TURN_CONTEXT
@@ -584,6 +617,8 @@ class ConversationBridge(QObject):
         """
         if self.is_running():
             return
+        self._agent_team_generation += 1
+        agent_team_generation = self._agent_team_generation
         # History is the durable authority for this turn. Freeze its ordered
         # installed identities once; neither prompt composition nor runtime
         # activation reads the mutable composer or infers from message text.
@@ -649,6 +684,7 @@ class ConversationBridge(QObject):
             workspace_root=self._registry.workspace_root,
             production_session=self._production_session,
             read_only_turn=self._turn_read_only,
+            agent_team_generation=agent_team_generation,
         )
         self._conversation_runner.moveToThread(self._thread)
 
@@ -664,6 +700,16 @@ class ConversationBridge(QObject):
         self._conversation_runner.agentProcessStarted.connect(self.agentProcessStarted)
         self._conversation_runner.agentProcessOutput.connect(self.agentProcessOutput)
         self._conversation_runner.agentProcessFinished.connect(self.agentProcessFinished)
+        self._conversation_runner.agentTeamAccepted.connect(
+            self._on_agent_team_accepted
+        )
+        self._conversation_runner.agentTeamStepChanged.connect(
+            self._on_agent_team_step_changed
+        )
+        self._conversation_runner.agentTeamFinished.connect(
+            self._on_agent_team_finished
+        )
+        self._registry.set_agent_team_run_observer(self._conversation_runner)
         # The single authoritative usage accounting path. Normal turns reach
         # it through the production session's relay; a Read Only turn routes
         # the same Usage facts here so conversation telemetry counts them
@@ -703,6 +749,32 @@ class ConversationBridge(QObject):
         return self._workflow_runner
 
     # ---- private slots ----------------------------------------------------
+
+    @Slot(int, object)
+    def _on_agent_team_accepted(self, generation: int, team: object) -> None:
+        if generation == self._agent_team_generation:
+            self.agentTeamAccepted.emit(team)
+
+    @Slot(int, str, str, str)
+    def _on_agent_team_step_changed(
+        self,
+        generation: int,
+        graph_id: str,
+        node_id: str,
+        state: str,
+    ) -> None:
+        if generation == self._agent_team_generation:
+            self.agentTeamStepChanged.emit(graph_id, node_id, state)
+
+    @Slot(int, object)
+    def _on_agent_team_finished(self, generation: int, result: object) -> None:
+        if generation == self._agent_team_generation:
+            self.agentTeamFinished.emit(result)
+
+    def _invalidate_agent_team_presentation(self) -> None:
+        """Detach and invalidate automatic-team facts from an obsolete turn."""
+        self._agent_team_generation += 1
+        self._registry.set_agent_team_run_observer(None)
 
     @Slot(int, str, str)
     def _on_tool_call_start(self, index: int, tool_id: str, name: str) -> None:
@@ -796,6 +868,7 @@ class ConversationBridge(QObject):
             # the active turn has released the registry, so it is ready for the
             # next send without changing any remaining round of this one.
             self.clear_external_read_authorization()
+            self._registry.set_agent_team_run_observer(None)
             self._registry.set_read_only(self._requested_read_only)
             # Agent authority is turn-scoped: the next turn supplies its own
             # complete snapshot, so nothing carries over.

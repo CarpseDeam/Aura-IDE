@@ -4,7 +4,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from aura.agents.roster import EMPTY_AGENT_ROSTER, AgentTurnRoster
 from aura.agents.turn_context import (
@@ -50,6 +50,9 @@ from aura.conversation.tools.grep import grep_files  # noqa: F401
 from aura.conversation.tools.mcp_registry import MCPToolRegistry
 from aura.conversation.tools.task_context import TaskContextHandlersMixin
 from aura.paths import safe_is_relative_to, safe_relative_to
+
+if TYPE_CHECKING:
+    from aura.agents.team_run_observer import AgentTeamRunObserver
 
 TOOL_HANDLERS: dict[str, Any] = {}
 
@@ -135,6 +138,9 @@ class ToolRegistry(
         # The same workflow runner executes both an active saved workflow and
         # a native in-memory plan compiled by ``run_agent_team``.
         self._agent_workflow_runner: Any = None
+        # Optional presentation only. It receives immutable automatic-team
+        # facts but grants no authority and is never consulted by tool policy.
+        self._agent_team_run_observer: AgentTeamRunObserver | None = None
         # Plan Review — required/approved state for the active turn, and the
         # GUI-thread proxy that pauses the tool loop for human review. The
         # state always exists (required defaults to False); the proxy is
@@ -350,6 +356,17 @@ class ToolRegistry(
         another workflow.
         """
         self._agent_workflow_runner = runner
+
+    def set_agent_team_run_observer(
+        self, observer: "AgentTeamRunObserver | None"
+    ) -> None:
+        """Attach the presentation observer for the active root turn.
+
+        The observer is deliberately independent of AgentTurnContext: it can
+        display a capability but cannot create one, alter one, or expose a
+        model-facing tool.
+        """
+        self._agent_team_run_observer = observer
 
     def tool_defs(self) -> list[dict[str, Any]]:
         dynamic_schemas = self._dynamic_tools.schemas() if not self._read_only else []

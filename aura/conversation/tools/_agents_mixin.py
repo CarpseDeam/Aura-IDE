@@ -13,9 +13,12 @@ workflow Agent is configured only with its own frozen immediate children.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from aura.conversation.tools._types import ApprovalCallback, ToolExecResult
+
+logger = logging.getLogger(__name__)
 
 
 class AgentDelegationHandlersMixin:
@@ -286,11 +289,25 @@ class AgentDelegationHandlersMixin:
         # single launch immediately before entering the existing runner, so a
         # provider/runtime failure cannot cause a second team to be spawned.
         self._automatic_team_started = True
+        observer = self._agent_team_run_observer
+        _notify_agent_team_observer(observer, "team_accepted", compiled)
+
+        def _on_step(node_id, state) -> None:
+            _notify_agent_team_observer(
+                observer,
+                "step_changed",
+                compiled.plan.graph_id,
+                node_id,
+                state,
+            )
+
         result = runner.run(
             compiled.plan,
             compiled.task,
             cancel_event=self.active_cancel_event,
+            on_step=_on_step if observer is not None else None,
         )
+        _notify_agent_team_observer(observer, "team_finished", result)
         payload = result.payload()
         payload["tool"] = "run_agent_team"
         payload.pop("workflow", None)
@@ -418,6 +435,16 @@ def _agent_team_failure(
     if errors:
         payload["errors"] = list(errors)
     return ToolExecResult(ok=False, payload=payload)
+
+
+def _notify_agent_team_observer(observer: Any, method: str, *args: Any) -> None:
+    """Project one run fact without allowing presentation to affect work."""
+    if observer is None:
+        return
+    try:
+        getattr(observer, method)(*args)
+    except Exception:  # pragma: no cover - defensive UI boundary
+        logger.debug("agents: automatic team observer raised", exc_info=True)
 
 
 def _change_set_failure(tool: str, exc: Exception) -> ToolExecResult:

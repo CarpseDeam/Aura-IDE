@@ -7,12 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from aura.agents.delegation import DelegationUsage
+from aura.agents.delegation import DelegationFailure, DelegationUsage
 from aura.agents.graph_models import WorkflowGraph
 from aura.agents.identity import AgentScope
 from aura.agents.models import AgentDefinition
 from aura.agents.roster import AgentRosterEntry, AgentTurnRoster
+from aura.agents.team_compiler import CompiledAgentTeam
 from aura.agents.turn_context import AgentModelTarget, AgentTurnContext
+from aura.agents.workflow_helper_execution import WorkflowStepState
 from aura.agents.workflow_plan import WorkflowRunPlan
 from aura.agents.workflow_runner import (
     WorkflowRunResult,
@@ -77,10 +79,14 @@ def _payload(*, permission: str = "read_only") -> dict:
 @dataclass
 class _Runner:
     calls: list[tuple[WorkflowRunPlan, str, object]] = field(default_factory=list)
+    results: list[WorkflowRunResult] = field(default_factory=list)
 
-    def run(self, plan, task, *, cancel_event=None):
+    def run(self, plan, task, *, cancel_event=None, on_step=None):
         self.calls.append((plan, task, cancel_event))
-        return WorkflowRunResult(
+        if on_step is not None:
+            on_step(plan.steps[0].node_id, WorkflowStepState.RUNNING)
+            on_step(plan.steps[0].node_id, WorkflowStepState.SUCCEEDED)
+        result = WorkflowRunResult(
             status=WorkflowRunStatus.COMPLETED,
             graph_id=plan.graph_id,
             workflow_name=plan.name,
@@ -93,6 +99,24 @@ class _Runner:
                 ),
             ),
         )
+        self.results.append(result)
+        return result
+
+
+@dataclass
+class _Observer:
+    events: list[tuple] = field(default_factory=list)
+
+    def team_accepted(self, team: CompiledAgentTeam) -> None:
+        self.events.append(("accepted", team))
+
+    def step_changed(
+        self, graph_id: str, node_id: str, state: WorkflowStepState
+    ) -> None:
+        self.events.append(("step", graph_id, node_id, state))
+
+    def team_finished(self, result: WorkflowRunResult) -> None:
+        self.events.append(("finished", result))
 
 
 @pytest.fixture(autouse=True)
@@ -202,6 +226,128 @@ def test_valid_team_runs_once_through_existing_runner_and_forwards_usage(
     )
     assert third.ok is True
     assert len(runner.calls) == 2
+
+
+def test_accepted_team_projects_exact_plan_live_states_and_terminal_result(
+    tmp_path: Path,
+) -> None:
+    registry = ToolRegistry(tmp_path)
+    runner = _Runner()
+    observer = _Observer()
+    registry.set_agent_turn_context(_context())
+    registry.set_agent_workflow_runner(runner)
+    registry.set_agent_team_run_observer(observer)
+
+    result = registry.execute(
+        "run_agent_team", _payload(), approval_cb=lambda _request: None
+    )
+
+    assert result.ok is True
+    assert [event[0] for event in observer.events] == [
+        "accepted",
+        "step",
+        "step",
+        "finished",
+    ]
+    accepted = observer.events[0][1]
+    assert isinstance(accepted, CompiledAgentTeam)
+    assert accepted.plan is runner.calls[0][0]
+    assert accepted.generated_definitions
+    graph_id = accepted.plan.graph_id
+    node_id = accepted.plan.steps[0].node_id
+    assert observer.events[1] == (
+        "step",
+        graph_id,
+        node_id,
+        WorkflowStepState.RUNNING,
+    )
+    assert observer.events[2] == (
+        "step",
+        graph_id,
+        node_id,
+        WorkflowStepState.SUCCEEDED,
+    )
+    assert observer.events[3][1] is runner.results[0]
+
+
+def test_team_presentation_failure_never_changes_execution(tmp_path: Path) -> None:
+    class _RaisingObserver:
+        def team_accepted(self, _team) -> None:
+            raise RuntimeError("accepted presentation failed")
+
+        def step_changed(self, _graph_id, _node_id, _state) -> None:
+            raise RuntimeError("step presentation failed")
+
+        def team_finished(self, _result) -> None:
+            raise RuntimeError("finished presentation failed")
+
+    registry = ToolRegistry(tmp_path)
+    runner = _Runner()
+    registry.set_agent_turn_context(_context())
+    registry.set_agent_workflow_runner(runner)
+    registry.set_agent_team_run_observer(_RaisingObserver())
+
+    result = registry.execute(
+        "run_agent_team", _payload(), approval_cb=lambda _request: None
+    )
+
+    assert result.ok is True
+    assert result.payload["result"] == "review complete"
+    assert len(runner.calls) == 1
+
+
+def test_runner_preflight_failure_still_settles_the_accepted_team_card(
+    tmp_path: Path,
+) -> None:
+    class _BusyRunner:
+        def run(self, plan, task, *, cancel_event=None, on_step=None):
+            return WorkflowRunResult.failure(
+                plan.graph_id,
+                failure=DelegationFailure.DELEGATION_BUSY,
+                error="Another workflow is already running.",
+                workflow_name=plan.name,
+            )
+
+    observer = _Observer()
+    registry = ToolRegistry(tmp_path)
+    registry.set_agent_turn_context(_context())
+    registry.set_agent_workflow_runner(_BusyRunner())
+    registry.set_agent_team_run_observer(observer)
+
+    result = registry.execute(
+        "run_agent_team", _payload(), approval_cb=lambda _request: None
+    )
+
+    assert result.ok is False
+    assert [event[0] for event in observer.events] == ["accepted", "finished"]
+    assert observer.events[-1][1].status is WorkflowRunStatus.FAILED
+
+
+def test_refused_team_never_emits_presentation_events(tmp_path: Path) -> None:
+    observer = _Observer()
+    registry = ToolRegistry(tmp_path, read_only=True)
+    registry.set_agent_turn_context(_context())
+    registry.set_agent_workflow_runner(_Runner())
+    registry.set_agent_team_run_observer(observer)
+
+    unavailable = ToolRegistry(tmp_path)
+    unavailable.set_agent_turn_context(_context())
+    unavailable.set_agent_team_run_observer(observer)
+
+    invalid = _payload()
+    invalid["handoffs"] = []
+    assert not registry.execute(
+        "run_agent_team",
+        _payload(permission="read_write"),
+        approval_cb=lambda _request: None,
+    ).ok
+    assert not registry.execute(
+        "run_agent_team", invalid, approval_cb=lambda _request: None
+    ).ok
+    assert not unavailable.execute(
+        "run_agent_team", _payload(), approval_cb=lambda _request: None
+    ).ok
+    assert observer.events == []
 
 
 def test_invalid_shape_does_not_consume_the_turns_single_launch(tmp_path: Path) -> None:

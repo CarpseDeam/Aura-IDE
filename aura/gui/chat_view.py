@@ -21,6 +21,7 @@ from aura.conversation.chat_transcript import (
     user_item,
 )
 from aura.gui.cards._helpers import _fade_in_widget
+from aura.gui.cards.agent_team_card import AgentTeamCard
 from aura.gui.cards.assistant_card import AssistantCard
 from aura.gui.cards.code_writer_card import CodeWriterCard
 from aura.gui.cards.diff_card import DiffCard
@@ -40,6 +41,7 @@ class ChatView(QScrollArea):
 
     retry_requested = Signal()
     mermaid_detected = Signal(str)  # emits the raw mermaid code
+    transientCardsCleared = Signal()
     _BOTTOM_THRESHOLD_PX = 64
     _BOTTOM_SAFE_MARGIN_PX = 44
 
@@ -231,6 +233,7 @@ class ChatView(QScrollArea):
 
     def reset(self) -> None:
         self._scroll_timer.stop()
+        self.transientCardsCleared.emit()
         # Strip everything except the trailing stretch.
         while self._layout.count() > 1:
             item = self._layout.takeAt(0)
@@ -490,6 +493,11 @@ class ChatView(QScrollArea):
 
     def add_tool_call(self, tool_call_id: str, name: str) -> None:
         ac = self.current_assistant()
+        if name == "run_agent_team":
+            # The accepted team gets its own truthful live card. The generic
+            # compact status would call this "Reading files" and then count it
+            # as one opaque tool, which duplicates and mislabels the work.
+            return
         ac.notify_compact_tool_start(name)
         self._compact_tool_names[tool_call_id] = name
 
@@ -559,6 +567,15 @@ class ChatView(QScrollArea):
         card = PlanReviewCard(review_id, goal, files, spec, acceptance, summary, parent=self)
         ac.add_footer_widget(card)
         self._scroll_to_bottom()
+        return card
+
+    def add_agent_team_card(self, team) -> AgentTeamCard:
+        """Attach one session-local automatic-team receipt to this Aura turn."""
+        ac = self.current_assistant()
+        card = AgentTeamCard(team, parent=ac)
+        card.layout_changed.connect(self._request_scroll_to_bottom)
+        ac.add_activity_widget(card)
+        self._request_scroll_to_bottom()
         return card
 
     def record_plan_review(

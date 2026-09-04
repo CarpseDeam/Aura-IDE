@@ -13,6 +13,7 @@ not treat it as such. Proves:
 5. Cancellation and API/harness errors stop it safely and clear the state.
 6. No workspace-activity route can be wired in a way that bypasses lazy
    activation, and mere provider/process startup never activates.
+7. The chat-native automatic-team wrapper does not open an empty workspace.
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ class _FakeBridge(QObject):
     executionStarted = Signal(str)
     executionFinished = Signal(str, bool, str)
     executionCancelled = Signal(str)
+    agentTeamAccepted = Signal(object)
     executionToolCallStart = Signal(str, str, str)
     executionToolResult = Signal(str, str, str, bool, str, dict)
     executionFileEditLifecycle = Signal(str, str, str, str, list, str)
@@ -394,3 +396,71 @@ def test_task_checklist_updates_do_not_activate_the_workspace(wired) -> None:
 
     assert handler._workspace_activated is False
     assert playground.names() == ["update_task_checklist"]
+
+
+# ---- 7. chat-native automatic teams do not open an empty workspace ---------
+
+
+def test_agent_team_wrapper_stays_in_chat_but_still_forwards_its_result(
+    wired,
+) -> None:
+    bridge, chat, playground, handler = wired
+    bridge.executionStarted.emit("run-1")
+
+    bridge.executionToolCallStart.emit("run-1", "team-1", "run_agent_team")
+    bridge.executionToolResult.emit(
+        "run-1", "team-1", "run_agent_team", True, "{}", {}
+    )
+    bridge.executionFinished.emit("run-1", True, "completed")
+
+    assert handler._workspace_activated is False
+    assert chat.card.thinking_messages == []
+    assert playground.calls == [("set_tool_result", ("team-1", True, "{}"), {})]
+
+
+def test_real_root_tool_after_agent_team_still_activates_workspace(wired) -> None:
+    bridge, chat, playground, handler = wired
+    bridge.executionStarted.emit("run-1")
+    bridge.executionToolCallStart.emit("run-1", "team-1", "run_agent_team")
+    bridge.executionToolResult.emit(
+        "run-1", "team-1", "run_agent_team", True, "{}", {}
+    )
+
+    bridge.executionToolCallStart.emit("run-1", "read-1", "read_file")
+
+    assert handler._workspace_activated is True
+    assert playground.names() == [
+        "set_tool_result",
+        "begin_assistant",
+        "set_execution_running",
+        "start_aura",
+    ]
+    assert chat.card.thinking_messages == ["Working in the workspace"]
+
+
+@pytest.mark.parametrize(
+    ("signal_name", "args"),
+    [
+        ("executionCancelled", ("run-1",)),
+        ("executionApiError", ("run-1", 500, "boom")),
+    ],
+)
+def test_team_only_cancel_or_api_error_does_not_touch_workspace_or_duplicate_chat(
+    wired, signal_name: str, args: tuple
+) -> None:
+    bridge, chat, playground, handler = wired
+    running: list[bool] = []
+    handler.execution_running_changed.connect(running.append)
+    bridge.executionStarted.emit("run-1")
+    bridge.executionToolCallStart.emit("run-1", "team-1", "run_agent_team")
+    bridge.agentTeamAccepted.emit(object())
+    playground.calls.clear()
+
+    getattr(bridge, signal_name).emit(*args)
+
+    assert handler._workspace_activated is False
+    assert handler._team_presented is False
+    assert handler._active_execution_tool_call_id is None
+    assert playground.calls == []
+    assert chat.info_calls == []
+    assert running == [True, False]
