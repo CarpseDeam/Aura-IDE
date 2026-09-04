@@ -197,11 +197,11 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             settings=self._settings,
             workspace_root=self._workspace_root,
             parent=self,
-            # The Agents controller is the one owner of agent storage, so the
-            # roster a message is frozen with is read from there and nowhere
-            # else.
-            agent_roster_provider=self._agents_controller.capture_agent_turn_roster,
-            workflow_plan_provider=self._agents_controller.capture_workflow_run_plan,
+            # The Agents controller is the one owner of Agent storage and
+            # selection state. It freezes the complete turn capability in one
+            # snapshot so queued sends cannot mix state captured at different
+            # moments.
+            agent_context_provider=self._agents_controller.capture_agent_turn_context,
         )
         # Skills manager — the only GUI owner of SkillLibrary access. Both the
         # composer's Skills button and /skills reach this one controller.

@@ -108,6 +108,7 @@ BUILTIN_TOOL_EFFECTS: dict[str, ToolEffect] = {
     # (only observations enter the parallel pool) without pretending a child
     # model call is a shell command.
     "delegate_agent": ToolEffect.BOOKKEEPING,
+    "run_agent_team": ToolEffect.BOOKKEEPING,
     "run_agent_workflow": ToolEffect.BOOKKEEPING,
     # --- bookkeeping/control: tracks or controls conversation/tool state ---
     "update_task_checklist": ToolEffect.BOOKKEEPING,

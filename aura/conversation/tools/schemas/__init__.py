@@ -10,6 +10,13 @@ from .agent_changes import (
     INSPECT_AGENT_CHANGE_SET_TOOL_DEF,
     LIST_AGENT_CHANGE_SETS_TOOL_DEF,
 )
+from .agent_teams import (
+    MAX_AGENT_TEAM_ASSIGNMENT_CHARS,
+    MAX_AGENT_TEAM_INSTRUCTIONS_CHARS,
+    MAX_AGENT_TEAM_OCCURRENCES,
+    MAX_AGENT_TEAM_TASK_CHARS,
+    build_run_agent_team_tool_def,
+)
 from .agents import (
     MAX_DELEGATED_TASK_CHARS,
     MAX_WORKFLOW_TASK_CHARS,
@@ -63,10 +70,15 @@ __all__ = [
     "INSPECT_AGENT_CHANGE_SET_TOOL_DEF",
     "LIST_AGENT_CHANGE_SETS_TOOL_DEF",
     "MAX_DELEGATED_TASK_CHARS",
+    "MAX_AGENT_TEAM_ASSIGNMENT_CHARS",
+    "MAX_AGENT_TEAM_INSTRUCTIONS_CHARS",
+    "MAX_AGENT_TEAM_OCCURRENCES",
+    "MAX_AGENT_TEAM_TASK_CHARS",
     "PROJECT_MEMORY_TOOL_DEFS", "READ_SKILL_RESOURCE_TOOL_DEF", "READ_TOOL_DEFS",
     "REVIEW_IMPLEMENTATION_PLAN_TOOL_DEF",
     "MAX_WORKFLOW_TASK_CHARS",
     "build_delegate_agent_tool_def",
+    "build_run_agent_team_tool_def",
     "build_run_workflow_tool_def",
     "build_workflow_helper_tool_def",
     "SEARCH_TOOL_DEFS",

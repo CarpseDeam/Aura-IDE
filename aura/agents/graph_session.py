@@ -1,8 +1,9 @@
 """The workflow that is open, and everything that can happen to it.
 
 One workspace's workflows, the one currently being authored, the undo stack
-behind it, and this user's two private decisions about it — which one is
-selected, and whether Aura may call that one during an ordinary conversation.
+behind it, and this user's private editor selection. The workspace-level state
+also records the separate workflow Aura may call during a conversation; merely
+browsing another canvas never redirects that authority.
 Holding those together is what lets the page's controller be about drawing and
 signals rather than about storage, and it is why this object outlives the
 Agents window: the toolbar's Agents switch has to be answerable before anyone
@@ -132,12 +133,9 @@ class WorkflowSession:
         if chosen != self._graph_id:
             self._graph_id = chosen
             self._history = None
-        # The session's open graph is the selected graph. Persist a fallback
-        # selection as well as an explicit click, otherwise the first valid
-        # workflow is visible in the picker but the master gate has no
-        # selected id to authorize. set_selected also switches the gate off
-        # when the fallback differs, which prevents authority following a
-        # deleted or newly discovered workflow.
+        # The session's open graph is the editor selection. Persist a fallback
+        # selection as well as an explicit click, but never alter the separate
+        # active conversation target while the user is only browsing.
         try:
             if state.selected_id() != chosen:
                 state.set_selected(chosen)
@@ -210,10 +208,9 @@ class WorkflowSession:
     # ---- the master gate ---------------------------------------------------
 
     def is_enabled(self) -> bool:
-        """Whether Aura may call the open workflow during a conversation."""
+        """Whether the workspace's one Agent conversation path is enabled."""
         state = self.state()
-        row = self.summary
-        if state is None or row is None or not row.valid:
+        if state is None:
             return False
         try:
             return state.is_enabled()
@@ -221,17 +218,16 @@ class WorkflowSession:
             return False
 
     def set_enabled(self, enabled: bool) -> None:
-        """Switch the open workflow on or off for Aura, privately.
-
-        With nothing open, or a workflow that did not load, there is nothing
-        to grant, so this switches off rather than recording an authority
-        that points at no workflow.
-        """
+        """Enable the open workflow, or automatic assembly when none is open."""
         state = self.state()
         if state is None:
             return
         row = self.summary
-        state.set_enabled(bool(enabled) and row is not None and row.valid)
+        if enabled:
+            state.set_active_workflow(
+                row.graph_id if row is not None and row.valid else ""
+            )
+        state.set_enabled(bool(enabled))
 
     def _remember_selection(self, graph_id: str) -> None:
         state = self.state()

@@ -32,7 +32,7 @@ class AgentDelegationHandlersMixin:
         agent_id = str(args.get("agent_id") or "").strip()
         task = str(args.get("task") or "")
 
-        roster = self._turn_agent_roster
+        roster = self._legacy_turn_agent_roster
         entry = roster.get(agent_id) if roster is not None else None
         if entry is None:
             available = ", ".join(roster.ids) if roster is not None else ""
@@ -167,7 +167,7 @@ class AgentDelegationHandlersMixin:
         from aura.agents.delegation import DelegationFailure
         from aura.agents.workflow_runner import WorkflowRunResult
 
-        plan = self._turn_workflow_plan
+        plan = self._turn_agent_context.workflow_plan
         if plan is None:
             result = WorkflowRunResult.failure(
                 "",
@@ -219,6 +219,93 @@ class AgentDelegationHandlersMixin:
             payload=result.payload(),
             extras=extras,
         )
+
+    def _handle_run_agent_team(
+        self, args: dict[str, Any], approval_cb: ApprovalCallback, reject_all: bool
+    ) -> ToolExecResult:
+        """Compile and run this automatic turn's one temporary native team."""
+        from aura.agents.team_compiler import compile_agent_team
+        from aura.agents.team_spec import parse_agent_team_spec
+        from aura.agents.turn_context import AgentTurnMode
+        from aura.conversation.tools.effects import ToolEffect
+
+        context = self._turn_agent_context
+        if context.mode is not AgentTurnMode.AUTOMATIC:
+            return _agent_team_failure(
+                "agent_team_unavailable",
+                "Automatic Agent team assembly is not available on this turn.",
+            )
+        if self._automatic_team_started:
+            return _agent_team_failure(
+                "agent_team_already_started",
+                "Aura already started this turn's automatic Agent team. "
+                "Continue from that Aura Result instead of starting another team.",
+            )
+
+        parsed = parse_agent_team_spec(args)
+        if not parsed.ok or parsed.spec is None:
+            return _agent_team_failure(
+                "invalid_agent_team",
+                "Aura could not understand the proposed Agent team.",
+                errors=parsed.errors,
+            )
+
+        compiled, errors = compile_agent_team(
+            parsed.spec,
+            roster=context.roster,
+            model_targets=context.model_targets,
+            provider=context.root_provider,
+            model=context.root_model,
+            thinking=context.root_thinking,
+        )
+        if compiled is None:
+            return _agent_team_failure(
+                "invalid_agent_team",
+                "Aura refused the proposed Agent team because it is not runnable.",
+                errors=errors,
+            )
+
+        runner = self._agent_workflow_runner
+        if runner is None:
+            return _agent_team_failure(
+                "delegation_unavailable",
+                "Automatic Agent teams are not available in this runtime.",
+            )
+
+        if compiled.plan.writable and (
+            self._read_only or self._plan_review.blocks(ToolEffect.MUTATION)
+        ):
+            return _agent_team_failure(
+                "root_mutation_forbidden",
+                "This team contains a Read / Write specialist, but the frozen "
+                "root turn forbids mutation. Aura did not downgrade the grant "
+                "or start the team.",
+            )
+
+        # Compilation and every authority check succeeded. Consume the turn's
+        # single launch immediately before entering the existing runner, so a
+        # provider/runtime failure cannot cause a second team to be spawned.
+        self._automatic_team_started = True
+        result = runner.run(
+            compiled.plan,
+            compiled.task,
+            cancel_event=self.active_cancel_event,
+        )
+        payload = result.payload()
+        payload["tool"] = "run_agent_team"
+        payload.pop("workflow", None)
+        payload["assembled"] = True
+        payload["team"] = compiled.plan.catalog_row()
+
+        extras: dict[str, Any] = {
+            "agent_team_graph_id": result.graph_id,
+            "agent_team_status": result.status.value,
+        }
+        if result.usage_groups:
+            extras["delegation_usage_groups"] = [
+                group.payload() for group in result.usage_groups
+            ]
+        return ToolExecResult(ok=result.ok, payload=payload, extras=extras)
 
     def _handle_list_agent_change_sets(
         self, args: dict[str, Any], approval_cb: ApprovalCallback, reject_all: bool
@@ -313,6 +400,24 @@ def _change_set_unavailable(tool: str) -> ToolExecResult:
             "error": "Writable Agent change sets are not available in this runtime.",
         },
     )
+
+
+def _agent_team_failure(
+    failure_class: str,
+    error: str,
+    *,
+    errors: tuple[str, ...] = (),
+) -> ToolExecResult:
+    payload: dict[str, Any] = {
+        "ok": False,
+        "tool": "run_agent_team",
+        "status": "failed",
+        "failure_class": failure_class,
+        "error": error,
+    }
+    if errors:
+        payload["errors"] = list(errors)
+    return ToolExecResult(ok=False, payload=payload)
 
 
 def _change_set_failure(tool: str, exc: Exception) -> ToolExecResult:

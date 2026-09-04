@@ -18,6 +18,7 @@ from aura.agents.local_state import AgentLocalState, AgentPermission  # noqa: E4
 from aura.agents.models import AgentDefinition  # noqa: E402
 from aura.agents.roster import AgentRosterEntry, AgentTurnRoster  # noqa: E402
 from aura.agents.store import AgentStore  # noqa: E402
+from aura.agents.turn_context import AgentTurnContext  # noqa: E402
 from aura.context_gearbox.runtime import compose_system_prompt  # noqa: E402
 from aura.conversation.history import History  # noqa: E402
 from aura.conversation.tools._types import ApprovalDecision  # noqa: E402
@@ -58,7 +59,7 @@ class _Bridge:
     def __init__(self) -> None:
         self.history = History()
         self.running = True
-        self.rosters: list[AgentTurnRoster] = []
+        self.agent_contexts: list[AgentTurnContext] = []
         self.sends: list[tuple[str, str]] = []
 
     def is_running(self) -> bool:
@@ -70,8 +71,8 @@ class _Bridge:
     def set_turn_target_files(self, _paths) -> None:
         pass
 
-    def set_submitted_agent_roster(self, roster: AgentTurnRoster) -> None:
-        self.rosters.append(roster)
+    def set_submitted_agent_context(self, context: AgentTurnContext) -> None:
+        self.agent_contexts.append(context)
 
     def send(self, *, model, thinking) -> None:
         self.sends.append((model, thinking))
@@ -118,29 +119,40 @@ def test_queued_send_freezes_definition_and_effective_grant_at_submission(
         input_panel=_Input(),
         settings=type("Settings", (), {"provider": "deepseek"})(),
         workspace_root=workspace,
-        agent_roster_provider=lambda: AgentTurnRoster(
-            entries=(
-                AgentRosterEntry(
-                    store.get(created.agent_id),
-                    permission=state.permission(created.agent_id),
-                ),
-            )
+        agent_context_provider=lambda **_kwargs: AgentTurnContext.automatic(
+            roster=AgentTurnRoster(
+                entries=(
+                    AgentRosterEntry(
+                        store.get(created.agent_id),
+                        permission=state.permission(created.agent_id),
+                    ),
+                )
+            ),
+            root_provider="deepseek",
+            root_model="model-a",
+            root_thinking="off",
         ),
     )
 
     handler.handle_send(SendPayload("Review this.", []), "model-a", "off")
     queued = handler._message_queue[0]
-    assert queued.agent_roster.entries[0].name == "Original"
-    assert queued.agent_roster.entries[0].permission is AgentPermission.READ_ONLY
+    assert queued.agent_context.roster.entries[0].name == "Original"
+    assert (
+        queued.agent_context.roster.entries[0].permission
+        is AgentPermission.READ_ONLY
+    )
 
     store.update(replace(created, name="Changed later", instructions="CHANGED PRIVATE"))
     state.set_permission(created.agent_id, AgentPermission.READ_WRITE)
     bridge.running = False
     handler.process_message_queue("ignored", "high")
 
-    frozen = bridge.rosters[0].entries[0]
+    frozen = bridge.agent_contexts[0].roster.entries[0]
     assert frozen.name == "Original"
     assert frozen.permission is AgentPermission.READ_ONLY
+    assert bridge.agent_contexts[0].root_provider == "deepseek"
+    assert bridge.agent_contexts[0].root_model == "model-a"
+    assert bridge.agent_contexts[0].root_thinking == "off"
     assert bridge.sends == [("model-a", "off")]
     canonical = json.dumps(bridge.history.messages)
     assert "ORIGINAL PRIVATE INSTRUCTIONS" not in canonical

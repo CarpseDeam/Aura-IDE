@@ -31,7 +31,9 @@ from aura.agents.graph_validation import MISSING_AGENT_LABEL  # noqa: E402
 from aura.agents.local_state import AgentLocalState  # noqa: E402
 from aura.agents.models import AgentScope  # noqa: E402
 from aura.agents.store import AgentStore  # noqa: E402
+from aura.agents.turn_context import AgentTurnMode  # noqa: E402
 from aura.gui.agents_library import AGENT_MIME  # noqa: E402
+from aura.gui.agents_page import ModelChoices, ModelTargetChoice  # noqa: E402
 from aura.gui.agents_workflow_node import NODE_HEIGHT, NODE_WIDTH  # noqa: E402
 from aura.gui.main_window_agents import MainWindowAgentsController  # noqa: E402
 
@@ -81,6 +83,7 @@ def wired(tmp_path: Path, qapp, monkeypatch) -> SimpleNamespace:
         workspace=workspace,
         controller=controller,
         agents=agents,
+        agent_state=AgentLocalState(workspace, state_root=userdata),
         graphs=AgentGraphStore(workspace, personal_dir=workflows),
         state=WorkflowLocalState(workspace, state_root=userdata),
     )
@@ -160,7 +163,7 @@ def test_a_personal_workflow_is_created_outside_the_project(wired) -> None:
     assert not (wired.workspace / ".aura" / "agents" / "workflows").exists()
 
 
-def test_deleting_a_workflow_forgets_every_private_decision_about_it(wired) -> None:
+def test_deleting_an_editor_only_workflow_keeps_automatic_agents_enabled(wired) -> None:
     page, graphs = _new_workflow(wired)
     graph_id = graphs.current_graph.graph_id
     wired.controller.set_workflow_enabled(True)
@@ -170,7 +173,8 @@ def test_deleting_a_workflow_forgets_every_private_decision_about_it(wired) -> N
 
     assert wired.graphs.get(graph_id) is None
     assert wired.state.selected_id() == ""
-    assert wired.state.is_enabled() is False
+    assert wired.state.active_workflow_id() == ""
+    assert wired.state.is_enabled() is True
 
 
 # ── placing agents ───────────────────────────────────────────────────────────
@@ -371,7 +375,7 @@ def test_a_visible_direct_bypass_makes_the_workflow_ineligible_to_run(wired) -> 
         and edge.target_id == graph.result_node.node_id
     ]
 
-    assert wired.controller.workflow_gate() == (False, False)
+    assert wired.controller.workflow_gate() == (False, True)
     assert page.workflow_bar.run_button.isEnabled() is False
     assert "only valid for an empty workflow" in page.scene.edge_items[
         bypass.connection_id
@@ -556,6 +560,73 @@ def test_the_graph_window_has_no_available_to_aura_control(wired) -> None:
     assert "available to aura" not in labels
 
 
+def test_agents_on_without_an_active_workflow_freezes_automatic_turn_inputs(
+    wired, monkeypatch
+) -> None:
+    reviewer = _agent(wired.agents, AgentScope.PROJECT, "Reviewer")
+    wired.agent_state.set_available(reviewer, True)
+    wired.controller._model_context = lambda: ("openai", "root-model", "medium")
+    wired.controller._choices = ModelChoices(
+        targets=(
+            ModelTargetChoice("openai", "gpt-usable", "OpenAI — Usable"),
+            ModelTargetChoice("openrouter", "hosted-unset", "OpenRouter — Unset"),
+            ModelTargetChoice("openai", "gpt-usable", "Duplicate"),
+        ),
+        current_provider="openai",
+        current_model="root-model",
+    )
+    monkeypatch.setattr(
+        "aura.gui.main_window_agents.has_usable_provider_configuration",
+        lambda provider: provider == "openai",
+    )
+
+    assert wired.controller.workflow_gate() == (False, True)
+    wired.controller.set_workflow_enabled(True)
+    context = wired.controller.capture_agent_turn_context(
+        model="submitted-model", thinking="high"
+    )
+
+    assert context.mode is AgentTurnMode.AUTOMATIC
+    assert context.roster.ids == (reviewer,)
+    assert context.model_targets.keys == ("inherit", "openai:gpt-usable")
+    assert context.model_targets.get("openai:gpt-usable").label == "OpenAI — Usable"
+    assert context.root_provider == "openai"
+    assert context.root_model == "submitted-model"
+    assert context.root_thinking == "high"
+
+
+def test_browsing_another_workflow_cannot_redirect_the_active_turn(
+    wired, monkeypatch
+) -> None:
+    reviewer = _agent(wired.agents, AgentScope.PROJECT, "Reviewer")
+    page, graphs = _new_workflow(wired)
+    _drop(wired, page, reviewer, 0.0, 0.0)
+    active = graphs.current_graph
+    (step,) = [node for node in active.nodes if node.is_agent]
+    page.scene.connect_requested.emit(active.task_node.node_id, step.node_id, "step")
+    page.scene.connect_requested.emit(step.node_id, active.result_node.node_id, "step")
+    wired.app.processEvents()
+
+    wired.controller.set_workflow_enabled(True)
+    active_id = active.graph_id
+    page.workflow_bar.create_requested.emit("project")
+    wired.app.processEvents()
+    assert graphs.current_graph.graph_id != active_id
+    assert wired.state.active_workflow_id() == active_id
+
+    wired.controller._model_context = lambda: ("openai", "root-model", "medium")
+    monkeypatch.setattr(
+        "aura.config.has_usable_provider_configuration", lambda _provider: True
+    )
+    context = wired.controller.capture_agent_turn_context(
+        model="submitted-model", thinking="low"
+    )
+
+    assert context.mode is AgentTurnMode.ACTIVE_WORKFLOW
+    assert context.workflow_plan.graph_id == active_id
+    assert context.workflow_plan.graph_id != graphs.current_graph.graph_id
+
+
 def test_invalidating_the_selected_workflow_switches_its_private_gate_off(
     wired,
 ) -> None:
@@ -575,8 +646,11 @@ def test_invalidating_the_selected_workflow_switches_its_private_gate_off(
     (edge,) = graphs.current_graph.outgoing(step.node_id, ConnectionKind.STEP)
     wired.graphs.save(graphs.current_graph.without_connection(edge.connection_id))
 
-    assert wired.controller.workflow_gate() == (False, False)
+    assert wired.controller.workflow_gate() == (False, True)
     assert wired.state.is_enabled() is False
+    assert wired.controller.capture_agent_turn_context(
+        model="unused", thinking="off"
+    ).mode is AgentTurnMode.OFF
 
 
 def test_manual_run_uses_the_injected_runner_even_when_the_gate_is_off(

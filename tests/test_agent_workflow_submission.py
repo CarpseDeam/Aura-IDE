@@ -1,4 +1,4 @@
-"""Submission-time workflow authority stays attached to the queued turn."""
+"""One submission-time Agent context stays attached to the queued turn."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,6 +10,7 @@ pytest.importorskip("PySide6.QtCore")
 
 from aura.agents.graph_models import WorkflowGraph  # noqa: E402
 from aura.agents.identity import AgentScope  # noqa: E402
+from aura.agents.turn_context import AgentTurnContext  # noqa: E402
 from aura.agents.workflow_plan import WorkflowRunPlan  # noqa: E402
 from aura.gui.input_panel import SendPayload  # noqa: E402
 from aura.gui.send_handler import SendHandler  # noqa: E402
@@ -27,17 +28,14 @@ class _Bridge:
     def __init__(self) -> None:
         self.history = _History()
         self.running = True
-        self.workflow_plans: list[WorkflowRunPlan | None] = []
+        self.agent_contexts: list[AgentTurnContext] = []
         self.sends: list[dict] = []
 
     def is_running(self) -> bool:
         return self.running
 
-    def set_submitted_agent_roster(self, roster) -> None:
-        self.roster = roster
-
-    def set_submitted_workflow_plan(self, plan) -> None:
-        self.workflow_plans.append(plan)
+    def set_submitted_agent_context(self, context: AgentTurnContext) -> None:
+        self.agent_contexts.append(context)
 
     def authorize_external_reads(self, paths):
         return tuple(paths or ())
@@ -92,7 +90,7 @@ def test_a_queued_turn_keeps_its_submitted_workflow_snapshot(
     )
     first = _plan("workflowone1", "First")
     later = _plan("workflowtwo2", "Later")
-    selected = {"plan": first}
+    selected = {"context": AgentTurnContext.active_workflow(first)}
     bridge = _Bridge()
     input_panel = _Input()
     handler = SendHandler(
@@ -101,20 +99,20 @@ def test_a_queued_turn_keeps_its_submitted_workflow_snapshot(
         input_panel=input_panel,
         settings=SimpleNamespace(provider="deepseek"),
         workspace_root=tmp_path,
-        workflow_plan_provider=lambda **_kwargs: selected["plan"],
+        agent_context_provider=lambda **_kwargs: selected["context"],
     )
 
     assert handler.handle_send(SendPayload("queued task", []), "model", "off") is False
-    selected["plan"] = later
+    selected["context"] = AgentTurnContext.active_workflow(later)
     bridge.running = False
     handler.process_message_queue("ignored-model", "off")
 
-    assert bridge.workflow_plans == [first]
+    assert bridge.agent_contexts == [AgentTurnContext.active_workflow(first)]
     assert bridge.sends == [{"model": "model", "thinking": "off"}]
     assert input_panel.queued == [1, 0]
 
 
-def test_an_off_gate_deposits_none_so_no_earlier_plan_can_carry_over(
+def test_an_off_gate_deposits_off_context_so_no_earlier_plan_can_carry_over(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setattr(
@@ -129,9 +127,9 @@ def test_an_off_gate_deposits_none_so_no_earlier_plan_can_carry_over(
         input_panel=_Input(),
         settings=SimpleNamespace(provider="deepseek"),
         workspace_root=tmp_path,
-        workflow_plan_provider=lambda **_kwargs: None,
+        agent_context_provider=lambda **_kwargs: AgentTurnContext.off(),
     )
 
     assert handler.handle_send(SendPayload("ordinary task", []), "model", "off") is True
 
-    assert bridge.workflow_plans == [None]
+    assert bridge.agent_contexts == [AgentTurnContext.off()]

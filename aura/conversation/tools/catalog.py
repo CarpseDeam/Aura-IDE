@@ -18,6 +18,7 @@ from aura.conversation.tools.schemas import (
     TASK_CHECKLIST_TOOL_DEF,
     TERMINAL_TOOL_DEF,
     build_delegate_agent_tool_def,
+    build_run_agent_team_tool_def,
     build_run_workflow_tool_def,
     build_workflow_helper_tool_def,
 )
@@ -104,6 +105,7 @@ class ToolCatalog:
         plan_review: bool = False,
         skills_active: bool = False,
         agents: tuple[dict[str, str], ...] | None = None,
+        automatic_team: Mapping[str, Any] | None = None,
         workflow_helpers: tuple[dict[str, Any], ...] | None = None,
         workflow: dict[str, Any] | None = None,
         agent_change_sets: bool = False,
@@ -124,7 +126,13 @@ class ToolCatalog:
         and ``read_skill_resource`` only when this turn's frozen skill index
         actually has candidates.
 
-        ``agents`` adds ``delegate_agent``, and only when this turn's frozen
+        ``automatic_team`` adds ``run_agent_team`` for a turn whose Agents
+        switch is on without a saved workflow target. Its frozen roster and
+        model-target rows describe the complete set of specialists and models
+        the root may reference while assembling one native in-memory plan.
+
+        ``agents`` is the legacy direct-delegation projection. It adds
+        ``delegate_agent``, and only when this turn's frozen
         roster actually holds an agent. With no roster — the ordinary case —
         the tool is absent from both catalogs and the surface is exactly what
         single-agent Aura has always offered. The rows carry each eligible
@@ -184,6 +192,13 @@ class ToolCatalog:
 
         if workflow_helpers:
             tools.append(build_workflow_helper_tool_def(workflow_helpers))
+        elif automatic_team is not None:
+            tools.append(
+                build_run_agent_team_tool_def(
+                    automatic_team.get("agents") or (),
+                    automatic_team.get("model_targets") or (),
+                )
+            )
         elif agents:
             tools.append(build_delegate_agent_tool_def(agents))
 

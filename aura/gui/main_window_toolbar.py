@@ -95,11 +95,11 @@ class MainWindowToolbar(QToolBar):
         self.addWidget(_toolbar_separator())
 
         # Group 3b: the Agents master gate. Unlike Plan and Approve it is not
-        # backed by application settings — the selected workflow and whether
-        # Aura may call it are private to this user and this workspace, so the
-        # Agents controller owns the value and this switch only shows it. It
-        # starts off and unavailable, which is exactly right before a
-        # workspace with a runnable workflow is open.
+        # backed by application settings — the active workflow (if any) and
+        # whether Aura may use Agents are private to this user and workspace,
+        # so the Agents controller owns the value and this switch only shows
+        # it. It starts unavailable until a workspace is open; a workspace
+        # needs no saved workflow because Aura can assemble a temporary team.
         self._agents_switch = GlassSwitch(
             "Agents",
             False,
@@ -213,10 +213,10 @@ class MainWindowToolbar(QToolBar):
     def set_agents_available(self, available: bool) -> None:
         """Allow or forbid using the gate at all.
 
-        With no valid workflow selected there is nothing the switch could
-        turn on, so it is disabled rather than left inviting a click that
-        would do nothing. The caller switches it off first; this never
-        changes the value on its own.
+        A workspace is enough to make the switch meaningful: with no active
+        saved workflow, turning it on authorizes automatic team assembly.
+        The caller switches it off before making it unavailable; this method
+        never changes the value on its own.
         """
         self._agents_switch.setEnabled(bool(available))
         self.refresh_auto_toggle_tooltips()
@@ -235,8 +235,8 @@ class MainWindowToolbar(QToolBar):
         self._agents_switch.setToolTip(
             ENABLED_NOTE
             if self._agents_switch.isEnabled()
-            else "Agents: open the Agents window and select a workflow that is "
-            "complete enough to run. Run there works without this switch."
+            else "Agents: open a workspace to use an active workflow or let "
+            "Aura assemble a team for the task."
         )
 
     def update_maximize_icon(self, maximized: bool) -> None:

@@ -16,10 +16,11 @@ otherwise, and nothing they decide is ever written back into the project.
 This controller also owns the workflow session, and therefore the Agents
 switch in the main toolbar. The session lives here rather than in the Agents
 window because the switch must be answerable — and honest — before that window
-has ever been opened: which workflow is selected, whether it is complete
-enough to run, and whether this user has said Aura may run it are facts about
-the workspace, not about a window being on screen. The switch is a view of
-those facts, and freezing them for a submitted turn happens here too.
+has ever been opened: whether this user enabled Agents, whether they activated
+an exact saved workflow or automatic assembly, and whether that active
+workflow remains runnable are facts about the workspace, not about a window
+being on screen. The switch is a view of those facts, and freezing them for a
+submitted turn happens here too.
 """
 
 from __future__ import annotations
@@ -47,7 +48,13 @@ from aura.agents.local_state import (
 from aura.agents.models import AgentDefinition, AgentScope
 from aura.agents.roster import EMPTY_AGENT_ROSTER, AgentTurnRoster, resolve_agent_turn_roster
 from aura.agents.store import AgentStore, AgentStoreError, AgentSummary
+from aura.agents.turn_context import (
+    AgentModelTarget,
+    AgentModelTargets,
+    AgentTurnContext,
+)
 from aura.agents.workflow_plan import WorkflowRunPlan, freeze_workflow_plan
+from aura.config import has_usable_provider_configuration
 from aura.gui.agents_page import (
     AgentDetail,
     AgentDraft,
@@ -200,15 +207,16 @@ class MainWindowAgentsController(QObject):
 
     @property
     def workflow_session(self) -> WorkflowSession:
-        """The one session that answers which workflow is selected, and how."""
+        """The one session owning editor selection and conversation authority."""
         return self._workflow_session
 
     def workflow_gate(self) -> tuple[bool, bool]:
         """``(enabled, available)`` for the switch, read from disk.
 
-        *available* is whether there is a selected workflow complete enough to
-        run at all: with none, the switch has nothing it could turn on, so it
-        is offered as unavailable rather than as a decision with no effect.
+        A bound workspace can always use automatic team assembly, so the
+        switch no longer depends on a workflow being present. When an exact
+        saved workflow is active, it must still exist and remain runnable;
+        Aura never falls back from a broken active workflow to automatic mode.
         """
         if not self._workflow_session.bound:
             return False, False
@@ -217,23 +225,29 @@ class MainWindowAgentsController(QObject):
         except Exception:
             logger.debug("agents: could not read the workflow session", exc_info=True)
             return False, False
-        available = self._selected_workflow_runnable()
-        if not available:
-            # Masking an old True value in the widget is not enough: if a
-            # shared definition later becomes valid again, that stale bit
-            # would silently revive its authority. Invalid or missing means
-            # off in the private state itself.
-            try:
-                self._workflow_session.set_enabled(False)
-            except WorkflowLocalStateError:
-                logger.debug("agents: could not switch off an invalid workflow")
+        state = self._workflow_session.state()
+        if state is None:
             return False, False
         try:
-            enabled = self._workflow_session.is_enabled()
+            enabled = state.is_enabled()
         except Exception:
             logger.debug("agents: could not read the workflow gate", exc_info=True)
             enabled = False
-        return enabled, available
+        if enabled:
+            try:
+                active_id = state.active_workflow_id()
+            except Exception:
+                active_id = ""
+            if active_id and self._active_workflow_graph(active_id) is None:
+                # A selected team is exact authority. If it disappears or
+                # becomes invalid, turn Agents off instead of quietly changing
+                # the meaning of the user's switch to automatic assembly.
+                try:
+                    state.set_enabled(False)
+                except WorkflowLocalStateError:
+                    logger.debug("agents: could not switch off an invalid workflow")
+                enabled = False
+        return enabled, True
 
     def refresh_workflow_gate(self) -> None:
         """Tell whoever draws the switch what it should be showing."""
@@ -242,8 +256,20 @@ class MainWindowAgentsController(QObject):
 
     def set_workflow_enabled(self, enabled: bool) -> None:
         """Record the user's answer to the switch, privately, and re-read it."""
+        state = self._workflow_session.state()
+        if state is None:
+            self.refresh_workflow_gate()
+            return
         try:
-            self._workflow_session.set_enabled(bool(enabled))
+            if enabled:
+                graph = self._workflow_session.graph
+                active_id = (
+                    graph.graph_id
+                    if graph is not None and self._selected_workflow_runnable()
+                    else ""
+                )
+                state.set_active_workflow(active_id)
+            state.set_enabled(bool(enabled))
         except WorkflowLocalStateError as exc:
             self._show_error("Agents", str(exc))
         self.refresh_workflow_gate()
@@ -260,11 +286,100 @@ class MainWindowAgentsController(QObject):
         enabled, _available = self.workflow_gate()
         if not enabled:
             return None
+        state = self._workflow_session.state()
+        if state is None:
+            return None
+        try:
+            active_id = state.active_workflow_id()
+        except Exception:
+            return None
+        if not active_id:
+            return None
+        graph = self._active_workflow_graph(active_id)
         provider, _model, _thinking = self._current_model_context()
-        plan, errors = self._freeze_plan(provider, model, thinking)
+        plan, errors = self._freeze_graph(graph, provider, model, thinking)
         if plan is None and errors:
             logger.info("agents: workflow not runnable this turn: %s", "; ".join(errors))
         return plan
+
+    def capture_agent_turn_context(
+        self, *, model: str, thinking: str
+    ) -> AgentTurnContext:
+        """Freeze the one Agent path authorized for a submitted root turn.
+
+        An active saved workflow is exact authority: it is loaded by its
+        persisted id and either freezes successfully or the turn gets no
+        Agent capability. With no active workflow, the same switch authorizes
+        automatic assembly from immutable snapshots of the user's available
+        Agents and the model targets this machine can actually run.
+        """
+        enabled, _available = self.workflow_gate()
+        if not enabled:
+            return AgentTurnContext.off()
+
+        state = self._workflow_session.state()
+        if state is None:
+            return AgentTurnContext.off()
+        try:
+            active_id = state.active_workflow_id()
+        except Exception:
+            logger.debug("agents: could not read the active workflow", exc_info=True)
+            return AgentTurnContext.off()
+
+        if not active_id:
+            provider, _model, _thinking = self._current_model_context()
+            return AgentTurnContext.automatic(
+                roster=self.capture_agent_turn_roster(),
+                model_targets=self._automatic_model_targets(),
+                root_provider=provider,
+                root_model=model,
+                root_thinking=thinking,
+            )
+
+        graph = self._active_workflow_graph(active_id)
+        provider, _model, _thinking = self._current_model_context()
+        plan, errors = self._freeze_graph(graph, provider, model, thinking)
+        if plan is not None:
+            return AgentTurnContext.active_workflow(plan)
+
+        if errors:
+            logger.info("agents: workflow not runnable this turn: %s", "; ".join(errors))
+        # Never reinterpret an exact saved-workflow choice as permission to
+        # assemble a different team. A load/freeze race therefore fails off.
+        try:
+            state.set_enabled(False)
+        except WorkflowLocalStateError:
+            logger.debug("agents: could not switch off an invalid workflow")
+        return AgentTurnContext.off()
+
+    def _automatic_model_targets(self) -> AgentModelTargets:
+        """Freeze usable provider/model rows behind stable tool-facing keys."""
+        targets: list[AgentModelTarget] = []
+        seen: set[str] = set()
+        for choice in self.model_choices().targets:
+            provider = str(choice.provider or "").strip()
+            model = str(choice.model or "").strip()
+            if not provider or not model:
+                continue
+            try:
+                usable = has_usable_provider_configuration(provider)
+            except Exception:
+                usable = False
+            if not usable:
+                continue
+            key = f"{provider}:{model}"
+            if key in seen:
+                continue
+            seen.add(key)
+            targets.append(
+                AgentModelTarget(
+                    key=key,
+                    provider=provider,
+                    model=model,
+                    label=str(choice.label or ""),
+                )
+            )
+        return AgentModelTargets.freeze(targets)
 
     def freeze_open_workflow(self) -> tuple[WorkflowRunPlan | None, tuple[str, ...]]:
         """Freeze the open workflow for a manual Run, gate or no gate.
@@ -278,12 +393,23 @@ class MainWindowAgentsController(QObject):
     def _freeze_plan(
         self, provider: str, model: str, thinking: str
     ) -> tuple[WorkflowRunPlan | None, tuple[str, ...]]:
+        return self._freeze_graph(
+            self._workflow_session.graph, provider, model, thinking
+        )
+
+    def _freeze_graph(
+        self,
+        graph,
+        provider: str,
+        model: str,
+        thinking: str,
+    ) -> tuple[WorkflowRunPlan | None, tuple[str, ...]]:
         store = self._store()
         state = self._state()
         if store is None or state is None:
             return None, ("no workspace is open",)
         return freeze_workflow_plan(
-            self._workflow_session.graph,
+            graph,
             definitions=store,
             permissions=state,
             agent_scopes=self._agent_scopes(),
@@ -291,6 +417,23 @@ class MainWindowAgentsController(QObject):
             model=model,
             thinking=thinking,
         )
+
+    def _active_workflow_graph(self, graph_id: str):
+        """Load the active workflow by id, never from the editor selection."""
+        store = self._workflow_session.store()
+        if store is None:
+            return None
+        try:
+            graph = store.get(graph_id)
+        except Exception:
+            logger.debug("agents: could not read the active workflow", exc_info=True)
+            return None
+        if graph is None:
+            return None
+        verdict = validate_graph(graph, agents=self._agent_scopes())
+        if not verdict.runnable or runnable_dag(graph) is None:
+            return None
+        return graph
 
     def _selected_workflow_runnable(self) -> bool:
         graph = self._workflow_session.graph

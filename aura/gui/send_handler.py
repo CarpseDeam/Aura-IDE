@@ -17,8 +17,10 @@ _log = logging.getLogger(__name__)
 
 from dataclasses import dataclass
 
-from aura.agents.roster import EMPTY_AGENT_ROSTER, AgentTurnRoster
-from aura.agents.workflow_plan import WorkflowRunPlan
+from aura.agents.turn_context import (
+    EMPTY_AGENT_TURN_CONTEXT,
+    AgentTurnContext,
+)
 from aura.config import (
     PROVIDERS,
     AppSettings,
@@ -58,13 +60,11 @@ class QueuedItem:
     model: str
     thinking: ThinkingMode
     selected_skills: tuple[ComposerSkill, ...] = ()
-    #: Full definition + effective grant, immutable and deliberately only in
-    #: memory. Child instructions never enter canonical/provider History.
-    agent_roster: AgentTurnRoster = EMPTY_AGENT_ROSTER
-    #: The one workflow this submission may run, already resolved, or None
-    #: when the Agents switch was off. Frozen for the same reason the roster
-    #: is: a queued turn runs the authority it was queued with.
-    workflow_plan: WorkflowRunPlan | None = None
+    #: The complete Agent mode and authority for this submission. It is
+    #: immutable and deliberately only in memory: private child instructions
+    #: never enter canonical/provider History, and a queued turn cannot mix a
+    #: newly selected workflow with an older roster or model catalog.
+    agent_context: AgentTurnContext = EMPTY_AGENT_TURN_CONTEXT
 
 
 class SendHandler(QObject):
@@ -86,8 +86,7 @@ class SendHandler(QObject):
         settings: AppSettings,
         workspace_root: Path | None,
         parent=None,
-        agent_roster_provider=None,
-        workflow_plan_provider=None,
+        agent_context_provider=None,
     ) -> None:
         super().__init__(parent)
         self._bridge = bridge
@@ -95,13 +94,11 @@ class SendHandler(QObject):
         self._input = input_panel
         self._settings = settings
         self._workspace_root = workspace_root
-        # The Agents controller owns storage and returns one full immutable
-        # submission-time roster. SendHandler never constructs storage owners.
-        self._agent_roster_provider = agent_roster_provider
-        # Same owner, same rule, for the workflow capability: it answers with
-        # a resolved plan or with None, and None is what an Agents switch that
-        # is off always produces.
-        self._workflow_plan_provider = workflow_plan_provider
+        # The Agents controller owns storage and returns one internally
+        # consistent, immutable submission-time capability. SendHandler never
+        # combines independently captured Agent state or constructs storage
+        # owners of its own.
+        self._agent_context_provider = agent_context_provider
 
         # Queued messages sent while the bridge is running.
         self._message_queue: list[QueuedItem] = []
@@ -142,53 +139,40 @@ class SendHandler(QObject):
 
     # ---- public API --------------------------------------------------------
 
-    def set_agent_roster_provider(self, provider) -> None:
-        """Wire the Agent controller's submission-time roster producer."""
-        self._agent_roster_provider = provider
+    def set_agent_context_provider(self, provider) -> None:
+        """Wire the Agent controller's complete turn-capability producer."""
+        self._agent_context_provider = provider
 
-    def set_workflow_plan_provider(self, provider) -> None:
-        """Wire the Agent controller's submission-time workflow producer."""
-        self._workflow_plan_provider = provider
-
-    def _capture_workflow_plan(
+    def _capture_agent_context(
         self, model: str, thinking: ThinkingMode
-    ) -> WorkflowRunPlan | None:
-        """Freeze this submission's runnable workflow, if there is one.
+    ) -> AgentTurnContext:
+        """Freeze the one Agent capability attached to this submission.
 
-        The turn's own model and thinking go in, because the plan resolves
-        each step's model under them; a queued item replays the pair it was
-        queued with, so its steps run on the model the user actually chose.
+        The turn's model and thinking are inputs because saved workflows and
+        automatically generated Agents may inherit them. Returning the off
+        context on capture failure is fail-closed: no earlier turn's Agent
+        authority can leak into this one.
         """
-        provider = self._workflow_plan_provider
+        provider = self._agent_context_provider
         if provider is None:
-            return None
+            return EMPTY_AGENT_TURN_CONTEXT
         try:
-            plan = provider(model=str(model), thinking=str(thinking))
+            context = provider(model=str(model), thinking=str(thinking))
         except Exception:
-            _log.debug("Could not freeze the submitted Agent workflow", exc_info=True)
-            return None
-        return plan if isinstance(plan, WorkflowRunPlan) else None
-
-    def _capture_agent_roster(self) -> AgentTurnRoster:
-        """Read one immutable roster from the injected storage owner."""
-        provider = self._agent_roster_provider
-        if provider is None:
-            return EMPTY_AGENT_ROSTER
-        try:
-            roster = provider()
-            return roster if isinstance(roster, AgentTurnRoster) else EMPTY_AGENT_ROSTER
-        except Exception:
-            _log.debug("Could not freeze the submitted Agent roster", exc_info=True)
-            return EMPTY_AGENT_ROSTER
+            _log.debug("Could not freeze the submitted Agent context", exc_info=True)
+            return EMPTY_AGENT_TURN_CONTEXT
+        return (
+            context
+            if isinstance(context, AgentTurnContext)
+            else EMPTY_AGENT_TURN_CONTEXT
+        )
 
     def handle_send(
         self,
         payload: SendPayload,
         model: str,
         thinking: ThinkingMode,
-        agent_roster: AgentTurnRoster | None = None,
-        workflow_plan: WorkflowRunPlan | None = None,
-        replaying: bool = False,
+        agent_context: AgentTurnContext | None = None,
     ) -> bool:
         """Process a send payload: run Aura's own commands, queue if busy, or send.
 
@@ -251,16 +235,13 @@ class SendHandler(QObject):
             self._handle_built_in_action(built_in, payload.text)
             return False
 
-        # Frozen once for this submission: a queued item keeps the roster it
-        # was queued with, and a dequeued one replays that captured roster
-        # rather than reading the live one again.
-        frozen_roster = (
-            self._capture_agent_roster()
-            if agent_roster is None
-            else agent_roster
-        )
-        frozen_workflow = (
-            workflow_plan if replaying else self._capture_workflow_plan(model, thinking)
+        # Frozen once for this submission: a queued item replays this complete
+        # snapshot rather than combining pieces of whatever Agent state is
+        # live when it eventually reaches the front of the queue.
+        frozen_context = (
+            self._capture_agent_context(model, thinking)
+            if agent_context is None
+            else agent_context
         )
 
         if self._bridge.is_running() or self._queue_paused:
@@ -270,8 +251,7 @@ class SendHandler(QObject):
                 model=model,
                 thinking=thinking,
                 selected_skills=tuple(payload.selected_skills),
-                agent_roster=frozen_roster,
-                workflow_plan=frozen_workflow,
+                agent_context=frozen_context,
             )
             self._message_queue.append(item)
             self._input.set_queued_messages(len(self._message_queue))
@@ -287,9 +267,7 @@ class SendHandler(QObject):
             )
             return False
 
-        self._finalize_send(
-            payload, model, thinking, frozen_roster, frozen_workflow
-        )
+        self._finalize_send(payload, model, thinking, frozen_context)
         return True
 
     def _restore_local_command_selection(self, payload: SendPayload) -> None:
@@ -354,10 +332,9 @@ class SendHandler(QObject):
         if replay_cb is not None:
             replay_cb()
         self._chat.begin_assistant()
-        set_roster = getattr(self._bridge, "set_submitted_agent_roster", None)
-        if callable(set_roster):
-            set_roster(self._capture_agent_roster())
-        self._set_submitted_workflow(self._capture_workflow_plan(model, thinking))
+        self._set_submitted_agent_context(
+            self._capture_agent_context(model, thinking)
+        )
         self._bridge.send(model=model, thinking=thinking)
         return True
 
@@ -551,8 +528,7 @@ class SendHandler(QObject):
         payload: SendPayload,
         model: str,
         thinking: ThinkingMode,
-        agent_roster: AgentTurnRoster = EMPTY_AGENT_ROSTER,
-        workflow_plan: WorkflowRunPlan | None = None,
+        agent_context: AgentTurnContext = EMPTY_AGENT_TURN_CONTEXT,
     ) -> None:
         """Build the message parts, append to history, and send via the bridge."""
         # Authorization is derived from the literal user text before history
@@ -582,7 +558,7 @@ class SendHandler(QObject):
                 explicit_installed_skill_ids=tuple(
                     skill.install_id for skill in payload.selected_skills
                 ),
-                available_agent_ids=agent_roster.ids,
+                available_agent_ids=agent_context.roster.ids,
             )
         else:
             self._bridge.history.append_user_text(
@@ -591,7 +567,7 @@ class SendHandler(QObject):
                 explicit_installed_skill_ids=tuple(
                     skill.install_id for skill in payload.selected_skills
                 ),
-                available_agent_ids=agent_roster.ids,
+                available_agent_ids=agent_context.roster.ids,
             )
 
         self._chat.add_user(text, [a.b64 for a in image_atts] or None)
@@ -604,22 +580,14 @@ class SendHandler(QObject):
             "send_start model=%s thinking=%s workspace_root=%s",
             model, thinking, self._workspace_root,
         )
-        set_roster = getattr(self._bridge, "set_submitted_agent_roster", None)
-        if callable(set_roster):
-            set_roster(agent_roster)
-        self._set_submitted_workflow(workflow_plan)
+        self._set_submitted_agent_context(agent_context)
         self._bridge.send(model=model, thinking=thinking)
 
-    def _set_submitted_workflow(self, plan: WorkflowRunPlan | None) -> None:
-        """Hand the bridge this submission's workflow, always — None included.
-
-        Setting it unconditionally is what makes the switch a real gate: a
-        turn submitted with Agents off deposits nothing, so the next turn
-        cannot inherit the last one's workflow.
-        """
-        setter = getattr(self._bridge, "set_submitted_workflow_plan", None)
+    def _set_submitted_agent_context(self, context: AgentTurnContext) -> None:
+        """Hand the bridge this submission's complete Agent capability."""
+        setter = getattr(self._bridge, "set_submitted_agent_context", None)
         if callable(setter):
-            setter(plan)
+            setter(context)
 
     # ---- model info lookup -------------------------------------------------
 
@@ -657,7 +625,5 @@ class SendHandler(QObject):
             payload,
             item.model,
             item.thinking,
-            agent_roster=item.agent_roster,
-            workflow_plan=item.workflow_plan,
-            replaying=True,
+            agent_context=item.agent_context,
         )

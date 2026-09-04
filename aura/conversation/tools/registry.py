@@ -7,6 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from aura.agents.roster import EMPTY_AGENT_ROSTER, AgentTurnRoster
+from aura.agents.turn_context import (
+    EMPTY_AGENT_TURN_CONTEXT,
+    AgentTurnContext,
+    AgentTurnMode,
+)
 from aura.code_intel.index import CodeIntelIndex
 from aura.code_intel.inspection import CodeInspector
 from aura.codebase_index.indexer import CodebaseIndex  # noqa: F401
@@ -111,11 +116,15 @@ class ToolRegistry(
         # decide whether ``load_skills`` belongs in the catalog this turn.
         # Set once per real user turn via ``set_turn_skill_state``.
         self._turn_skill_state: Any = None
-        # The frozen per-turn agent roster and the injected delegation runner.
-        # Both are absent by default, and that absence is the ordinary case:
-        # with no roster there is no ``delegate_agent`` in the catalog, and a
-        # an ordinary child agent's registry is built this way on purpose.
-        self._turn_agent_roster: AgentTurnRoster = EMPTY_AGENT_ROSTER
+        # One immutable value owns the root turn's Agent path: off, automatic
+        # team assembly, or one exact saved workflow.  It is replaced before
+        # the first catalog is built and never pieced together from live state.
+        self._turn_agent_context: AgentTurnContext = EMPTY_AGENT_TURN_CONTEXT
+        self._automatic_team_started = False
+        # Compatibility for callers that still exercise the retired root
+        # ``delegate_agent`` path directly. Production submission installs an
+        # AgentTurnContext instead and always clears this roster.
+        self._legacy_turn_agent_roster: AgentTurnRoster = EMPTY_AGENT_ROSTER
         self._agent_delegation_runner: Any = None
         # A workflow Step or helper may receive one narrower delegation
         # surface: only its frozen immediate children, resolved by node id.
@@ -123,11 +132,8 @@ class ToolRegistry(
         self._workflow_helpers: tuple[Any, ...] = ()
         self._workflow_helper_runner: Any = None
         self._agent_worktree_manager: Any = None
-        # The frozen per-turn workflow plan and the runner that executes it.
-        # Absent by default, and that absence is the ordinary case: with no
-        # plan there is no ``run_agent_workflow`` in the catalog and not one
-        # word about workflows in the request.
-        self._turn_workflow_plan: Any = None
+        # The same workflow runner executes both an active saved workflow and
+        # a native in-memory plan compiled by ``run_agent_team``.
         self._agent_workflow_runner: Any = None
         # Plan Review — required/approved state for the active turn, and the
         # GUI-thread proxy that pauses the tool loop for human review. The
@@ -255,18 +261,44 @@ class ToolRegistry(
 
     @property
     def turn_agent_roster(self) -> AgentTurnRoster:
-        """The agents this turn may delegate to — empty unless one was frozen."""
-        return self._turn_agent_roster
+        """Compatibility projection for the old direct-delegation surface."""
+        if self._turn_agent_context.mode is AgentTurnMode.AUTOMATIC:
+            return self._turn_agent_context.roster
+        return self._legacy_turn_agent_roster
+
+    @property
+    def turn_agent_context(self) -> AgentTurnContext:
+        """The complete Agent capability frozen for this root turn."""
+        return self._turn_agent_context
+
+    def set_agent_turn_context(self, context: AgentTurnContext | None) -> None:
+        """Install the root turn's one closed Agent capability snapshot.
+
+        Replacing the context also resets the automatic team's one-launch
+        ledger. A root production turn calls this exactly once before its
+        catalog is frozen; child registries retain the default off context.
+        """
+        if context is None:
+            context = EMPTY_AGENT_TURN_CONTEXT
+        if not isinstance(context, AgentTurnContext):
+            raise TypeError("Agent turn context must be an AgentTurnContext value.")
+        self._turn_agent_context = context
+        self._automatic_team_started = False
+        self._legacy_turn_agent_roster = EMPTY_AGENT_ROSTER
 
     def set_turn_agent_roster(self, roster: AgentTurnRoster | None) -> None:
-        """Freeze this real user turn's roster of eligible agents.
+        """Compatibility shim for the retired root ``delegate_agent`` path.
 
-        Called once per turn, before the first ``tool_defs()`` of that turn,
-        so ``delegate_agent`` joins the catalog only when the user actually
-        made an agent available — and stays in that state for every round.
-        ``None`` clears it back to the ordinary single-agent surface.
+        New production code installs :class:`AgentTurnContext` instead. This
+        method remains while older integrations and focused delegation tests
+        migrate; it deliberately does not make the roster available to
+        automatic team assembly.
         """
-        self._turn_agent_roster = roster if roster is not None else EMPTY_AGENT_ROSTER
+        self._turn_agent_context = EMPTY_AGENT_TURN_CONTEXT
+        self._automatic_team_started = False
+        self._legacy_turn_agent_roster = (
+            roster if roster is not None else EMPTY_AGENT_ROSTER
+        )
 
     def set_agent_delegation_runner(self, runner: Any | None) -> None:
         """Wire (or clear) the runtime that actually runs a delegated agent.
@@ -291,17 +323,23 @@ class ToolRegistry(
     @property
     def turn_workflow_plan(self) -> Any | None:
         """The one workflow this turn may run — None unless one was frozen."""
-        return self._turn_workflow_plan
+        return self._turn_agent_context.workflow_plan
 
     def set_turn_workflow_plan(self, plan: Any | None) -> None:
-        """Freeze this real user turn's runnable workflow, or clear it.
+        """Compatibility shim that installs one active-workflow context.
 
-        Called once per turn, before the first ``tool_defs()`` of that turn,
-        so ``run_agent_workflow`` joins the catalog only when the user had the
-        Agents switch on over a workflow that actually froze — and stays in
-        that state for every round. ``None`` is the ordinary case.
+        ``None`` leaves any legacy direct-delegation roster intact because old
+        bridge versions submitted those two independent values in sequence.
+        New production code calls :meth:`set_agent_turn_context` once instead.
         """
-        self._turn_workflow_plan = plan
+        self._turn_agent_context = (
+            AgentTurnContext.active_workflow(plan)
+            if plan is not None
+            else EMPTY_AGENT_TURN_CONTEXT
+        )
+        self._automatic_team_started = False
+        if plan is not None:
+            self._legacy_turn_agent_roster = EMPTY_AGENT_ROSTER
 
     def set_agent_workflow_runner(self, runner: Any | None) -> None:
         """Wire (or clear) the runtime that actually runs a frozen workflow.
@@ -327,30 +365,46 @@ class ToolRegistry(
             self._turn_skill_state is not None
             and not getattr(self._turn_skill_state, "is_empty", True)
         )
+        context = self._turn_agent_context
+        automatic_team = None
+        workflow = None
+        legacy_agents = None
+        if context.mode is AgentTurnMode.AUTOMATIC:
+            automatic_team = {
+                "agents": context.roster.catalog_rows(),
+                "model_targets": context.model_targets.catalog_rows(),
+            }
+        elif context.mode is AgentTurnMode.ACTIVE_WORKFLOW:
+            assert context.workflow_plan is not None
+            workflow = context.workflow_plan.catalog_row()
+        elif not self._legacy_turn_agent_roster.is_empty:
+            legacy_agents = self._legacy_turn_agent_roster.catalog_rows()
+
         return self._catalog.build_tool_defs(
             read_only=self._read_only,
             dynamic_schemas=dynamic_schemas or None,
             mcp_schemas=mcp_schemas or None,
             plan_review=(not self._read_only) and self._plan_review.required,
             skills_active=skills_active,
-            agents=self._turn_agent_roster.catalog_rows() or None,
+            agents=legacy_agents,
+            automatic_team=automatic_team,
             workflow_helpers=(
                 tuple(helper.catalog_row() for helper in self._workflow_helpers)
                 or None
             ),
-            workflow=(
-                self._turn_workflow_plan.catalog_row()
-                if self._turn_workflow_plan is not None
-                else None
-            ),
+            workflow=workflow,
             agent_change_sets=bool(
                 self._agent_worktree_manager is not None
                 and (
                     getattr(self._agent_worktree_manager, "has_unresolved", False)
-                    or any(entry.permission.allows_edit for entry in self._turn_agent_roster.entries)
+                    or context.mode is AgentTurnMode.AUTOMATIC
+                    or any(
+                        entry.permission.allows_edit
+                        for entry in self._legacy_turn_agent_roster.entries
+                    )
                     or bool(
-                        self._turn_workflow_plan is not None
-                        and self._turn_workflow_plan.writable
+                        context.workflow_plan is not None
+                        and context.workflow_plan.writable
                     )
                 )
             ),
@@ -615,6 +669,7 @@ TOOL_HANDLERS["code_intel_audit"] = ToolRegistry._handle_code_intel_audit
 TOOL_HANDLERS["inspect_code"] = ToolRegistry._handle_inspect_code
 TOOL_HANDLERS["review_implementation_plan"] = ToolRegistry._handle_review_implementation_plan
 TOOL_HANDLERS["delegate_agent"] = ToolRegistry._handle_delegate_agent
+TOOL_HANDLERS["run_agent_team"] = ToolRegistry._handle_run_agent_team
 TOOL_HANDLERS["run_agent_workflow"] = ToolRegistry._handle_run_agent_workflow
 TOOL_HANDLERS["list_agent_change_sets"] = ToolRegistry._handle_list_agent_change_sets
 TOOL_HANDLERS["inspect_agent_change_set"] = ToolRegistry._handle_inspect_agent_change_set

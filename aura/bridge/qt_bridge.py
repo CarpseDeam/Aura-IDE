@@ -34,9 +34,11 @@ from PySide6.QtCore import (
     Slot,
 )
 
-from aura.agents.roster import EMPTY_AGENT_ROSTER, AgentTurnRoster
 from aura.agents.runtime import AgentDelegationRunner
-from aura.agents.workflow_plan import WorkflowRunPlan
+from aura.agents.turn_context import (
+    EMPTY_AGENT_TURN_CONTEXT,
+    AgentTurnContext,
+)
 from aura.agents.workflow_runner import WorkflowRunner
 from aura.backends import (
     APIAgentBackend,
@@ -299,15 +301,12 @@ class ConversationBridge(QObject):
         self._turn_content: str = ""
         self._turn_target_files: tuple[str, ...] = ()
         self._turn_explicit_install_ids: tuple[str, ...] = ()
-        # The frozen agent roster for the active turn, and the runtime that
-        # runs a delegated child. The GUI's storage owner supplies the full
-        # immutable roster at submission; the runner is created once and
-        # re-pointed at the turn's own provider and model.
-        self._turn_agent_roster: AgentTurnRoster = EMPTY_AGENT_ROSTER
-        # The GUI send layer deposits the immutable submission snapshot here
-        # immediately before ``send``. Keeping it out of History preserves
-        # the canonical transcript while still freezing queued authority.
-        self._submitted_agent_roster: AgentTurnRoster | None = None
+        # The complete Agent capability for the active turn and the immutable
+        # submission snapshot waiting to be consumed by ``send``. Keeping this
+        # out of History preserves the canonical transcript while one value
+        # prevents roster, workflow, and model authority from drifting apart.
+        self._turn_agent_context: AgentTurnContext = EMPTY_AGENT_TURN_CONTEXT
+        self._submitted_agent_context: AgentTurnContext | None = None
         self._agent_runner = AgentDelegationRunner(
             workspace_root=self._registry.workspace_root
         )
@@ -319,7 +318,6 @@ class ConversationBridge(QObject):
         # runner's worktree manager on purpose: there is one writable slot on
         # this machine, and one journal of retained change sets, so a workflow
         # and a single agent can never both believe they own it.
-        self._submitted_workflow_plan: WorkflowRunPlan | None = None
         self._workflow_runner = WorkflowRunner(
             workspace_root=self._registry.workspace_root,
             worktree_manager=self._agent_runner.worktree_manager,
@@ -392,14 +390,11 @@ class ConversationBridge(QObject):
     def set_workspace_root(self, root) -> None:
         self._cancel.set()
         self._turn_explicit_install_ids = ()
-        # Agents belong to the workspace they were made available in. Nothing
-        # from the previous one survives the switch: not the frozen roster, not
-        # the root the child would have been rooted to.
-        self._turn_agent_roster = EMPTY_AGENT_ROSTER
-        self._submitted_agent_roster = None
-        self._registry.set_turn_agent_roster(None)
-        self._submitted_workflow_plan = None
-        self._registry.set_turn_workflow_plan(None)
+        # Agent authority belongs to the workspace in which it was captured.
+        # Nothing from the previous one survives the switch.
+        self._turn_agent_context = EMPTY_AGENT_TURN_CONTEXT
+        self._submitted_agent_context = None
+        self._registry.set_agent_turn_context(EMPTY_AGENT_TURN_CONTEXT)
         self._agent_runner.set_workspace_root(root)
         self._workflow_runner.set_workspace_root(root)
         if root is None:
@@ -547,10 +542,9 @@ class ConversationBridge(QObject):
     def reset_history(self) -> None:
         self._cancel.set()
         self._manager.reset_conversation_runtime()
-        self._turn_agent_roster = EMPTY_AGENT_ROSTER
-        self._registry.set_turn_agent_roster(None)
-        self._submitted_workflow_plan = None
-        self._registry.set_turn_workflow_plan(None)
+        self._turn_agent_context = EMPTY_AGENT_TURN_CONTEXT
+        self._submitted_agent_context = None
+        self._registry.set_agent_turn_context(EMPTY_AGENT_TURN_CONTEXT)
         self._history.messages.clear()
         self._index_to_id.clear()
         self._index_to_name.clear()
@@ -596,29 +590,14 @@ class ConversationBridge(QObject):
         self._turn_explicit_install_ids = (
             self._history.latest_real_user_explicit_installed_skill_ids()
         )
-        # Consume the full immutable roster the Agents storage owner produced
-        # when the turn was submitted or queued. This happens before prompt
-        # composition and the first request, so schema and runtime authority
-        # cannot disagree during the turn.
-        submitted_roster = self._submitted_agent_roster
-        self._submitted_agent_roster = None
-        self._freeze_turn_agent_roster(
-            model=str(model), thinking=str(thinking), submitted=submitted_roster
+        # Consume the one immutable Agent capability captured when this turn
+        # was submitted or queued. Install it before prompt composition and
+        # the first tool catalog so schema and runtime authority agree.
+        submitted_context = self._submitted_agent_context
+        self._submitted_agent_context = None
+        self._freeze_turn_agent_context(
+            model=str(model), thinking=str(thinking), submitted=submitted_context
         )
-        # The same rule for the workflow capability: what the Agents surface
-        # resolved when the turn was submitted is what this turn may run, so a
-        # queued turn cannot pick up a workflow, a step, or a grant that only
-        # exists now.
-        submitted_workflow = self._submitted_workflow_plan
-        self._submitted_workflow_plan = None
-        self._registry.set_turn_workflow_plan(submitted_workflow)
-        self._workflow_runner.set_workspace_root(self._registry.workspace_root)
-        if submitted_workflow is not None:
-            _log.info(
-                "turn_workflow %s steps=%s",
-                submitted_workflow.graph_id,
-                len(submitted_workflow.steps),
-            )
         # Freeze the requested toolbar mode before composing the prompt or
         # starting the worker. The registry remains at this value for the
         # entire model/tool loop, including every later round.
@@ -707,14 +686,11 @@ class ConversationBridge(QObject):
         self._approval_proxy.cancel_active_dialog()
         self._plan_review_proxy.cancel_active()
 
-    def set_submitted_agent_roster(self, roster: AgentTurnRoster) -> None:
-        """Deposit an ephemeral submission-time authority snapshot.
-
-        ``send`` consumes this exactly once. Definitions and grants can then
-        change without altering an already queued request, and the full
-        definition never needs to enter canonical History.
-        """
-        self._submitted_agent_roster = roster
+    def set_submitted_agent_context(self, context: AgentTurnContext) -> None:
+        """Deposit the complete ephemeral Agent capability for the next send."""
+        if not isinstance(context, AgentTurnContext):
+            raise TypeError("Submitted Agent context must be an AgentTurnContext.")
+        self._submitted_agent_context = context
 
     @property
     def workflow_runner(self) -> WorkflowRunner:
@@ -725,15 +701,6 @@ class ConversationBridge(QObject):
         and the single journal of retained change sets.
         """
         return self._workflow_runner
-
-    def set_submitted_workflow_plan(self, plan: WorkflowRunPlan | None) -> None:
-        """Deposit the turn's one frozen runnable workflow, or nothing.
-
-        ``send`` consumes this exactly once. ``None`` — the ordinary case, and
-        what an Agents switch that is off always produces — leaves the turn
-        with no workflow tool and no workflow prompt material at all.
-        """
-        self._submitted_workflow_plan = plan
 
     # ---- private slots ----------------------------------------------------
 
@@ -830,43 +797,56 @@ class ConversationBridge(QObject):
             # next send without changing any remaining round of this one.
             self.clear_external_read_authorization()
             self._registry.set_read_only(self._requested_read_only)
-            # The roster is a turn capability too: the next turn freezes its
-            # own from its own user message, so nothing carries over.
-            self._turn_agent_roster = EMPTY_AGENT_ROSTER
-            self._submitted_agent_roster = None
-            self._registry.set_turn_agent_roster(None)
-            self._submitted_workflow_plan = None
-            self._registry.set_turn_workflow_plan(None)
+            # Agent authority is turn-scoped: the next turn supplies its own
+            # complete snapshot, so nothing carries over.
+            self._turn_agent_context = EMPTY_AGENT_TURN_CONTEXT
+            self._submitted_agent_context = None
+            self._registry.set_agent_turn_context(EMPTY_AGENT_TURN_CONTEXT)
             self._turn_active = False
             self.finished.emit()
 
-    def _freeze_turn_agent_roster(
+    def _freeze_turn_agent_context(
         self,
         *,
         model: str,
         thinking: str,
-        submitted: AgentTurnRoster | None = None,
+        submitted: AgentTurnContext | None = None,
     ) -> None:
-        """Resolve this turn's roster and point the delegation runtime at it.
-
-        With no workspace, no ids, or nothing that still resolves, the roster
-        is empty — and an empty roster is the ordinary case: no
-        ``delegate_agent`` in the catalog and the single-agent behaviour Aura
-        has always had.
-        """
-        roster = submitted if submitted is not None else EMPTY_AGENT_ROSTER
+        """Install one turn capability and point its runtimes at frozen facts."""
+        context = submitted if submitted is not None else EMPTY_AGENT_TURN_CONTEXT
         workspace_root = self._registry.workspace_root
-        self._turn_agent_roster = roster
-        self._registry.set_turn_agent_roster(roster)
-        # An agent that inherits inherits *this* turn's provider and model —
-        # the ones the user actually selected — never a stored default.
+        self._turn_agent_context = context
+        self._registry.set_agent_turn_context(context)
+        self._workflow_runner.set_workspace_root(workspace_root)
+
+        # An automatically assembled Agent that inherits a target inherits the
+        # provider/model/thinking captured in the same immutable submission
+        # snapshot. Other modes cannot expose automatic definitions, but keep
+        # the direct runner pointed at the current root target while dormant.
+        inherited_provider = self._provider
+        inherited_model = model
+        inherited_thinking = thinking
+        if context.is_automatic:
+            inherited_provider = context.root_provider or inherited_provider
+            inherited_model = context.root_model or inherited_model
+            inherited_thinking = context.root_thinking or inherited_thinking
         self._agent_runner.set_workspace_root(workspace_root)
         self._agent_runner.set_inherited_target(
-            provider=self._provider, model=model, thinking=thinking
+            provider=inherited_provider,
+            model=inherited_model,
+            thinking=inherited_thinking,
         )
-        if not roster.is_empty:
+        if context.is_automatic:
             _log.info(
-                "turn_agents %s", ", ".join(roster.ids)
+                "turn_agents automatic available=%s models=%s",
+                len(context.roster.entries),
+                len(context.model_targets),
+            )
+        elif context.has_active_workflow and context.workflow_plan is not None:
+            _log.info(
+                "turn_workflow %s steps=%s",
+                context.workflow_plan.graph_id,
+                len(context.workflow_plan.steps),
             )
 
     def _prepare_turn_context(self) -> None:
