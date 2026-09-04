@@ -2,17 +2,15 @@
 
 A workflow file says what a workflow *is*. This file says what *this* user,
 in *this* workspace, has decided about it: which one they have open, and
-whether Aura may invoke it during an ordinary conversation. Neither is ever
+whether Aura may use Agents during an ordinary conversation. Neither is ever
 written into the project, so a workflow committed to a repository arrives on
 every other machine switched off until that machine's user says otherwise —
 the same rule that keeps an agent definition from granting itself authority
 (:mod:`aura.agents.local_state`).
 
-The editor selection and the workflow Aura may use are deliberately separate.
-Browsing another workflow must not redirect an already-enabled conversation
-capability. ``active_workflow`` is empty when the enabled switch means
-automatic team assembly, and otherwise names the exact saved workflow Aura may
-run. There is still only one enabled bit and one active target.
+The editor selection is only an authoring convenience. Browsing, deleting, or
+breaking one workflow never changes conversational authority: when the gate is
+enabled, every workflow which can be frozen joins the next turn independently.
 
 State lives under the user's own Aura data directory, keyed by a digest of
 the workspace path::
@@ -37,19 +35,18 @@ from aura.paths import data_dir
 
 logger = logging.getLogger(__name__)
 
-#: Bumped when editor selection and the active conversation target separated.
-_STATE_VERSION = 3
+#: Bumped when the retired exclusive ``active_workflow`` target was removed.
+_STATE_VERSION = 4
 
 #: What the master switch is called wherever it is shown.
 ENABLED_LABEL = "Agents"
 
 #: What that switch means, said once, here, rather than in a widget.
 ENABLED_NOTE = (
-    "Agents: when ON, Aura may use the workflow you activated, or assemble a "
-    "team for the task when no workflow is active. Your choice, on this "
-    "computer, for this project — it is never written into a workflow, so a "
-    "workflow you share cannot switch itself on for anyone else. Run in the "
-    "Agents window works either way."
+    "Agents: when ON, Aura may use one available Agent, run any saved runnable "
+    "Workflow, or assemble a team when that materially improves the task. Your "
+    "choice is private to this computer and project; shared definitions cannot "
+    "switch themselves on. Workflow selection affects only editing and manual Run."
 )
 
 
@@ -96,29 +93,14 @@ class WorkflowLocalState:
         data["selected"] = text
         self._save(data)
 
-    # ---- the conversation target and master gate --------------------------
-
-    def active_workflow_id(self) -> str:
-        """The exact saved workflow Aura may run, or empty for automatic."""
-        return str(self._load()["active_workflow"])
-
-    def set_active_workflow(self, graph_id: str) -> None:
-        """Choose one saved workflow, or clear it to use automatic teams."""
-        text = str(graph_id or "")
-        if text:
-            self._require_graph_id(text)
-        data = self._load(for_write=True)
-        if data["active_workflow"] == text:
-            return
-        data["active_workflow"] = text
-        self._save(data)
+    # ---- the conversation master gate -------------------------------------
 
     def is_enabled(self) -> bool:
-        """Whether Aura may use the active workflow or assemble a team."""
+        """Whether Aura may use any frozen Agent or Workflow capability."""
         return bool(self._load()["enabled"])
 
     def set_enabled(self, enabled: bool) -> None:
-        """Switch the one Agent conversation path on or off, privately."""
+        """Switch the complete Agent conversation capability on or off."""
         data = self._load(for_write=True)
         wanted = bool(enabled)
         if data["enabled"] == wanted:
@@ -133,20 +115,15 @@ class WorkflowLocalState:
         self._require_graph_id(graph_id)
         data = self._load(for_write=True)
         selected = data["selected"] == graph_id
-        active = data["active_workflow"] == graph_id
-        if not selected and not active:
+        if not selected:
             return
-        if selected:
-            data["selected"] = ""
-        if active:
-            data["active_workflow"] = ""
-            data["enabled"] = False
+        data["selected"] = ""
         self._save(data)
 
     # ---- persistence -------------------------------------------------------
 
     def _load(self, *, for_write: bool = False) -> dict:
-        blank: dict = {"selected": "", "active_workflow": "", "enabled": False}
+        blank: dict = {"selected": "", "enabled": False}
         try:
             mode = self._path.stat().st_mode
         except FileNotFoundError:
@@ -168,13 +145,10 @@ class WorkflowLocalState:
             version = raw.get("version", 1)
             enabled = raw.get("enabled", False)
             available = raw.get("available", [])
-            active_workflow = raw.get("active_workflow", "")
             if not isinstance(selected, str) or not isinstance(version, int):
                 raise ValueError("the workflow state has an invalid shape")
             if version >= 2 and not isinstance(enabled, bool):
                 raise ValueError("the workflow state has an invalid enabled value")
-            if version >= 3 and not isinstance(active_workflow, str):
-                raise ValueError("the workflow state has an invalid active workflow")
             if version < 2 and not isinstance(available, list):
                 raise ValueError("the legacy workflow availability is invalid")
         except Exception as exc:
@@ -197,21 +171,12 @@ class WorkflowLocalState:
                 if isinstance(item, str) and is_valid_graph_id(item)
             }
             blank["enabled"] = blank["selected"] in clean_available
-            blank["active_workflow"] = (
-                blank["selected"] if blank["enabled"] else ""
-            )
-        elif version < 3:
-            blank["enabled"] = bool(enabled) and bool(blank["selected"])
-            blank["active_workflow"] = (
-                blank["selected"] if blank["enabled"] else ""
-            )
+        elif version < 4:
+            # Versions 2 and 3 coupled the enabled bit to a selected/active
+            # workflow. Preserve the user's gate exactly, but retire the target.
+            blank["enabled"] = bool(enabled)
         else:
-            active_is_valid = not active_workflow or is_valid_graph_id(active_workflow)
-            blank["active_workflow"] = active_workflow if active_is_valid else ""
-            # A non-empty active target is exact authority. If its id is
-            # malformed, fail closed instead of silently changing an enabled
-            # saved-workflow turn into automatic assembly.
-            blank["enabled"] = bool(enabled) and active_is_valid
+            blank["enabled"] = bool(enabled)
         return blank
 
     def _save(self, data: dict) -> None:
@@ -219,7 +184,6 @@ class WorkflowLocalState:
             "version": _STATE_VERSION,
             "workspace": str(self._workspace_root),
             "selected": str(data["selected"]),
-            "active_workflow": str(data["active_workflow"]),
             "enabled": bool(data["enabled"]),
         }
         try:

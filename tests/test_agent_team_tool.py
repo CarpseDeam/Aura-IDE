@@ -28,9 +28,14 @@ def _names(registry: ToolRegistry) -> set[str]:
     return {tool["function"]["name"] for tool in registry.tool_defs()}
 
 
-def _context(*, roster: AgentTurnRoster | None = None) -> AgentTurnContext:
-    return AgentTurnContext.automatic(
+def _context(
+    *,
+    roster: AgentTurnRoster | None = None,
+    workflows: tuple[WorkflowRunPlan, ...] = (),
+) -> AgentTurnContext:
+    return AgentTurnContext.enabled(
         roster=roster or AgentTurnRoster(),
+        workflows=workflows,
         model_targets=(
             AgentModelTarget(
                 key="local-review",
@@ -126,7 +131,7 @@ def _configured_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_agent_turn_modes_expose_exactly_one_root_agent_path(tmp_path: Path) -> None:
+def test_enabled_turn_exposes_automatic_and_saved_routes_together(tmp_path: Path) -> None:
     registry = ToolRegistry(tmp_path)
     assert not (_names(registry) & {"delegate_agent", "run_agent_team", "run_agent_workflow"})
 
@@ -169,12 +174,90 @@ def test_agent_turn_modes_expose_exactly_one_root_agent_path(tmp_path: Path) -> 
             name="Saved workflow",
         ),
     )
-    registry.set_agent_turn_context(AgentTurnContext.active_workflow(plan))
+    registry.set_agent_turn_context(_context(workflows=(plan,)))
 
     names = _names(registry)
     assert "run_agent_workflow" in names
-    assert "run_agent_team" not in names
+    assert "run_agent_team" in names
     assert "delegate_agent" not in names
+
+
+def test_saved_workflow_execution_resolves_only_the_requested_frozen_id(
+    tmp_path: Path,
+) -> None:
+    first = WorkflowRunPlan(
+        graph_id="firstsavedflow1",
+        scope=AgentScope.PERSONAL,
+        name="First frozen Workflow",
+        description="Checks API compatibility.",
+        provider="deepseek",
+        graph=WorkflowGraph(
+            graph_id="firstsavedflow1",
+            scope=AgentScope.PERSONAL,
+            name="First frozen Workflow",
+        ),
+    )
+    second = WorkflowRunPlan(
+        graph_id="secondsavedflow2",
+        scope=AgentScope.PERSONAL,
+        name="Second frozen Workflow",
+        description="Reviews the user experience.",
+        provider="deepseek",
+        graph=WorkflowGraph(
+            graph_id="secondsavedflow2",
+            scope=AgentScope.PERSONAL,
+            name="Second frozen Workflow",
+        ),
+    )
+
+    @dataclass
+    class _SavedRunner:
+        calls: list[tuple[WorkflowRunPlan, str]] = field(default_factory=list)
+
+        def run(self, plan, task, *, cancel_event=None, on_step=None):
+            self.calls.append((plan, task))
+            return WorkflowRunResult(
+                status=WorkflowRunStatus.COMPLETED,
+                graph_id=plan.graph_id,
+                workflow_name=plan.name,
+                result="saved workflow complete",
+            )
+
+    runner = _SavedRunner()
+    registry = ToolRegistry(tmp_path)
+    registry.set_agent_turn_context(_context(workflows=(first, second)))
+    registry.set_agent_workflow_runner(runner)
+    tool = next(
+        item
+        for item in registry.tool_defs()
+        if item["function"]["name"] == "run_agent_workflow"
+    )["function"]
+
+    assert tool["parameters"]["required"] == ["workflow_id", "task"]
+    assert tool["parameters"]["properties"]["workflow_id"]["enum"] == [
+        first.graph_id,
+        second.graph_id,
+    ]
+    assert first.description in tool["description"]
+    assert second.description in tool["description"]
+
+    unknown = registry.execute(
+        "run_agent_workflow",
+        {"workflow_id": "unknownfrozenflow", "task": "Do the work"},
+        approval_cb=lambda _request: None,
+    )
+    selected = registry.execute(
+        "run_agent_workflow",
+        {"workflow_id": second.graph_id, "task": "Review this experience"},
+        approval_cb=lambda _request: None,
+    )
+
+    assert unknown.ok is False
+    assert unknown.payload["failure_class"] == "delegation_unavailable"
+    assert first.graph_id in unknown.payload["error"]
+    assert second.graph_id in unknown.payload["error"]
+    assert selected.ok is True
+    assert runner.calls == [(second, "Review this experience")]
 
 
 def test_valid_team_runs_once_through_existing_runner_and_forwards_usage(

@@ -119,7 +119,7 @@ def test_queued_send_freezes_definition_and_effective_grant_at_submission(
         input_panel=_Input(),
         settings=type("Settings", (), {"provider": "deepseek"})(),
         workspace_root=workspace,
-        agent_context_provider=lambda **_kwargs: AgentTurnContext.automatic(
+        agent_context_provider=lambda **_kwargs: AgentTurnContext.enabled(
             roster=AgentTurnRoster(
                 entries=(
                     AgentRosterEntry(

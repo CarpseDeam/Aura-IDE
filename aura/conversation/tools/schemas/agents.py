@@ -194,131 +194,45 @@ def build_workflow_helper_tool_def(
 MAX_WORKFLOW_TASK_CHARS = 4000
 
 
-def _workflow_step_lines(steps: Iterable[Mapping[str, Any]]) -> str:
+def build_run_workflow_tool_def(
+    workflows: Iterable[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Build saved-Workflow selection from one frozen concise catalog."""
+    rows = tuple(workflows or ())
+    ids: list[str] = []
     lines: list[str] = []
-    for step in steps:
-        position = step.get("position")
-        name = str(step.get("agent_name") or "").strip() or "an agent"
-        permission = str(step.get("permission_label") or "Read only").strip()
-        assignment = " ".join(str(step.get("assignment") or "").split())
-        after = [str(item).strip() for item in (step.get("after") or ()) if str(item).strip()]
-        head = f"{position}. {name} [{permission}]"
-        if after:
-            head += f" (after {', '.join(after)})"
-        lines.append(f"{head}: {assignment}" if assignment else head)
-        pending = [
-            (helper, 1)
-            for helper in reversed(tuple(step.get("helpers") or ()))
-        ]
-        while pending:
-            helper, depth = pending.pop()
-            helper_node_id = str(helper.get("helper_node_id") or "").strip()
-            helper_name = str(
-                helper.get("agent_name") or helper.get("name") or "a helper"
-            ).strip()
-            helper_permission = str(
-                helper.get("permission_label") or "Read only"
-            ).strip()
-            helper_assignment = " ".join(
-                str(helper.get("assignment") or "").split()
-            )
-            helper_head = (
-                f"{'   ' * depth}Optional helper {helper_node_id} — {helper_name} "
-                f"[{helper_permission}]"
-            )
-            lines.append(
-                f"{helper_head}: {helper_assignment}"
-                if helper_assignment
-                else helper_head
-            )
-            pending.extend(
-                (child, depth + 1)
-                for child in reversed(tuple(helper.get("helpers") or ()))
-            )
-    return "\n".join(lines)
-
-
-def build_run_workflow_tool_def(workflow: Mapping[str, Any]) -> dict[str, Any]:
-    """Build ``run_agent_workflow`` for the one workflow this turn froze.
-
-    There is no workflow parameter. The user selected one workflow and
-    switched it on, and that exact frozen plan is what runs — so the model
-    cannot name a different one, and a workflow the user was merely looking
-    at is not reachable by asking for it.
-    """
-    name = str(workflow.get("name") or "").strip() or "the selected workflow"
-    description = str(workflow.get("description") or "").strip()
-    step_rows = tuple(workflow.get("steps") or ())
-    steps = _workflow_step_lines(step_rows)
-    has_helpers = any(step.get("helpers") for step in step_rows)
-    helper_copy = (
-        "Each workflow Agent may optionally call only the helpers shown directly "
-        "beneath it; helpers never run automatically and return only to their "
-        "immediate caller. "
-        if has_helpers
-        else ""
-    )
-    branched = bool(workflow.get("branched"))
-    writable = bool(workflow.get("writable"))
-    if writable and has_helpers:
-        authority = (
-            "At least one solid Step or helper descendant may edit files. Every "
-            "child in this run reads one shared isolated Git worktree, and the "
-            "whole run is checkpointed into a single change set. A Step that may "
-            "edit, or whose helper tree contains Read / Write authority, runs "
-            "exclusively. Nothing is written to the user's workspace unless the "
-            "user later approves applying it."
-        )
-    elif writable:
-        authority = (
-            "At least one step may edit files. Every step of this run shares one "
-            "isolated Git worktree, and the whole run is checkpointed into a "
-            "single change set. A Step that may edit runs exclusively. Nothing is "
-            "written to the user's workspace unless they later approve applying it."
-        )
-    elif has_helpers:
-        authority = "Every solid Step and helper descendant is read-only."
-    else:
-        authority = "Every step of this workflow is read-only."
-    order_copy = (
-        "DAG edges are the ordering contract. Independent ready read-only Steps "
-        "may overlap; every Step that may edit or has a Read / Write descendant runs "
-        "exclusively. A Step that must consume another Step's edits must be its "
-        "successor. A branch that fans out runs every path, and a Step marked "
-        "(after ...) waits for every named predecessor to settle successfully. "
-        "Joins therefore wait for every predecessor. Results are always returned "
-        "in the frozen workflow order, never completion order."
-        if branched
-        else (
-            "The agents below run one after another according to their DAG edges. "
-            "A mutation-capable Step runs exclusively, and results retain this "
-            "frozen order."
-        )
-    )
+    for row in rows:
+        workflow_id = str(row.get("workflow_id") or "").strip()
+        if not workflow_id or workflow_id in ids:
+            continue
+        ids.append(workflow_id)
+        name = " ".join(str(row.get("name") or workflow_id).split())
+        description = " ".join(str(row.get("description") or "").split())
+        head = f"- {workflow_id} — {name}"
+        lines.append(f"{head}: {description}" if description else head)
     return {
         "type": "function",
         "function": {
             "name": "run_agent_workflow",
             "description": (
-                f"Run the user's Agent workflow '{name}' and wait for its "
-                "result. " + order_copy + " Each is given your task, its own "
-                "assignment, and the structured result of the step or steps before "
-                "it, and none of them can see this conversation. "
-                f"{helper_copy}{authority} You receive one structured result"
-                + (
-                    ", carrying every branch that reaches the end in the "
-                    "workflow's own order,"
-                    if branched
-                    else ""
-                )
-                + " and write the final answer to the user yourself.\n\n"
-                + (f"{description}\n\n" if description else "")
-                + "Steps:\n"
-                + (steps or "- (none)")
+                "Run one saved Agent Workflow chosen by immutable id from the "
+                "catalog frozen with this turn, wait for its structured Aura "
+                "Result, and write the final answer yourself. The Workflow's "
+                "validated graph, assignments, models, permissions, branches, "
+                "joins, and optional helpers are already frozen and cannot be "
+                "redirected by editor or disk changes.\n\nSaved Workflows:\n"
+                + "\n".join(lines)
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "workflow_id": {
+                        "type": "string",
+                        "enum": ids,
+                        "description": (
+                            "The exact immutable id of a Workflow in this frozen catalog."
+                        ),
+                    },
                     "task": {
                         "type": "string",
                         "minLength": 1,
@@ -332,7 +246,7 @@ def build_run_workflow_tool_def(workflow: Mapping[str, Any]) -> dict[str, Any]:
                         ),
                     },
                 },
-                "required": ["task"],
+                "required": ["workflow_id", "task"],
                 "additionalProperties": False,
             },
         },

@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import stat
+from collections.abc import Mapping
 from enum import Enum
 from pathlib import Path
 
@@ -189,6 +190,42 @@ class AgentLocalState:
         data = self._load(for_write=True)
         data["permissions"][agent_id] = AgentPermission(permission).value
         self._save(data)
+
+    def set_permissions(
+        self, permissions: Mapping[str, AgentPermission]
+    ) -> None:
+        """Persist several exact grants in one local-state write."""
+        checked: dict[str, AgentPermission] = {}
+        for agent_id, permission in permissions.items():
+            self._require_agent_id(agent_id)
+            checked[agent_id] = AgentPermission(permission)
+        if not checked:
+            return
+        data = self._load(for_write=True)
+        changed = False
+        for agent_id, permission in checked.items():
+            if data["permissions"].get(agent_id) != permission.value:
+                data["permissions"][agent_id] = permission.value
+                changed = True
+        if changed:
+            self._save(data)
+
+    def retain_available_agent(
+        self, agent_id: str, permission: AgentPermission
+    ) -> None:
+        """Persist one retained Agent's grant and roster membership atomically."""
+        self._require_agent_id(agent_id)
+        checked = AgentPermission(permission)
+        data = self._load(for_write=True)
+        changed = False
+        if data["permissions"].get(agent_id) != checked.value:
+            data["permissions"][agent_id] = checked.value
+            changed = True
+        if agent_id not in data["available"]:
+            data["available"].append(agent_id)
+            changed = True
+        if changed:
+            self._save(data)
 
     # ---- upkeep ------------------------------------------------------------
 

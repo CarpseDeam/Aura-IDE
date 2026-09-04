@@ -290,12 +290,12 @@ class WorkflowRunPlan:
         return tuple(step.summary_row() for step in self.steps)
 
     def catalog_row(self) -> dict[str, Any]:
-        """What the model is told about this workflow before it calls it.
+        """A detailed structured summary for run results and diagnostics.
 
         The agents' names and what each was asked to do here, in order — the
         shape of the hand-off, including which steps a branched workflow waits
-        for. Never their instructions: those are each child's own brief and
-        stay in the definition.
+        for. Saved-Workflow selection deliberately uses the turn context's
+        separate concise catalog instead.
         """
         branched = self.branched
         names = {step.node_id: step.agent_name for step in self.steps}

@@ -189,6 +189,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._agent_team_chat_controller = AgentTeamChatController(
             bridge=self._bridge,
             chat=self._chat,
+            retention_owner=self._agents_controller,
             parent=self,
         )
 

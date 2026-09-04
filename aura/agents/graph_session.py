@@ -2,8 +2,7 @@
 
 One workspace's workflows, the one currently being authored, the undo stack
 behind it, and this user's private editor selection. The workspace-level state
-also records the separate workflow Aura may call during a conversation; merely
-browsing another canvas never redirects that authority.
+also records the single Agents gate; editor selection never changes its meaning.
 Holding those together is what lets the page's controller be about drawing and
 signals rather than about storage, and it is why this object outlives the
 Agents window: the toolbar's Agents switch has to be answerable before anyone
@@ -133,9 +132,8 @@ class WorkflowSession:
         if chosen != self._graph_id:
             self._graph_id = chosen
             self._history = None
-        # The session's open graph is the editor selection. Persist a fallback
-        # selection as well as an explicit click, but never alter the separate
-        # active conversation target while the user is only browsing.
+        # The session's open graph is only the editor selection. Persist a
+        # fallback selection as well as an explicit click.
         try:
             if state.selected_id() != chosen:
                 state.set_selected(chosen)
@@ -208,7 +206,7 @@ class WorkflowSession:
     # ---- the master gate ---------------------------------------------------
 
     def is_enabled(self) -> bool:
-        """Whether the workspace's one Agent conversation path is enabled."""
+        """Whether the workspace's complete Agent capability is enabled."""
         state = self.state()
         if state is None:
             return False
@@ -218,15 +216,10 @@ class WorkflowSession:
             return False
 
     def set_enabled(self, enabled: bool) -> None:
-        """Enable the open workflow, or automatic assembly when none is open."""
+        """Enable or disable the workspace's complete Agent capability."""
         state = self.state()
         if state is None:
             return
-        row = self.summary
-        if enabled:
-            state.set_active_workflow(
-                row.graph_id if row is not None and row.valid else ""
-            )
         state.set_enabled(bool(enabled))
 
     def _remember_selection(self, graph_id: str) -> None:

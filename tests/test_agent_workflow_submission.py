@@ -90,7 +90,7 @@ def test_a_queued_turn_keeps_its_submitted_workflow_snapshot(
     )
     first = _plan("workflowone1", "First")
     later = _plan("workflowtwo2", "Later")
-    selected = {"context": AgentTurnContext.active_workflow(first)}
+    selected = {"context": AgentTurnContext.enabled(workflows=(first,))}
     bridge = _Bridge()
     input_panel = _Input()
     handler = SendHandler(
@@ -103,11 +103,11 @@ def test_a_queued_turn_keeps_its_submitted_workflow_snapshot(
     )
 
     assert handler.handle_send(SendPayload("queued task", []), "model", "off") is False
-    selected["context"] = AgentTurnContext.active_workflow(later)
+    selected["context"] = AgentTurnContext.enabled(workflows=(later,))
     bridge.running = False
     handler.process_message_queue("ignored-model", "off")
 
-    assert bridge.agent_contexts == [AgentTurnContext.active_workflow(first)]
+    assert bridge.agent_contexts == [AgentTurnContext.enabled(workflows=(first,))]
     assert bridge.sends == [{"model": "model", "thinking": "off"}]
     assert input_panel.queued == [1, 0]
 

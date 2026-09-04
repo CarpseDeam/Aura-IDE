@@ -894,12 +894,12 @@ class ConversationBridge(QObject):
 
         # An automatically assembled Agent that inherits a target inherits the
         # provider/model/thinking captured in the same immutable submission
-        # snapshot. Other modes cannot expose automatic definitions, but keep
-        # the direct runner pointed at the current root target while dormant.
+        # snapshot. An off turn keeps the runner pointed at the current root
+        # target while it remains dormant.
         inherited_provider = self._provider
         inherited_model = model
         inherited_thinking = thinking
-        if context.is_automatic:
+        if context.is_enabled:
             inherited_provider = context.root_provider or inherited_provider
             inherited_model = context.root_model or inherited_model
             inherited_thinking = context.root_thinking or inherited_thinking
@@ -909,17 +909,16 @@ class ConversationBridge(QObject):
             model=inherited_model,
             thinking=inherited_thinking,
         )
-        if context.is_automatic:
+        if context.is_enabled:
             _log.info(
                 "turn_agents automatic available=%s models=%s",
                 len(context.roster.entries),
                 len(context.model_targets),
             )
-        elif context.has_active_workflow and context.workflow_plan is not None:
+        if len(context.workflows):
             _log.info(
-                "turn_workflow %s steps=%s",
-                context.workflow_plan.graph_id,
-                len(context.workflow_plan.steps),
+                "turn_workflows available=%s",
+                len(context.workflows),
             )
 
     def _prepare_turn_context(self) -> None:

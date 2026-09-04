@@ -231,6 +231,34 @@ class AgentGraphStore:
         self._write(path, graph)
         return graph
 
+    def create_supplied(self, graph: WorkflowGraph) -> WorkflowGraph:
+        """Create an exact immutable graph without minting or overwriting.
+
+        An identical graph already present at the same scope is a successful
+        retry. Any different claim on its id is refused.
+        """
+        if not isinstance(graph, WorkflowGraph):
+            raise AgentGraphStoreError("A supplied Workflow must be a WorkflowGraph.")
+        self._validate(graph)
+        matches = [row for row in self.list_summaries() if row.graph_id == graph.graph_id]
+        if matches:
+            if (
+                len(matches) == 1
+                and matches[0].scope is graph.scope
+                and matches[0].graph == graph
+            ):
+                return graph
+            raise AgentGraphStoreError(
+                f"Workflow id {graph.graph_id} already exists with different content."
+            )
+        path = self.path_for(graph.scope, graph.graph_id)
+        if path.exists():
+            raise AgentGraphStoreError(
+                f"Workflow id {graph.graph_id} already exists with different content."
+            )
+        self._write(path, graph)
+        return graph
+
     def save(self, graph: WorkflowGraph) -> WorkflowGraph:
         """Overwrite an existing workflow in place, keeping its id and scope."""
         self._validate(graph)

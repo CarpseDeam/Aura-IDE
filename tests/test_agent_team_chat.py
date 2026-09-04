@@ -19,6 +19,10 @@ from aura.agents.delegation import (  # noqa: E402
     DelegationResult,
     DelegationStatus,
 )
+from aura.agents.retention import (  # noqa: E402
+    AgentRetentionError,
+    AgentRetentionResult,
+)
 from aura.agents.roster import EMPTY_AGENT_ROSTER  # noqa: E402
 from aura.agents.team_compiler import CompiledAgentTeam, compile_agent_team  # noqa: E402
 from aura.agents.team_spec import (  # noqa: E402
@@ -27,6 +31,7 @@ from aura.agents.team_spec import (  # noqa: E402
     HelperSpec,
     NewAgentSpec,
     OccurrenceSpec,
+    parse_agent_team_spec,
 )
 from aura.agents.turn_context import (  # noqa: E402
     AgentModelTargets,
@@ -158,6 +163,21 @@ def _single_agent_payload() -> dict:
     }
 
 
+def _single_agent_team() -> CompiledAgentTeam:
+    parsed = parse_agent_team_spec(_single_agent_payload())
+    assert parsed.ok and parsed.spec is not None
+    compiled, errors = compile_agent_team(
+        parsed.spec,
+        roster=EMPTY_AGENT_ROSTER,
+        model_targets=AgentModelTargets(),
+        provider="deepseek",
+        model="deepseek-chat",
+        thinking="off",
+    )
+    assert errors == () and compiled is not None
+    return compiled
+
+
 def _completed(step) -> WorkflowStepOutcome:
     result = DelegationResult(
         status=DelegationStatus.COMPLETED,
@@ -227,7 +247,7 @@ def test_card_shows_truthful_live_steps_and_only_invoked_helpers(qapp) -> None:
     assert "After Scout — Inspect the data path., Scout — Inspect the API path." in rendered
 
 
-def test_completed_card_collapses_and_retains_no_dead_keep_control(qapp) -> None:
+def test_completed_card_collapses_and_reveals_working_retention_only_after_root(qapp) -> None:
     team = _compiled_team()
     card = AgentTeamCard(team)
     helper = team.plan.steps[-1].helpers[0]
@@ -249,11 +269,14 @@ def test_completed_card_collapses_and_retains_no_dead_keep_control(qapp) -> None
     assert "3 steps · View details" in card._details._toggle.text()
     assert card.occurrence_visible(helper.node_id) is True
     assert card.occurrence_status(helper.node_id) == "2 calls · 2 done"
+    assert card.retention_actions_visible is False
+    card.settle_root_turn()
+    assert card.retention_actions_visible is True
     action_text = " ".join(
         button.text().lower() for button in card.findChildren(QAbstractButton)
     )
-    assert "save" not in action_text
-    assert "keep" not in action_text
+    assert action_text.count("save agent") == len(team.generated_definitions)
+    assert "keep team" in action_text
     assert card.finish(result) is False
 
 
@@ -378,10 +401,154 @@ def test_terminal_result_preserves_live_facts_and_cleanup_warning(qapp) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("status", "header"),
+    [
+        (WorkflowRunStatus.COMPLETED, "Agent completed"),
+        (WorkflowRunStatus.PARTIAL, "Agent finished with issues"),
+        (WorkflowRunStatus.FAILED, "Agent couldn’t finish"),
+        (WorkflowRunStatus.CANCELLED, "Agent stopped"),
+    ],
+)
+def test_one_occurrence_uses_agent_wording_without_team_ceremony(
+    qapp, status: WorkflowRunStatus, header: str
+) -> None:
+    team = _single_agent_team()
+    card = AgentTeamCard(team)
+
+    assert card.is_agent_run is True
+    assert card._header_label.text() == "Aura used an Agent"
+    assert card._name_label.text() == "Dependency Reviewer"
+    assert card._meta_label is None
+    initial_copy = " ".join(label.text() for label in card.findChildren(QLabel))
+    assert "team" not in initial_copy.lower()
+    assert "1 step" not in initial_copy
+    result = WorkflowRunResult(
+        status=status,
+        graph_id=team.plan.graph_id,
+        workflow_name=team.plan.name,
+        steps=(
+            (_completed(team.plan.steps[0]),)
+            if status is WorkflowRunStatus.COMPLETED
+            else ()
+        ),
+        error="The Agent stopped." if status is not WorkflowRunStatus.COMPLETED else "",
+    )
+    # Flatten the conditional tuple used above for the successful receipt.
+    if result.steps and isinstance(result.steps[0], tuple):
+        result = replace(result, steps=result.steps[0])
+    assert card.finish(result) is True
+    assert card._header_label.text() == header
+    assert "Agent details" in card._details._toggle.text()
+    card.settle_root_turn()
+    assert card.save_agent_ids == (team.generated_definitions[0].agent_id,)
+    assert card.can_keep_team is False
+
+
+def test_card_actions_map_to_exact_team_retry_errors_and_ignore_stale_cards(qapp) -> None:
+    bridge = _FakeBridge()
+    retention = _Retention()
+    driver = AuraPhaseDriver(qapp)
+    chat = ChatView(driver)
+    chat.begin_assistant()
+    controller = AgentTeamChatController(
+        bridge=bridge,
+        chat=chat,
+        retention_owner=retention,
+    )
+    team = _compiled_team()
+    result = WorkflowRunResult(
+        status=WorkflowRunStatus.CANCELLED,
+        graph_id=team.plan.graph_id,
+        workflow_name=team.plan.name,
+        error="Stopped by user.",
+    )
+
+    bridge.agentTeamAccepted.emit(team)
+    bridge.agentTeamFinished.emit(result)
+    qapp.processEvents()
+    card = controller.cards[0]
+    assert card.retention_actions_visible is False
+
+    bridge.finished.emit()
+    qapp.processEvents()
+    assert card.retention_actions_visible is True
+
+    agent_id = card.save_agent_ids[0]
+    retention.error = "Agent id collision; nothing was overwritten."
+    card._save_buttons[agent_id].click()
+    assert retention.saved == []
+    assert not card._save_buttons[agent_id].isHidden()
+    assert "collision" in card._retention_error.text()
+
+    retention.error = ""
+    card._save_buttons[agent_id].click()
+    assert retention.saved == [(team, agent_id)]
+    assert card._save_buttons[agent_id].isHidden()
+    assert not card._save_statuses[agent_id].isHidden()
+
+    card._keep_button.click()
+    assert retention.kept == [team]
+    assert card._keep_button.isHidden()
+    assert not card._keep_status.isHidden()
+
+    stale_keep = card._keep_button
+    chat.reset()
+    stale_keep.click()
+    assert retention.kept == [team]
+
+
+def test_root_failure_alone_does_not_reveal_actions_until_team_settles(qapp) -> None:
+    bridge = _FakeBridge()
+    driver = AuraPhaseDriver(qapp)
+    chat = ChatView(driver)
+    chat.begin_assistant()
+    controller = AgentTeamChatController(
+        bridge=bridge, chat=chat, retention_owner=_Retention()
+    )
+    team = _compiled_team()
+    bridge.agentTeamAccepted.emit(team)
+    bridge.finished.emit()
+    qapp.processEvents()
+
+    card = controller.cards[0]
+    assert card.retention_actions_visible is False
+    bridge.agentTeamFinished.emit(
+        WorkflowRunResult(
+            status=WorkflowRunStatus.FAILED,
+            graph_id=team.plan.graph_id,
+            workflow_name=team.plan.name,
+            error="API failure.",
+        )
+    )
+    qapp.processEvents()
+    assert card.retention_actions_visible is True
+
+
 class _FakeBridge(QObject):
     agentTeamAccepted = Signal(object)
     agentTeamStepChanged = Signal(str, str, str)
     agentTeamFinished = Signal(object)
+    finished = Signal()
+
+
+class _Retention:
+    def __init__(self) -> None:
+        self.saved: list[tuple[CompiledAgentTeam, str]] = []
+        self.kept: list[CompiledAgentTeam] = []
+        self.error = ""
+
+    def retain_generated_agent(self, team, agent_id):
+        if self.error:
+            raise AgentRetentionError(self.error)
+        self.saved.append((team, agent_id))
+        return AgentRetentionResult("Saved", agent_ids=(agent_id,))
+
+    def retain_generated_team(self, team):
+        if self.error:
+            raise AgentRetentionError(self.error)
+        self.kept.append(team)
+        return AgentRetentionResult("Kept", workflow_id=team.plan.graph_id)
 
 
 def test_controller_keeps_card_session_local_and_ignores_stale_events(qapp) -> None:
@@ -665,7 +832,7 @@ def test_real_bridge_turn_projects_team_facts_on_gui_thread_and_cleans_up(
     bridge.set_workspace_root(tmp_path)
     bridge.set_read_only(read_only_turn)
     bridge.set_submitted_agent_context(
-        AgentTurnContext.automatic(
+        AgentTurnContext.enabled(
             root_provider="deepseek",
             root_model="deepseek-chat",
             root_thinking="high",

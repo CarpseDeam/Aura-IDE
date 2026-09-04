@@ -95,8 +95,8 @@ class MainWindowToolbar(QToolBar):
         self.addWidget(_toolbar_separator())
 
         # Group 3b: the Agents master gate. Unlike Plan and Approve it is not
-        # backed by application settings — the active workflow (if any) and
-        # whether Aura may use Agents are private to this user and workspace,
+        # backed by application settings — whether Aura may use Agents is
+        # private to this user and workspace,
         # so the Agents controller owns the value and this switch only shows
         # it. It starts unavailable until a workspace is open; a workspace
         # needs no saved workflow because Aura can assemble a temporary team.
@@ -213,8 +213,8 @@ class MainWindowToolbar(QToolBar):
     def set_agents_available(self, available: bool) -> None:
         """Allow or forbid using the gate at all.
 
-        A workspace is enough to make the switch meaningful: with no active
-        saved workflow, turning it on authorizes automatic team assembly.
+        A workspace is enough to make the switch meaningful: Aura can generate
+        a specialist even when no saved Agent or Workflow exists.
         The caller switches it off before making it unavailable; this method
         never changes the value on its own.
         """
@@ -235,8 +235,7 @@ class MainWindowToolbar(QToolBar):
         self._agents_switch.setToolTip(
             ENABLED_NOTE
             if self._agents_switch.isEnabled()
-            else "Agents: open a workspace to use an active workflow or let "
-            "Aura assemble a team for the task."
+            else "Agents: open a workspace to use an Agent or Workflow."
         )
 
     def update_maximize_icon(self, maximized: bool) -> None:

@@ -1453,7 +1453,7 @@ def test_aura_triggered_workflow_uses_the_same_helper_runner_path(
 
     tool_result = registry.execute(
         "run_agent_workflow",
-        {"task": "Aura-triggered task"},
+        {"workflow_id": plan.graph_id, "task": "Aura-triggered task"},
         approval_cb=lambda _request: None,
     )
 
@@ -1722,7 +1722,7 @@ def test_root_read_only_and_plan_review_refuse_a_helper_writable_workflow(
 
         tool_result = registry.execute(
             "run_agent_workflow",
-            {"task": "Do not start"},
+            {"workflow_id": plan.graph_id, "task": "Do not start"},
             approval_cb=lambda _request: None,
         )
 
@@ -2528,7 +2528,7 @@ def test_workflow_usage_groups_keep_provider_models_distinct_and_frozen(
 
     tool_result = registry.execute(
         "run_agent_workflow",
-        {"task": "Account for both models"},
+        {"workflow_id": plan.graph_id, "task": "Account for both models"},
         approval_cb=lambda _request: None,
     )
 
@@ -2617,7 +2617,7 @@ def test_descendant_blocks_only_after_every_predecessor_settles(
     assert blocked.payload()["blocked_by"] == ["right", "left"]
 
 
-def test_workflow_tool_copy_states_parallel_exclusivity_join_and_order(
+def test_workflow_tool_copy_is_a_concise_frozen_catalog_only(
     tmp_path: Path, monkeypatch
 ) -> None:
     graph = _dag_graph(
@@ -2642,8 +2642,13 @@ def test_workflow_tool_copy_states_parallel_exclusivity_join_and_order(
         if tool["function"]["name"] == "run_agent_workflow"
     )
     description = workflow_tool["function"]["description"]
+    parameters = workflow_tool["function"]["parameters"]
 
-    assert "Independent ready read-only Steps may overlap" in description
-    assert "Read / Write descendant runs exclusively" in description
-    assert "Joins therefore wait for every predecessor" in description
-    assert "frozen workflow order, never completion order" in description
+    assert plan.graph_id in description
+    assert plan.name in description
+    assert plan.description in description
+    assert "Independent ready read-only Steps may overlap" not in description
+    assert "Read / Write descendant runs exclusively" not in description
+    assert "writer-helper" not in description
+    assert "workflow_id" in parameters["required"]
+    assert parameters["properties"]["workflow_id"]["enum"] == [plan.graph_id]

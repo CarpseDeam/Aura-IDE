@@ -1,4 +1,4 @@
-"""Compact live receipt for one automatically assembled Agent team."""
+"""Compact live receipt and retention intents for an automatic Agent run."""
 from __future__ import annotations
 
 from collections import Counter, defaultdict
@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -47,11 +48,18 @@ _STATE_PRESENTATION = {
     WorkflowStepState.SKIPPED: ("–", "Not run", FG_MUTED),
 }
 
-_RUN_PRESENTATION = {
+_TEAM_RUN_PRESENTATION = {
     WorkflowRunStatus.COMPLETED: ("Team completed", "DONE", SUCCESS),
     WorkflowRunStatus.PARTIAL: ("Team finished with issues", "ISSUES", WARN),
     WorkflowRunStatus.FAILED: ("Team couldn’t finish", "FAILED", DANGER),
     WorkflowRunStatus.CANCELLED: ("Team stopped", "STOPPED", WARN),
+}
+
+_AGENT_RUN_PRESENTATION = {
+    WorkflowRunStatus.COMPLETED: ("Agent completed", "DONE", SUCCESS),
+    WorkflowRunStatus.PARTIAL: ("Agent finished with issues", "ISSUES", WARN),
+    WorkflowRunStatus.FAILED: ("Agent couldn’t finish", "FAILED", DANGER),
+    WorkflowRunStatus.CANCELLED: ("Agent stopped", "STOPPED", WARN),
 }
 
 
@@ -155,9 +163,11 @@ class _AgentTeamOccurrenceRow(QFrame):
 
 
 class AgentTeamCard(QFrame):
-    """Session-local, read-only view of one exact compiled team run."""
+    """Session-local view of one exact compiled Agent run."""
 
     layout_changed = Signal()
+    save_agent_requested = Signal(str)
+    keep_team_requested = Signal()
 
     def __init__(
         self,
@@ -168,9 +178,12 @@ class AgentTeamCard(QFrame):
         self._team = team
         self._result: WorkflowRunResult | None = None
         self._finished = False
+        self._root_settled = False
         self._rows: dict[str, _AgentTeamOccurrenceRow] = {}
         self._solid_node_ids = tuple(step.node_id for step in team.plan.steps)
         self._helper_node_ids: set[str] = set()
+        self._occurrence_count = len(team.plan.agent_ids)
+        self._is_agent_run = self._occurrence_count == 1
 
         self.setObjectName("agentTeamCard")
         self.setMinimumWidth(0)
@@ -193,7 +206,10 @@ class AgentTeamCard(QFrame):
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(8)
-        self._header_label = QLabel("Aura assembled a team", header)
+        self._header_label = QLabel(
+            "Aura used an Agent" if self._is_agent_run else "Aura assembled a team",
+            header,
+        )
         self._header_label.setObjectName("agentTeamHeader")
         self._header_label.setStyleSheet(
             f"color: {LABEL_AGENTS}; font-weight: 700; font-size: 12px;"
@@ -205,23 +221,30 @@ class AgentTeamCard(QFrame):
         header_layout.addWidget(self._status_chip)
         outer.addWidget(header)
 
-        self._name_label = QLabel(_bounded_text(team.plan.name, 100), self)
+        display_name = (
+            team.plan.steps[0].agent_name
+            if self._is_agent_run and team.plan.steps
+            else team.plan.name
+        )
+        self._name_label = QLabel(_bounded_text(display_name, 100), self)
         self._name_label.setObjectName("agentTeamName")
         self._name_label.setTextFormat(Qt.TextFormat.PlainText)
         self._name_label.setStyleSheet(f"color: {FG}; font-weight: 600;")
         self._name_label.setWordWrap(True)
         outer.addWidget(self._name_label)
 
-        distinct_agents = len(set(team.plan.agent_ids))
-        steps = len(team.plan.steps)
-        self._meta_label = QLabel(
-            f"{steps} step{'s' if steps != 1 else ''} · "
-            f"{distinct_agents} specialist{'s' if distinct_agents != 1 else ''}",
-            self,
-        )
-        self._meta_label.setObjectName("agentTeamMeta")
-        self._meta_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
-        outer.addWidget(self._meta_label)
+        self._meta_label: QLabel | None = None
+        if not self._is_agent_run:
+            distinct_agents = len(set(team.plan.agent_ids))
+            steps = len(team.plan.steps)
+            self._meta_label = QLabel(
+                f"{steps} step{'s' if steps != 1 else ''} · "
+                f"{distinct_agents} specialist{'s' if distinct_agents != 1 else ''}",
+                self,
+            )
+            self._meta_label.setObjectName("agentTeamMeta")
+            self._meta_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
+            outer.addWidget(self._meta_label)
 
         self._notice_label = QLabel("", self)
         self._notice_label.setObjectName("agentTeamNotice")
@@ -283,6 +306,70 @@ class AgentTeamCard(QFrame):
         self._details._toggle.clicked.connect(self._on_details_toggled)
         outer.addWidget(self._details)
 
+        self._retention_widget = QWidget(self)
+        self._retention_widget.setObjectName("agentRetentionActions")
+        retention_layout = QVBoxLayout(self._retention_widget)
+        retention_layout.setContentsMargins(0, 5, 0, 0)
+        retention_layout.setSpacing(5)
+        self._save_buttons: dict[str, QPushButton] = {}
+        self._save_statuses: dict[str, QLabel] = {}
+        generated: dict[str, object] = {}
+        for definition in team.generated_definitions:
+            generated.setdefault(definition.agent_id, definition)
+        for agent_id, definition in generated.items():
+            row = QWidget(self._retention_widget)
+            row.setStyleSheet("background: transparent;")
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(7)
+            name = QLabel(_bounded_text(definition.name, 80), row)
+            name.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
+            row_layout.addWidget(name, 1)
+            status = QLabel("Saved", row)
+            status.setObjectName("agentRetentionSaved")
+            status.setStyleSheet(f"color: {SUCCESS}; font-size: 11px;")
+            status.setVisible(False)
+            row_layout.addWidget(status)
+            button = self._retention_button("Save Agent", row)
+            button.clicked.connect(
+                lambda _checked=False, value=agent_id: self.save_agent_requested.emit(value)
+            )
+            row_layout.addWidget(button)
+            retention_layout.addWidget(row)
+            self._save_buttons[agent_id] = button
+            self._save_statuses[agent_id] = status
+
+        self._keep_button: QPushButton | None = None
+        self._keep_status: QLabel | None = None
+        if not self._is_agent_run:
+            row = QWidget(self._retention_widget)
+            row.setStyleSheet("background: transparent;")
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(7)
+            label = QLabel("Reusable Workflow", row)
+            label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
+            row_layout.addWidget(label, 1)
+            self._keep_status = QLabel("Kept", row)
+            self._keep_status.setObjectName("agentRetentionKept")
+            self._keep_status.setStyleSheet(f"color: {SUCCESS}; font-size: 11px;")
+            self._keep_status.setVisible(False)
+            row_layout.addWidget(self._keep_status)
+            self._keep_button = self._retention_button("Keep Team", row)
+            self._keep_button.clicked.connect(self.keep_team_requested.emit)
+            row_layout.addWidget(self._keep_button)
+            retention_layout.addWidget(row)
+
+        self._retention_error = QLabel("", self._retention_widget)
+        self._retention_error.setObjectName("agentRetentionError")
+        self._retention_error.setTextFormat(Qt.TextFormat.PlainText)
+        self._retention_error.setWordWrap(True)
+        self._retention_error.setStyleSheet(f"color: {DANGER}; font-size: 11px;")
+        self._retention_error.setVisible(False)
+        retention_layout.addWidget(self._retention_error)
+        self._retention_widget.setVisible(False)
+        outer.addWidget(self._retention_widget)
+
     @property
     def compiled_team(self) -> CompiledAgentTeam:
         """The exact immutable team retained for the later Keep action."""
@@ -295,6 +382,22 @@ class AgentTeamCard(QFrame):
     @property
     def result(self) -> WorkflowRunResult | None:
         return self._result
+
+    @property
+    def is_agent_run(self) -> bool:
+        return self._is_agent_run
+
+    @property
+    def retention_actions_visible(self) -> bool:
+        return not self._retention_widget.isHidden()
+
+    @property
+    def save_agent_ids(self) -> tuple[str, ...]:
+        return tuple(self._save_buttons)
+
+    @property
+    def can_keep_team(self) -> bool:
+        return self._keep_button is not None
 
     def occurrence_status(self, node_id: str) -> str:
         row = self._rows.get(node_id)
@@ -321,6 +424,36 @@ class AgentTeamCard(QFrame):
         self._set_details_prefix(self._progress_title())
         self.layout_changed.emit()
         return True
+
+    def settle_root_turn(self) -> None:
+        """Reveal executable retention actions once both lifecycles settled."""
+        self._root_settled = True
+        self._refresh_retention_visibility()
+
+    def mark_agent_saved(self, agent_id: str) -> bool:
+        button = self._save_buttons.get(agent_id)
+        status = self._save_statuses.get(agent_id)
+        if button is None or status is None:
+            return False
+        button.setVisible(False)
+        status.setVisible(True)
+        self._clear_retention_error()
+        self.layout_changed.emit()
+        return True
+
+    def mark_team_kept(self) -> bool:
+        if self._keep_button is None or self._keep_status is None:
+            return False
+        self._keep_button.setVisible(False)
+        self._keep_status.setVisible(True)
+        self._clear_retention_error()
+        self.layout_changed.emit()
+        return True
+
+    def show_retention_error(self, message: str) -> None:
+        self._retention_error.setText(_bounded_text(message, 400))
+        self._retention_error.setVisible(True)
+        self.layout_changed.emit()
 
     def finish(self, result: WorkflowRunResult) -> bool:
         """Reconcile the card from the runner's complete terminal facts."""
@@ -362,7 +495,10 @@ class AgentTeamCard(QFrame):
             if node_id not in invocations and row.state is WorkflowStepState.RUNNING:
                 row.set_did_not_finish()
 
-        title, chip, color = _RUN_PRESENTATION[result.status]
+        presentation = (
+            _AGENT_RUN_PRESENTATION if self._is_agent_run else _TEAM_RUN_PRESENTATION
+        )
+        title, chip, color = presentation[result.status]
         self._header_label.setText(title)
         self._header_label.setStyleSheet(
             f"color: {color}; font-weight: 700; font-size: 12px;"
@@ -374,11 +510,38 @@ class AgentTeamCard(QFrame):
         # Once the run is terminal the rows are the truthful receipt. A
         # neutral count avoids presenting skipped/not-started work as work
         # that finished (notably when runner preflight fails before step 1).
-        details_prefix = f"{total} step{'s' if total != 1 else ''}"
+        details_prefix = (
+            "Agent details"
+            if self._is_agent_run
+            else f"{total} step{'s' if total != 1 else ''}"
+        )
         self._details.set_open(result.status is not WorkflowRunStatus.COMPLETED)
         self._set_details_prefix(details_prefix)
+        self._refresh_retention_visibility()
         self.layout_changed.emit()
         return True
+
+    @staticmethod
+    def _retention_button(text: str, parent: QWidget) -> QPushButton:
+        button = QPushButton(text, parent)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setStyleSheet(
+            f"QPushButton {{ color: {LABEL_AGENTS}; background: {BG_ALT}; "
+            f"border: 1px solid {LABEL_AGENTS}; border-radius: 5px; "
+            "padding: 3px 8px; font-size: 11px; font-weight: 600; }"
+        )
+        return button
+
+    def _refresh_retention_visibility(self) -> None:
+        has_actions = bool(self._save_buttons or self._keep_button is not None)
+        self._retention_widget.setVisible(
+            self._finished and self._root_settled and has_actions
+        )
+        self.layout_changed.emit()
+
+    def _clear_retention_error(self) -> None:
+        self._retention_error.clear()
+        self._retention_error.setVisible(False)
 
     def _make_step_row(
         self,
@@ -452,6 +615,8 @@ class AgentTeamCard(QFrame):
         )
 
     def _progress_title(self) -> str:
+        if self._is_agent_run:
+            return "Agent details"
         total = len(self._solid_node_ids)
         finished = self._finished_step_count()
         if finished == 0 and not any(

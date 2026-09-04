@@ -1,4 +1,4 @@
-"""The frozen Agent turn context permits exactly one Agent path."""
+"""The frozen Agent turn context owns the complete OFF/ENABLED gate."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from aura.agents.turn_context import (
     AgentModelTargets,
     AgentTurnContext,
     AgentTurnMode,
+    AgentWorkflowCatalog,
 )
 from aura.agents.workflow_plan import WorkflowRunPlan
 
@@ -139,42 +140,54 @@ def test_catalog_projections_cannot_mutate_the_frozen_targets() -> None:
         targets.targets = ()  # type: ignore[misc]
 
 
-def test_closed_turn_context_constructors_preserve_one_agent_path() -> None:
+def test_off_and_enabled_contexts_keep_all_enabled_routes_together() -> None:
     roster = _roster()
     target = _explicit_target()
     plan = _plan()
 
     off = AgentTurnContext.off()
-    automatic = AgentTurnContext.automatic(
+    enabled = AgentTurnContext.enabled(
         roster=roster,
+        workflows=(plan,),
         model_targets=(target,),
         root_provider="openai",
         root_model="gpt-root",
         root_thinking="high",
     )
-    active = AgentTurnContext.active_workflow(plan)
-
     assert off.mode is AgentTurnMode.OFF
-    assert off.enabled is False
+    assert off.is_enabled is False
     assert off.roster.is_empty
-    assert off.workflow_plan is None
+    assert len(off.workflows) == 0
 
-    assert automatic.mode is AgentTurnMode.AUTOMATIC
-    assert automatic.enabled is True
-    assert automatic.is_automatic is True
-    assert automatic.roster is roster
-    assert automatic.workflow_plan is None
-    assert automatic.model_targets.get("local-fast") is target
-    assert automatic.root_provider == "openai"
-    assert automatic.root_model == "gpt-root"
-    assert automatic.root_thinking == "high"
+    assert enabled.mode is AgentTurnMode.ENABLED
+    assert enabled.is_enabled is True
+    assert enabled.roster is roster
+    assert enabled.workflow(plan.graph_id) is plan
+    assert enabled.model_targets.get("local-fast") is target
+    assert enabled.root_provider == "openai"
+    assert enabled.root_model == "gpt-root"
+    assert enabled.root_thinking == "high"
 
-    assert active.mode is AgentTurnMode.ACTIVE_WORKFLOW
-    assert active.enabled is True
-    assert active.has_active_workflow is True
-    assert active.roster.is_empty
-    assert active.workflow_plan is plan
-    assert active.model_targets.keys == ("inherit",)
+
+def test_workflow_catalog_is_frozen_concise_and_resolves_only_exact_ids() -> None:
+    plan = _plan()
+    catalog = AgentWorkflowCatalog.freeze((plan,))
+
+    rows = catalog.catalog_rows()
+    rows[0]["name"] = "tampered"
+
+    assert catalog.ids == (plan.graph_id,)
+    assert catalog.get(plan.graph_id) is plan
+    assert catalog.get("unknownworkflow") is None
+    assert catalog.catalog_rows() == (
+        {
+            "workflow_id": plan.graph_id,
+            "name": plan.name,
+            "description": plan.description,
+        },
+    )
+    with pytest.raises(FrozenInstanceError):
+        catalog.plans = ()  # type: ignore[misc]
 
 
 @pytest.mark.parametrize(
@@ -189,22 +202,10 @@ def test_closed_turn_context_constructors_preserve_one_agent_path() -> None:
         ),
         (
             lambda: AgentTurnContext(
-                mode=AgentTurnMode.AUTOMATIC,
-                workflow_plan=_plan(),
+                mode=AgentTurnMode.OFF,
+                workflows=AgentWorkflowCatalog((_plan(),)),
             ),
-            "automatic Agent turn",
-        ),
-        (
-            lambda: AgentTurnContext(mode=AgentTurnMode.ACTIVE_WORKFLOW),
-            "needs a frozen workflow plan",
-        ),
-        (
-            lambda: AgentTurnContext(
-                mode=AgentTurnMode.ACTIVE_WORKFLOW,
-                roster=_roster(),
-                workflow_plan=_plan(),
-            ),
-            "cannot also expose an automatic roster",
+            "off Agent turn",
         ),
         (
             lambda: AgentTurnContext(
@@ -221,15 +222,6 @@ def test_closed_turn_context_constructors_preserve_one_agent_path() -> None:
             ),
             "cannot carry a root model target",
         ),
-        (
-            lambda: AgentTurnContext(
-                mode=AgentTurnMode.ACTIVE_WORKFLOW,
-                workflow_plan=_plan(),
-                root_provider="openai",
-                root_model="gpt-root",
-            ),
-            "cannot carry an automatic root target",
-        ),
     ],
 )
 def test_direct_context_construction_rejects_mixed_modes(factory, message: str) -> None:
@@ -238,19 +230,22 @@ def test_direct_context_construction_rejects_mixed_modes(factory, message: str) 
 
 
 def test_context_is_frozen_and_accepts_a_valid_string_mode() -> None:
-    context = AgentTurnContext(mode="automatic")  # type: ignore[arg-type]
+    context = AgentTurnContext(mode="enabled")  # type: ignore[arg-type]
 
-    assert context.mode is AgentTurnMode.AUTOMATIC
+    assert context.mode is AgentTurnMode.ENABLED
     with pytest.raises(FrozenInstanceError):
         context.mode = AgentTurnMode.OFF  # type: ignore[misc]
 
 
 def test_context_rejects_partial_root_targets_and_non_frozen_workflow_values() -> None:
     with pytest.raises(ValueError, match="captured together"):
-        AgentTurnContext.automatic(root_provider="openai")
+        AgentTurnContext.enabled(root_provider="openai")
+
+    with pytest.raises(TypeError, match="AgentWorkflowCatalog"):
+        AgentTurnContext(
+            mode=AgentTurnMode.ENABLED,
+            workflows=object(),  # type: ignore[arg-type]
+        )
 
     with pytest.raises(TypeError, match="WorkflowRunPlan"):
-        AgentTurnContext(
-            mode=AgentTurnMode.ACTIVE_WORKFLOW,
-            workflow_plan=object(),  # type: ignore[arg-type]
-        )
+        AgentWorkflowCatalog((object(),))  # type: ignore[arg-type]

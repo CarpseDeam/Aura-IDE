@@ -237,6 +237,36 @@ class AgentStore:
         self._write(path, definition)
         return definition
 
+    def create_supplied(self, definition: AgentDefinition) -> AgentDefinition:
+        """Create an exact immutable definition without minting or overwriting.
+
+        An identical definition already present at the same scope is a
+        successful retry. Any other claim on the id is a collision.
+        """
+        if not isinstance(definition, AgentDefinition):
+            raise AgentStoreError("A supplied Agent must be an AgentDefinition.")
+        self._validate(definition)
+        matches = [
+            row for row in self.list_summaries() if row.agent_id == definition.agent_id
+        ]
+        if matches:
+            if (
+                len(matches) == 1
+                and matches[0].scope is definition.scope
+                and matches[0].definition == definition
+            ):
+                return definition
+            raise AgentStoreError(
+                f"Agent id {definition.agent_id} already exists with different content."
+            )
+        path = self.path_for(definition.scope, definition.agent_id)
+        if path.exists():
+            raise AgentStoreError(
+                f"Agent id {definition.agent_id} already exists with different content."
+            )
+        self._write(path, definition)
+        return definition
+
     def update(self, definition: AgentDefinition) -> AgentDefinition:
         """Overwrite an existing definition in place, keeping its id and scope."""
         self._require_agent_id(definition.agent_id)

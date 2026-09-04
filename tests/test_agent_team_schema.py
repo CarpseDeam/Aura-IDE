@@ -196,13 +196,15 @@ def test_full_native_team_shape_validates_without_recursive_schema_features() ->
     jsonschema.Draft202012Validator(_parameters(tool)).validate(_valid_team())
 
     description = tool["function"]["description"]
-    assert "Use Aura directly for everyday work" in description
-    assert "genuinely improve the outcome" in description
+    assert "Use Aura directly for ordinary work" in description
+    assert "Use exactly one occurrence" in description
+    assert "two or more occurrences only" in description
+    assert "materially improve the result" in description
     assert "outgoing handoffs branch" in description
     assert "incoming handoffs wait and join" in description
     assert "Reuse one Agent in multiple occurrences" in description
     assert "may have helpers of its own" in description
-    assert "Read / Write specialists may work together" in description
+    assert "Read / Write specialists use Aura's existing isolation" in description
 
 
 def test_occurrence_limit_and_required_arrays_are_enforced_by_preflight_schema() -> None:

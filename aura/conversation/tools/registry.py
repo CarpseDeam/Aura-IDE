@@ -119,8 +119,8 @@ class ToolRegistry(
         # decide whether ``load_skills`` belongs in the catalog this turn.
         # Set once per real user turn via ``set_turn_skill_state``.
         self._turn_skill_state: Any = None
-        # One immutable value owns the root turn's Agent path: off, automatic
-        # team assembly, or one exact saved workflow.  It is replaced before
+        # One immutable value owns the root turn's Agent gate and all enabled
+        # routes: automatic assembly plus every frozen saved Workflow. It is replaced before
         # the first catalog is built and never pieced together from live state.
         self._turn_agent_context: AgentTurnContext = EMPTY_AGENT_TURN_CONTEXT
         self._automatic_team_started = False
@@ -268,7 +268,7 @@ class ToolRegistry(
     @property
     def turn_agent_roster(self) -> AgentTurnRoster:
         """Compatibility projection for the old direct-delegation surface."""
-        if self._turn_agent_context.mode is AgentTurnMode.AUTOMATIC:
+        if self._turn_agent_context.mode is AgentTurnMode.ENABLED:
             return self._turn_agent_context.roster
         return self._legacy_turn_agent_roster
 
@@ -328,18 +328,19 @@ class ToolRegistry(
 
     @property
     def turn_workflow_plan(self) -> Any | None:
-        """The one workflow this turn may run — None unless one was frozen."""
-        return self._turn_agent_context.workflow_plan
+        """Compatibility projection for callers expecting one frozen Workflow."""
+        plans = self._turn_agent_context.workflows.plans
+        return plans[0] if len(plans) == 1 else None
 
     def set_turn_workflow_plan(self, plan: Any | None) -> None:
-        """Compatibility shim that installs one active-workflow context.
+        """Compatibility shim that installs one frozen saved Workflow.
 
         ``None`` leaves any legacy direct-delegation roster intact because old
         bridge versions submitted those two independent values in sequence.
         New production code calls :meth:`set_agent_turn_context` once instead.
         """
         self._turn_agent_context = (
-            AgentTurnContext.active_workflow(plan)
+            AgentTurnContext.enabled(workflows=(plan,))
             if plan is not None
             else EMPTY_AGENT_TURN_CONTEXT
         )
@@ -384,16 +385,14 @@ class ToolRegistry(
         )
         context = self._turn_agent_context
         automatic_team = None
-        workflow = None
+        workflows = None
         legacy_agents = None
-        if context.mode is AgentTurnMode.AUTOMATIC:
+        if context.mode is AgentTurnMode.ENABLED:
             automatic_team = {
                 "agents": context.roster.catalog_rows(),
                 "model_targets": context.model_targets.catalog_rows(),
             }
-        elif context.mode is AgentTurnMode.ACTIVE_WORKFLOW:
-            assert context.workflow_plan is not None
-            workflow = context.workflow_plan.catalog_row()
+            workflows = context.workflows.catalog_rows() or None
         elif not self._legacy_turn_agent_roster.is_empty:
             legacy_agents = self._legacy_turn_agent_roster.catalog_rows()
 
@@ -409,19 +408,15 @@ class ToolRegistry(
                 tuple(helper.catalog_row() for helper in self._workflow_helpers)
                 or None
             ),
-            workflow=workflow,
+            workflows=workflows,
             agent_change_sets=bool(
                 self._agent_worktree_manager is not None
                 and (
                     getattr(self._agent_worktree_manager, "has_unresolved", False)
-                    or context.mode is AgentTurnMode.AUTOMATIC
+                    or context.mode is AgentTurnMode.ENABLED
                     or any(
                         entry.permission.allows_edit
                         for entry in self._legacy_turn_agent_roster.entries
-                    )
-                    or bool(
-                        context.workflow_plan is not None
-                        and context.workflow_plan.writable
                     )
                 )
             ),

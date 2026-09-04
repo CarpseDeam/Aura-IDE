@@ -1,10 +1,9 @@
 """The complete Agent capability frozen for one root Aura turn.
 
-Agent availability is a three-way choice, not a collection of independent
-flags.  A turn either has no Agent path, may assemble one temporary team from
-its frozen roster and model targets, or may run one already-frozen workflow.
-Keeping that choice in one value prevents a queued turn from accidentally
-mixing authority captured at different moments.
+Agent availability is one honest gate. A turn is either off, or it receives
+the frozen roster, model targets, and every saved Workflow which was runnable
+at submission. Keeping those facts in one value prevents a queued turn from
+accidentally mixing authority captured at different moments.
 
 This module contains only immutable data.  It does not read local state,
 discover models, build tool schemas, run workflows, or decide how often an
@@ -26,11 +25,10 @@ from aura.agents.workflow_plan import WorkflowRunPlan
 
 
 class AgentTurnMode(str, Enum):
-    """The one Agent path available to a submitted root turn."""
+    """Whether the submitted root turn has Agent capability."""
 
     OFF = "off"
-    AUTOMATIC = "automatic"
-    ACTIVE_WORKFLOW = "active_workflow"
+    ENABLED = "enabled"
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,12 +159,69 @@ DEFAULT_AGENT_MODEL_TARGETS = AgentModelTargets()
 
 
 @dataclass(frozen=True, slots=True)
+class AgentWorkflowCatalog:
+    """Every runnable saved Workflow frozen for one submitted turn."""
+
+    plans: tuple[WorkflowRunPlan, ...] = ()
+    _by_id: Mapping[str, WorkflowRunPlan] = field(
+        init=False, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        supplied = tuple(self.plans or ())
+        if any(not isinstance(plan, WorkflowRunPlan) for plan in supplied):
+            raise TypeError("An Agent workflow catalog needs WorkflowRunPlan values.")
+        by_id: dict[str, WorkflowRunPlan] = {}
+        for plan in supplied:
+            if plan.graph_id in by_id:
+                raise ValueError(
+                    f"More than one frozen Workflow uses the id '{plan.graph_id}'."
+                )
+            by_id[plan.graph_id] = plan
+        object.__setattr__(self, "plans", supplied)
+        object.__setattr__(self, "_by_id", MappingProxyType(by_id))
+
+    @classmethod
+    def freeze(
+        cls, plans: Iterable[WorkflowRunPlan] = ()
+    ) -> "AgentWorkflowCatalog":
+        return cls(tuple(plans))
+
+    @property
+    def ids(self) -> tuple[str, ...]:
+        return tuple(plan.graph_id for plan in self.plans)
+
+    def get(self, workflow_id: str) -> WorkflowRunPlan | None:
+        return self._by_id.get(str(workflow_id or "").strip())
+
+    def catalog_rows(self) -> tuple[dict[str, str], ...]:
+        """Only the concise saved-Workflow facts Aura needs to choose."""
+        return tuple(
+            {
+                "workflow_id": plan.graph_id,
+                "name": plan.name,
+                "description": plan.description,
+            }
+            for plan in self.plans
+        )
+
+    def __iter__(self) -> Iterator[WorkflowRunPlan]:
+        return iter(self.plans)
+
+    def __len__(self) -> int:
+        return len(self.plans)
+
+
+EMPTY_AGENT_WORKFLOW_CATALOG = AgentWorkflowCatalog()
+
+
+@dataclass(frozen=True, slots=True)
 class AgentTurnContext:
     """One internally consistent Agent capability captured for a root turn."""
 
     mode: AgentTurnMode = AgentTurnMode.OFF
     roster: AgentTurnRoster = EMPTY_AGENT_ROSTER
-    workflow_plan: WorkflowRunPlan | None = None
+    workflows: AgentWorkflowCatalog = EMPTY_AGENT_WORKFLOW_CATALOG
     model_targets: AgentModelTargets = DEFAULT_AGENT_MODEL_TARGETS
     root_provider: str = ""
     root_model: str = ""
@@ -183,10 +238,8 @@ class AgentTurnContext:
             raise TypeError("An Agent turn context needs a frozen AgentTurnRoster.")
         if not isinstance(self.model_targets, AgentModelTargets):
             raise TypeError("An Agent turn context needs frozen AgentModelTargets.")
-        if self.workflow_plan is not None and not isinstance(
-            self.workflow_plan, WorkflowRunPlan
-        ):
-            raise TypeError("An Agent turn context needs a frozen WorkflowRunPlan.")
+        if not isinstance(self.workflows, AgentWorkflowCatalog):
+            raise TypeError("An Agent turn context needs a frozen AgentWorkflowCatalog.")
         root_provider = str(self.root_provider or "").strip()
         root_model = str(self.root_model or "").strip()
         root_thinking = str(self.root_thinking or "off").strip() or "off"
@@ -195,42 +248,29 @@ class AgentTurnContext:
         object.__setattr__(self, "root_thinking", root_thinking)
 
         if mode is AgentTurnMode.OFF:
-            if not self.roster.is_empty or self.workflow_plan is not None:
-                raise ValueError("An off Agent turn cannot carry a roster or workflow plan.")
+            if not self.roster.is_empty or len(self.workflows):
+                raise ValueError("An off Agent turn cannot carry Agents or Workflows.")
             if len(self.model_targets) != 1:
                 raise ValueError("An off Agent turn cannot carry explicit model targets.")
             if root_provider or root_model or root_thinking != "off":
                 raise ValueError("An off Agent turn cannot carry a root model target.")
             return
 
-        if mode is AgentTurnMode.AUTOMATIC:
-            if self.workflow_plan is not None:
-                raise ValueError("An automatic Agent turn cannot carry an active workflow plan.")
-            if bool(root_provider) != bool(root_model):
-                raise ValueError(
-                    "An automatic Agent turn's root provider and model must be "
-                    "captured together."
-                )
-            return
-
-        if self.workflow_plan is None:
-            raise ValueError("An active-workflow Agent turn needs a frozen workflow plan.")
-        if not self.roster.is_empty:
-            raise ValueError("A saved-workflow Agent turn cannot also expose an automatic roster.")
-        if len(self.model_targets) != 1:
-            raise ValueError("A saved-workflow Agent turn cannot carry automatic model targets.")
-        if root_provider or root_model or root_thinking != "off":
-            raise ValueError("A saved-workflow Agent turn cannot carry an automatic root target.")
+        if bool(root_provider) != bool(root_model):
+            raise ValueError(
+                "An enabled Agent turn's root provider and model must be captured together."
+            )
 
     @classmethod
     def off(cls) -> "AgentTurnContext":
         return cls()
 
     @classmethod
-    def automatic(
+    def enabled(
         cls,
         *,
         roster: AgentTurnRoster = EMPTY_AGENT_ROSTER,
+        workflows: AgentWorkflowCatalog | Iterable[WorkflowRunPlan] = (),
         model_targets: AgentModelTargets | Iterable[AgentModelTarget] = (),
         root_provider: str = "",
         root_model: str = "",
@@ -239,33 +279,28 @@ class AgentTurnContext:
         frozen_targets = (
             model_targets if isinstance(model_targets, AgentModelTargets) else AgentModelTargets.freeze(model_targets)
         )
+        frozen_workflows = (
+            workflows
+            if isinstance(workflows, AgentWorkflowCatalog)
+            else AgentWorkflowCatalog.freeze(workflows)
+        )
         return cls(
-            mode=AgentTurnMode.AUTOMATIC,
+            mode=AgentTurnMode.ENABLED,
             roster=roster,
+            workflows=frozen_workflows,
             model_targets=frozen_targets,
             root_provider=root_provider,
             root_model=root_model,
             root_thinking=root_thinking,
         )
 
-    @classmethod
-    def active_workflow(cls, plan: WorkflowRunPlan) -> "AgentTurnContext":
-        return cls(
-            mode=AgentTurnMode.ACTIVE_WORKFLOW,
-            workflow_plan=plan,
-        )
-
     @property
-    def enabled(self) -> bool:
+    def is_enabled(self) -> bool:
         return self.mode is not AgentTurnMode.OFF
 
-    @property
-    def is_automatic(self) -> bool:
-        return self.mode is AgentTurnMode.AUTOMATIC
-
-    @property
-    def has_active_workflow(self) -> bool:
-        return self.mode is AgentTurnMode.ACTIVE_WORKFLOW
+    def workflow(self, workflow_id: str) -> WorkflowRunPlan | None:
+        """Resolve an id only against this submitted immutable catalog."""
+        return self.workflows.get(workflow_id)
 
 
 EMPTY_AGENT_TURN_CONTEXT = AgentTurnContext.off()
@@ -274,10 +309,12 @@ EMPTY_AGENT_TURN_CONTEXT = AgentTurnContext.off()
 __all__ = [
     "DEFAULT_AGENT_MODEL_TARGETS",
     "EMPTY_AGENT_TURN_CONTEXT",
+    "EMPTY_AGENT_WORKFLOW_CATALOG",
     "INHERIT_MODEL_TARGET",
     "INHERIT_MODEL_TARGET_KEY",
     "AgentModelTarget",
     "AgentModelTargets",
     "AgentTurnContext",
     "AgentTurnMode",
+    "AgentWorkflowCatalog",
 ]

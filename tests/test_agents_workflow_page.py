@@ -173,7 +173,6 @@ def test_deleting_an_editor_only_workflow_keeps_automatic_agents_enabled(wired) 
 
     assert wired.graphs.get(graph_id) is None
     assert wired.state.selected_id() == ""
-    assert wired.state.active_workflow_id() == ""
     assert wired.state.is_enabled() is True
 
 
@@ -560,7 +559,7 @@ def test_the_graph_window_has_no_available_to_aura_control(wired) -> None:
     assert "available to aura" not in labels
 
 
-def test_agents_on_without_an_active_workflow_freezes_automatic_turn_inputs(
+def test_agents_on_freezes_automatic_turn_inputs(
     wired, monkeypatch
 ) -> None:
     reviewer = _agent(wired.agents, AgentScope.PROJECT, "Reviewer")
@@ -586,7 +585,7 @@ def test_agents_on_without_an_active_workflow_freezes_automatic_turn_inputs(
         model="submitted-model", thinking="high"
     )
 
-    assert context.mode is AgentTurnMode.AUTOMATIC
+    assert context.mode is AgentTurnMode.ENABLED
     assert context.roster.ids == (reviewer,)
     assert context.model_targets.keys == ("inherit", "openai:gpt-usable")
     assert context.model_targets.get("openai:gpt-usable").label == "OpenAI — Usable"
@@ -595,7 +594,7 @@ def test_agents_on_without_an_active_workflow_freezes_automatic_turn_inputs(
     assert context.root_thinking == "high"
 
 
-def test_browsing_another_workflow_cannot_redirect_the_active_turn(
+def test_browsing_another_workflow_only_changes_editor_selection(
     wired, monkeypatch
 ) -> None:
     reviewer = _agent(wired.agents, AgentScope.PROJECT, "Reviewer")
@@ -612,7 +611,22 @@ def test_browsing_another_workflow_cannot_redirect_the_active_turn(
     page.workflow_bar.create_requested.emit("project")
     wired.app.processEvents()
     assert graphs.current_graph.graph_id != active_id
-    assert wired.state.active_workflow_id() == active_id
+    selected_id = graphs.current_graph.graph_id
+    _drop(wired, page, reviewer, 0.0, 0.0)
+    selected = graphs.current_graph
+    (selected_step,) = [node for node in selected.nodes if node.is_agent]
+    page.scene.connect_requested.emit(
+        selected.task_node.node_id, selected_step.node_id, "step"
+    )
+    page.scene.connect_requested.emit(
+        selected_step.node_id, selected.result_node.node_id, "step"
+    )
+    wired.app.processEvents()
+    page.workflow_bar.create_requested.emit("project")
+    wired.app.processEvents()
+    unrunnable_id = graphs.current_graph.graph_id
+    assert wired.state.selected_id() == unrunnable_id
+    assert wired.state.is_enabled() is True
 
     wired.controller._model_context = lambda: ("openai", "root-model", "medium")
     monkeypatch.setattr(
@@ -622,12 +636,14 @@ def test_browsing_another_workflow_cannot_redirect_the_active_turn(
         model="submitted-model", thinking="low"
     )
 
-    assert context.mode is AgentTurnMode.ACTIVE_WORKFLOW
-    assert context.workflow_plan.graph_id == active_id
-    assert context.workflow_plan.graph_id != graphs.current_graph.graph_id
+    assert context.mode is AgentTurnMode.ENABLED
+    assert set(context.workflows.ids) == {active_id, selected_id}
+    assert context.workflow(active_id) is not None
+    assert context.workflow(selected_id) is not None
+    assert context.workflow(unrunnable_id) is None
 
 
-def test_invalidating_the_selected_workflow_switches_its_private_gate_off(
+def test_invalid_workflow_is_excluded_without_disabling_agents(
     wired,
 ) -> None:
     reviewer = _agent(wired.agents, AgentScope.PROJECT, "Reviewer")
@@ -645,12 +661,15 @@ def test_invalidating_the_selected_workflow_switches_its_private_gate_off(
 
     (edge,) = graphs.current_graph.outgoing(step.node_id, ConnectionKind.STEP)
     wired.graphs.save(graphs.current_graph.without_connection(edge.connection_id))
+    wired.controller._model_context = lambda: ("openai", "root-model", "off")
 
-    assert wired.controller.workflow_gate() == (False, True)
-    assert wired.state.is_enabled() is False
-    assert wired.controller.capture_agent_turn_context(
+    assert wired.controller.workflow_gate() == (True, True)
+    assert wired.state.is_enabled() is True
+    context = wired.controller.capture_agent_turn_context(
         model="unused", thinking="off"
-    ).mode is AgentTurnMode.OFF
+    )
+    assert context.mode is AgentTurnMode.ENABLED
+    assert context.workflows.ids == ()
 
 
 def test_manual_run_uses_the_injected_runner_even_when_the_gate_is_off(

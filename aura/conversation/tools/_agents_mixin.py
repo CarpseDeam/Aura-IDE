@@ -160,22 +160,22 @@ class AgentDelegationHandlersMixin:
     def _handle_run_agent_workflow(
         self, args: dict[str, Any], approval_cb: ApprovalCallback, reject_all: bool
     ) -> ToolExecResult:
-        """Run this turn's one frozen workflow, or refuse truthfully.
-
-        There is no workflow to name: the plan was frozen with the turn, and a
-        turn that froze none has no such tool in its catalog at all. Reaching
-        here without one therefore means something went wrong, and it is said
-        plainly rather than resolved into whatever workflow is open now.
-        """
+        """Run an explicitly selected Workflow from this turn's frozen catalog."""
         from aura.agents.delegation import DelegationFailure
         from aura.agents.workflow_runner import WorkflowRunResult
 
-        plan = self._turn_agent_context.workflow_plan
+        workflow_id = str(args.get("workflow_id") or "").strip()
+        plan = self._turn_agent_context.workflow(workflow_id)
         if plan is None:
+            available = ", ".join(self._turn_agent_context.workflows.ids)
             result = WorkflowRunResult.failure(
-                "",
+                workflow_id,
                 DelegationFailure.DELEGATION_UNAVAILABLE,
-                "No Agent workflow is available on this turn.",
+                (
+                    f"No saved Workflow with id '{workflow_id}' is available on "
+                    "this turn's frozen catalog."
+                    + (f" Available: {available}." if available else "")
+                ),
             )
             return ToolExecResult(ok=False, payload=result.payload())
 
@@ -233,7 +233,7 @@ class AgentDelegationHandlersMixin:
         from aura.conversation.tools.effects import ToolEffect
 
         context = self._turn_agent_context
-        if context.mode is not AgentTurnMode.AUTOMATIC:
+        if context.mode is not AgentTurnMode.ENABLED:
             return _agent_team_failure(
                 "agent_team_unavailable",
                 "Automatic Agent team assembly is not available on this turn.",
