@@ -22,6 +22,7 @@ from aura.conversation.tools.schemas import (
     build_run_workflow_tool_def,
     build_workflow_helper_tool_def,
 )
+from aura.conversation.tools.schemas.workflow_authoring import build_workflow_authoring_tools
 
 #: The single production read tool. Line windows via offset/limit already
 #: cover the rest of what a bulk-read wrapper would add.
@@ -109,6 +110,7 @@ class ToolCatalog:
         workflow_helpers: tuple[dict[str, Any], ...] | None = None,
         workflows: tuple[dict[str, str], ...] | None = None,
         agent_change_sets: bool = False,
+        workflow_authoring: tuple[dict, ...] | None = None,
     ) -> list[dict[str, Any]]:
         """Build tool definitions for the production catalog.
 
@@ -181,6 +183,9 @@ class ToolCatalog:
             )
             if plan_review:
                 tools.append(dict(REVIEW_IMPLEMENTATION_PLAN_TOOL_DEF))
+
+        if workflow_authoring is not None:
+            tools.extend(build_workflow_authoring_tools(workflow_authoring, read_only=read_only))
 
         if skills_active:
             tools.append(dict(LOAD_SKILLS_TOOL_DEF))

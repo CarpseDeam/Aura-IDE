@@ -53,10 +53,20 @@ Run `aura` or `python -m aura`. The onboarding wizard walks you through 5 steps:
 
 1. Open a project folder (File → Open Workspace or drag a folder onto the window).
 2. Type a request in the input panel: "Add error handling to the database module" or "Explain how the authentication flow works."
-3. Aura reads the workspace and owns the root conversation. It can complete the task directly or use the selected reusable Agents and workflow.
+3. Aura reads the workspace and owns the root conversation. With the Agents toggle enabled, it can assemble a team or choose a runnable saved Workflow; it can also complete the task directly.
 4. Each file change shows a **diff** — approve, reject, approve all, or reject all.
 5. Tool activity, TODO progress, terminal output, and validation stay visible during the run.
 6. When done, Aura reports a factual receipt. Changes are auto-committed with an AI-generated message.
+
+## Create a reusable Workflow in chat
+
+1. Ask: **“Create a reusable Workflow that implements a requested change, tests it, then reviews it.”** Aura chooses a name, inherits the current model by default, and saves the Workflow without running it. You can also start from **Ask Aura to create a Workflow** in the Agents window.
+2. Check the saved graph card. **Details** shows each placement's assignment, model, and permission. Solid arrows are handoffs; dashed arrows are optional Sub-agents.
+3. Refine it: **“Add a security review before the final result.”** Aura updates the same Workflow. **Undo** reverses its latest edit; chat and canvas share the same session undo history. An outdated action asks Aura to inspect the latest revision first.
+4. Click **Run**, then enter this run's task, such as **“Add password reset.”** A new root turn receives that exact saved Workflow. Run it again with a different task to reuse the process.
+5. **Open Workflow** opens the same saved graph on the canvas. The saved Workflow survives restarting Aura; chat previews do not.
+
+Setup works with the Agents toggle off. The toggle enables automatic team use in ordinary chat; choosing a graph in the editor does not select it for chat. The card's explicit Run works independently of that toggle. Read Only prevents authoring changes, Plan Review remains enforced, and writable Agent work still uses isolated worktrees with explicit application.
 
 ## Keyboard Shortcuts
 

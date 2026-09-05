@@ -87,6 +87,8 @@ class MainWindowAgentsController(QObject):
     #: ``(enabled, available)`` for the toolbar's Agents switch, emitted
     #: whenever either could have changed.
     workflow_gate_changed = Signal(bool, bool)
+    workflows_changed = Signal()
+    author_with_aura_requested = Signal()
 
     def __init__(
         self,
@@ -444,6 +446,7 @@ class MainWindowAgentsController(QObject):
             page.visibility_changed.connect(lambda _visible: self.sync_agents_tab_checked())
             page.current_row_changed.connect(self._on_current_row_changed)
             page.create_requested.connect(self._on_create_requested)
+            page.author_with_aura_requested.connect(self.author_with_aura_requested)
             page.save_requested.connect(self._on_save_requested)
             page.delete_requested.connect(self._on_delete_requested)
             page.availability_changed.connect(self._on_availability_changed)
@@ -461,6 +464,7 @@ class MainWindowAgentsController(QObject):
                 parent=self,
             )
             self._graphs.gate_changed.connect(self.refresh_workflow_gate)
+            self._graphs.gate_changed.connect(self.workflows_changed)
         return self._agents_page
 
     @property
@@ -503,6 +507,43 @@ class MainWindowAgentsController(QObject):
         except Exception:
             logger.debug("agents: could not read the library", exc_info=True)
             return ()
+
+    def capture_explicit_workflow_context(self, workflow_id: str, *, model: str, thinking: str):
+        """One deliberate card Run, with the same independence as manual Run."""
+        store = self._workflow_session.store()
+        graph = store.get(workflow_id) if store is not None else None
+        provider, _, _ = self._current_model_context()
+        plan, errors = self._freeze_graph(graph, provider, model, thinking)
+        if plan is None:
+            raise AgentRetentionError("This Workflow cannot run: " + "; ".join(errors))
+        return AgentTurnContext.enabled(
+            workflows=(plan,), root_provider=provider, root_model=model,
+            root_thinking=thinking, explicit_workflow_id=workflow_id,
+        )
+
+    def capture_workflow_authoring(self):
+        """Freeze authoring model choices independently of the execution gate."""
+        from aura.agents.workflow_authoring import WorkflowAuthoring
+        agents, workflows, state = self._store(), self._workflow_session.store(), self._state()
+        if agents is None or workflows is None or state is None:
+            return None
+        return WorkflowAuthoring(
+            agents=agents, workflows=workflows, local_state=state,
+            edits=self._workflow_session.edits, model_targets=self._automatic_model_targets(),
+        )
+
+    def open_workflow(self, workflow_id: str) -> None:
+        """Open the exact saved graph for editing, without changing the Agent gate."""
+        store = self._workflow_session.store()
+        if store is None or store.get(workflow_id) is None:
+            raise AgentRetentionError("That saved Workflow is no longer available.")
+        page = self._ensure_page()
+        self._workflow_session.open(workflow_id)
+        self.refresh()
+        page.show()
+        page.raise_()
+        page.activateWindow()
+        self.sync_agents_tab_checked()
 
     def retain_generated_agent(
         self, team: CompiledAgentTeam, agent_id: str

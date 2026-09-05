@@ -499,6 +499,12 @@ class InputPanel(QFrame):
         self._editor.setPlainText(text)
         self._editor.setFocus()
 
+    def suggest_text(self, text: str) -> None:
+        """Offer a starting point while preserving an existing composer draft."""
+        if not self._editor.toPlainText().strip():
+            self._editor.setPlainText(text)
+        self.focus_editor()
+
     def set_attachments(self, attachments: list[Attachment]) -> None:
         """Restore a list of attachments to the panel."""
         self._clear_attachments()

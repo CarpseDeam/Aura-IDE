@@ -27,6 +27,7 @@ from aura.conversation.tools._read_mixin import ReadHandlersMixin
 from aura.conversation.tools._search_mixin import SearchHandlersMixin
 from aura.conversation.tools._task_checklist_mixin import TaskChecklistHandlersMixin
 from aura.conversation.tools._types import ApprovalCallback, ToolExecResult
+from aura.conversation.tools._workflow_authoring_mixin import WorkflowAuthoringHandlersMixin
 from aura.conversation.tools._workspace_mixin import WorkspaceHandlersMixin
 from aura.conversation.tools._write_mixin import WriteHandlersMixin
 from aura.conversation.tools.backup import backup_existing  # noqa: F401
@@ -59,6 +60,7 @@ TOOL_HANDLERS: dict[str, Any] = {}
 
 class ToolRegistry(
     AgentDelegationHandlersMixin,
+    WorkflowAuthoringHandlersMixin,
     CodeIntelHandlersMixin,
     TaskContextHandlersMixin,
     ReadHandlersMixin,
@@ -141,6 +143,8 @@ class ToolRegistry(
         # Optional presentation only. It receives immutable automatic-team
         # facts but grants no authority and is never consulted by tool policy.
         self._agent_team_run_observer: AgentTeamRunObserver | None = None
+        self._workflow_authoring = None
+        self._workflow_authoring_observer = None
         # Plan Review — required/approved state for the active turn, and the
         # GUI-thread proxy that pauses the tool loop for human review. The
         # state always exists (required defaults to False); the proxy is
@@ -162,6 +166,7 @@ class ToolRegistry(
         if root is None:
             return
         self._root = root.resolve()
+        self.set_workflow_authoring(None)
         self._dynamic_tools.set_workspace_root(self._root)
         self._codebase_index = None
         # External access authorized while the old workspace was active must
@@ -369,6 +374,15 @@ class ToolRegistry(
         """
         self._agent_team_run_observer = observer
 
+    def set_workflow_authoring(self, service, observer=None) -> None:
+        """Only the root bridge installs this workspace-bound authoring context."""
+        self._workflow_authoring = service if not self._isolated_agent else None
+        self._workflow_authoring_observer = observer
+
+    def set_workflow_authoring_observer(self, observer) -> None:
+        """Presentation is independent of the authoring capability."""
+        self._workflow_authoring_observer = observer
+
     def tool_defs(self) -> list[dict[str, Any]]:
         dynamic_schemas = self._dynamic_tools.schemas() if not self._read_only else []
         # Read-only mode exposes only the MCP tools resolved as observations.
@@ -388,16 +402,21 @@ class ToolRegistry(
         workflows = None
         legacy_agents = None
         if context.mode is AgentTurnMode.ENABLED:
-            automatic_team = {
-                "agents": context.roster.catalog_rows(),
-                "model_targets": context.model_targets.catalog_rows(),
-            }
+            if not context.explicit_workflow_id:
+                automatic_team = {
+                    "agents": context.roster.catalog_rows(),
+                    "model_targets": context.model_targets.catalog_rows(),
+                }
             workflows = context.workflows.catalog_rows() or None
         elif not self._legacy_turn_agent_roster.is_empty:
             legacy_agents = self._legacy_turn_agent_roster.catalog_rows()
 
         return self._catalog.build_tool_defs(
             read_only=self._read_only,
+            workflow_authoring=(
+                self._workflow_authoring.model_targets.catalog_rows()
+                if self._workflow_authoring is not None and not self._isolated_agent else None
+            ),
             dynamic_schemas=dynamic_schemas or None,
             mcp_schemas=mcp_schemas or None,
             plan_review=(not self._read_only) and self._plan_review.required,
@@ -687,3 +706,8 @@ TOOL_HANDLERS["list_agent_change_sets"] = ToolRegistry._handle_list_agent_change
 TOOL_HANDLERS["inspect_agent_change_set"] = ToolRegistry._handle_inspect_agent_change_set
 TOOL_HANDLERS["apply_agent_change_set"] = ToolRegistry._handle_apply_agent_change_set
 TOOL_HANDLERS["discard_agent_change_set"] = ToolRegistry._handle_discard_agent_change_set
+
+TOOL_HANDLERS["inspect_workflow"] = ToolRegistry._handle_inspect_workflow
+TOOL_HANDLERS["create_workflow"] = ToolRegistry._handle_create_workflow
+TOOL_HANDLERS["update_workflow"] = ToolRegistry._handle_update_workflow
+TOOL_HANDLERS["undo_workflow_edit"] = ToolRegistry._handle_undo_workflow_edit

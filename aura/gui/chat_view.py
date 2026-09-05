@@ -493,8 +493,8 @@ class ChatView(QScrollArea):
 
     def add_tool_call(self, tool_call_id: str, name: str) -> None:
         ac = self.current_assistant()
-        if name == "run_agent_team":
-            # The accepted team gets its own truthful live card. The generic
+        if name in {"run_agent_team", "create_workflow", "update_workflow", "undo_workflow_edit"}:
+            # Teams and saved Workflows get their own native cards. The generic
             # compact status would call this "Reading files" and then count it
             # as one opaque tool, which duplicates and mislabels the work.
             return
@@ -567,6 +567,15 @@ class ChatView(QScrollArea):
         card = PlanReviewCard(review_id, goal, files, spec, acceptance, summary, parent=self)
         ac.add_footer_widget(card)
         self._scroll_to_bottom()
+        return card
+
+    def add_workflow_card(self, saved):
+        from aura.gui.cards.workflow_card import WorkflowCard
+        ac = self.current_assistant()
+        card = WorkflowCard(saved, parent=ac)
+        card.layout_changed.connect(self._request_scroll_to_bottom)
+        ac.add_activity_widget(card)
+        self._request_scroll_to_bottom()
         return card
 
     def add_agent_team_card(self, team) -> AgentTeamCard:

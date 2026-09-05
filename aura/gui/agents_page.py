@@ -83,6 +83,7 @@ class AgentsPage(QDialog):
 
     visibility_changed = Signal(bool)
     current_row_changed = Signal(str)
+    author_with_aura_requested = Signal()
     create_requested = Signal(str)  # scope key
     save_requested = Signal(object)  # AgentDraft
     delete_requested = Signal(str, str)  # scope key, agent id
@@ -116,6 +117,10 @@ class AgentsPage(QDialog):
 
         self.workflow_bar = WorkflowBar()
         layout.addWidget(self.workflow_bar)
+        self.author_button = QPushButton("Ask Aura to create a Workflow")
+        self.author_button.setToolTip("Example: create a Workflow that implements, tests, and reviews a change.")
+        self.author_button.clicked.connect(self.author_with_aura_requested)
+        layout.addWidget(self.author_button)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setHandleWidth(3)
@@ -256,6 +261,7 @@ class AgentsPage(QDialog):
         be acting on the answers they gave.
         """
         self._mutations_enabled = bool(enabled)
+        self.author_button.setEnabled(self._mutations_enabled)
         self._status.setText("" if self._mutations_enabled else _BUSY_NOTE)
         self._library.set_mutations_enabled(self._mutations_enabled)
         self.inspector.set_mutations_enabled(self._mutations_enabled)

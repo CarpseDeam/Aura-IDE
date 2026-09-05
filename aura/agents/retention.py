@@ -8,6 +8,7 @@ persistence format.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
@@ -26,6 +27,7 @@ from aura.agents.local_state import (
 from aura.agents.models import AgentDefinition
 from aura.agents.store import AgentStore, AgentStoreError
 from aura.agents.team_compiler import CompiledAgentTeam
+from aura.agents.workflow_builder import BuiltWorkflow
 
 
 class AgentRetentionError(RuntimeError):
@@ -184,7 +186,21 @@ class AgentTeamRetention:
         )
 
     def keep_team(self, team: CompiledAgentTeam) -> AgentRetentionResult:
-        facts = validate_compiled_team(team)
+        return self._keep_facts(validate_compiled_team(team), self._workflows.create_supplied)
+
+    def save_workflow(
+        self, built: BuiltWorkflow, commit: Callable[[WorkflowGraph], object]
+    ) -> AgentRetentionResult:
+        """Persist authoring facts through the same identity and grant checks."""
+        facts = CompiledTeamFacts(
+            built.graph, built.generated_definitions, built.definitions, built.permissions
+        )
+        return self._keep_facts(facts, commit, replacing=True)
+
+    def _keep_facts(
+        self, facts: CompiledTeamFacts, commit: Callable[[WorkflowGraph], object],
+        *, replacing: bool = False,
+    ) -> AgentRetentionResult:
         generated_ids = {item.agent_id for item in facts.generated_definitions}
         existing_generated = self._preflight_generated(facts.generated_definitions)
         reused_definitions = {
@@ -202,7 +218,8 @@ class AgentTeamRetention:
             definitions=facts.definitions,
             allow_unrecorded=existing_generated,
         )
-        self._preflight_workflow(facts.graph)
+        if not replacing:
+            self._preflight_workflow(facts.graph)
 
         try:
             for definition in facts.generated_definitions:
@@ -213,7 +230,7 @@ class AgentTeamRetention:
                     for definition in facts.generated_definitions
                 }
             )
-            self._workflows.create_supplied(facts.graph)
+            commit(facts.graph)
         except (AgentStoreError, AgentGraphStoreError, AgentLocalStateError) as exc:
             raise AgentRetentionError(str(exc)) from exc
         return AgentRetentionResult(

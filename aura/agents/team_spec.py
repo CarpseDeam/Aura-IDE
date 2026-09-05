@@ -64,6 +64,18 @@ class HelperSpec:
 
 
 @dataclass(frozen=True)
+class WorkflowSpec:
+    """Reusable work and relationships, independent of any execution task."""
+
+    name: str
+    description: str = ""
+    new_agents: tuple[NewAgentSpec, ...] = ()
+    occurrences: tuple[OccurrenceSpec, ...] = ()
+    handoffs: tuple[HandoffSpec, ...] = ()
+    helpers: tuple[HelperSpec, ...] = ()
+
+
+@dataclass(frozen=True)
 class AgentTeamSpec:
     """A task and the semantic team Aura assembled to perform it."""
 
@@ -74,6 +86,23 @@ class AgentTeamSpec:
     occurrences: tuple[OccurrenceSpec, ...] = ()
     handoffs: tuple[HandoffSpec, ...] = ()
     helpers: tuple[HelperSpec, ...] = ()
+
+    @property
+    def workflow(self) -> WorkflowSpec:
+        return WorkflowSpec(
+            self.name, self.description, self.new_agents,
+            self.occurrences, self.handoffs, self.helpers,
+        )
+
+
+@dataclass(frozen=True)
+class ParsedWorkflowSpec:
+    spec: WorkflowSpec | None
+    errors: tuple[str, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return self.spec is not None and not self.errors
 
 
 @dataclass(frozen=True)
@@ -89,21 +118,38 @@ class ParsedAgentTeamSpec:
 
 
 def parse_agent_team_spec(raw: Mapping[str, Any] | object) -> ParsedAgentTeamSpec:
-    """Parse the eventual flat tool payload without inventing missing values.
-
-    Value-level rules — aliases, references, topology, limits, model targets,
-    and permissions — are owned by the compiler.  This boundary only proves
-    the payload is an object containing text fields and arrays of objects.
-    ``team_name`` and ``team_description`` keep top-level labels distinct from
-    each new Agent's own name and description.
-    """
+    """Parse the run task separately from its reusable Workflow shape."""
     if not isinstance(raw, Mapping):
         return ParsedAgentTeamSpec(None, ("the Agent team payload is not an object",))
-
     errors: list[str] = []
     task = _text(raw, "task", "task", errors, required=True)
-    name = _text(raw, "team_name", "team_name", errors, required=True)
-    description = _text(raw, "team_description", "team_description", errors)
+    parsed = parse_workflow_spec(raw, name_key="team_name", description_key="team_description")
+    errors.extend(parsed.errors)
+    if errors or parsed.spec is None:
+        return ParsedAgentTeamSpec(None, tuple(errors))
+    spec = parsed.spec
+    return ParsedAgentTeamSpec(AgentTeamSpec(
+        task, spec.name, spec.description, spec.new_agents,
+        spec.occurrences, spec.handoffs, spec.helpers,
+    ))
+
+
+def parse_workflow_spec(
+    raw: Mapping[str, Any] | object, *, name_key: str = "name", description_key: str = "description"
+) -> ParsedWorkflowSpec:
+    """Parse the flat semantic shape without inventing missing values.
+
+    Value-level rules — aliases, references, topology, limits, model targets,
+    and permissions — are owned by the graph builder. This boundary only proves
+    the payload is an object containing text fields and arrays of objects.
+    Automatic teams supply their own top-level name and description keys.
+    """
+    if not isinstance(raw, Mapping):
+        return ParsedWorkflowSpec(None, ("the Workflow payload is not an object",))
+
+    errors: list[str] = []
+    name = _text(raw, name_key, name_key, errors, required=True)
+    description = _text(raw, description_key, description_key, errors)
 
     new_agents = tuple(
         NewAgentSpec(
@@ -183,10 +229,9 @@ def parse_agent_team_spec(raw: Mapping[str, Any] | object) -> ParsedAgentTeamSpe
     )
 
     if errors:
-        return ParsedAgentTeamSpec(None, tuple(errors))
-    return ParsedAgentTeamSpec(
-        AgentTeamSpec(
-            task=task,
+        return ParsedWorkflowSpec(None, tuple(errors))
+    return ParsedWorkflowSpec(
+        WorkflowSpec(
             name=name,
             description=description,
             new_agents=new_agents,
@@ -242,5 +287,8 @@ __all__ = [
     "NewAgentSpec",
     "OccurrenceSpec",
     "ParsedAgentTeamSpec",
+    "ParsedWorkflowSpec",
+    "WorkflowSpec",
     "parse_agent_team_spec",
+    "parse_workflow_spec",
 ]

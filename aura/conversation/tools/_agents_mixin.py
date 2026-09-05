@@ -233,7 +233,7 @@ class AgentDelegationHandlersMixin:
         from aura.conversation.tools.effects import ToolEffect
 
         context = self._turn_agent_context
-        if context.mode is not AgentTurnMode.ENABLED:
+        if context.mode is not AgentTurnMode.ENABLED or context.explicit_workflow_id:
             return _agent_team_failure(
                 "agent_team_unavailable",
                 "Automatic Agent team assembly is not available on this turn.",

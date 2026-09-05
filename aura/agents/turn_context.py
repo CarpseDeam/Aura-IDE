@@ -226,6 +226,7 @@ class AgentTurnContext:
     root_provider: str = ""
     root_model: str = ""
     root_thinking: str = "off"
+    explicit_workflow_id: str = ""
 
     def __post_init__(self) -> None:
         try:
@@ -246,6 +247,10 @@ class AgentTurnContext:
         object.__setattr__(self, "root_provider", root_provider)
         object.__setattr__(self, "root_model", root_model)
         object.__setattr__(self, "root_thinking", root_thinking)
+
+        if self.explicit_workflow_id:
+            if mode is AgentTurnMode.OFF or self.workflows.ids != (self.explicit_workflow_id,):
+                raise ValueError("An explicit Run must carry exactly its requested Workflow.")
 
         if mode is AgentTurnMode.OFF:
             if not self.roster.is_empty or len(self.workflows):
@@ -275,6 +280,7 @@ class AgentTurnContext:
         root_provider: str = "",
         root_model: str = "",
         root_thinking: str = "off",
+        explicit_workflow_id: str = "",
     ) -> "AgentTurnContext":
         frozen_targets = (
             model_targets if isinstance(model_targets, AgentModelTargets) else AgentModelTargets.freeze(model_targets)
@@ -292,6 +298,7 @@ class AgentTurnContext:
             root_provider=root_provider,
             root_model=root_model,
             root_thinking=root_thinking,
+            explicit_workflow_id=explicit_workflow_id,
         )
 
     @property

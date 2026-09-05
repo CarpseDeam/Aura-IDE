@@ -104,6 +104,7 @@ class _ConversationRunner(QObject):
     # The private runner-to-bridge hop carries a presentation generation so
     # queued facts from a reset workspace/conversation cannot recreate stale
     # cards. The bridge's public signals remain generation-free.
+    workflowAuthored = Signal(int, object)  # generation, exact WorkflowSaved
     agentTeamAccepted = Signal(int, object)  # generation, exact CompiledAgentTeam
     agentTeamStepChanged = Signal(int, str, str, str)
     agentTeamFinished = Signal(int, object)  # generation, exact WorkflowRunResult
@@ -187,6 +188,9 @@ class _ConversationRunner(QObject):
 
     # ---- automatic Agent-team presentation ------------------------------
 
+    def workflow_authored(self, saved) -> None:
+        self.workflowAuthored.emit(self._agent_team_generation, saved)
+
     def team_accepted(self, team) -> None:
         """Relay one validated, authorized compiled team to the GUI thread."""
         self.agentTeamAccepted.emit(self._agent_team_generation, team)
@@ -235,6 +239,7 @@ class ConversationBridge(QObject):
     apiError = Signal(int, str)
     streamDone = Signal(str, dict)
     toolResult = Signal(str, str, bool, str, dict)
+    workflowAuthored = Signal(object)
     agentTeamAccepted = Signal(object)
     agentTeamStepChanged = Signal(str, str, str)
     agentTeamFinished = Signal(object)
@@ -361,6 +366,7 @@ class ConversationBridge(QObject):
         self._turn_active: bool = False
         # Invalidates already-queued private runner signals when a new turn,
         # workspace, or conversation supersedes their presentation.
+        self._workflow_authoring_provider = None
         self._agent_team_generation: int = 0
 
         # Re-emit production session signals on the same bridge signals so the
@@ -436,6 +442,10 @@ class ConversationBridge(QObject):
         self._manager.set_workspace_root(root)
         self._registry.set_workspace_root(root)
         self.refresh_tier1_context()
+
+    def set_workflow_authoring_provider(self, provider) -> None:
+        """The GUI supplies an authoring service bound to this workspace."""
+        self._workflow_authoring_provider = provider
 
     def set_read_only(self, value: bool) -> None:
         """Set the toolbar mode for the next real user turn.
@@ -638,6 +648,8 @@ class ConversationBridge(QObject):
         # entire model/tool loop, including every later round.
         self._turn_read_only = self._requested_read_only
         self._registry.set_read_only(self._turn_read_only)
+        provider = self._workflow_authoring_provider
+        self._registry.set_workflow_authoring(provider() if provider is not None else None)
         self._turn_active = True
         # Freeze Plan Review's required/approved state for this turn now, so
         # a toolbar toggle flipped while the turn is running cannot mutate
@@ -709,6 +721,8 @@ class ConversationBridge(QObject):
         self._conversation_runner.agentTeamFinished.connect(
             self._on_agent_team_finished
         )
+        self._conversation_runner.workflowAuthored.connect(self._on_workflow_authored)
+        self._registry.set_workflow_authoring_observer(self._conversation_runner)
         self._registry.set_agent_team_run_observer(self._conversation_runner)
         # The single authoritative usage accounting path. Normal turns reach
         # it through the production session's relay; a Read Only turn routes
@@ -751,6 +765,11 @@ class ConversationBridge(QObject):
     # ---- private slots ----------------------------------------------------
 
     @Slot(int, object)
+    def _on_workflow_authored(self, generation: int, saved: object) -> None:
+        if generation == self._agent_team_generation:
+            self.workflowAuthored.emit(saved)
+
+    @Slot(int, object)
     def _on_agent_team_accepted(self, generation: int, team: object) -> None:
         if generation == self._agent_team_generation:
             self.agentTeamAccepted.emit(team)
@@ -772,9 +791,10 @@ class ConversationBridge(QObject):
             self.agentTeamFinished.emit(result)
 
     def _invalidate_agent_team_presentation(self) -> None:
-        """Detach and invalidate automatic-team facts from an obsolete turn."""
+        """Detach and invalidate transient Workflow facts from an obsolete turn."""
         self._agent_team_generation += 1
         self._registry.set_agent_team_run_observer(None)
+        self._registry.set_workflow_authoring_observer(None)
 
     @Slot(int, str, str)
     def _on_tool_call_start(self, index: int, tool_id: str, name: str) -> None:
@@ -869,6 +889,7 @@ class ConversationBridge(QObject):
             # next send without changing any remaining round of this one.
             self.clear_external_read_authorization()
             self._registry.set_agent_team_run_observer(None)
+            self._registry.set_workflow_authoring(None)
             self._registry.set_read_only(self._requested_read_only)
             # Agent authority is turn-scoped: the next turn supplies its own
             # complete snapshot, so nothing carries over.

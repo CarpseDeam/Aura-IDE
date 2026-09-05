@@ -60,6 +60,7 @@ from aura.gui.status_bar import AuraStatusBar
 from aura.gui.update_dialog import UpdateDialog
 from aura.gui.widgets.aura_glow import AuraPhaseDriver, AuraWidget
 from aura.gui.window_chrome import WindowChromeMixin
+from aura.gui.workflow_chat_controller import WorkflowChatController
 
 
 class _ShrinkableStack(QStackedWidget):
@@ -211,6 +212,12 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             # snapshot so queued sends cannot mix state captured at different
             # moments.
             agent_context_provider=self._agents_controller.capture_agent_turn_context,
+        )
+        self._agents_controller.author_with_aura_requested.connect(self._start_workflow_authoring)
+        self._bridge.set_workflow_authoring_provider(self._agents_controller.capture_workflow_authoring)
+        self._workflow_chat_controller = WorkflowChatController(
+            bridge=self._bridge, chat=self._chat, owner=self._agents_controller,
+            submit_run=self._run_workflow_from_chat, parent_widget=self, parent=self,
         )
         # Skills manager — the only GUI owner of SkillLibrary access. Both the
         # composer's Skills button and /skills reach this one controller.
@@ -542,10 +549,26 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._bridge.set_read_only(checked)
         self._toolbar.set_read_only(checked)
         self._playground.set_read_only_mode(checked)
+        self._workflow_chat_controller.refresh()
 
     def _on_focused_action_requested(self, prompt: str) -> None:
         payload = SendPayload(text=prompt, attachments=[])
         self._send_handler.handle_send(payload, self.current_model(), self.current_thinking())
+
+    def _start_workflow_authoring(self) -> None:
+        self._agents_controller.hide_page()
+        self._input.suggest_text("Create a reusable Workflow that implements a requested change, tests it, then reviews it.")
+
+    def _run_workflow_from_chat(self, workflow_id: str, task: str) -> bool:
+        model, thinking = self.current_model(), self.current_thinking()
+        context = self._agents_controller.capture_explicit_workflow_context(
+            workflow_id, model=model, thinking=str(thinking)
+        )
+        plan = context.workflows.get(workflow_id)
+        prompt = f"Run the saved Workflow ‘{plan.name}’.\n\nTask:\n{task}"
+        return self._send_handler.handle_send(
+            SendPayload(text=prompt, attachments=[]), model, thinking, agent_context=context
+        )
 
     def _on_new_conversation(self) -> None:
         if self._bridge.is_running():

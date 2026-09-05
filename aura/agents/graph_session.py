@@ -19,7 +19,6 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from aura.agents.graph_history import GraphHistory
 from aura.agents.graph_local_state import WorkflowLocalState, WorkflowLocalStateError
 from aura.agents.graph_models import WorkflowGraph
 from aura.agents.graph_store import (
@@ -28,6 +27,7 @@ from aura.agents.graph_store import (
     WorkflowSummary,
 )
 from aura.agents.identity import AgentScope
+from aura.agents.workflow_edits import WorkflowEdits
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class WorkflowSession:
         self._summaries: dict[str, WorkflowSummary] = {}
         self._order: tuple[str, ...] = ()
         self._graph: WorkflowGraph | None = None
-        self._history: GraphHistory | None = None
+        self.edits: WorkflowEdits
         self._graph_id = ""
         self.rebind(workspace_root)
 
@@ -60,8 +60,9 @@ class WorkflowSession:
         self._summaries = {}
         self._order = ()
         self._graph = None
-        self._history = None
         self._graph_id = ""
+        edit_root = self._workspace_root
+        self.edits = WorkflowEdits(lambda: self._store_factory(edit_root) if edit_root else None)
 
     @property
     def bound(self) -> bool:
@@ -105,11 +106,11 @@ class WorkflowSession:
 
     @property
     def can_undo(self) -> bool:
-        return self._history is not None and self._history.can_undo
+        return self._graph is not None and self.edits.history(self._graph).can_undo
 
     @property
     def can_redo(self) -> bool:
-        return self._history is not None and self._history.can_redo
+        return self._graph is not None and self.edits.history(self._graph).can_redo
 
     # ---- reading from disk -------------------------------------------------
 
@@ -131,7 +132,6 @@ class WorkflowSession:
         chosen = self._choose(state)
         if chosen != self._graph_id:
             self._graph_id = chosen
-            self._history = None
         # The session's open graph is only the editor selection. Persist a
         # fallback selection as well as an explicit click.
         try:
@@ -141,8 +141,6 @@ class WorkflowSession:
             logger.debug("agents: could not remember the selected workflow")
         row = self._summaries.get(chosen)
         self._graph = row.graph if row is not None else None
-        if self._graph is not None and self._history is None:
-            self._history = GraphHistory(self._graph)
 
     def _choose(self, state: WorkflowLocalState) -> str:
         """Keep what is open; otherwise what was open; otherwise the first."""
@@ -161,7 +159,6 @@ class WorkflowSession:
         if str(graph_id) == self._graph_id:
             return
         self._graph_id = str(graph_id)
-        self._history = None
         self._remember_selection(self._graph_id)
         self.reload()
 
@@ -174,7 +171,6 @@ class WorkflowSession:
             raise AgentGraphStoreError("There is no workspace to create a workflow in.")
         graph = store.create(scope)
         self._graph_id = graph.graph_id
-        self._history = None
         self._remember_selection(graph.graph_id)
         self.reload()
         return graph
@@ -199,7 +195,6 @@ class WorkflowSession:
                 state.forget(row.graph_id)
         self._graph_id = ""
         self._graph = None
-        self._history = None
         self.reload()
         return removed
 
@@ -234,13 +229,13 @@ class WorkflowSession:
     # ---- editing -----------------------------------------------------------
 
     def commit(self, graph: WorkflowGraph) -> bool:
-        """Write an edited workflow and record it as an undo step."""
-        store = self.store()
-        if store is None or self._graph is None or graph == self._graph:
+        """Use the same explicit-identity edit owner as conversational tools."""
+        if self._graph is None:
             return False
-        store.save(graph)
-        self._adopt(graph)
-        return True
+        changed = self.edits.commit(self._graph, graph)
+        self._graph = graph
+        self._refresh_summary(graph)
+        return changed
 
     def undo(self) -> WorkflowGraph | None:
         return self._step(redo=False)
@@ -249,25 +244,13 @@ class WorkflowSession:
         return self._step(redo=True)
 
     def _step(self, *, redo: bool) -> WorkflowGraph | None:
-        history = self._history
-        store = self.store()
-        if history is None or store is None:
+        if self._graph is None:
             return None
-        graph = history.redo() if redo else history.undo()
-        if graph is None:
-            return None
-        store.save(graph)
-        self._graph = graph
-        self._refresh_summary(graph)
+        graph = self.edits.step(self._graph, redo=redo)
+        if graph is not None:
+            self._graph = graph
+            self._refresh_summary(graph)
         return graph
-
-    def _adopt(self, graph: WorkflowGraph) -> None:
-        self._graph = graph
-        if self._history is None:
-            self._history = GraphHistory(graph)
-        else:
-            self._history.push(graph)
-        self._refresh_summary(graph)
 
     def _refresh_summary(self, graph: WorkflowGraph) -> None:
         """Keep the listed row in step with what was just written."""

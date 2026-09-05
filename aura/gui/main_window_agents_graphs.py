@@ -66,7 +66,7 @@ from aura.gui.main_window_agents_run import WorkflowRunController
 
 logger = logging.getLogger(__name__)
 
-_EMPTY_CANVAS = "No workflow open yet. Use New to start one."
+_EMPTY_CANVAS = "Describe a Workflow to Aura in chat, or use New to build one here."
 
 
 class AgentsGraphController(QObject):

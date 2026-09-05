@@ -38,6 +38,10 @@ Aura remains the stable root owner for every turn. Agent work stays inside Aura'
 
 Agents are a major harness capability, not a separate product. Each Agent is a reusable identity with its own instructions, model target, thinking level, and private Read only or Read / Write permissions. An Agent can inherit Aura's provider and model or target any configured hosted or local model. Place an Agent in a workflow to give that occurrence a concise assignment while keeping the reusable identity intact.
 
+Describe the process to Aura: **“Create a reusable Workflow that implements a requested change, tests it, then reviews it.”** Aura saves a personal Workflow and shows its native graph in chat, with **Run**, **Open Workflow**, and **Undo** after an edit. Refine it conversationally: **“Add a security review before the final result.”** The same Workflow is updated; models inherit Aura's current model by default, and shared Agent definitions stay intact. Expand **Details** to inspect assignments, models, and permissions.
+
+Setup works with the Agents switch off and does not execute anything. Click the card's **Run** and supply a task such as “Add password reset”; the saved process can then run again for a different task. Chat previews are session-local, while the Workflow remains in the ordinary library and canvas. Read Only and Plan Review also govern conversational edits.
+
 <p align="center">
   <img src="media/aura-agents-workflow.png" alt="Aura Agents window showing the reusable Agent library, the Aura Documentation Refresh workflow, its solid Task-to-Result sequence, a dashed Review Helper sub-agent connection, and the Website Writer inspector" width="1000">
 </p>
@@ -45,7 +49,7 @@ Agents are a major harness capability, not a separate product. Each Agent is a r
 - **Solid lines** are the ordering contract from Task through Agent steps to Aura Result. Independent ready read-only Steps may overlap against the same stable workspace view. A Step with Read / Write authority—or a Read / Write descendant anywhere in its helper tree—runs exclusively, so readers never overlap writers and writers never overlap each other. A Step that must consume another Step's edits must be connected as its successor. Joins wait for every predecessor to settle successfully, and results remain in frozen workflow order rather than completion order.
 - **Dashed Sub-agent lines** form optional helper trees without inserting them into the automatic path. Each Step or helper may invoke only its directly attached helpers, synchronously, under each occurrence's own frozen permission.
 - **Run** explicitly executes the open workflow; **Stop** remains available while it runs.
-- The **Agents toolbar toggle** lets Aura use the selected Agents and workflow during an ordinary conversation.
+- The **Agents toolbar toggle** lets Aura assemble a team or choose a runnable saved Workflow during an ordinary conversation. Opening a Workflow in the editor does not bind chat to it; the card's **Run** requests that exact Workflow for one fresh turn without changing the toggle.
 - **Read / Write work is isolated** and is never applied automatically. Aura returns structured results and retains proposed changes for explicit review and application.
 
 <p align="center">
@@ -177,7 +181,7 @@ See [Providers](docs/providers.md) for supported backends and configuration deta
 - **Run-and-watch verification** — start a process, observe its output over a bounded window, and retain the result.
 - **Git integration** — status, diff, commit, snapshots, restore support, `/undo`, and automatic `.aura/` ignore setup.
 - **Provider-native web search** — the selected production provider and model own hosted search in the same request when their current transport supports it; unsupported combinations omit search without switching providers.
-- **Reusable Agents and workflows** — compose permissioned specialists into explicit solid sequences with optional dashed helper trees, then invoke the selected workflow from an ordinary Aura conversation.
+- **Reusable Agents and workflows** — describe and refine a saved Workflow in chat, or compose permissioned specialists on the canvas with branches, joins, and optional helper trees.
 - **MCP integration** — connect stdio Model Context Protocol servers and expose their tools through Aura's tool registry.
 - **Update support** — packaged Windows builds support in-app updates, while source checkouts can inspect upstream update state.
 
