@@ -308,9 +308,10 @@ class AgentEditor(QWidget):
                 self.description.setText(detail.description)
                 self.instructions.setPlainText(detail.instructions)
                 self._select_target(detail.provider, detail.model)
-                self._select_data(self.thinking, detail.thinking.value)
                 self._select_data(self.permission, detail.permission.value)
-            self._sync_thinking_for_target()
+            self._sync_thinking_for_target(
+                detail.thinking.value if detail is not None else AgentThinking.INHERIT.value
+            )
         finally:
             self._loading = False
         self._update_actions()
@@ -382,14 +383,17 @@ class AgentEditor(QWidget):
             provider = self._choices.current_provider.strip()
         return provider == "local_openai"
 
-    def _sync_thinking_for_target(self) -> None:
+    def _sync_thinking_for_target(self, thinking: str | None = None) -> None:
         # An explicitly pinned local target stores Off because that is its
         # portable runtime contract. An inherited target keeps ``inherit`` in
         # the definition even while Aura itself happens to be local; the
         # disabled control still makes clear that the effective run is Off.
         target = self.model.currentData()
         provider, model = target if isinstance(target, (tuple, list)) and len(target) == 2 else ("", "")
-        thinking = "off" if provider == "local_openai" else self.thinking.currentData()
+        if provider == "local_openai":
+            thinking = "off"
+        elif thinking is None:
+            thinking = self.thinking.currentData()
         sync_thinking_combo(
             self.thinking, provider or self._choices.current_provider,
             model or self._choices.current_model, thinking,

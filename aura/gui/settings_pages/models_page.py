@@ -200,8 +200,11 @@ class ModelsPage(QWidget):
 
         self._populate_models(current_provider, self._settings.default_model)
         self._refresh_btn.setVisible(self._provider_combo.currentData() == "openrouter")
-        self._set_combo_to_data(self._thinking_combo, self._settings.default_thinking)
-        self._sync_thinking_for_provider(current_provider, use_provider_default=False)
+        self._sync_thinking_for_provider(
+            current_provider,
+            use_provider_default=False,
+            thinking=self._settings.default_thinking,
+        )
         self._local_verified_endpoint: str | None = None
         local_endpoint = normalize_local_openai_base_url(
             self._local_endpoint_edit.text()
@@ -392,8 +395,10 @@ class ModelsPage(QWidget):
         provider_id: ProviderId | None,
         *,
         use_provider_default: bool,
+        thinking: str | None = None,
     ) -> None:
-        thinking = self._thinking_combo.currentData()
+        if thinking is None:
+            thinking = self._thinking_combo.currentData()
         if (
             use_provider_default
             and provider_id
