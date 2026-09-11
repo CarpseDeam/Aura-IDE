@@ -59,11 +59,14 @@ def _native(calls, size):
     chunks = []
     for index, (name, args) in enumerate(calls):
         raw = args if isinstance(args, str) else json.dumps(args)
+        # Stream metadata arrives once; later deltas carry only arguments.
+        chunks.append(_chunk(tool_calls=[{
+            "index": index, "id": f"call_{index}", "type": "function",
+            "function": {"name": name, "arguments": ""},
+        }]))
         for start in range(0, len(raw), size):
             chunks.append(_chunk(tool_calls=[{
-                "index": index, "id": f"call_{index}" if start == 0 else None,
-                "type": "function", "function": {"name": name if start == 0 else None,
-                                                     "arguments": raw[start:start + size]},
+                "index": index, "function": {"arguments": raw[start:start + size]},
             }]))
     return chunks
 

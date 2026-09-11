@@ -263,6 +263,7 @@ def _stream_chat_completions_impl(
     openrouter_reasoning = OpenRouterReasoning() if provider == "openrouter" else None
     content_buf: list[str] = []
     tool_calls: dict[int, dict[str, Any]] = {}
+    ignored_tool_indices: set[int] = set()
     args_buffers: dict[int, list[str]] = {}
     seen_starts: set[int] = set()
     finish_reason: str | None = None
@@ -456,11 +457,14 @@ def _stream_chat_completions_impl(
             for tool_call in delta.tool_calls:
                 # OpenRouter server tools are executed by OpenRouter. Only
                 # ordinary client function calls enter Aura's ToolRunner.
-                if getattr(tool_call, "type", "function") != "function":
-                    continue
-                if getattr(tool_call, "function", None) is None:
-                    continue
+                # Type is usually sent only on the opening chunk; the SDK
+                # represents its absence on argument deltas as None. Keep
+                # those deltas, except for indices known to be server tools.
                 index = tool_call.index
+                if getattr(tool_call, "type", None) not in (None, "function"):
+                    ignored_tool_indices.add(index)
+                if index in ignored_tool_indices or getattr(tool_call, "function", None) is None:
+                    continue
                 slot = tool_calls.setdefault(
                     index,
                     {
