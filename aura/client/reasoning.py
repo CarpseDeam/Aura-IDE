@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from aura.providers.base import ThinkingMode, normalize_thinking_mode
+from aura.providers.base import ModelInfo, ThinkingMode, normalize_thinking_mode
 
 #: How the ``reasoning_effort`` parameter was decided for one request. Logged
 #: verbatim so a request can be diagnosed from a normal log file.
@@ -67,13 +67,17 @@ class ReasoningRequest:
     effort_policy: str
 
     @property
+    def wire_effort(self) -> str | None:
+        return self.reasoning_effort or (self.extra_body or {}).get("reasoning", {}).get("effort")
+
+    @property
     def effort_sent(self) -> bool:
-        return self.reasoning_effort is not None
+        return self.wire_effort is not None
 
     def describe(self) -> str:
         return (
             f"thinking={self.thinking} provider={self.provider} "
-            f"reasoning_effort={self.reasoning_effort or '<omitted>'} "
+            f"reasoning_effort={self.wire_effort or '<omitted>'} "
             f"effort_sent={self.effort_sent} effort_policy={self.effort_policy}"
         )
 
@@ -83,8 +87,72 @@ def _explicit_effort(thinking: ThinkingMode) -> str:
     return "high" if thinking == "high" else "max"
 
 
+@dataclass(frozen=True)
+class OpenRouterThinkingOption:
+    mode: str
+    label: str
+    effort: str | None = None
+
+
+_OPENROUTER_EFFORTS = ("max", "xhigh", "high", "medium", "low", "minimal")
+
+
+def openrouter_thinking_options(info: ModelInfo | None) -> tuple[OpenRouterThinkingOption, ...]:
+    """Project advertised capabilities onto Aura's stored Off / High / Max.
+
+    https://openrouter.ai/docs/guides/best-practices/reasoning-tokens
+    Missing effort metadata offers an on/off switch, not invented effort levels.
+    """
+    metadata = (info.reasoning or {}) if info else {}
+    parameters = info.supported_parameters if info else None
+    if not metadata and parameters is not None and not any(
+        p in parameters for p in ("reasoning", "reasoning_effort", "include_reasoning")
+    ):
+        return (OpenRouterThinkingOption("off", "Off (unsupported)"),)
+    options = []
+    if metadata.get("mandatory") is not True:
+        options.append(OpenRouterThinkingOption("off", "Off"))
+    efforts = metadata.get("supported_efforts", [])
+    if efforts is None:
+        efforts = _OPENROUTER_EFFORTS
+    supported = [e for e in _OPENROUTER_EFFORTS if e in efforts] if isinstance(efforts, (list, tuple)) else []
+    if supported:
+        high = next((e for e in _OPENROUTER_EFFORTS[2:] if e in supported), supported[-1])
+        options.append(OpenRouterThinkingOption("high", high.title(), high))
+        if supported[0] != high:
+            options.append(OpenRouterThinkingOption("max", f"Max ({supported[0]})", supported[0]))
+    elif efforts == ["none"]:
+        return (OpenRouterThinkingOption("off", "Off (unsupported)"),)
+    else:
+        label = "On" if metadata else "On (provider default; capabilities unknown)"
+        options.append(OpenRouterThinkingOption("high", label))
+    if metadata.get("mandatory") is True:
+        options = [OpenRouterThinkingOption(o.mode, f"{o.label} (required)", o.effort) for o in options]
+    return tuple(options)
+
+
+def _resolve_openrouter_reasoning(mode: str, info: ModelInfo | None) -> ReasoningRequest:
+    options = openrouter_thinking_options(info)
+    option = next((o for o in options if o.mode == mode), options[-1] if mode == "max" else options[0])
+    unsupported = len(options) == 1 and option.mode == "off"
+    config: dict[str, Any] = {"enabled": option.mode != "off"}
+    if option.effort is not None:
+        config["effort"] = option.effort
+    return ReasoningRequest(
+        thinking=option.mode,
+        provider="openrouter",
+        extra_body=None if unsupported else {"reasoning": config},
+        reasoning_effort=None,
+        send_temperature=option.mode == "off",
+        effort_policy=(
+            EFFORT_OMITTED_UNSUPPORTED_MODEL if unsupported
+            else EFFORT_OMITTED_DISABLED if option.mode == "off" else EFFORT_EXPLICIT
+        ),
+    )
+
+
 def resolve_reasoning_request(
-    provider: str, thinking: ThinkingMode
+    provider: str, thinking: ThinkingMode, *, model_info: ModelInfo | None = None
 ) -> ReasoningRequest:
     """Return the reasoning request for *provider* under the user's *thinking*.
 
@@ -92,6 +160,9 @@ def resolve_reasoning_request(
     default rather than silently promoting to Max.
     """
     mode = normalize_thinking_mode(thinking) or "high"
+
+    if provider == "openrouter":
+        return _resolve_openrouter_reasoning(mode, model_info)
 
     if provider == "deepseek":
         if mode == "off":
@@ -114,8 +185,7 @@ def resolve_reasoning_request(
             effort_policy=EFFORT_EXPLICIT,
         )
 
-    # OpenAI-compatible providers (openai, openrouter, and anything else routed
-    # through the chat-completions path).
+    # Other OpenAI-compatible providers keep their existing request shape.
     if mode == "off":
         return ReasoningRequest(
             thinking=mode,

@@ -71,7 +71,16 @@ def build_model_picker_items(
         if not mid or mid in seen:
             return
         seen.add(mid)
-        items.append(ModelPickerItem(model_id=mid, label=label or _fallback_label(mid)))
+        label = label or _fallback_label(mid)
+        if provider_id == "openrouter":
+            info = models.get(mid)
+            support = info.supports_tools if info else None
+            status = (
+                "Tools supported" if support is True
+                else "No tool support" if support is False else "Tool support unknown"
+            )
+            label = f"{label} · {status}"
+        items.append(ModelPickerItem(model_id=mid, label=label))
 
     for info in entries:
         add(info.id, info.label)

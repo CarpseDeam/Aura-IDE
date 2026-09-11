@@ -26,6 +26,7 @@ from aura.config import (
 from aura.gui.theme import ACCENT, BG_ALT, BG_RAISED, BORDER, FG_DIM, FG_MUTED, LABEL_PROJECTS, LABEL_THREAD
 from aura.gui.widgets.no_wheel_combo import NoWheelComboBox
 from aura.gui.widgets.searchable_model_combo import SearchableModelCombo
+from aura.gui.widgets.thinking_combo import sync_thinking_combo
 from aura.projects.store import ProjectStore
 from aura.providers.base import THINKING_MODES, normalize_thinking_mode
 from aura.providers.model_presentation import build_model_picker_items
@@ -405,8 +406,9 @@ class LeftPane(QFrame):
         production_model_label.setStyleSheet(f"color: {FG_DIM};")
         production_model_row.addWidget(production_model_label)
         self._production_model_combo = SearchableModelCombo()
+        self._model_provider = ""
         self._production_model_combo.currentIndexChanged.connect(
-            lambda: self.production_model_changed.emit(self.current_production_model())
+            self._on_production_model_changed
         )
         production_model_row.addWidget(self._production_model_combo, 1)
         footer_layout.addLayout(production_model_row)
@@ -442,16 +444,24 @@ class LeftPane(QFrame):
     ) -> None:
         """Populate the production model list."""
         cfg = provider_registry.get(provider)
+        self._model_provider = provider
         items = build_model_picker_items(
             provider,
             cfg.models,
             default_model=cfg.default_model,
         )
         self._production_model_combo.set_items(items, cfg.default_model)
-        local_only = cfg.kind == "local"
-        self._production_thinking_combo.setEnabled(not local_only)
-        if local_only:
-            _select_thinking(self._production_thinking_combo, "off")
+        self._sync_production_thinking()
+
+    def _on_production_model_changed(self) -> None:
+        self._sync_production_thinking()
+        self.production_model_changed.emit(self.current_production_model())
+
+    def _sync_production_thinking(self, thinking: str | None = None) -> None:
+        sync_thinking_combo(
+            self._production_thinking_combo, self._model_provider,
+            self.current_production_model(), thinking,
+        )
 
     def current_production_model(self) -> str:
         return self._production_model_combo.currentData()
@@ -465,10 +475,7 @@ class LeftPane(QFrame):
             self._production_model_combo.setCurrentIndex(idx)
 
     def set_production_thinking(self, thinking: ThinkingMode) -> None:
-        _select_thinking(
-            self._production_thinking_combo,
-            "off" if not self._production_thinking_combo.isEnabled() else thinking,
-        )
+        self._sync_production_thinking(thinking)
 
     def _clear_projects_layout(self) -> None:
         while self._projects_layout.count():

@@ -25,6 +25,7 @@ from aura.config import (
 from aura.gui.theme import DANGER, FG_DIM, FG_MUTED, SUCCESS, WARN
 from aura.gui.widgets.no_wheel_combo import NoWheelComboBox
 from aura.gui.widgets.searchable_model_combo import SearchableModelCombo
+from aura.gui.widgets.thinking_combo import sync_thinking_combo
 from aura.providers.base import ProviderId
 from aura.providers.local_openai import (
     DEFAULT_LOCAL_OPENAI_BASE_URL,
@@ -224,6 +225,9 @@ class ModelsPage(QWidget):
         # --- 4. Connect Signals ---
         # Connect AFTER initial population to avoid spurious signal firing.
         self._provider_combo.currentIndexChanged.connect(self._on_provider_changed)
+        self._model_combo.currentIndexChanged.connect(
+            lambda: self._sync_thinking_for_provider(self._provider_combo.currentData(), use_provider_default=False)
+        )
         self._refresh_btn.clicked.connect(
             lambda: self._start_discovery(self._provider_combo.currentData())
         )
@@ -389,21 +393,14 @@ class ModelsPage(QWidget):
         *,
         use_provider_default: bool,
     ) -> None:
-        if provider_id == _LOCAL_PROVIDER_ID:
-            self._set_combo_to_data(self._thinking_combo, "off")
-            self._thinking_combo.setEnabled(False)
-            return
-
-        self._thinking_combo.setEnabled(True)
+        thinking = self._thinking_combo.currentData()
         if (
             use_provider_default
             and provider_id
             and provider_registry.has(provider_id)
         ):
-            self._set_combo_to_data(
-                self._thinking_combo,
-                provider_registry.get(provider_id).default_thinking,
-            )
+            thinking = provider_registry.get(provider_id).default_thinking
+        sync_thinking_combo(self._thinking_combo, provider_id or "", self._model_combo.currentData(), thinking)
 
     def _sync_local_controls(self, provider_id: ProviderId | None) -> None:
         visible = provider_id == _LOCAL_PROVIDER_ID
@@ -493,6 +490,7 @@ class ModelsPage(QWidget):
             current_selection=current_selection,
         )
         combo.set_items(items, current_selection or default_model)
+        self._sync_thinking_for_provider(provider_id, use_provider_default=False)
 
     def _set_combo_to_data(self, combo: QComboBox, value: str) -> None:
         idx = combo.findData(value)

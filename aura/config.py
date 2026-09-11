@@ -267,6 +267,8 @@ def fetch_provider_models(
                 context_window_tokens=ctx_tokens,
                 max_output_tokens=max_out,
                 created=created,
+                supported_parameters=_coerce_supported_parameters(m.get("supported_parameters")),
+                reasoning=m.get("reasoning") if isinstance(m.get("reasoning"), dict) else None,
             )
             pricing[mid] = {"in_miss": in_m, "in_hit": hit_m, "out": out_m}
     else:
@@ -508,6 +510,12 @@ def save_dynamic_catalog(provider_id: str, models: dict[str, ModelInfo], pricing
 _MODEL_INFO_FIELDS: frozenset[str] = frozenset(f.name for f in fields(ModelInfo))
 
 
+def _coerce_supported_parameters(value: object) -> tuple[str, ...] | None:
+    if isinstance(value, (list, tuple)) and all(isinstance(item, str) for item in value):
+        return tuple(value)
+    return None
+
+
 def _model_info_from_cache(
     m_data: dict,
     known: ModelInfo | None,
@@ -541,6 +549,9 @@ def _model_info_from_cache(
     ``true`` (or vice versa), so the current seeded value wins there too.
     """
     clean = {k: v for k, v in m_data.items() if k in _MODEL_INFO_FIELDS}
+    clean["supported_parameters"] = _coerce_supported_parameters(clean.get("supported_parameters"))
+    if not isinstance(clean.get("reasoning"), dict):
+        clean["reasoning"] = None
     if known is not None:
         if not trust_cached_capacity:
             clean["context_window_tokens"] = known.context_window_tokens

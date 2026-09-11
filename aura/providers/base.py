@@ -46,6 +46,18 @@ class ModelInfo:
     # provider other than OpenRouter leaves this unset. Presentation code uses
     # it to order OpenRouter's list newest-first; nothing else reads it.
     created: int | None = None
+    # None means unknown (including old caches); an empty tuple explicitly
+    # advertises no parameters. Do not infer tool support from the model name.
+    supported_parameters: tuple[str, ...] | None = None
+    # OpenRouter's per-model reasoning options. Keep missing vs null effort
+    # lists distinct: missing means no selector; null means all gateway levels.
+    reasoning: dict[str, Any] | None = None
+
+    @property
+    def supports_tools(self) -> bool | None:
+        if self.supported_parameters is None:
+            return None
+        return "tools" in self.supported_parameters
 
 
 @dataclass

@@ -56,7 +56,7 @@ def _build_kwargs(provider: str, thinking: str, temperature: float = 0.7) -> dic
     return kwargs
 
 
-@pytest.mark.parametrize("provider", ["deepseek", "openai", "openrouter"])
+@pytest.mark.parametrize("provider", ["deepseek", "openai"])
 @pytest.mark.parametrize("mode", ALL_MODES)
 def test_explicit_mode_is_sent_verbatim(provider: str, mode: str) -> None:
     request = resolve_reasoning_request(provider, mode)

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 from PySide6.QtWidgets import QApplication
@@ -223,3 +225,105 @@ class TestDynamicCacheSnapshot:
         load_dynamic_catalog()
 
         assert "seed" in cfg.models
+
+
+def test_discovery_and_cache_preserve_capability_distinctions(tmp_path, monkeypatch, openrouter_snapshot):
+    import aura.config as config
+    from aura.providers.model_presentation import build_model_picker_items
+
+    monkeypatch.setenv("AURA_CONFIG_DIR", str(tmp_path))
+    reasoning = {"supported_efforts": ["xhigh", "high", "low"], "mandatory": True,
+                 "default_effort": "high", "default_enabled": True}
+    raw = [
+        {"id": "tools", "supported_parameters": ["tools", "reasoning"], "reasoning": reasoning},
+        {"id": "no-tools", "supported_parameters": []},
+        {"id": "unknown"},
+    ]
+    monkeypatch.setattr(config, "refresh_provider_pricing", lambda _: None)
+    monkeypatch.setattr(provider_registry, "create_client", lambda *a, **k: SimpleNamespace(fetch_raw_models=lambda: raw))
+    models, pricing, error = config.fetch_provider_models("openrouter")
+    assert error is None
+    assert [models[mid].supports_tools for mid in ("tools", "no-tools", "unknown")] == [True, False, None]
+    save_dynamic_catalog("openrouter", models, pricing)
+    load_dynamic_catalog()
+    assert openrouter_snapshot.models == models
+    assert models["tools"].reasoning == reasoning
+    items = {i.model_id: i.label for i in build_model_picker_items("openrouter", models, current_selection="old")}
+    assert "Tools supported" in items["tools"]
+    assert "No tool support" in items["no-tools"]
+    assert "Tool support unknown" in items["unknown"]
+    assert "Tool support unknown" in items["old"]
+
+
+@pytest.mark.parametrize(("metadata", "selection", "expected", "effective"), [
+    ({"supported_efforts": ["high", "low"]}, "off", {"enabled": False}, "off"),
+    ({"supported_efforts": ["high", "low"]}, "max", {"enabled": True, "effort": "high"}, "high"),
+    ({"supported_efforts": ["xhigh", "high"]}, "max", {"enabled": True, "effort": "xhigh"}, "max"),
+    ({"supported_efforts": ["low"], "mandatory": True}, "off", {"enabled": True, "effort": "low"}, "high"),
+    ({"supported_efforts": None}, "max", {"enabled": True, "effort": "max"}, "max"),
+    ({"default_effort": "medium"}, "max", {"enabled": True}, "high"),
+])
+def test_reasoning_settings_follow_model_metadata(metadata, selection, expected, effective):
+    from aura.client.reasoning import openrouter_thinking_options, resolve_reasoning_request
+
+    model = replace(_model("m"), supported_parameters=("tools", "reasoning"), reasoning=metadata)
+    request = resolve_reasoning_request("openrouter", selection, model_info=model)
+    assert request.extra_body == {"reasoning": expected}
+    assert request.reasoning_effort is None
+    assert request.thinking == effective
+    if metadata.get("mandatory"):
+        assert all(o.mode != "off" for o in openrouter_thinking_options(model))
+
+
+def test_unknown_and_unsupported_reasoning_are_distinct():
+    from aura.client.reasoning import resolve_reasoning_request
+
+    assert resolve_reasoning_request("openrouter", "off").extra_body == {"reasoning": {"enabled": False}}
+    assert resolve_reasoning_request("openrouter", "high").extra_body == {"reasoning": {"enabled": True}}
+    unsupported = replace(_model("m"), supported_parameters=("tools",))
+    request = resolve_reasoning_request("openrouter", "high", model_info=unsupported)
+    assert request.extra_body is None
+    assert request.thinking == "off"
+
+
+def test_model_changes_refresh_thinking_controls(qapp, monkeypatch, openrouter_snapshot):
+    from aura.gui.agents_editor import AgentEditor, ModelChoices, ModelTargetChoice
+    from aura.gui.left_pane import LeftPane
+    from aura.gui.settings_pages.models_page import ModelsPage
+
+    monkeypatch.setattr(ModelsPage, "_start_discovery", lambda *a, **k: None)
+    cfg = openrouter_snapshot
+    cfg.models.clear()
+    cfg.models.update({
+        "required": replace(_model("required"), reasoning={"mandatory": True, "supported_efforts": ["high"]}),
+        "optional": replace(_model("optional"), reasoning={"supported_efforts": ["xhigh", "high"]}),
+        "unsupported": replace(_model("unsupported"), supported_parameters=("tools",)),
+    })
+    page = ModelsPage(AppSettings(provider="openrouter", default_model="required", default_thinking="off"))
+    pane = LeftPane(None)
+    pane.populate_models("openrouter")
+    editor = AgentEditor(ModelChoices(targets=(ModelTargetChoice("openrouter", "required", "Required"),)))
+    try:
+        for owner, model_combo, thinking in (
+            (page, page._model_combo, page._thinking_combo),
+            (pane, pane._production_model_combo, pane._production_thinking_combo),
+        ):
+            for mid, expected in (("optional", ["off", "high", "max"]), ("required", ["high"]),
+                                  ("unsupported", ["off"]), ("optional", ["off", "high", "max"])):
+                model_combo.setCurrentIndex(model_combo.findData(mid))
+                assert [thinking.itemData(i) for i in range(thinking.count())] == expected
+                assert thinking.currentData() in expected
+                if mid == "required":
+                    assert "required" in thinking.currentText()
+            if owner is pane:
+                pane.set_production_model("required")
+                pane.set_production_thinking("off")
+                assert pane.current_production_thinking() == "high"
+        editor.model.setCurrentIndex(1)
+        assert [editor.thinking.itemData(i) for i in range(editor.thinking.count())] == ["inherit", "high"]
+        assert "required" in editor.thinking.itemText(1)
+    finally:
+        page.cleanup_threads()
+        page.deleteLater()
+        pane.deleteLater()
+        editor.deleteLater()

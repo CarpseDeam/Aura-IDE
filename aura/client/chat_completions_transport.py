@@ -32,9 +32,11 @@ from aura.client.hosted_search import (
     citation_markdown,
     hosted_search_metadata,
 )
+from aura.client.openrouter_reasoning import OpenRouterReasoning
 from aura.client.reasoning import resolve_reasoning_request
 from aura.client.responses_continuation import AURA_PROVIDER_REASONING_KEY
 from aura.config import ProviderId, ThinkingMode
+from aura.providers.registry import provider_registry
 
 _log = logging.getLogger(__name__)
 
@@ -74,12 +76,18 @@ class _StreamLifetime:
 
 def _strip_foreign_message_keys(
     messages: list[dict[str, Any]],
+    provider: str = "",
 ) -> list[dict[str, Any]]:
     """Return messages without keys belonging to another wire protocol."""
     out: list[dict[str, Any]] = []
+    foreign = _FOREIGN_MESSAGE_KEYS + (() if provider == "openrouter" else ("reasoning", "reasoning_details"))
     for msg in messages:
-        if isinstance(msg, dict) and any(key in msg for key in _FOREIGN_MESSAGE_KEYS):
-            out.append({k: v for k, v in msg.items() if k not in _FOREIGN_MESSAGE_KEYS})
+        if provider == "openrouter" and isinstance(msg, dict) and ("reasoning" in msg or "reasoning_details" in msg):
+            # reasoning_content is Aura's display alias for these fields;
+            # echo the original provider payload without that duplicate alias.
+            msg = {k: v for k, v in msg.items() if k != "reasoning_content"}
+        if isinstance(msg, dict) and any(key in msg for key in foreign):
+            out.append({k: v for k, v in msg.items() if k not in foreign})
         else:
             out.append(msg)
     return out
@@ -166,7 +174,7 @@ def _stream_chat_completions_impl(
     stream_lifetime: _StreamLifetime,
 ) -> Iterator[Event]:
     """Stream the existing OpenAI-compatible Chat Completions request."""
-    outbound = _strip_foreign_message_keys(messages)
+    outbound = _strip_foreign_message_keys(messages, provider)
     kwargs: dict[str, Any] = {
         "model": model,
         "messages": outbound,
@@ -195,7 +203,9 @@ def _stream_chat_completions_impl(
                 len(REASONING_REPLAY_PLACEHOLDER),
             )
 
-    reasoning = resolve_reasoning_request(provider, effective_thinking)
+    model_info = provider_registry.get(provider).models.get(model) if provider_registry.has(provider) else None
+    reasoning = resolve_reasoning_request(provider, effective_thinking, model_info=model_info)
+    effective_thinking = reasoning.thinking
     if reasoning.extra_body is not None:
         kwargs["extra_body"] = reasoning.extra_body
     if reasoning.reasoning_effort is not None:
@@ -221,7 +231,7 @@ def _stream_chat_completions_impl(
         requires_reasoning_replay,
         kwargs.get("tool_choice", "<none>"),
         kwargs.get("parallel_tool_calls", "<default>"),
-        reasoning.reasoning_effort or "<omitted>",
+        reasoning.wire_effort or "<omitted>",
         reasoning.effort_sent,
         reasoning.effort_policy,
         timeout.connect,
@@ -250,6 +260,7 @@ def _stream_chat_completions_impl(
         _log.info("provider_stream_start certifi=not_available")
 
     reasoning_buf: list[str] = []
+    openrouter_reasoning = OpenRouterReasoning() if provider == "openrouter" else None
     content_buf: list[str] = []
     tool_calls: dict[int, dict[str, Any]] = {}
     args_buffers: dict[int, list[str]] = {}
@@ -419,13 +430,22 @@ def _stream_chat_completions_impl(
         if getattr(delta, "reasoning_content", None) or delta.content or delta.tool_calls:
             meaningful_emitted = True
 
-        reasoning_content = getattr(delta, "reasoning_content", None)
+        reasoning_content = (
+            openrouter_reasoning.push(delta) if openrouter_reasoning is not None
+            else getattr(delta, "reasoning_content", None)
+        )
+        if openrouter_reasoning is not None and openrouter_reasoning.details:
+            meaningful_emitted = True
         if reasoning_content:
+            meaningful_emitted = True
             reasoning_buf.append(reasoning_content)
             yield ReasoningDelta(reasoning_content)
 
         if delta.content:
-            yield from _yield_dsml_events(dsml_parser.push(delta.content))
+            for event in _yield_dsml_events(dsml_parser.push(delta.content)):
+                yield event
+                if isinstance(event, ApiError):
+                    return
 
         for annotation in getattr(delta, "annotations", None) or []:
             citation = citation_from(annotation)
@@ -479,7 +499,10 @@ def _stream_chat_completions_impl(
                         args_chunk=tool_call.function.arguments,
                     )
 
-    yield from _yield_dsml_events(dsml_parser.flush())
+    for event in _yield_dsml_events(dsml_parser.flush()):
+        yield event
+        if isinstance(event, ApiError):
+            return
 
     citation_suffix = citation_markdown(
         hosted_search_citations,
@@ -500,6 +523,8 @@ def _stream_chat_completions_impl(
     }
     if not full_message["reasoning_content"]:
         full_message.pop("reasoning_content")
+    if openrouter_reasoning is not None:
+        full_message.update(openrouter_reasoning.message_fields())
     parsed_tool_calls = dsml_parser.get_tool_calls()
     if tool_calls or parsed_tool_calls:
         full_message["tool_calls"] = [tool_calls[i] for i in sorted(tool_calls)] + parsed_tool_calls

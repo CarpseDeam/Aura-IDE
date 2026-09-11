@@ -97,10 +97,12 @@ def read_file(workspace_root: Path, target: Path) -> dict[str, Any]:
     returned_lines = text.count("\n") + (1 if text and not text.endswith("\n") else 0)
 
     if truncated:
+        next_offset = max(1, returned_lines + (1 if text.endswith("\n") else 0))
         text += (
             f"\n\n[... truncated: showing {decoded_bytes} of {file_size} bytes "
-            f"({returned_lines} lines). Use read_file offset/limit or "
-            "read_file_range for the rest ...]"
+            f"({returned_lines} lines). Continue with read_file(path, "
+            f"offset={next_offset}, "
+            "limit=200); offset is a 1-based line number ...]"
         )
     rel = safe_relative_to(target, workspace_root).as_posix()
     return {

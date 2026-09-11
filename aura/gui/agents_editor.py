@@ -25,6 +25,7 @@ from aura.agents.models import CURRENT_MODEL_LABEL, THINKING_ORDER, AgentThinkin
 from aura.agents.validation import MAX_AGENT_DESCRIPTION_CHARS, MAX_AGENT_NAME_CHARS
 from aura.gui.theme import BG, DANGER, FG, FG_DIM
 from aura.gui.widgets.searchable_model_combo import SearchableModelCombo
+from aura.gui.widgets.thinking_combo import sync_thinking_combo
 from aura.providers.model_presentation import build_model_picker_items
 
 SCOPE_LABELS: dict[str, str] = {"project": "Project", "personal": "Personal"}
@@ -386,8 +387,14 @@ class AgentEditor(QWidget):
         # portable runtime contract. An inherited target keeps ``inherit`` in
         # the definition even while Aura itself happens to be local; the
         # disabled control still makes clear that the effective run is Off.
-        if self._selected_provider() == "local_openai":
-            self._select_data(self.thinking, AgentThinking.OFF.value)
+        target = self.model.currentData()
+        provider, model = target if isinstance(target, (tuple, list)) and len(target) == 2 else ("", "")
+        thinking = "off" if provider == "local_openai" else self.thinking.currentData()
+        sync_thinking_combo(
+            self.thinking, provider or self._choices.current_provider,
+            model or self._choices.current_model, thinking,
+            inherit_label=AgentThinking.INHERIT.label,
+        )
         self._update_actions()
 
     def _on_model_target_changed(self, _index: int) -> None:
